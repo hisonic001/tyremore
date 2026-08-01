@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
-import { savePriceRule, type RuleScope } from "@/lib/pricing";
+import { useEffect, useRef, useState, useTransition } from "react";
+import { savePriceRule } from "@/lib/pricing";
+import { addToCompare } from "./compare-store";
 
 const won = (n: number) => n.toLocaleString();
 
@@ -18,8 +18,8 @@ const won = (n: number) => n.toLocaleString();
 export function PriceTool({
   productId,
   cai,
-  pattern,
-  brandCode,
+  model,
+  spec,
   brandName,
   listPrice,
   salesRate,
@@ -27,56 +27,74 @@ export function PriceTool({
 }: {
   productId: number;
   cai: string | null;
-  pattern: string | null;
-  brandCode: string | null;
+  model: string;
+  spec: string | null;
   brandName: string | null;
   listPrice: number;
   salesRate: number | null;
   unit: string;
 }) {
-  const router = useRouter();
-  const [pending, start] = useTransition();
-  const [open, setOpen] = useState(false);
+  const [, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
 
   const [rate, setRate] = useState(salesRate !== null ? String(Math.round(salesRate * 1000) / 10) : "");
   const [sale, setSale] = useState(salesRate !== null ? String(Math.round(listPrice * (1 - salesRate))) : "");
   const [qty, setQty] = useState(1);
 
+  /**
+   * ⭐ 저장 버튼을 없앴다 (사장님 지시 2026-08-01).
+   *    입력을 멈추면 잠시 뒤 **이 상품에만** 자동 저장된다.
+   *    타자 칠 때마다 저장하면 중간값(2 → 25 의 "2")까지 저장되므로 잠깐 기다린다.
+   *    ⚠️ 모델·브랜드 단위로 넓게 저장하는 것은 상세 화면(/stock/[id])에 남겨 두었다.
+   *       목록에서 무심코 누른 값이 브랜드 전체에 퍼지면 되돌리기 어렵다.
+   */
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+
+  function autoSave(nextRate: number | null) {
+    if (!cai) return; // 자체 등록품은 개별 저장 대상이 없다
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      start(async () => {
+        setError(null);
+        const r = await savePriceRule({ scope: "item", target: cai, salesRate: nextRate, productId });
+        if (!r.ok) setError(r.error);
+        else {
+          setSaved(true);
+          setTimeout(() => setSaved(false), 1200);
+        }
+      });
+    }, 900);
+  }
+
   /** 할인율 → 판매가 */
   function onRate(v: string) {
     const c = v.replace(/[^\d.]/g, "");
     setRate(c);
-    if (c === "" || Number.isNaN(Number(c))) return setSale("");
+    if (c === "" || Number.isNaN(Number(c))) {
+      setSale("");
+      autoSave(null);
+      return;
+    }
     setSale(String(Math.round(listPrice * (1 - Number(c) / 100))));
+    autoSave(Number(c) / 100);
   }
   /** 판매가 → 할인율 */
   function onSale(v: string) {
     const c = v.replace(/\D/g, "");
     setSale(c);
-    if (c === "" || listPrice <= 0) return setRate("");
-    setRate(String(Math.round((1 - Number(c) / listPrice) * 1000) / 10));
+    if (c === "" || listPrice <= 0) {
+      setRate("");
+      autoSave(null);
+      return;
+    }
+    const r = 1 - Number(c) / listPrice;
+    setRate(String(Math.round(r * 1000) / 10));
+    autoSave(r);
   }
 
   const saleNum = sale === "" ? null : Number(sale);
-  const rateNum = rate === "" ? null : Number(rate) / 100;
-  const changed = rateNum !== salesRate;
-
-  const scopes: { scope: RuleScope; target: string; label: string }[] = [];
-  if (cai) scopes.push({ scope: "item", target: cai, label: "이 상품만" });
-  if (pattern) scopes.push({ scope: "pattern", target: pattern, label: "이 모델" });
-  if (brandCode) scopes.push({ scope: "brand", target: brandCode, label: `${brandName ?? brandCode} 전체` });
-
-  const save = (scope: RuleScope, target: string) =>
-    start(async () => {
-      setError(null);
-      const r = await savePriceRule({ scope, target, salesRate: rateNum, productId });
-      if (!r.ok) setError(r.error);
-      else {
-        setOpen(false);
-        router.refresh();
-      }
-    });
 
   const BTN = "h-11 w-11 shrink-0 rounded-lg border border-slate-300 bg-white text-xl font-bold active:bg-slate-100";
 
@@ -159,37 +177,28 @@ export function PriceTool({
 
       {error && <p className="mt-1 text-sm text-red-600">{error}</p>}
 
-      {/* 바꿨으면 저장 — 어디에 적용할지 고른다 (좁은 것이 이긴다) */}
-      {changed && (
-        <div className="mt-2">
-          {!open ? (
-            <button
-              type="button"
-              onClick={() => setOpen(true)}
-              className="w-full rounded-lg bg-slate-900 py-2.5 text-sm font-semibold text-white"
-            >
-              이 할인율 저장
-            </button>
-          ) : (
-            <div className="flex flex-wrap gap-1.5">
-              {scopes.map((s) => (
-                <button
-                  key={s.scope}
-                  type="button"
-                  disabled={pending}
-                  onClick={() => save(s.scope, s.target)}
-                  className="flex-1 rounded-lg border border-slate-900 px-2 py-2.5 text-sm font-medium disabled:opacity-50"
-                >
-                  {s.label}
-                </button>
-              ))}
-              <button type="button" onClick={() => setOpen(false)} className="px-3 text-sm text-slate-400">
-                취소
-              </button>
-            </div>
-          )}
-        </div>
-      )}
+      {/* ⭐ 스태거드(앞뒤 규격이 다른 차) 대응 — 담아두면 다시 검색해도 안 사라진다 */}
+      <div className="mt-2 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() =>
+            addToCompare({
+              productId,
+              model,
+              spec,
+              brandName,
+              listPrice,
+              salePrice: saleNum ?? listPrice,
+              qty,
+              unit,
+            })
+          }
+          className="flex-1 rounded-lg border border-slate-400 py-2.5 text-sm font-semibold text-slate-700 active:bg-slate-100"
+        >
+          담기
+        </button>
+        {saved && <span className="text-xs text-emerald-600">저장됨 ✓</span>}
+      </div>
     </div>
   );
 }

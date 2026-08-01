@@ -123,8 +123,8 @@ export function ProductCard({ p }: { p: ProductHit }) {
         <PriceTool
           productId={p.productId}
           cai={p.cai}
-          pattern={p.pattern}
-          brandCode={p.brandCode}
+          model={p.model}
+          spec={p.spec}
           brandName={p.brandName}
           listPrice={p.listPrice}
           salesRate={p.salesRate}

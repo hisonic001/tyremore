@@ -3,6 +3,7 @@ import { findProducts, findVehicles, guessMode, tireBrands, type Mode } from "@/
 import type { Season } from "@/lib/tire-attrs";
 import { FilterPanel, ModeTabs } from "./search-ui";
 import { ProductCard, VehicleCard } from "./cards";
+import { ComparePanel } from "./compare-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -50,7 +51,7 @@ export default async function Home({
   ]);
 
   return (
-    <main className="mx-auto min-h-dvh max-w-3xl px-4 py-5">
+    <main className="mx-auto min-h-dvh max-w-3xl px-4 py-5 pb-24 xl:pb-5">
       <header className="mb-4 flex items-baseline justify-between">
         <h1 className="text-xl font-bold tracking-tight">타이어모어</h1>
         <nav className="flex gap-3 text-sm text-slate-500">
@@ -128,6 +129,7 @@ export default async function Home({
             </div>
           )}
           {!q && filterCount === 0 && <Hint mode="product" />}
+          <ComparePanel />
           {products.length > 0 && (
             <div className="mt-4 text-center">
               <Link
