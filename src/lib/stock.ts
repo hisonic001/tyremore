@@ -15,6 +15,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { product, stockItem, stockMovement } from "@/db/schema";
 import { isPlausibleDot, isValidDot } from "./normalize";
+import { parseName } from "./product-name";
 
 /**
  * 화면 갱신. 웹 요청 밖(이관 스크립트·실사 배치)에서 호출되면 갱신할 화면이 없으므로
@@ -37,6 +38,10 @@ export interface DotGroup {
 
 export interface StockDetail {
   productId: number;
+  /** CAI — 미쉐린 고유번호 (MARS 품번) */
+  cai: string | null;
+  fullName: string;
+  oe: string[];
   name: string;
   pattern: string | null;
   brandName: string | null;
@@ -65,6 +70,7 @@ async function nextStockNo(): Promise<string> {
 export async function getStockDetail(productId: number): Promise<StockDetail | null> {
   const [p] = await db.execute<{
     id: number;
+    mars_item_no: string | null;
     raw_name: string;
     pattern: string | null;
     brand_name: string | null;
@@ -77,7 +83,7 @@ export async function getStockDetail(productId: number): Promise<StockDetail | n
     is_active: boolean;
     list_price: number | null;
   }>(sql`
-    SELECT p.id, p.raw_name, p.pattern, b.name_ko AS brand_name,
+    SELECT p.id, p.mars_item_no, p.raw_name, p.pattern, b.name_ko AS brand_name,
            p.width, p.aspect_ratio, p.rim_inch, p.item_type, p.is_serialized,
            p.stock_tracked, p.is_active, p.list_price
     FROM product p LEFT JOIN brand b ON b.code = p.brand_code
@@ -98,8 +104,12 @@ export async function getStockDetail(productId: number): Promise<StockDetail | n
     WHERE product_id = ${productId} AND status = '재고'
   `);
 
+  const n = parseName(p.raw_name, p.pattern);
   return {
     productId: p.id,
+    cai: p.mars_item_no && /^\d+$/.test(p.mars_item_no) ? p.mars_item_no : null,
+    fullName: n.full,
+    oe: n.oe,
     name: p.raw_name,
     pattern: p.pattern,
     brandName: p.brand_name,

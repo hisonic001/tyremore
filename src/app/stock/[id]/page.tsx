@@ -29,16 +29,28 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
       </Link>
 
       <header className="mt-3">
-        <h1 className="text-2xl font-bold leading-tight">
-          {d.brandName && <span className="text-slate-500">{d.brandName} </span>}
-          {d.pattern ?? d.name}
-        </h1>
-        {d.spec && <p className="tabular mt-1 text-lg text-slate-700">{d.spec}</p>}
-        {d.listPrice && (
-          <p className="tabular mt-1 text-sm text-slate-500">
-            기표가 {d.listPrice.toLocaleString()}원
-          </p>
-        )}
+        <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+          {d.brandName && (
+            <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+              {d.brandName}
+            </span>
+          )}
+          {d.oe.map((m) => (
+            <span key={m} className="rounded bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900">
+              {m}
+            </span>
+          ))}
+        </div>
+        {/* 전체 이름 그대로 — 모델명만 띄우면 같은 모델의 다른 물건과 구분이 안 된다 */}
+        <h1 className="text-xl font-bold leading-snug">{d.fullName}</h1>
+        <div className="tabular mt-1.5 flex flex-wrap gap-x-4 text-sm text-slate-500">
+          {d.cai && (
+            <span>
+              CAI <span className="font-semibold text-slate-700">{d.cai}</span>
+            </span>
+          )}
+          {d.listPrice && <span>기표가 {d.listPrice.toLocaleString()}원</span>}
+        </div>
       </header>
 
       <section className="mt-5 rounded-2xl border border-slate-200 bg-white p-5">

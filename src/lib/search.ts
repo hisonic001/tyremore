@@ -13,6 +13,7 @@ import { and, eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { brand, customer, product, vehicle } from "@/db/schema";
 import { normalizePhone, normalizePlate } from "./normalize";
+import { looksLikeCai, parseName } from "./product-name";
 import { parseSpecQuery } from "./tire-spec";
 import type { Season } from "./tire-attrs";
 
@@ -47,6 +48,12 @@ export interface VehicleHit {
 
 export interface ProductHit {
   productId: number;
+  /** ⭐ CAI — 미쉐린 고유번호. MARS 품번과 같은 값이다 */
+  cai: string | null;
+  /** 규격+모델+마킹을 합친 전체 이름 */
+  fullName: string;
+  /** OE 마킹 배지 (MO·VOL·AO·GOE·★ …) */
+  oe: string[];
   name: string;
   pattern: string | null;
   brandName: string | null;
@@ -76,6 +83,7 @@ export function guessMode(q: string): Mode | null {
   const t = q.trim();
   if (!t) return null;
   if (parseSpecQuery(t)) return "product";
+  if (looksLikeCai(t)) return "product"; // CAI — 미쉐린 고유번호 5~6자리
   if (/^\d{2,3}[가-힣]\s?\d{4}$/.test(t) || /^[가-힣]{2}\d{2,3}[가-힣]\d{4}$/.test(t)) return "customer";
   if (/^\d{4}$/.test(t)) return "customer"; // 고객은 "3456이요" 라고 말한다
   if (/^01\d{1,2}-?\d{3,4}-?\d{4}$/.test(t) || /^\d{9,11}$/.test(t.replace(/\D/g, ""))) return "customer";
@@ -154,8 +162,17 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
         eq(product.aspectRatio, spec.aspectRatio),
         sql`${product.rimInch} = ${String(spec.rimInch)}`,
       );
-    } else if (/^\d{8,13}$/.test(t)) {
-      conds.push(eq(product.barcode, t));
+    } else if (looksLikeCai(t)) {
+      /**
+       * ⭐ CAI 검색 (사장님 요청 2026-08-01)
+       * 미쉐린은 타이어마다 고유번호가 있고, 그게 MARS 품번과 같은 값이다.
+       * 앞자리만 쳐도 찾히게 부분 일치도 받는다.
+       */
+      conds.push(
+        or(eq(product.marsItemNo, t), sql`${product.marsItemNo} LIKE ${t + "%"}`, eq(product.barcode, t))!,
+      );
+    } else if (/^\d{7,13}$/.test(t)) {
+      conds.push(or(eq(product.barcode, t), eq(product.marsItemNo, t))!);
     } else {
       // 모델명 · 부품번호 · 적용차종
       const like = `%${t}%`;
@@ -199,6 +216,7 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
   const rows = await db
     .select({
       productId: product.id,
+      cai: product.marsItemNo,
       name: product.rawName,
       pattern: product.pattern,
       brandName: brand.nameKo,
@@ -234,8 +252,14 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
     )
     .limit(60);
 
-  return rows.map((r) => ({
+  return rows.map((r) => {
+    const n = parseName(r.name, r.pattern);
+    return {
     productId: r.productId,
+    // MARS 이관품은 품번이 곧 CAI. 자체 등록품(NEW-…)은 CAI가 없다
+    cai: r.cai && /^\d+$/.test(r.cai) ? r.cai : null,
+    fullName: n.full,
+    oe: n.oe,
     name: r.name,
     pattern: r.pattern,
     brandName: r.brandName,
@@ -256,7 +280,8 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
     fitment: r.fitment,
     partNo: r.partNo,
     isHidden: r.isHidden,
-  }));
+    };
+  });
 }
 
 /** 필터 화면에 쓸 브랜드 목록 — 취급 중이고 타이어를 가진 브랜드만 */

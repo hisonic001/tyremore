@@ -53,6 +53,12 @@ export function ProductCard({ p }: { p: ProductHit }) {
           {p.isSuv && (
             <span className="rounded bg-stone-100 px-2 py-0.5 text-xs font-medium text-stone-700">SUV</span>
           )}
+          {/* OE 마킹 — 어느 차 순정인가. 같은 모델이라도 마킹이 다르면 다른 물건이다 */}
+          {p.oe.map((m) => (
+            <span key={m} className="rounded bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900">
+              {m}
+            </span>
+          ))}
           {p.isHidden && (
             <span className="rounded bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-600">숨김</span>
           )}
@@ -60,12 +66,21 @@ export function ProductCard({ p }: { p: ProductHit }) {
 
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="truncate text-lg font-semibold">{p.pattern ?? p.name}</div>
-            <div className="tabular mt-0.5 text-sm text-slate-700">
-              {[p.spec, p.loadSpeed].filter(Boolean).join("  ")}
-            </div>
+            {/*
+              ⭐ 전체 이름을 그대로 보여준다 (사장님 요청 2026-08-01).
+              모델명만 띄우면 같은 PILOT SPORT 4 S 세 건이 똑같이 보인다.
+              XL·ZR·TL·OE마킹이 다른 물건이다.
+            */}
+            <div className="text-base font-semibold leading-snug">{p.fullName}</div>
             {p.fitment && <div className="mt-0.5 truncate text-sm text-slate-500">{p.fitment}</div>}
-            {p.partNo && <div className="tabular text-xs text-slate-400">{p.partNo}</div>}
+            <div className="tabular mt-1 flex flex-wrap gap-x-3 text-xs text-slate-400">
+              {p.cai && (
+                <span>
+                  CAI <span className="font-semibold text-slate-600">{p.cai}</span>
+                </span>
+              )}
+              {p.partNo && <span>{p.partNo}</span>}
+            </div>
           </div>
           <StockBadge p={p} />
         </div>
