@@ -5,9 +5,13 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   previewInvoice,
+  receiveAll,
   receiveLine,
+  removeInvoice,
+  removeInvoiceItem,
   saveInvoice,
   type InvoicePreview,
+  type PendingInvoice,
   type PendingLine,
   type PreviewResult,
 } from "@/lib/invoice";
@@ -235,14 +239,102 @@ function InvoiceCard({ one }: { one: InvoicePreview }) {
   );
 }
 
-/** ② 도착 확정 */
-export function PendingList({ lines }: { lines: PendingLine[] }) {
+/** ② 도착 확정 — 인보이스 단위로 묶어서 다룬다 */
+export function PendingList({ invoices }: { invoices: PendingInvoice[] }) {
   return (
-    <ul className="mt-3 space-y-2">
-      {lines.map((l) => (
-        <PendingRow key={l.itemId} l={l} />
+    <ul className="mt-3 space-y-4">
+      {invoices.map((inv) => (
+        <PendingInvoiceCard key={inv.invoiceId} inv={inv} />
       ))}
     </ul>
+  );
+}
+
+function PendingInvoiceCard({ inv }: { inv: PendingInvoice }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  return (
+    <li className="rounded-xl border-2 border-slate-300 bg-white p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <span className="font-bold">
+          {inv.supplier}{" "}
+          <span className="tabular text-sm font-normal text-slate-500">{inv.invoiceNo}</span>
+        </span>
+        <span className="tabular text-sm text-slate-500">
+          {inv.issuedAt} · <strong className="text-amber-800">{inv.remain}본 대기</strong>
+        </span>
+      </div>
+
+      {error && <p className="mt-2 whitespace-pre-line text-sm text-red-600">{error}</p>}
+
+      {/* ⭐ 바코드 없이 한 번에 재고로 (사장님 요청) */}
+      <div className="mt-2 flex gap-2">
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() =>
+            start(async () => {
+              setError(null);
+              const r = await receiveAll(inv.invoiceId);
+              if (!r.ok) setError(r.error);
+              else {
+                if (r.failed.length) setError(`${r.created}본 입고. 남은 문제:\n${r.failed.join("\n")}`);
+                router.refresh();
+              }
+            })
+          }
+          className="flex-1 rounded-lg bg-slate-900 py-3 font-semibold text-white disabled:opacity-50"
+        >
+          {pending ? "처리 중…" : `전량 입고 (${inv.remain}본)`}
+        </button>
+        {confirmDelete ? (
+          <>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() =>
+                start(async () => {
+                  const r = await removeInvoice(inv.invoiceId);
+                  if (!r.ok) setError(r.error ?? "지우지 못했습니다");
+                  else router.refresh();
+                })
+              }
+              className="rounded-lg bg-red-600 px-4 py-3 text-sm font-semibold text-white"
+            >
+              정말 삭제
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmDelete(false)}
+              className="px-2 text-sm text-slate-500"
+            >
+              취소
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setConfirmDelete(true)}
+            aria-label="인보이스 삭제"
+            className="rounded-lg border border-slate-300 px-4 py-3 text-slate-400"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+      <p className="mt-1 text-xs text-slate-400">
+        전량 입고는 DOT 없이 들어갑니다. DOT 를 넣으려면 아래에서 품목별로 하세요.
+      </p>
+
+      <ul className="mt-2 space-y-2">
+        {inv.lines.map((l) => (
+          <PendingRow key={l.itemId} l={l} />
+        ))}
+      </ul>
+    </li>
   );
 }
 
@@ -262,16 +354,32 @@ function PendingRow({ l }: { l: PendingLine }) {
         <div className="min-w-0">
           <div className="truncate font-semibold">{l.model ?? l.description}</div>
           <div className="tabular text-xs text-slate-500">
-            {[l.spec, `CAI ${l.cai}`].filter(Boolean).join(" · ")}
-          </div>
-          <div className="tabular mt-0.5 text-xs text-slate-400">
-            {l.supplier} {l.invoiceNo} {l.issuedAt && `· ${l.issuedAt}`}
-            {l.unitCost && ` · 본당 ${won(l.unitCost)}원`}
+            {[l.spec, l.cai].filter(Boolean).join(" · ")}
+            {l.unitCost ? ` · 본당 ${won(l.unitCost)}원` : ""}
           </div>
         </div>
-        <span className="tabular shrink-0 rounded-lg bg-amber-100 px-3 py-1.5 text-sm font-bold text-amber-900">
-          {remain}본 대기
-        </span>
+        <div className="flex shrink-0 items-center gap-1">
+          <span className="tabular rounded-lg bg-amber-100 px-3 py-1.5 text-sm font-bold text-amber-900">
+            {remain}본
+          </span>
+          {/* ⭐ 타이어가 아닌 것이 섞여 온다 — 목록에서 뺀다 (사장님 요청) */}
+          <button
+            type="button"
+            disabled={pending}
+            aria-label="이 품목 빼기"
+            onClick={() =>
+              start(async () => {
+                setError(null);
+                const r = await removeInvoiceItem(l.itemId);
+                if (!r.ok) setError(r.error ?? "지우지 못했습니다");
+                else router.refresh();
+              })
+            }
+            className="px-2 text-slate-300 active:text-red-600"
+          >
+            ✕
+          </button>
+        </div>
       </div>
 
       {!l.productId ? (

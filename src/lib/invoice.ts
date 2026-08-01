@@ -279,6 +279,110 @@ export interface PendingLine {
   unitCost: number | null;
 }
 
+export interface PendingInvoice {
+  invoiceId: number;
+  invoiceNo: string;
+  supplier: string;
+  issuedAt: string | null;
+  status: string;
+  lines: PendingLine[];
+  /** 아직 안 온 수량 합 */
+  remain: number;
+}
+
+/** 인보이스 단위로 묶어 준다 — 화면에서 한 건씩 통째로 다루기 위해 */
+export async function pendingInvoices(): Promise<PendingInvoice[]> {
+  const lines = await pendingLines();
+  const map = new Map<number, PendingInvoice>();
+  for (const l of lines) {
+    const g =
+      map.get(l.invoiceId) ??
+      map
+        .set(l.invoiceId, {
+          invoiceId: l.invoiceId,
+          invoiceNo: l.invoiceNo,
+          supplier: l.supplier,
+          issuedAt: l.issuedAt,
+          status: "",
+          lines: [],
+          remain: 0,
+        })
+        .get(l.invoiceId)!;
+    g.lines.push(l);
+    g.remain += l.qty - l.receivedQty;
+  }
+  return [...map.values()];
+}
+
+/**
+ * ⭐ 인보이스 품목 지우기 (사장님 요청 2026-08-01)
+ *   타이어가 아닌 것이 섞여 오므로 목록에서 빼야 한다.
+ *
+ * ⚠️ 이미 입고된 것은 못 지운다. 재고가 이미 생겼기 때문에
+ *    여기서 지우면 재고만 남고 근거가 사라진다.
+ */
+export async function removeInvoiceItem(itemId: number): Promise<{ ok: boolean; error?: string }> {
+  const [line] = await db
+    .select()
+    .from(purchaseInvoiceItem)
+    .where(eq(purchaseInvoiceItem.id, itemId))
+    .limit(1);
+  if (!line) return { ok: false, error: "품목을 찾을 수 없습니다" };
+  if (line.receivedQty > 0) {
+    return { ok: false, error: "이미 입고된 품목입니다. 재고 화면에서 수량을 고쳐 주세요" };
+  }
+  await db.delete(purchaseInvoiceItem).where(eq(purchaseInvoiceItem.id, itemId));
+
+  // 품목이 하나도 안 남으면 인보이스도 정리한다
+  const [rest] = await db.execute<{ n: number }>(
+    sql`SELECT count(*)::int n FROM purchase_invoice_item WHERE invoice_id = ${line.invoiceId}`,
+  );
+  if ((rest?.n ?? 0) === 0) {
+    await db.delete(purchaseInvoice).where(eq(purchaseInvoice.id, line.invoiceId));
+  }
+  refresh("/receiving");
+  return { ok: true };
+}
+
+/** 인보이스 통째로 지우기 — 잘못 올렸을 때 */
+export async function removeInvoice(invoiceId: number): Promise<{ ok: boolean; error?: string }> {
+  const [got] = await db.execute<{ received: number }>(
+    sql`SELECT COALESCE(SUM(received_qty),0)::int received
+        FROM purchase_invoice_item WHERE invoice_id = ${invoiceId}`,
+  );
+  if ((got?.received ?? 0) > 0) {
+    return { ok: false, error: "이미 입고된 품목이 있어 지울 수 없습니다" };
+  }
+  await db.delete(purchaseInvoice).where(eq(purchaseInvoice.id, invoiceId));
+  refresh("/receiving");
+  return { ok: true };
+}
+
+/**
+ * ⭐ 남은 수량 전부 입고 (사장님 요청 2026-08-01)
+ *   바코드를 찍지 않아도 한 번에 재고로 넘긴다.
+ *   ⚠️ DOT 는 비워 둔다. 나중에 재고 화면에서 채울 수 있다 (D-02).
+ */
+export async function receiveAll(
+  invoiceId: number,
+  userId?: number,
+): Promise<{ ok: true; created: number; failed: string[] } | { ok: false; error: string }> {
+  const lines = (await pendingLines()).filter((l) => l.invoiceId === invoiceId);
+  if (lines.length === 0) return { ok: false, error: "입고할 것이 없습니다" };
+
+  let created = 0;
+  const failed: string[] = [];
+  for (const l of lines) {
+    const remain = l.qty - l.receivedQty;
+    if (remain <= 0) continue;
+    const r = await receiveLine({ itemId: l.itemId, qty: remain, dot: null, userId });
+    if (r.ok) created += r.created;
+    else failed.push(`${l.model ?? l.cai}: ${r.error}`);
+  }
+  refresh("/receiving", "/");
+  return { ok: true, created, failed };
+}
+
 /** 아직 다 안 들어온 인보이스 품목 */
 export async function pendingLines(): Promise<PendingLine[]> {
   const rows = await db.execute<{

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { pendingLines } from "@/lib/invoice";
+import { pendingInvoices } from "@/lib/invoice";
 import { InvoiceUpload, PendingList } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -10,8 +10,8 @@ export const dynamic = "force-dynamic";
  *   ② 실물이 도착하면 확정 → 재고가 된다
  */
 export default async function ReceivingPage() {
-  const lines = await pendingLines();
-  const totalPending = lines.reduce((s, l) => s + (l.qty - l.receivedQty), 0);
+  const invoices = await pendingInvoices();
+  const totalPending = invoices.reduce((s, i) => s + i.remain, 0);
 
   return (
     <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6">
@@ -34,12 +34,12 @@ export default async function ReceivingPage() {
             </span>
           )}
         </h2>
-        {lines.length === 0 ? (
+        {invoices.length === 0 ? (
           <p className="mt-3 rounded-xl border border-dashed border-slate-300 p-6 text-center text-slate-500">
             기다리는 물건이 없습니다
           </p>
         ) : (
-          <PendingList lines={lines} />
+          <PendingList invoices={invoices} />
         )}
       </section>
     </main>
