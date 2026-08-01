@@ -4,6 +4,7 @@ import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
+  createProductFromInvoiceItem,
   previewInvoice,
   receiveAll,
   receiveLine,
@@ -383,12 +384,34 @@ function PendingRow({ l }: { l: PendingLine }) {
       </div>
 
       {!l.productId ? (
-        <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
-          상품이 등록돼 있지 않아 입고할 수 없습니다.{" "}
-          <Link href={`/product/new?q=${encodeURIComponent(l.cai)}`} className="underline">
-            상품 등록
-          </Link>
-        </p>
+        <div className="mt-2 rounded-lg bg-red-50 px-3 py-2">
+          <p className="text-sm text-red-700">상품 목록에 없어 입고할 수 없습니다</p>
+          <p className="tabular mt-0.5 text-xs text-red-600">{l.description}</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {/* ⭐ 인보이스에 규격·모델명·기표가가 다 있다. 그대로 만든다 */}
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() =>
+                start(async () => {
+                  setError(null);
+                  const r = await createProductFromInvoiceItem(l.itemId);
+                  if (!r.ok) setError(r.error);
+                  else router.refresh();
+                })
+              }
+              className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              {pending ? "만드는 중…" : "인보이스 정보로 상품 만들기"}
+            </button>
+            <Link
+              href={`/product/new?q=${encodeURIComponent(l.cai)}`}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm text-slate-600"
+            >
+              직접 등록
+            </Link>
+          </div>
+        </div>
       ) : (
         <>
           <div className="mt-2 flex flex-wrap items-center gap-2">

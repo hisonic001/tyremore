@@ -275,7 +275,15 @@ export async function load(data: {
     if (p.no) prodIdByMars.set(p.no, p.id);
   }
 
-  // 재이관 시 중복 생성을 막는다. 이관분(stock_no 접두 IMP-)만 지운다.
+  /**
+   * 재이관 시 중복 생성을 막는다. 이관분(stock_no 접두 IMP-)만 지운다.
+   * ⚠️ 입출고 이력이 먼저 지워져야 한다. 안 그러면 외래키에 걸려 재이관이 통째로 실패한다
+   *    ("Key (id)=… is still referenced from table stock_movement") — 2026-08-01 발견.
+   */
+  await db.execute(sql`
+    DELETE FROM stock_movement
+    WHERE stock_item_id IN (SELECT id FROM stock_item WHERE stock_no LIKE 'IMP-%')
+  `);
   await db.execute(sql`DELETE FROM stock_item WHERE stock_no LIKE 'IMP-%'`);
 
   let seq = 0;

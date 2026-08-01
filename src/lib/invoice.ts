@@ -359,6 +359,132 @@ export async function removeInvoice(invoiceId: number): Promise<{ ok: boolean; e
 }
 
 /**
+ * ⭐ 인보이스 정보로 상품 바로 만들기 (사장님 요청 2026-08-01)
+ *
+ * 신모델은 MARS 마스터에 아직 없다 (금호 HP72 등). 그런데 인보이스에는
+ * 규격·모델명·기표가가 다 들어 있으므로 그대로 상품을 만들 수 있다.
+ *
+ * ⭐ 품번을 **MARS 규칙에 맞춰** 만든다 — 미쉐린은 그대로, 콘티넨탈 `CO…`, 금호 `KM…`.
+ *    그래야 나중에 MARS 마스터를 다시 받았을 때 저절로 이어진다.
+ *    아무 번호나 붙이면 그때 중복이 생긴다.
+ */
+export async function createProductFromInvoiceItem(
+  itemId: number,
+): Promise<{ ok: true; productId: number } | { ok: false; error: string }> {
+  const [line] = await db.execute<{
+    id: number;
+    cai: string;
+    description: string;
+    unit_list_price: number | null;
+    unit_cost: number | null;
+    supplier: string;
+    product_id: number | null;
+  }>(sql`
+    SELECT ii.id, ii.cai, ii.description, ii.unit_list_price, ii.unit_cost,
+           i.supplier, ii.product_id
+    FROM purchase_invoice_item ii JOIN purchase_invoice i ON i.id = ii.invoice_id
+    WHERE ii.id = ${itemId}
+  `);
+  if (!line) return { ok: false, error: "품목을 찾을 수 없습니다" };
+  if (line.product_id) return { ok: false, error: "이미 상품이 연결돼 있습니다" };
+
+  const BRAND: Record<string, { code: string; prefix: string }> = {
+    미쉐린: { code: "MI", prefix: "" },
+    콘티넨탈: { code: "CO", prefix: "CO" },
+    금호: { code: "KM", prefix: "KM" },
+  };
+  const b = BRAND[line.supplier];
+  if (!b) return { ok: false, error: `${line.supplier} 은 아직 자동 등록을 지원하지 않습니다` };
+
+  const marsItemNo = `${b.prefix}${line.cai}`;
+
+  // 혹시 이미 있으면 잇기만 한다
+  const [exists] = await db
+    .select({ id: product.id })
+    .from(product)
+    .where(eq(product.marsItemNo, marsItemNo))
+    .limit(1);
+  if (exists) {
+    await db
+      .update(purchaseInvoiceItem)
+      .set({ productId: exists.id })
+      .where(eq(purchaseInvoiceItem.id, itemId));
+    refresh("/receiving");
+    return { ok: true, productId: exists.id };
+  }
+
+  const { parseTireSpec } = await import("./tire-spec");
+  const { parseTireName } = await import("./tire-name");
+  const { parseTireAttrs } = await import("./tire-attrs");
+
+  /**
+   * ⚠️ 브랜드마다 자재명에 내부 코드가 섞여 온다.
+   *    금호 `KH 245/60  R18 V04L HP72 8K;RK` — `KH`(브랜드) `V04L`·`8K;RK`(내부코드)
+   *    이걸 그대로 모델명으로 쓰면 화면이 읽을 수 없게 된다.
+   */
+  const desc = line.description
+    .replace(/;.*$/, " ") // `;RK` 뒤는 내부 코드
+    .replace(/^\s*(KH|KM|CO|MI|BS|HK|NX|GY)\s+/i, " ") // 브랜드 접두
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const spec = parseTireSpec(desc);
+  if (!spec.parsed) {
+    return {
+      ok: false,
+      error: `규격을 읽지 못했습니다 («${line.description}»). 「새 상품 등록」에서 직접 넣어 주세요`,
+    };
+  }
+  const name = parseTireName(desc, desc, spec);
+  const attrs = parseTireAttrs(desc, desc);
+
+  // 기표가 — 인보이스에 없으면 매입가로 대신 채워 둔다 (0 보다 낫다)
+  const excl = line.unit_list_price && line.unit_list_price > 0 ? line.unit_list_price : line.unit_cost;
+  const [brandRow] = await db.execute<{ vat: boolean }>(
+    sql`SELECT price_excludes_vat vat FROM brand WHERE code = ${b.code}`,
+  );
+  const listPrice = excl ? (brandRow?.vat ? Math.round(excl * 1.1) : excl) : null;
+
+  const [row] = await db
+    .insert(product)
+    .values([
+      {
+        marsItemNo,
+        itemType: "tire",
+        isSerialized: true,
+        brandCode: b.code,
+        pattern: name.model,
+        // 원문은 손대지 않은 것을 남긴다 — 나중에 다시 읽을 수 있어야 한다
+        rawName: line.description,
+        width: spec.width,
+        aspectRatio: spec.aspectRatio,
+        rimInch: spec.rimInch !== null ? String(spec.rimInch) : null,
+        loadIndex: spec.loadIndex,
+        speedRating: spec.speedRating,
+        season: attrs.season,
+        isRunflat: attrs.isRunflat,
+        isAcoustic: attrs.isAcoustic,
+        isSuv: attrs.isSuv,
+        category: "10-TIRES",
+        barcode: marsItemNo,
+        listPriceExcl: excl,
+        listPrice,
+        specParsed: true,
+        stockTracked: false,
+      },
+    ])
+    .returning({ id: product.id });
+
+  await db
+    .update(purchaseInvoiceItem)
+    .set({ productId: row.id })
+    .where(eq(purchaseInvoiceItem.id, itemId));
+
+  refresh("/receiving", "/");
+  return { ok: true, productId: row.id };
+}
+
+/**
  * ⭐ 남은 수량 전부 입고 (사장님 요청 2026-08-01)
  *   바코드를 찍지 않아도 한 번에 재고로 넘긴다.
  *   ⚠️ DOT 는 비워 둔다. 나중에 재고 화면에서 채울 수 있다 (D-02).
