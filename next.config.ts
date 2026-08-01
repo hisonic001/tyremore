@@ -28,6 +28,18 @@ const nextConfig: NextConfig = {
   // 매장 태블릿은 공용이다. 캐시된 화면이 남으면 앞 손님 정보가 보인다.
   poweredByHeader: false,
 
+  /**
+   * ⚠️ 인보이스 PDF 를 읽으려면 pdf.js 의 CMap 데이터가 함께 배포돼야 한다.
+   *    없으면 한글 CID 폰트 문서(콘티넨탈)에서 글자가 0개로 나온다.
+   *    Next.js 는 실제로 import 된 코드만 챙기므로 데이터 파일은 따로 지정해야 한다.
+   */
+  outputFileTracingIncludes: {
+    "/**": [
+      "./node_modules/pdfjs-dist/cmaps/**",
+      "./node_modules/pdfjs-dist/standard_fonts/**",
+    ],
+  },
+
   typescript: { ignoreBuildErrors: false },
   eslint: { ignoreDuringBuilds: true },
 };

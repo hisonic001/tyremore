@@ -3,7 +3,14 @@
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { previewInvoice, receiveLine, saveInvoice, type InvoicePreview, type PendingLine } from "@/lib/invoice";
+import {
+  previewInvoice,
+  receiveLine,
+  saveInvoice,
+  type InvoicePreview,
+  type PendingLine,
+  type PreviewResult,
+} from "@/lib/invoice";
 
 const won = (n: number) => n.toLocaleString();
 
@@ -15,7 +22,7 @@ const won = (n: number) => n.toLocaleString();
 export function InvoiceUpload() {
   const router = useRouter();
   const [pending, start] = useTransition();
-  const [pv, setPv] = useState<InvoicePreview | null>(null);
+  const [pv, setPv] = useState<PreviewResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [updatePrices, setUpdatePrices] = useState(true);
@@ -43,7 +50,9 @@ export function InvoiceUpload() {
       if (!r.ok) setError(r.error);
       else {
         setMsg(
-          `등록했습니다. ${updatePrices ? `매입 할인율 ${r.priceUpdates}건도 갱신했습니다.` : ""}`,
+          `인보이스 ${r.saved}건 등록했습니다.` +
+            (r.skipped ? ` (이미 있던 ${r.skipped}건은 건너뜀)` : "") +
+            (updatePrices && r.priceUpdates ? ` 매입 할인율 ${r.priceUpdates}건 갱신.` : ""),
         );
         setPv(null);
         fileRef.current = null;
@@ -76,70 +85,17 @@ export function InvoiceUpload() {
 
       {pv && (
         <div className="mt-4">
-          <dl className="tabular grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-            <dt className="text-slate-500">매입처</dt>
-            <dd className="text-right font-medium">{pv.supplier}</dd>
-            <dt className="text-slate-500">발행번호</dt>
-            <dd className="text-right font-medium">{pv.invoiceNo || "—"}</dd>
-            <dt className="text-slate-500">발행일자</dt>
-            <dd className="text-right">{pv.issuedAt ?? "—"}</dd>
-            <dt className="text-slate-500">총 수량</dt>
-            <dd className="text-right font-bold">{pv.totalQty ?? "—"}본</dd>
-            <dt className="text-slate-500">공급가액</dt>
-            <dd className="text-right">{pv.subtotal ? won(pv.subtotal) : "—"}원</dd>
-            <dt className="text-slate-500">총 합계</dt>
-            <dd className="text-right font-bold">{pv.total ? won(pv.total) : "—"}원</dd>
-          </dl>
-
-          {/* 검산 — 인보이스는 돈이다 */}
-          <p
-            className={`mt-3 rounded-lg px-3 py-2 text-sm ${
-              pv.ok ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900"
-            }`}
-          >
-            {pv.ok ? "✅ 금액 검산이 전부 맞습니다" : `⚠️ ${pv.checks.join(" / ")}`}
-          </p>
-          {pv.duplicate && (
-            <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
-              이미 올린 인보이스입니다
-            </p>
+          {pv.note && (
+            <p className="mb-3 rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-700">{pv.note}</p>
           )}
 
-          <ul className="mt-3 divide-y divide-slate-100">
-            {pv.items.map((it, i) => {
-              const m = pv.matches[i];
-              return (
-                <li key={it.cai} className="py-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold">
-                        {m?.model ?? it.description}
-                      </div>
-                      <div className="tabular text-xs text-slate-500">
-                        CAI {it.cai} · {it.qty}본 · 할인 {(it.discountRate * 100).toFixed(0)}%
-                      </div>
-                    </div>
-                    <div className="tabular shrink-0 text-right">
-                      <div className="text-sm font-bold">본당 {won(it.unitCost)}원</div>
-                      <div className="text-xs text-slate-400">{won(it.supplyAmount)}원</div>
-                    </div>
-                  </div>
-                  {!m?.productId && (
-                    <p className="mt-1 text-xs text-red-600">
-                      우리 상품 목록에 없습니다 — 먼저 등록해야 입고됩니다
-                    </p>
-                  )}
-                  {m?.priceDiffers && (
-                    <p className="mt-1 text-xs text-amber-700">
-                      기표가가 다릅니다 (우리 {won(m.ourListPrice!)} → 인보이스 {won(it.unitListPrice)})
-                    </p>
-                  )}
-                </li>
-              );
-            })}
+          <ul className="space-y-3">
+            {pv.invoices.map((one) => (
+              <InvoiceCard key={one.invoiceNo} one={one} />
+            ))}
           </ul>
 
-          <label className="mt-3 flex items-start gap-2 rounded-lg bg-slate-50 p-3 text-sm">
+          <label className="mt-4 flex items-start gap-2 rounded-lg bg-slate-50 p-3 text-sm">
             <input
               type="checkbox"
               checked={updatePrices}
@@ -156,15 +112,84 @@ export function InvoiceUpload() {
 
           <button
             type="button"
-            disabled={pending || pv.duplicate || pv.items.length === 0}
+            disabled={pending || pv.invoices.every((i) => i.duplicate)}
             onClick={commit}
             className="mt-3 w-full rounded-xl bg-slate-900 py-4 text-lg font-semibold text-white disabled:opacity-40"
           >
-            {pending ? "저장 중…" : "입고 예정으로 등록"}
+            {pending
+              ? "저장 중…"
+              : `입고 예정으로 등록 (${pv.invoices.filter((i) => !i.duplicate).length}건)`}
           </button>
         </div>
       )}
     </section>
+  );
+}
+
+/** 인보이스 한 건 미리보기 */
+function InvoiceCard({ one }: { one: InvoicePreview }) {
+  const missing = one.matches.filter((m) => !m.productId).length;
+  return (
+    <li
+      className={`rounded-xl border p-3 ${
+        one.duplicate ? "border-slate-200 bg-slate-50 opacity-60" : "border-slate-300 bg-white"
+      }`}
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+        <span className="font-semibold">
+          {one.supplier} <span className="tabular text-sm font-normal text-slate-500">{one.invoiceNo}</span>
+        </span>
+        <span className="tabular text-sm text-slate-500">
+          {one.issuedAt} · {one.totalQty}본 · {one.total ? won(one.total) : "—"}원
+        </span>
+      </div>
+
+      {one.duplicate ? (
+        <p className="mt-1 text-sm text-slate-500">이미 등록돼 있습니다 — 건너뜁니다</p>
+      ) : (
+        <p
+          className={`mt-1 rounded px-2 py-1 text-xs ${
+            one.ok ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900"
+          }`}
+        >
+          {one.checks.length === 0 ? "✅ 금액 검산이 맞습니다" : one.checks.join(" / ")}
+        </p>
+      )}
+
+      <ul className="mt-2 divide-y divide-slate-100">
+        {one.items.map((it, i) => {
+          const m = one.matches[i];
+          return (
+            <li key={it.cai + i} className="py-1.5">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">{m?.model ?? it.description}</div>
+                  <div className="tabular text-xs text-slate-500">
+                    {it.cai} · {it.qty}본
+                    {it.discountRate > 0 && ` · 할인 ${(it.discountRate * 100).toFixed(0)}%`}
+                  </div>
+                </div>
+                <div className="tabular shrink-0 text-right">
+                  <div className="text-sm font-bold">{won(it.unitCost)}원</div>
+                  <div className="text-xs text-slate-400">{won(it.supplyAmount)}</div>
+                </div>
+              </div>
+              {!m?.productId && (
+                <p className="text-xs text-red-600">상품 미등록 — 먼저 등록해야 입고됩니다</p>
+              )}
+              {m?.priceDiffers && (
+                <p className="text-xs text-amber-700">
+                  기표가 {won(m.ourListPrice!)} → {won(it.unitListPrice)} 로 갱신됩니다
+                </p>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {missing > 0 && (
+        <p className="mt-1 text-xs text-red-600">상품 미등록 {missing}건</p>
+      )}
+    </li>
   );
 }
 

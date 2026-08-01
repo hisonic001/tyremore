@@ -15,9 +15,34 @@ import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { product, purchaseInvoice, purchaseInvoiceItem, stockItem, stockMovement } from "@/db/schema";
-import { parseInvoice, type ParsedInvoice } from "./invoice-parse";
+import { parseInvoiceRows, parseInvoiceText, type ParsedInvoice } from "./invoice-parse";
 import { isPlausibleDot } from "./normalize";
 import { savePriceRule } from "./pricing";
+
+/**
+ * 인보이스 품번으로 우리 상품을 찾는다.
+ *
+ * 브랜드마다 번호 체계가 다르고, 우리 DB에는 접두가 붙어 있다.
+ *   미쉐린   267623        → 그대로
+ *   콘티넨탈 03580470000   → CO03580470000
+ *   금호     2420132       → KM2420132
+ * ⚠️ 접두를 고정하면 안 된다. **콘티넨탈 인보이스에 제네럴(GN) 제품이 섞여 온다.**
+ *    실제로 04492050000(GRAB HT6)이 GN 으로 들어 있었다.
+ */
+async function matchProduct(code: string) {
+  const [p] = await db.execute<{ id: number; pattern: string | null; excl: number | null }>(sql`
+    SELECT p.id, COALESCE(p.display_name, p.pattern) pattern, p.list_price_excl excl
+    FROM product p
+    WHERE p.mars_item_no = ${code}
+       OR p.barcode = ${code}
+       OR p.mars_item_no = ${"CO" + code}
+       OR p.mars_item_no = ${"KM" + code}
+       OR p.mars_item_no LIKE ${"%" + code}
+    ORDER BY (p.mars_item_no = ${code}) DESC
+    LIMIT 1
+  `);
+  return p ?? null;
+}
 
 function refresh(...paths: string[]) {
   for (const p of paths) {
@@ -44,27 +69,34 @@ export interface InvoicePreview extends ParsedInvoice {
   }[];
 }
 
+export interface PreviewResult {
+  /** ⚠️ 한 파일에 인보이스가 여러 건 들어온다 */
+  invoices: InvoicePreview[];
+  /** 파일 전체에 대한 안내 */
+  note: string | null;
+}
+
 /** ① 파일을 읽어 미리보기를 만든다. 아직 저장하지 않는다 */
 export async function previewInvoice(
   fileName: string,
   bytes: ArrayBuffer,
-): Promise<InvoicePreview | { error: string }> {
+): Promise<PreviewResult | { error: string }> {
   let text = "";
+  let excelRows: Record<string, unknown>[] | null = null;
   try {
-    /**
-     * ⚠️ 반드시 **복사본**을 넘긴다.
-     *    pdf.js 는 넘긴 버퍼를 가져가 버려서(detach), 원본을 다시 쓰면
-     *    "Cannot perform Construct on a detached ArrayBuffer" 로 깨진다.
-     *    미리보기 → 저장으로 같은 파일을 두 번 읽는 흐름이라 실제로 문제가 됐다.
-     */
     if (/\.pdf$/i.test(fileName)) {
-      const { extractText, getDocumentProxy } = await import("unpdf");
-      const pdf = await getDocumentProxy(new Uint8Array(bytes.slice(0)));
-      const r = await extractText(pdf, { mergePages: true });
-      text = r.text;
+      const { pdfToText } = await import("./pdf-text");
+      text = await pdfToText(bytes);
     } else if (/\.xlsx?$/i.test(fileName)) {
+      /**
+       * 금호는 인보이스가 아니라 「발주내역조회」 엑셀이다. 표 그대로 읽는다.
+       * CSV 로 눌러 읽으면 컬럼이 섞여 「합계」 행을 못 걸러낸다.
+       */
       const XLSX = await import("xlsx");
-      const wb = XLSX.read(new Uint8Array(bytes.slice(0)), { type: "array" });
+      const wb = XLSX.read(new Uint8Array(bytes.slice(0)), { type: "array", cellDates: true });
+      excelRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(wb.Sheets[wb.SheetNames[0]], {
+        defval: null,
+      });
       text = wb.SheetNames.map((n) => XLSX.utils.sheet_to_csv(wb.Sheets[n], { FS: " " })).join("\n");
     } else {
       return { error: "PDF 또는 엑셀 파일만 올릴 수 있습니다" };
@@ -80,39 +112,63 @@ export async function previewInvoice(
     };
   }
 
-  const parsed = parseInvoice(text);
+  // 엑셀이 기본 경로다. PDF 는 엑셀을 못 받을 때만 쓴다
+  const parsedList = excelRows ? parseInvoiceRows(excelRows) : parseInvoiceText(text);
 
-  const [dup] = parsed.invoiceNo
-    ? await db
-        .select({ id: purchaseInvoice.id })
-        .from(purchaseInvoice)
-        .where(eq(purchaseInvoice.invoiceNo, parsed.invoiceNo))
-        .limit(1)
-    : [];
-
-  // CAI 로 상품을 찾는다
-  const matches: InvoicePreview["matches"] = [];
-  for (const it of parsed.items) {
-    const [p] = await db
-      .select({
-        id: product.id,
-        pattern: product.pattern,
-        displayName: product.displayName,
-        excl: product.listPriceExcl,
-      })
-      .from(product)
-      .where(eq(product.marsItemNo, it.cai))
-      .limit(1);
-    matches.push({
-      cai: it.cai,
-      productId: p?.id ?? null,
-      model: p?.displayName ?? p?.pattern ?? null,
-      ourListPrice: p?.excl ?? null,
-      priceDiffers: !!p && p.excl !== null && p.excl !== it.unitListPrice,
-    });
+  if (parsedList.length === 0) {
+    return {
+      error: excelRows
+        ? "어느 브랜드 양식인지 알아보지 못했습니다. 미쉐린·콘티넨탈·금호 엑셀을 읽습니다."
+        : "이 PDF 는 읽지 못했습니다. 사이트에서 **엑셀**로 내려받아 올려 주세요 — 훨씬 정확합니다.",
+    };
   }
 
-  return { ...parsed, duplicate: !!dup, matches, rawTextLength: text.length } as InvoicePreview;
+  const invoices: InvoicePreview[] = [];
+  for (const parsed of parsedList) {
+    const [dup] = parsed.invoiceNo
+      ? await db
+          .select({ id: purchaseInvoice.id })
+          .from(purchaseInvoice)
+          .where(eq(purchaseInvoice.invoiceNo, parsed.invoiceNo))
+          .limit(1)
+      : [];
+
+    const matches: InvoicePreview["matches"] = [];
+    for (const it of parsed.items) {
+      const p = await matchProduct(it.cai);
+      matches.push({
+        cai: it.cai,
+        productId: p?.id ?? null,
+        model: p?.pattern ?? null,
+        ourListPrice: p?.excl ?? null,
+        // 기표가를 주는 것은 미쉐린뿐이다. 없는 브랜드는 비교할 것이 없다
+        priceDiffers: !!p && it.unitListPrice > 0 && p.excl !== null && p.excl !== it.unitListPrice,
+      });
+
+      /**
+       * ⭐ 할인율이 적힌 것은 미쉐린뿐이다.
+       *    콘티넨탈·금호는 단가만 주므로 **우리 기표가로 역산**한다.
+       *    이게 있어야 세 브랜드 모두 매입원가·마진이 나온다.
+       */
+      if (it.discountRate === 0 && p?.excl && p.excl > 0 && it.unitCost > 0) {
+        it.unitListPrice = p.excl;
+        it.discountRate = Math.max(0, Math.min(0.99, 1 - it.unitCost / p.excl));
+        it.discountAmount = Math.round(p.excl * it.qty - it.supplyAmount);
+      }
+    }
+    invoices.push({ ...parsed, duplicate: !!dup, matches });
+  }
+
+  const already = invoices.filter((i) => i.duplicate).length;
+  return {
+    invoices,
+    note:
+      invoices.length > 1
+        ? `이 파일에 인보이스 ${invoices.length}건이 들어 있습니다${already ? ` (이미 등록된 것 ${already}건)` : ""}`
+        : already
+          ? "이미 등록된 인보이스입니다"
+          : null,
+  };
 }
 
 /**
@@ -124,70 +180,83 @@ export async function saveInvoice(
   fileName: string,
   bytes: ArrayBuffer,
   opts: { updatePrices: boolean },
-): Promise<{ ok: true; invoiceId: number; priceUpdates: number } | { ok: false; error: string }> {
+): Promise<
+  { ok: true; saved: number; skipped: number; priceUpdates: number } | { ok: false; error: string }
+> {
   const pv = await previewInvoice(fileName, bytes);
   if ("error" in pv) return { ok: false, error: pv.error };
-  if (!pv.invoiceNo) return { ok: false, error: "발행번호를 찾지 못해 저장할 수 없습니다" };
-  if (pv.duplicate) return { ok: false, error: `이미 올린 인보이스입니다 (${pv.invoiceNo})` };
-  if (pv.items.length === 0) return { ok: false, error: "품목을 하나도 읽지 못했습니다" };
 
-  const [inv] = await db
-    .insert(purchaseInvoice)
-    .values([
-      {
-        supplier: pv.supplier,
-        invoiceNo: pv.invoiceNo,
-        orderNo: pv.orderNo,
-        issuedAt: pv.issuedAt,
-        totalQty: pv.totalQty,
-        subtotal: pv.subtotal,
-        vat: pv.vat,
-        total: pv.total,
-        fileName,
-        status: "입고대기",
-      },
-    ])
-    .returning({ id: purchaseInvoice.id });
+  // 이미 올린 것은 건너뛴다. 한 파일에 새 것과 옛 것이 섞여 오기 때문이다
+  const todo = pv.invoices.filter((i) => !i.duplicate && i.invoiceNo && i.items.length > 0);
+  const skipped = pv.invoices.length - todo.length;
+  if (todo.length === 0) {
+    return { ok: false, error: skipped > 0 ? "전부 이미 등록된 인보이스입니다" : "저장할 것이 없습니다" };
+  }
 
-  await db.insert(purchaseInvoiceItem).values(
-    pv.items.map((it, i) => ({
-      invoiceId: inv.id,
-      cai: it.cai,
-      productId: pv.matches[i]?.productId ?? null,
-      description: it.description,
-      qty: it.qty,
-      unitListPrice: it.unitListPrice,
-      discountRate: String(it.discountRate),
-      supplyAmount: it.supplyAmount,
-      unitCost: it.unitCost,
-    })),
-  );
-
-  /**
-   * ⭐ 매입 할인율·기표가 갱신 — 사장님이 수기로 넣을 일이 없어진다.
-   * 인보이스는 실제로 돈이 오간 근거라 어떤 자료보다 정확하다.
-   */
   let priceUpdates = 0;
-  if (opts.updatePrices) {
-    for (const it of pv.items) {
+  for (const one of todo) {
+    const [inv] = await db
+      .insert(purchaseInvoice)
+      .values([
+        {
+          supplier: one.supplier,
+          invoiceNo: one.invoiceNo,
+          orderNo: one.orderNo,
+          issuedAt: one.issuedAt,
+          totalQty: one.totalQty,
+          subtotal: one.subtotal,
+          vat: one.vat,
+          total: one.total,
+          fileName,
+          status: "입고대기",
+        },
+      ])
+      .returning({ id: purchaseInvoice.id });
+
+    await db.insert(purchaseInvoiceItem).values(
+      one.items.map((it, i) => ({
+        invoiceId: inv.id,
+        cai: it.cai,
+        productId: one.matches[i]?.productId ?? null,
+        description: it.description,
+        qty: it.qty,
+        unitListPrice: it.unitListPrice,
+        discountRate: String(it.discountRate),
+        supplyAmount: it.supplyAmount,
+        unitCost: it.unitCost,
+      })),
+    );
+
+    /**
+     * ⭐ 매입 할인율·기표가 갱신 — 사장님이 수기로 넣을 일이 없어진다.
+     * 인보이스는 실제로 돈이 오간 근거라 어떤 자료보다 정확하다.
+     */
+    if (!opts.updatePrices) continue;
+    for (const it of one.items) {
+      if (it.discountRate <= 0) continue;
       await savePriceRule({ scope: "item", target: it.cai, purchaseRate: it.discountRate });
       priceUpdates++;
-      // 기준단가가 다르면 인보이스 쪽이 최신이다 (MARS 데이터는 낡을 수 있다)
-      await db.execute(sql`
-        UPDATE product SET
-          list_price_excl = ${it.unitListPrice},
-          list_price = CASE WHEN (SELECT price_excludes_vat FROM brand b WHERE b.code = product.brand_code)
-                            THEN round(${it.unitListPrice} * 1.1)::int
-                            ELSE ${it.unitListPrice} END,
-          updated_at = now()
-        WHERE mars_item_no = ${it.cai}
-          AND (list_price_excl IS DISTINCT FROM ${it.unitListPrice})
-      `);
+      /**
+       * 기표가가 다르면 인보이스 쪽이 최신이다 (MARS 데이터는 낡을 수 있다).
+       * ⚠️ 역산으로 채운 값은 우리 기표가 그대로라 갱신되지 않는다 — 의도한 대로다.
+       */
+      if (it.unitListPrice > 0) {
+        await db.execute(sql`
+          UPDATE product SET
+            list_price_excl = ${it.unitListPrice},
+            list_price = CASE WHEN (SELECT price_excludes_vat FROM brand b WHERE b.code = product.brand_code)
+                              THEN round(${it.unitListPrice} * 1.1)::int
+                              ELSE ${it.unitListPrice} END,
+            updated_at = now()
+          WHERE mars_item_no = ${it.cai}
+            AND (list_price_excl IS DISTINCT FROM ${it.unitListPrice})
+        `);
+      }
     }
   }
 
   refresh("/", "/receiving");
-  return { ok: true, invoiceId: inv.id, priceUpdates };
+  return { ok: true, saved: todo.length, skipped, priceUpdates };
 }
 
 /* ============================================================
