@@ -3,6 +3,7 @@
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { linkBarcode } from "@/lib/barcode-lookup";
 import { useScanner } from "../use-scanner";
 import {
   createProductFromInvoiceItem,
@@ -250,10 +251,12 @@ function InvoiceCard({ one }: { one: InvoicePreview }) {
  *
  * 찍을 때마다 대기 수량이 1씩 줄어든다. **찍는 행위가 곧 검수다.**
  */
-export function ScanBox() {
+export function ScanBox({ lines }: { lines: PendingLine[] }) {
   const router = useRouter();
   const [log, setLog] = useState<{ ok: boolean; text: string; at: number }[]>([]);
   const [busy, setBusy] = useState(false);
+  /** 못 알아본 바코드 — 사장님이 이어 주면 다음부터 자동이 된다 */
+  const [unknown, setUnknown] = useState<string | null>(null);
 
   const handle = (code: string) => {
     if (busy) return;
@@ -264,12 +267,13 @@ export function ScanBox() {
         ? `✅ ${r.line.model ?? r.line.cai} 1본 — 남은 ${r.remain}본`
         : `❌ ${r.error}`;
       setLog((l) => [{ ok: r.ok, text, at: Date.now() }, ...l].slice(0, 6));
+      setUnknown(!r.ok && r.unknown ? (r.code ?? code) : null);
       setBusy(false);
       if (r.ok) router.refresh();
     })();
   };
 
-  useScanner(handle);
+  useScanner(handle, !unknown);
 
   return (
     <section className="mt-5 rounded-2xl border-2 border-emerald-600 bg-emerald-50 p-4">
@@ -301,6 +305,19 @@ export function ScanBox() {
         </button>
       </form>
 
+      {/* ⭐ 못 알아본 바코드를 여기서 이어 준다. 한 번만 하면 다음부터 자동 */}
+      {unknown && (
+        <LinkBarcode
+          code={unknown}
+          lines={lines}
+          onDone={() => {
+            setUnknown(null);
+            router.refresh();
+          }}
+          onCancel={() => setUnknown(null)}
+        />
+      )}
+
       {log.length > 0 && (
         <ul className="mt-3 space-y-1">
           {log.map((l) => (
@@ -319,11 +336,105 @@ export function ScanBox() {
   );
 }
 
+/**
+ * 처음 보는 바코드를 상품과 잇는다.
+ *
+ * 브랜드마다 체계가 달라 미리 다 알 수 없다 —
+ * 한국타이어는 EAN-13(8808563590301), 미쉐린은 품번+개별번호(441358261D590A).
+ * 그래서 **한 번 이어 주면 그다음부터 자동**이 되게 한다 (D-05 와 같은 철학).
+ */
+function LinkBarcode({
+  code,
+  lines,
+  onDone,
+  onCancel,
+}: {
+  code: string;
+  lines: PendingLine[];
+  onDone: () => void;
+  onCancel: () => void;
+}) {
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  /** 앞부분만 같고 뒤가 본마다 다른 형태인가 (미쉐린식) */
+  const [asPrefix, setAsPrefix] = useState(/^\d{6}[0-9A-Z]{6,}$/.test(code));
+  const prefix = code.slice(0, 6);
+
+  const link = (productId: number) =>
+    start(async () => {
+      setError(null);
+      const r = await linkBarcode({
+        code: asPrefix ? prefix : code,
+        productId,
+        kind: asPrefix ? "prefix" : "exact",
+      });
+      if (!r.ok) setError(r.error);
+      else onDone();
+    });
+
+  const candidates = lines.filter((l) => l.productId);
+
+  return (
+    <div className="mt-3 rounded-xl border-2 border-amber-500 bg-amber-50 p-3">
+      <p className="font-semibold text-amber-900">처음 보는 바코드입니다</p>
+      <p className="tabular mt-0.5 text-sm text-amber-800">{code}</p>
+      <p className="mt-1 text-xs text-amber-700">
+        어느 상품인지 골라 주세요. <strong>다음부터는 자동으로 인식합니다.</strong>
+      </p>
+
+      {/^\d{6}[0-9A-Z]{6,}$/.test(code) && (
+        <label className="mt-2 flex items-start gap-2 text-xs text-amber-900">
+          <input
+            type="checkbox"
+            checked={asPrefix}
+            onChange={(e) => setAsPrefix(e.target.checked)}
+            className="mt-0.5 h-4 w-4"
+          />
+          <span>
+            앞 6자리(<strong className="tabular">{prefix}</strong>)만 같고 뒤는 본마다 다름
+            <span className="block text-amber-700">
+              미쉐린처럼 개별번호가 붙는 형태입니다. 끄면 이 바코드 하나만 등록합니다.
+            </span>
+          </span>
+        </label>
+      )}
+
+      {error && <p className="mt-2 text-sm text-red-700">{error}</p>}
+
+      <ul className="mt-2 max-h-64 space-y-1 overflow-y-auto">
+        {candidates.length === 0 && (
+          <li className="text-sm text-amber-800">입고 예정 목록이 비어 있습니다. 인보이스를 먼저 올려 주세요.</li>
+        )}
+        {candidates.map((l) => (
+          <li key={l.itemId}>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => link(l.productId!)}
+              className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-left active:bg-amber-100 disabled:opacity-50"
+            >
+              <div className="truncate text-sm font-medium">{l.model ?? l.description}</div>
+              <div className="tabular text-xs text-slate-500">
+                {[l.spec, l.cai].filter(Boolean).join(" · ")} · {l.qty - l.receivedQty}본 대기
+              </div>
+            </button>
+          </li>
+        ))}
+      </ul>
+
+      <button type="button" onClick={onCancel} className="mt-2 w-full py-2 text-sm text-amber-700">
+        나중에
+      </button>
+    </div>
+  );
+}
+
 /** ② 도착 확정 — 인보이스 단위로 묶어서 다룬다 */
 export function PendingList({ invoices }: { invoices: PendingInvoice[] }) {
   return (
     <>
-      <ScanBox />
+      <ScanBox lines={invoices.flatMap((i) => i.lines)} />
       <ul className="mt-4 space-y-4">
         {invoices.map((inv) => (
           <PendingInvoiceCard key={inv.invoiceId} inv={inv} />

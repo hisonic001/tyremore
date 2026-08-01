@@ -498,49 +498,54 @@ export async function receiveByScan(
   rawCode: string,
   userId?: number,
 ): Promise<
-  | { ok: true; line: PendingLine; serial: string | null; remain: number }
-  | { ok: false; error: string; code?: string }
+  | { ok: true; line: PendingLine; serial: string | null; remain: number; via: string }
+  | { ok: false; error: string; code?: string; unknown?: boolean }
 > {
   const { parseTireBarcode } = await import("./barcode");
+  const { lookupBarcode } = await import("./barcode-lookup");
   const scanned = parseTireBarcode(rawCode);
 
+  /**
+   * 브랜드마다 바코드 체계가 다르다. 등록된 바코드 → 품번 → 앞자리 순으로 찾는다.
+   * 못 찾으면 화면에서 상품을 골라 이어 줄 수 있다 (그다음부터 자동).
+   */
+  const hit = await lookupBarcode(scanned.raw);
+
   const lines = await pendingLines();
-  // 앞자리로 찾고, 없으면 전체 문자열로도 본다 (다른 브랜드 라벨 대비)
-  let line =
-    lines.find((l) => l.cai === scanned.code) ??
-    lines.find((l) => scanned.raw.startsWith(l.cai)) ??
-    lines.find((l) => l.cai === scanned.raw);
+  const line = hit
+    ? lines.find((l) => l.productId === hit.productId)
+    : (lines.find((l) => l.cai === scanned.code) ??
+      lines.find((l) => scanned.raw.startsWith(l.cai)) ??
+      lines.find((l) => l.cai === scanned.raw));
 
   if (!line) {
-    if (scanned.kind === "bead") {
+    // 상품은 찾았는데 입고 예정에 없는 경우 — 인보이스를 안 올렸거나 이미 다 받았다
+    if (hit) {
       return {
         ok: false,
         code: scanned.raw,
-        error: `비드 바코드(${scanned.raw})로는 상품을 찾을 수 없습니다. 라벨지 바코드를 찍어 주세요`,
+        error: `${hit.model ?? hit.marsItemNo} — 입고 예정 목록에 없습니다 (인보이스를 먼저 올려 주세요)`,
       };
     }
     return {
       ok: false,
-      code: scanned.code,
-      error: `입고 예정 목록에 ${scanned.code} 이(가) 없습니다`,
+      code: scanned.raw,
+      error: `${scanned.raw} — 어느 상품인지 모릅니다. 아래에서 이어 주시면 다음부터 자동으로 인식합니다`,
+      unknown: true,
     };
   }
 
-  const r = await receiveLine({
-    itemId: line.itemId,
-    qty: 1,
-    dot: null,
-    userId,
-    serial: scanned.serial,
-  });
-  if (!r.ok) return { ok: false, error: r.error, code: scanned.code };
+  const serial = hit?.serial ?? scanned.serial;
+  const r = await receiveLine({ itemId: line.itemId, qty: 1, dot: null, userId, serial });
+  if (!r.ok) return { ok: false, error: r.error, code: scanned.raw };
 
-  const after = (await pendingLines()).find((l) => l.itemId === line!.itemId);
+  const after = (await pendingLines()).find((l) => l.itemId === line.itemId);
   return {
     ok: true,
     line,
-    serial: scanned.serial,
+    serial,
     remain: after ? after.qty - after.receivedQty : 0,
+    via: hit?.via ?? "앞자리 일치",
   };
 }
 

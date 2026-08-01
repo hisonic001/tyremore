@@ -186,6 +186,43 @@ export const product = pgTable(
 );
 
 /* ============================================================
+ * product_barcode — 실제로 찍히는 바코드 ⭐ (2026-08-01)
+ *
+ * 🔴 MARS 의 `barcode` 컬럼은 **실제 라벨 바코드가 아니다.** 품번을 복사해 놓은 값이다.
+ *    한국타이어  DB `HK1033085`  ←→  실제 라벨 `8808563590301` (EAN-13)
+ *    미쉐린      DB `441358`     ←→  실제 라벨 `441358261D590A`
+ *    미쉐린만 앞자리가 우연히 맞아 동작했을 뿐이다.
+ *
+ * 브랜드마다 체계가 다르고 미리 다 알 수 없다.
+ * → **찍으면서 채운다.** 못 찾은 바코드는 그 자리에서 상품과 이어 주면
+ *   다음부터 자동으로 인식된다 (D-05·D-02 와 같은 철학).
+ * ========================================================== */
+export const productBarcode = pgTable(
+  "product_barcode",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    /** 스캔된 문자열, 또는 그 앞부분 */
+    code: text("code").notNull(),
+    productId: bigint("product_id", { mode: "number" })
+      .notNull()
+      .references(() => product.id, { onDelete: "cascade" }),
+    /**
+     * 'exact'  — 이 값이 통째로 그 상품 (EAN-13 처럼 상품마다 고정)
+     * 'prefix' — 이 값으로 시작하면 그 상품 (미쉐린처럼 뒤에 개별번호가 붙는 경우)
+     */
+    kind: text("kind").notNull().default("exact"),
+    memo: text("memo"),
+    createdBy: bigint("created_by", { mode: "number" }).references(() => appUser.id),
+    createdAt,
+  },
+  (t) => [
+    check("product_barcode_kind", sql`${t.kind} IN ('exact','prefix')`),
+    uniqueIndex("uq_product_barcode").on(t.code),
+    index("idx_product_barcode_product").on(t.productId),
+  ],
+);
+
+/* ============================================================
  * 3-5. stock_item — 재고 (타이어와 부품을 한 테이블로)
  * ========================================================== */
 export const stockItem = pgTable(
