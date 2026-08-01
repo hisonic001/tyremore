@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { brand } from "@/db/schema";
 import { asc } from "drizzle-orm";
 import { NewProductForm } from "./form";
+import { ProductLookup } from "./lookup";
 
 export const dynamic = "force-dynamic";
 
@@ -30,8 +31,17 @@ export default async function NewProductPage({
       </Link>
       <h1 className="mt-3 text-2xl font-bold">새 상품 등록</h1>
       <p className="mt-1 text-sm text-slate-500">
-        MARS 마스터에 없는 신모델만 여기서 넣습니다. 대부분은 검색으로 나옵니다.
+        MARS 마스터에 없는 신모델만 여기서 넣습니다.
       </p>
+
+      {/* ⭐ 만들기 전에 먼저 찾아본다 — 중복으로 만들면 재고가 갈라진다 */}
+      <ProductLookup initial={q ?? ""} />
+
+      <div className="mt-8 flex items-center gap-3">
+        <div className="h-px flex-1 bg-slate-200" />
+        <span className="text-sm text-slate-400">정말 없으면 아래에 등록</span>
+        <div className="h-px flex-1 bg-slate-200" />
+      </div>
 
       <NewProductForm brands={brands} initialPattern={q ?? ""} />
     </main>

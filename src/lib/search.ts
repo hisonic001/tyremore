@@ -162,34 +162,65 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
     conds.push(sql`(${brand.isHandled} IS NULL OR ${brand.isHandled} = true)`);
   }
 
+  /**
+   * ⭐ 규격과 단어를 섞어 칠 수 있다 (사장님 요청 2026-08-01)
+   *   "2454518"           → 그 규격 전부
+   *   "2454518 primacy"   → 그 규격 중 PRIMACY 만
+   *   "405365"            → CAI 로 한 건
+   * 띄어 쓴 토막을 따로 읽어 **전부 만족하는 것**만 남긴다.
+   */
   if (t) {
-    const spec = parseSpecQuery(t);
-    if (spec) {
-      conds.push(
-        eq(product.width, spec.width),
-        eq(product.aspectRatio, spec.aspectRatio),
-        sql`${product.rimInch} = ${String(spec.rimInch)}`,
-      );
-    } else if (looksLikeCai(t)) {
+    const parts = t.split(/\s+/).filter(Boolean);
+    const words: string[] = [];
+
+    for (const part of parts) {
+      const spec = parseSpecQuery(part);
+      if (spec) {
+        conds.push(
+          eq(product.width, spec.width),
+          eq(product.aspectRatio, spec.aspectRatio),
+          sql`${product.rimInch} = ${String(spec.rimInch)}`,
+        );
+        continue;
+      }
       /**
-       * ⭐ CAI 검색 (사장님 요청 2026-08-01)
-       * 미쉐린은 타이어마다 고유번호가 있고, 그게 MARS 품번과 같은 값이다.
-       * 앞자리만 쳐도 찾히게 부분 일치도 받는다.
+       * CAI·바코드는 **단독으로 쳤을 때만** 번호로 본다.
+       * 모델명과 섞여 있으면 그냥 단어로 취급해야 한다.
        */
-      conds.push(
-        or(eq(product.marsItemNo, t), sql`${product.marsItemNo} LIKE ${t + "%"}`, eq(product.barcode, t))!,
-      );
-    } else if (/^\d{7,13}$/.test(t)) {
-      conds.push(or(eq(product.barcode, t), eq(product.marsItemNo, t))!);
-    } else {
-      // 모델명 · 부품번호 · 적용차종
-      const like = `%${t}%`;
+      if (parts.length === 1 && looksLikeCai(part)) {
+        conds.push(
+          or(
+            eq(product.marsItemNo, part),
+            sql`${product.marsItemNo} LIKE ${part + "%"}`,
+            eq(product.barcode, part),
+          )!,
+        );
+        continue;
+      }
+      if (parts.length === 1 && /^\d{7,13}$/.test(part)) {
+        conds.push(or(eq(product.barcode, part), eq(product.marsItemNo, part))!);
+        continue;
+      }
+      words.push(part);
+    }
+
+    /**
+     * 단어는 모델명·품번·적용차종·원문에서 찾는다.
+     * 여러 단어를 치면 **전부** 들어 있어야 한다 — 칠수록 좁아진다.
+     * 적용차종이 부품 검색의 전부다 (D-12).
+     */
+    for (const w of words) {
+      const like = `%${w}%`;
       conds.push(
         or(
           sql`${product.pattern} ILIKE ${like}`,
           sql`${product.partNo} ILIKE ${like}`,
           sql`${product.fitment} ILIKE ${like}`,
           sql`${product.rawName} ILIKE ${like}`,
+          sql`${product.displayName} ILIKE ${like}`,
+          // 브랜드는 한글로도 친다 — 원문에는 "Michelin" 뿐이라 "미쉐린"이 안 걸린다
+          sql`${brand.nameKo} ILIKE ${like}`,
+          sql`${brand.nameEn} ILIKE ${like}`,
         )!,
       );
     }
