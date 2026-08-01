@@ -7,6 +7,7 @@
  */
 import { findFile, openWorkbook, readSheet, type Row } from "../lib/excel";
 import {
+  isPlausibleDot,
   normalizeName,
   normalizePhone,
   normalizePlate,
@@ -374,8 +375,23 @@ export function transformTireStock(dataDir: string): Transformed<TireStockRow> {
     // DOT가 있으면 DOT별로, 없으면 수량만큼 DOT 없이 행을 만든다
     if (dots.length > 0) {
       for (const d of dots) {
+        /**
+         * ⚠️ 말이 안 되는 DOT는 **넣지 않고 비운다** (사장님 확인 2026-08-01).
+         * 틀린 연식은 선입선출과 노후화 경고를 통째로 망가뜨린다.
+         * 비워두면 나중에 실물을 보고 채울 수 있다 — 재고 화면에서 입력 가능.
+         */
+        const ok = isPlausibleDot(d.dot);
+        if (!ok) {
+          issues.push({
+            kind: "dot",
+            refTable: "stock_item",
+            rawValue: d.dot,
+            suggestion: null,
+            detail: `${code} ${label} — DOT '${d.dot}'는 ${2000 + Number(d.dot.slice(2, 4))}년산이 된다. 오타로 보여 비워 둔다 (${d.qty}본)`,
+          });
+        }
         for (let i = 0; i < d.qty; i++) {
-          rows.push({ marsItemNo: code, dot: d.dot, qty: 1, rawLabel: label });
+          rows.push({ marsItemNo: code, dot: ok ? d.dot : null, qty: 1, rawLabel: label });
         }
       }
     } else {

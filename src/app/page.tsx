@@ -87,10 +87,14 @@ export default async function Home({
             ))}
           </ul>
 
-          {/* 상품 · 재고 */}
+          {/* 상품 · 재고 — 누르면 재고를 고칠 수 있다 */}
           <ul className="mt-3 space-y-2">
             {result.products.map((p) => (
-              <li key={p.productId} className="rounded-xl border border-slate-200 bg-white p-4">
+              <Link
+                key={p.productId}
+                href={`/stock/${p.productId}`}
+                className="block rounded-xl border border-slate-200 bg-white p-4 active:bg-slate-50"
+              >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     {/* ⭐ 브랜드 + 모델명 + 규격. 고객은 "미쉐린 파일럿스포츠"라고 말한다 */}
@@ -111,12 +115,28 @@ export default async function Home({
                 ) : (
                   <div className="mt-2 text-sm text-amber-600">기표가 없음</div>
                 )}
-              </li>
+              </Link>
             ))}
           </ul>
 
           {result.vehicles.length + result.products.length === 0 && (
-            <p className="mt-8 text-center text-slate-500">찾지 못했습니다</p>
+            <div className="mt-8 text-center">
+              <p className="text-slate-500">찾지 못했습니다</p>
+              <Link
+                href={`/product/new?q=${encodeURIComponent(q)}`}
+                className="mt-3 inline-block rounded-xl border-2 border-dashed border-slate-300 px-6 py-3 font-medium text-slate-600"
+              >
+                + 새 상품으로 등록
+              </Link>
+            </div>
+          )}
+
+          {result.products.length > 0 && (
+            <div className="mt-4 text-center">
+              <Link href={`/product/new?q=${encodeURIComponent(q)}`} className="text-sm text-slate-500 underline underline-offset-4">
+                찾는 모델이 없나요? 새 상품 등록
+              </Link>
+            </div>
           )}
         </>
       )}

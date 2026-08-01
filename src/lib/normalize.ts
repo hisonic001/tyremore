@@ -121,13 +121,26 @@ export function isValidDot(dot: string): boolean {
   return week >= 1 && week <= 53;
 }
 
-/** DOT → 제조 연도 (4자리). 미래 연도가 나오면 이전 세기로 본다 */
-export function dotYear(dot: string, now = new Date()): number | null {
-  if (!isValidDot(dot)) return null;
+/**
+ * 형식은 맞지만 말이 안 되는 DOT를 걸러낸다.
+ *
+ * 실데이터에 `1882`(18주 2082년)가 있었다 — `1822`나 `1826`의 오타로 보인다.
+ * 이런 값은 **넣지 않고 비워둔다.** 틀린 연식은 선입선출과 노후화 경고를 통째로 망가뜨린다.
+ * 비워두면 나중에 실물을 보고 채울 수 있다 (D-02: DOT는 선택 항목).
+ *
+ * 타이어 수명을 고려해 제조 15년 이내 ~ 내년까지만 인정한다.
+ */
+export function isPlausibleDot(dot: string, now = new Date()): boolean {
+  if (!isValidDot(dot)) return false;
   const yy = Number(dot.slice(2, 4));
-  const century = Math.floor(now.getFullYear() / 100) * 100;
-  const year = century + yy;
-  return year > now.getFullYear() + 1 ? year - 100 : year;
+  const year = 2000 + yy;
+  return year >= now.getFullYear() - 15 && year <= now.getFullYear() + 1;
+}
+
+/** DOT → 제조 연도 (4자리). 말이 안 되는 값이면 null */
+export function dotYear(dot: string, now = new Date()): number | null {
+  if (!isPlausibleDot(dot, now)) return null;
+  return 2000 + Number(dot.slice(2, 4));
 }
 
 /** 제조 후 경과 연수 — 재고 노후화 경고에 쓴다 */
