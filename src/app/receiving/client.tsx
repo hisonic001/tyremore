@@ -26,36 +26,68 @@ export function InvoiceUpload() {
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [updatePrices, setUpdatePrices] = useState(true);
-  const fileRef = useRef<File | null>(null);
+  /** ⭐ 여러 브랜드 파일을 한 번에 올린다 — 발주 후 3개를 끌어다 놓으면 끝난다 */
+  const filesRef = useRef<File[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [names, setNames] = useState<string[]>([]);
 
-  function onPick(f: File | undefined) {
-    if (!f) return;
-    fileRef.current = f;
+  function onPick(list: FileList | null) {
+    const files = Array.from(list ?? []);
+    if (files.length === 0) return;
+    filesRef.current = files;
+    setNames(files.map((f) => f.name));
     setError(null);
     setMsg(null);
     setPv(null);
+
     start(async () => {
-      const r = await previewInvoice(f.name, await f.arrayBuffer());
-      if ("error" in r) setError(r.error);
-      else setPv(r);
+      const all: InvoicePreview[] = [];
+      const problems: string[] = [];
+      for (const f of files) {
+        const r = await previewInvoice(f.name, await f.arrayBuffer());
+        if ("error" in r) problems.push(`${f.name}: ${r.error}`);
+        else all.push(...r.invoices);
+      }
+      if (problems.length) setError(problems.join("\n"));
+      if (all.length > 0) {
+        const dup = all.filter((i) => i.duplicate).length;
+        setPv({
+          invoices: all,
+          note:
+            `파일 ${files.length}개에서 인보이스 ${all.length}건을 읽었습니다` +
+            (dup ? ` (이미 등록된 것 ${dup}건)` : ""),
+        });
+      }
     });
   }
 
   function commit() {
-    const f = fileRef.current;
-    if (!f) return;
+    const files = filesRef.current;
+    if (files.length === 0) return;
     start(async () => {
-      const r = await saveInvoice(f.name, await f.arrayBuffer(), { updatePrices });
-      if (!r.ok) setError(r.error);
-      else {
+      let saved = 0;
+      let skipped = 0;
+      let priceUpdates = 0;
+      const problems: string[] = [];
+      for (const f of files) {
+        const r = await saveInvoice(f.name, await f.arrayBuffer(), { updatePrices });
+        if (!r.ok) problems.push(`${f.name}: ${r.error}`);
+        else {
+          saved += r.saved;
+          skipped += r.skipped;
+          priceUpdates += r.priceUpdates;
+        }
+      }
+      setError(problems.length ? problems.join("\n") : null);
+      if (saved > 0) {
         setMsg(
-          `인보이스 ${r.saved}건 등록했습니다.` +
-            (r.skipped ? ` (이미 있던 ${r.skipped}건은 건너뜀)` : "") +
-            (updatePrices && r.priceUpdates ? ` 매입 할인율 ${r.priceUpdates}건 갱신.` : ""),
+          `인보이스 ${saved}건 등록했습니다.` +
+            (skipped ? ` (이미 있던 ${skipped}건은 건너뜀)` : "") +
+            (priceUpdates ? ` 매입 할인율 ${priceUpdates}건 갱신.` : ""),
         );
         setPv(null);
-        fileRef.current = null;
+        filesRef.current = [];
+        setNames([]);
         if (inputRef.current) inputRef.current.value = "";
         router.refresh();
       }
@@ -66,21 +98,31 @@ export function InvoiceUpload() {
     <section className="mt-5 rounded-2xl border-2 border-slate-900 bg-white p-4">
       <h2 className="font-bold">인보이스 올리기</h2>
       <p className="mt-0.5 text-sm text-slate-500">
-        미쉐린 인보이스(PDF·엑셀). 다른 브랜드는 양식을 주시면 추가합니다.
+        <strong>미쉐린 · 콘티넨탈 · 금호</strong> 엑셀을 한 번에 여러 개 올릴 수 있습니다.
+        이미 올린 건은 알아서 건너뜁니다.
       </p>
 
       <input
         ref={inputRef}
         type="file"
-        accept=".pdf,.xlsx,.xls"
-        onChange={(e) => onPick(e.target.files?.[0])}
+        multiple
+        accept=".xlsx,.xls,.pdf"
+        onChange={(e) => onPick(e.target.files)}
         className="mt-3 w-full rounded-xl border-2 border-dashed border-slate-300 p-4 text-sm
                    file:mr-3 file:rounded-lg file:border-0 file:bg-slate-900 file:px-4 file:py-2
                    file:text-sm file:font-semibold file:text-white"
       />
+      {names.length > 0 && (
+        <p className="mt-2 text-xs text-slate-500">{names.join(" · ")}</p>
+      )}
+      <p className="mt-1 text-xs text-slate-400">
+        엑셀을 권합니다 — PDF 는 양식이 조금만 바뀌어도 못 읽습니다.
+      </p>
 
       {pending && <p className="mt-3 text-sm text-slate-500">읽는 중…</p>}
-      {error && <p className="mt-3 rounded-lg bg-red-50 px-4 py-3 text-red-700">{error}</p>}
+      {error && (
+        <p className="mt-3 whitespace-pre-line rounded-lg bg-red-50 px-4 py-3 text-red-700">{error}</p>
+      )}
       {msg && <p className="mt-3 rounded-lg bg-emerald-50 px-4 py-3 text-emerald-800">{msg}</p>}
 
       {pv && (
