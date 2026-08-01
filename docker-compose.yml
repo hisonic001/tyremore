@@ -1,0 +1,53 @@
+# ============================================================
+#  타이어모어 — 자체 서버 이관용 구성 (D-06)
+#
+#  클라우드(Vercel + Supabase)에 묶이지 않기 위해 처음부터 함께 만든다.
+#  나중에 사무실 PC로 옮길 때 할 일:
+#      1) DB 덤프를 db/init 에 넣거나 psql로 복원
+#      2) docker compose up -d
+#  그게 전부다.
+#
+#  개발 중에는 db 서비스만 띄워도 된다:
+#      docker compose up -d db
+# ============================================================
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: tyremore-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tyremore}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tyremore_local_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-tyremore}
+      # 한글 정렬·검색을 위해 UTF-8 고정
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+      TZ: Asia/Seoul
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tyremore} -d ${POSTGRES_DB:-tyremore}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    container_name: tyremore-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-tyremore}:${POSTGRES_PASSWORD:-tyremore_local_dev}@db:5432/${POSTGRES_DB:-tyremore}
+      NODE_ENV: production
+      TZ: Asia/Seoul
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    profiles:
+      - full # 개발 중에는 뜨지 않는다. `docker compose --profile full up`
+
+volumes:
+  pgdata:
