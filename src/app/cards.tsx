@@ -104,14 +104,27 @@ export function ProductCard({ p }: { p: ProductHit }) {
             )}
             {p.partNo && <span className="ml-2">{p.partNo}</span>}
           </span>
+          {/* ⭐ 판매가가 정해져 있으면 그것을 크게. 상담에서 부르는 금액이다 */}
           <span className="text-sm">
-            {p.listPrice ? (
+            {p.salePrice !== null ? (
+              <>
+                <span className="text-slate-400 line-through">{p.listPrice?.toLocaleString()}</span>
+                <span className="ml-2 text-lg font-bold text-slate-900">
+                  {p.salePrice.toLocaleString()}원
+                </span>
+                {p.salesRate !== null && (
+                  <span className="ml-1 text-xs font-medium text-emerald-700">
+                    {Math.round(p.salesRate * 1000) / 10}%↓
+                  </span>
+                )}
+              </>
+            ) : p.listPrice ? (
               <>
                 <span className="text-slate-500">기표가 </span>
                 <span className="text-base font-bold text-slate-900">
                   {p.listPrice.toLocaleString()}원
                 </span>
-                <span className="ml-1 text-xs text-slate-400">VAT 포함</span>
+                <span className="ml-1 text-xs text-amber-600">할인율 미설정</span>
               </>
             ) : (
               <span className="text-amber-600">기표가 없음</span>

@@ -66,8 +66,11 @@ export interface ProductHit {
   isRunflat: boolean;
   isAcoustic: boolean;
   isSuv: boolean;
-  /** ⭐ 공장도가 (MARS 단가1) */
+  /** ⭐ 기표가 (VAT 포함) */
   listPrice: number | null;
+  /** 할인율 적용 판매가. 규칙이 없으면 null → 화면에 「할인율 미설정」 */
+  salePrice: number | null;
+  salesRate: number | null;
   stockQty: number;
   stockTracked: boolean;
   verified: boolean;
@@ -240,6 +243,18 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
       partNo: product.partNo,
       stockQty,
       isHidden,
+      /**
+       * ⭐ 판매 할인율 — 좁은 것이 이긴다 (개별 > 모델 > 브랜드 > 범주).
+       * 상담 화면에서 바로 판매가를 보여주기 위해 검색에서 함께 가져온다.
+       */
+      salesRate: sql<string | null>`(
+        SELECT r.sales_discount_rate FROM price_rule r
+        WHERE (r.scope='item'     AND r.target = ${product.marsItemNo})
+           OR (r.scope='pattern'  AND r.target = ${product.pattern})
+           OR (r.scope='brand'    AND r.target = ${product.brandCode})
+           OR (r.scope='category' AND r.target = ${product.category})
+        ORDER BY r.priority LIMIT 1
+      )`,
       verified: sql<boolean>`EXISTS (
         SELECT 1 FROM stock_item s
         WHERE s.product_id = ${product.id} AND s.verified_at IS NOT NULL
@@ -262,7 +277,10 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
       aspectRatio: r.aspectRatio,
       rimInch: r.rimInch,
     });
+    const rate = r.salesRate !== null ? Number(r.salesRate) : null;
     return {
+    salesRate: rate,
+    salePrice: r.listPrice !== null && rate !== null ? Math.round(r.listPrice * (1 - rate)) : null,
     productId: r.productId,
     // MARS 이관품은 품번이 곧 CAI. 자체 등록품(NEW-…)은 CAI가 없다
     cai: r.cai && /^\d+$/.test(r.cai) ? r.cai : null,
