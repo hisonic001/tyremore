@@ -34,6 +34,7 @@ yarn-error.log*
 
 # --- Next.js -------------------------------------------------
 .next/
+.next-prod/
 out/
 build/
 dist/
