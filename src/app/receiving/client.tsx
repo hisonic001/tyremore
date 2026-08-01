@@ -4,6 +4,7 @@ import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { linkBarcode } from "@/lib/barcode-lookup";
+import { ScanIndicator } from "../scan-indicator";
 import { useScanner } from "../use-scanner";
 import {
   createProductFromInvoiceItem,
@@ -277,9 +278,18 @@ export function ScanBox({ lines }: { lines: PendingLine[] }) {
 
   return (
     <section className="mt-5 rounded-2xl border-2 border-emerald-600 bg-emerald-50 p-4">
-      <h2 className="font-bold text-emerald-900">바코드로 입고</h2>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-bold text-emerald-900">바코드로 입고</h2>
+        <ScanIndicator active={!unknown} busy={busy} />
+      </div>
       <p className="mt-0.5 text-sm text-emerald-800">
-        타이어 <strong>라벨지 바코드</strong>를 찍으면 1본씩 입고됩니다. 화면 아무 데나 두고 찍으세요.
+        {unknown ? (
+          "바코드를 이어 주면 다시 시작합니다"
+        ) : (
+          <>
+            타이어 <strong>라벨지 바코드</strong>를 찍으면 1본씩 입고됩니다. 화면 아무 데나 두고 찍으세요.
+          </>
+        )}
       </p>
 
       {/* 리더기가 없을 때·폰에서 쓸 수 있게 직접 입력도 열어 둔다 */}

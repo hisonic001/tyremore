@@ -495,6 +495,27 @@ export async function createProductFromInvoiceItem(
  *    따로 만들면 나중에 정산할 때 두 군데를 봐야 한다.
  * ========================================================== */
 
+/**
+ * 이미 쓴 적 있는 거래처 목록.
+ *
+ * ⚠️ 같은 거래처가 「쌍성타이어」·「쌍성」처럼 여러 이름으로 생기면
+ *    매입 내역이 갈라져 나중에 합칠 수 없다. 그래서 **치는 동안 보여준다.**
+ */
+export async function supplierList(q = ""): Promise<{ name: string; count: number; lastAt: string | null }[]> {
+  const term = q.replace(/\s/g, "").toLowerCase();
+  const rows = await db.execute<{ supplier: string; n: number; last_at: string | null }>(sql`
+    SELECT supplier, count(*)::int n, max(issued_at) last_at
+    FROM purchase_invoice
+    GROUP BY supplier
+    ORDER BY max(created_at) DESC
+    LIMIT 200
+  `);
+  const all = rows.map((r) => ({ name: r.supplier, count: r.n, lastAt: r.last_at }));
+  if (!term) return all.slice(0, 8);
+  // 공백을 무시하고 부분 일치 — "쌍성" 으로 "쌍성 타이어" 를 찾는다
+  return all.filter((s) => s.name.replace(/\s/g, "").toLowerCase().includes(term)).slice(0, 8);
+}
+
 /** 직접 매입 시작 — 빈 장부를 하나 연다 */
 export async function startManualPurchase(
   supplier: string,

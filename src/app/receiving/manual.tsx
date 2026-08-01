@@ -9,7 +9,9 @@ import {
   updatePurchaseItem,
   type PendingInvoice,
 } from "@/lib/invoice";
+import { ScanIndicator } from "../scan-indicator";
 import { useScanner } from "../use-scanner";
+import { SupplierInput } from "./supplier-input";
 
 const won = (n: number) => n.toLocaleString();
 
@@ -35,7 +37,7 @@ export function ManualPurchase({ open }: { open: PendingInvoice | null }) {
           거래처에서 사 오신 타이어는 여기서 바코드를 찍어 등록합니다. 인보이스가 없어도 됩니다.
         </p>
         <form
-          className="mt-3 flex gap-2"
+          className="mt-3 flex items-start gap-2"
           onSubmit={(e) => {
             e.preventDefault();
             start(async () => {
@@ -49,16 +51,14 @@ export function ManualPurchase({ open }: { open: PendingInvoice | null }) {
             });
           }}
         >
-          <input
-            value={supplier}
-            onChange={(e) => setSupplier(e.target.value)}
-            placeholder="거래처 이름"
-            className="min-w-0 flex-1 rounded-lg border-2 border-slate-300 px-3 py-3 text-lg outline-none focus:border-slate-900"
-          />
+          <div className="min-w-0 flex-1">
+            {/* ⭐ 같은 거래처가 두 이름으로 갈리지 않게 치는 동안 보여준다 */}
+            <SupplierInput value={supplier} onChange={setSupplier} />
+          </div>
           <button
             type="submit"
-            disabled={pending}
-            className="shrink-0 rounded-lg bg-slate-900 px-5 font-semibold text-white disabled:opacity-50"
+            disabled={pending || !supplier.trim()}
+            className="shrink-0 rounded-lg bg-slate-900 px-5 py-3 font-semibold text-white disabled:opacity-50"
           >
             시작
           </button>
@@ -115,9 +115,12 @@ function ManualScanning({ inv }: { inv: PendingInvoice }) {
           {total > 0 && ` · ${won(total)}원`}
         </span>
       </div>
-      <p className="mt-0.5 text-sm text-indigo-800">
-        타이어 바코드를 찍으세요. 같은 상품을 또 찍으면 수량이 늘어납니다.
-      </p>
+      <div className="mt-1 flex flex-wrap items-center gap-2">
+        <ScanIndicator active={!unknown} busy={busy} tone="indigo" />
+        <span className="text-sm text-indigo-800">
+          {unknown ? "바코드를 이어 주면 다시 시작합니다" : "찍으면 수량이 1씩 늘어납니다"}
+        </span>
+      </div>
 
       <form
         className="mt-3 flex gap-2"
