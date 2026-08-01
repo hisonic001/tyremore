@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { setProductActive } from "@/lib/catalog";
+import { setDisplayName, setProductActive } from "@/lib/catalog";
 import { changeDot, setDotQty } from "@/lib/stock";
 
 /** 현장에서 장갑 낀 손으로 누른다. 버튼을 크게. */
@@ -222,6 +222,86 @@ export function NewDotRow({
 /** 1826 → '2026년 18주' */
 function dotLabel(dot: string): string {
   return `20${dot.slice(2, 4)}년 ${Number(dot.slice(0, 2))}주`;
+}
+
+/**
+ * ⭐ 표시 이름 직접 고치기 (2026-08-01)
+ * MARS 원문에 `PILSP3` 같은 축약이 섞여 있어 자동으로는 못 편다.
+ * 제목을 눌러 바로 고친다. MARS 원본은 그대로 남는다.
+ */
+export function NameEditor({
+  productId,
+  model,
+  autoModel,
+  isCustom,
+}: {
+  productId: number;
+  model: string;
+  autoModel: string;
+  isCustom: boolean;
+}) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(model);
+
+  const save = (v: string | null) =>
+    start(async () => {
+      await setDisplayName(productId, v);
+      setEditing(false);
+      router.refresh();
+    });
+
+  if (!editing) {
+    return (
+      <div className="mt-1.5">
+        <button type="button" onClick={() => { setValue(model); setEditing(true); }} className="text-left">
+          <h1 className="text-2xl font-bold leading-snug">
+            {model}
+            <span className="ml-2 align-middle text-sm font-normal text-slate-400">✏️</span>
+          </h1>
+        </button>
+        {isCustom && <p className="text-xs text-slate-400">직접 정한 이름 · 원래 «{autoModel}»</p>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-1.5">
+      <input
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        autoFocus
+        className="w-full rounded-xl border-2 border-slate-900 px-3 py-2 text-xl font-bold outline-none"
+      />
+      <p className="mt-1 text-xs text-slate-500">
+        화면에만 쓰입니다. MARS 입력용 원본은 그대로 유지됩니다.
+      </p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => save(value)}
+          className="rounded-lg bg-slate-900 px-5 py-2 font-medium text-white disabled:opacity-50"
+        >
+          {pending ? "저장 중…" : "저장"}
+        </button>
+        <button type="button" onClick={() => setEditing(false)} className="rounded-lg px-4 py-2 text-slate-500">
+          취소
+        </button>
+        {isCustom && (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => save(null)}
+            className="ml-auto rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-600"
+          >
+            자동 이름으로 되돌리기
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 /**

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ProductHit, VehicleHit } from "@/lib/search";
 import { SEASON_STYLE } from "@/lib/tire-attrs";
+import { BADGE_STYLE } from "@/lib/tire-name";
 
 export function VehicleCard({ v }: { v: VehicleHit }) {
   return (
@@ -25,6 +26,17 @@ export function VehicleCard({ v }: { v: VehicleHit }) {
   );
 }
 
+/**
+ * ⭐ 화면은 깔끔하게, 세부사항은 전부 (사장님 요청 2026-08-01)
+ *
+ *   [미쉐린] [올웨더]
+ *   CROSSCLIMATE 2
+ *   215/55R17  98W                        🟢 4본
+ *   [흡음재] [XL 하중강화] [MO 벤츠]
+ *   CAI 334245              기표가 251,900원 VAT 포함
+ *
+ * MARS 원본명은 화면에서 빠지지만 `marsName` 으로 그대로 살아 있다 (D-08).
+ */
 export function ProductCard({ p }: { p: ProductHit }) {
   return (
     <li>
@@ -32,7 +44,7 @@ export function ProductCard({ p }: { p: ProductHit }) {
         href={`/stock/${p.productId}`}
         className="block rounded-xl border border-slate-200 bg-white p-4 active:bg-slate-50"
       >
-        {/* 태그 줄 — 계절과 특성이 한눈에 */}
+        {/* 1줄: 브랜드 · 계절 */}
         <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
           {p.brandName && (
             <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
@@ -44,57 +56,67 @@ export function ProductCard({ p }: { p: ProductHit }) {
               {p.season}
             </span>
           )}
-          {p.isRunflat && (
-            <span className="rounded bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-800">런플랫</span>
-          )}
-          {p.isAcoustic && (
-            <span className="rounded bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-800">흡음재</span>
-          )}
-          {p.isSuv && (
-            <span className="rounded bg-stone-100 px-2 py-0.5 text-xs font-medium text-stone-700">SUV</span>
-          )}
-          {/* OE 마킹 — 어느 차 순정인가. 같은 모델이라도 마킹이 다르면 다른 물건이다 */}
-          {p.oe.map((m) => (
-            <span key={m} className="rounded bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900">
-              {m}
-            </span>
-          ))}
           {p.isHidden && (
             <span className="rounded bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-600">숨김</span>
           )}
         </div>
 
+        {/* 2줄: 모델명 · 규격 · 재고 */}
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            {/*
-              ⭐ 전체 이름을 그대로 보여준다 (사장님 요청 2026-08-01).
-              모델명만 띄우면 같은 PILOT SPORT 4 S 세 건이 똑같이 보인다.
-              XL·ZR·TL·OE마킹이 다른 물건이다.
-            */}
-            <div className="text-base font-semibold leading-snug">{p.fullName}</div>
-            {p.fitment && <div className="mt-0.5 truncate text-sm text-slate-500">{p.fitment}</div>}
-            <div className="tabular mt-1 flex flex-wrap gap-x-3 text-xs text-slate-400">
-              {p.cai && (
-                <span>
-                  CAI <span className="font-semibold text-slate-600">{p.cai}</span>
-                </span>
-              )}
-              {p.partNo && <span>{p.partNo}</span>}
+            <div className="truncate text-lg font-bold leading-snug">{p.model}</div>
+            <div className="tabular mt-0.5 flex flex-wrap gap-x-3 text-sm text-slate-700">
+              {p.spec && <span className="font-medium">{p.spec}</span>}
+              {p.loadSpeed && <span>{p.loadSpeed}</span>}
             </div>
+            {p.fitment && <div className="mt-0.5 truncate text-sm text-slate-500">{p.fitment}</div>}
           </div>
           <StockBadge p={p} />
         </div>
 
-        <div className="tabular mt-2 text-sm">
-          {p.listPrice ? (
-            <>
-              <span className="text-slate-500">기표가 </span>
-              <span className="text-base font-bold text-slate-900">{p.listPrice.toLocaleString()}원</span>
-              <span className="ml-1 text-xs text-slate-400">VAT 포함</span>
-            </>
-          ) : (
-            <span className="text-amber-600">기표가 없음</span>
-          )}
+        {/* 3줄: 세부사항 — 런플랫·흡음재·OE마킹 등 전부 */}
+        {(p.badges.length > 0 || p.unknown.length > 0) && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {p.badges.map((b) => (
+              <span
+                key={b.code}
+                className={`rounded px-2 py-0.5 text-xs font-medium ${BADGE_STYLE[b.kind]}`}
+              >
+                {b.code === b.label ? b.code : `${b.code} ${b.label}`}
+              </span>
+            ))}
+            {/* 사전에 없는 표기도 버리지 않는다 */}
+            {p.unknown.map((u) => (
+              <span key={u} className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-400">
+                {u}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* 4줄: CAI · 가격 */}
+        <div className="tabular mt-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          <span className="text-xs text-slate-400">
+            {p.cai && (
+              <>
+                CAI <span className="font-semibold text-slate-600">{p.cai}</span>
+              </>
+            )}
+            {p.partNo && <span className="ml-2">{p.partNo}</span>}
+          </span>
+          <span className="text-sm">
+            {p.listPrice ? (
+              <>
+                <span className="text-slate-500">기표가 </span>
+                <span className="text-base font-bold text-slate-900">
+                  {p.listPrice.toLocaleString()}원
+                </span>
+                <span className="ml-1 text-xs text-slate-400">VAT 포함</span>
+              </>
+            ) : (
+              <span className="text-amber-600">기표가 없음</span>
+            )}
+          </span>
         </div>
       </Link>
     </li>

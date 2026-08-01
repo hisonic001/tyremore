@@ -37,6 +37,21 @@ export async function setProductActive(productId: number, active: boolean) {
   return { ok: true as const };
 }
 
+/**
+ * ⭐ 화면 표시 이름 직접 정하기 (사장님 요청 2026-08-01)
+ *
+ * MARS 원문에 `PILSP3`, `PRIM MXM4`, `P SPT CUP2` 같은 축약이 섞여 있어
+ * 자동으로는 못 편다. 비우면 자동 생성 이름으로 돌아간다.
+ *
+ * ⚠️ `raw_name`·`pattern` 은 건드리지 않는다. MARS 입력은 원문으로 해야 한다 (D-08).
+ */
+export async function setDisplayName(productId: number, name: string | null) {
+  const v = name?.trim() || null;
+  await db.update(product).set({ displayName: v, updatedAt: new Date() }).where(eq(product.id, productId));
+  refresh("/", `/stock/${productId}`);
+  return { ok: true as const };
+}
+
 /** 브랜드 통째로 취급/미취급 */
 export async function setBrandHandled(code: string, handled: boolean) {
   await db.update(brand).set({ isHandled: handled }).where(eq(brand.code, code));

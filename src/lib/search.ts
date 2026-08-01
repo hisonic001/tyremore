@@ -13,7 +13,7 @@ import { and, eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { brand, customer, product, vehicle } from "@/db/schema";
 import { normalizePhone, normalizePlate } from "./normalize";
-import { looksLikeCai, parseName } from "./product-name";
+import { looksLikeCai, parseTireName, type Badge } from "./tire-name";
 import { parseSpecQuery } from "./tire-spec";
 import type { Season } from "./tire-attrs";
 
@@ -50,11 +50,14 @@ export interface ProductHit {
   productId: number;
   /** ⭐ CAI — 미쉐린 고유번호. MARS 품번과 같은 값이다 */
   cai: string | null;
-  /** 규격+모델+마킹을 합친 전체 이름 */
-  fullName: string;
-  /** OE 마킹 배지 (MO·VOL·AO·GOE·★ …) */
-  oe: string[];
-  name: string;
+  /** ⭐ 화면용 모델명 — "CROSSCLIMATE 2" 처럼 짧게 */
+  model: string;
+  /** 런플랫·흡음재·저연비·OE마킹·하중강화 … 세부사항 전부 */
+  badges: Badge[];
+  /** 사전에 없는 표기 — 버리지 않고 그대로 보여준다 */
+  unknown: string[];
+  /** ⚠️ MARS 입력용 원본. 화면 정리와 무관하게 유지된다 (D-08) */
+  marsName: string;
   pattern: string | null;
   brandName: string | null;
   spec: string | null;
@@ -218,6 +221,7 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
       productId: product.id,
       cai: product.marsItemNo,
       name: product.rawName,
+      displayName: product.displayName,
       pattern: product.pattern,
       brandName: brand.nameKo,
       width: product.width,
@@ -253,21 +257,24 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
     .limit(60);
 
   return rows.map((r) => {
-    const n = parseName(r.name, r.pattern);
+    const n = parseTireName(r.name, r.pattern, {
+      width: r.width,
+      aspectRatio: r.aspectRatio,
+      rimInch: r.rimInch,
+    });
     return {
     productId: r.productId,
     // MARS 이관품은 품번이 곧 CAI. 자체 등록품(NEW-…)은 CAI가 없다
     cai: r.cai && /^\d+$/.test(r.cai) ? r.cai : null,
-    fullName: n.full,
-    oe: n.oe,
-    name: r.name,
+    // 사장님이 정한 이름이 있으면 그것이 이긴다
+    model: r.displayName?.trim() || n.model,
+    badges: n.badges,
+    unknown: n.unknown,
+    marsName: n.marsName,
     pattern: r.pattern,
     brandName: r.brandName,
-    spec:
-      r.width && r.aspectRatio && r.rimInch
-        ? `${r.width}/${r.aspectRatio}R${Number(r.rimInch)}`
-        : null,
-    loadSpeed: r.loadIndex ? `${r.loadIndex}${r.speedRating ?? ""}` : null,
+    spec: n.spec,
+    loadSpeed: n.loadSpeed ?? (r.loadIndex ? `${r.loadIndex}${r.speedRating ?? ""}` : null),
     season: (r.season as Season) ?? null,
     isRunflat: r.isRunflat,
     isAcoustic: r.isAcoustic,

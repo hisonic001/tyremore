@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getStockDetail } from "@/lib/stock";
-import { DotRow, HideToggle, NewDotRow } from "./editor";
+import { BADGE_STYLE } from "@/lib/tire-name";
+import { DotRow, HideToggle, NameEditor, NewDotRow } from "./editor";
 
 export const dynamic = "force-dynamic";
 
@@ -29,21 +30,39 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
       </Link>
 
       <header className="mt-3">
-        <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-          {d.brandName && (
-            <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
-              {d.brandName}
-            </span>
-          )}
-          {d.oe.map((m) => (
-            <span key={m} className="rounded bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900">
-              {m}
-            </span>
-          ))}
+        {d.brandName && (
+          <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+            {d.brandName}
+          </span>
+        )}
+        <NameEditor
+          productId={d.productId}
+          model={d.model}
+          autoModel={d.autoModel}
+          isCustom={d.displayName !== null}
+        />
+        <div className="tabular mt-1 flex flex-wrap gap-x-3 text-lg text-slate-700">
+          {d.spec && <span className="font-semibold">{d.spec}</span>}
+          {d.loadSpeed && <span>{d.loadSpeed}</span>}
         </div>
-        {/* 전체 이름 그대로 — 모델명만 띄우면 같은 모델의 다른 물건과 구분이 안 된다 */}
-        <h1 className="text-xl font-bold leading-snug">{d.fullName}</h1>
-        <div className="tabular mt-1.5 flex flex-wrap gap-x-4 text-sm text-slate-500">
+
+        {/* 세부사항 — 런플랫·흡음재·OE마킹 등 전부 */}
+        {(d.badges.length > 0 || d.unknown.length > 0) && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {d.badges.map((b) => (
+              <span key={b.code} className={`rounded px-2 py-1 text-sm font-medium ${BADGE_STYLE[b.kind]}`}>
+                {b.code === b.label ? b.code : `${b.code} ${b.label}`}
+              </span>
+            ))}
+            {d.unknown.map((u) => (
+              <span key={u} className="rounded bg-slate-100 px-2 py-1 text-sm text-slate-400">
+                {u}
+              </span>
+            ))}
+          </div>
+        )}
+
+        <div className="tabular mt-2 flex flex-wrap gap-x-4 text-sm text-slate-500">
           {d.cai && (
             <span>
               CAI <span className="font-semibold text-slate-700">{d.cai}</span>
@@ -56,6 +75,20 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
             </span>
           )}
         </div>
+
+        {/* ⚠️ MARS 입력용 원본. 4주차 입력 대기열에서 이 이름으로 찾는다 (D-08) */}
+        <details className="mt-2">
+          <summary className="cursor-pointer text-xs text-slate-400">MARS 원본 이름</summary>
+          <p className="mt-1 rounded bg-slate-50 px-3 py-2 font-mono text-xs text-slate-500">
+            {d.marsName}
+            {d.pattern && d.pattern !== d.marsName && (
+              <>
+                <br />
+                {d.pattern}
+              </>
+            )}
+          </p>
+        </details>
       </header>
 
       <section className="mt-5 rounded-2xl border border-slate-200 bg-white p-5">

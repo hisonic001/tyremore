@@ -108,8 +108,15 @@ export const product = pgTable(
 
     brandCode: text("brand_code").references(() => brand.code),
     pattern: text("pattern"),
-    /** 원문 보존 — 규격 파서를 나중에 고쳐 다시 돌릴 수 있어야 한다 */
+    /** 원문 보존 — 규격 파서를 나중에 고쳐 다시 돌릴 수 있어야 한다. MARS 입력의 기준 */
     rawName: text("raw_name").notNull(),
+    /**
+     * ⭐ 사장님이 정한 화면 표시 이름 (2026-08-01)
+     * MARS 원문에는 `PILSP3`, `PRIM MXM4`, `P SPT CUP2` 같은 축약이 섞여 있어
+     * 자동으로는 펼 수 없다. 값이 있으면 이것을 우선 표시한다.
+     * ⚠️ `raw_name`·`pattern` 은 그대로 둔다 — MARS 입력은 원문으로 해야 한다 (D-08)
+     */
+    displayName: text("display_name"),
 
     // --- 타이어 전용 (부품은 NULL) ---
     width: integer("width"), // 225

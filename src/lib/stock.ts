@@ -15,7 +15,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { product, stockItem, stockMovement } from "@/db/schema";
 import { isPlausibleDot, isValidDot } from "./normalize";
-import { parseName } from "./product-name";
+import { parseTireName, type Badge } from "./tire-name";
 
 /**
  * 화면 갱신. 웹 요청 밖(이관 스크립트·실사 배치)에서 호출되면 갱신할 화면이 없으므로
@@ -40,9 +40,17 @@ export interface StockDetail {
   productId: number;
   /** CAI — 미쉐린 고유번호 (MARS 품번) */
   cai: string | null;
-  fullName: string;
-  oe: string[];
-  name: string;
+  /** 화면용 모델명 (사장님이 정한 이름이 있으면 그것) */
+  model: string;
+  /** 자동 생성 이름 — 되돌리기 기준 */
+  autoModel: string;
+  /** 사장님이 직접 넣은 이름. 없으면 null */
+  displayName: string | null;
+  badges: Badge[];
+  unknown: string[];
+  /** ⚠️ MARS 입력용 원본 — 화면 정리와 무관하게 유지 (D-08) */
+  marsName: string;
+  loadSpeed: string | null;
   pattern: string | null;
   brandName: string | null;
   spec: string | null;
@@ -72,6 +80,7 @@ export async function getStockDetail(productId: number): Promise<StockDetail | n
     id: number;
     mars_item_no: string | null;
     raw_name: string;
+    display_name: string | null;
     pattern: string | null;
     brand_name: string | null;
     width: number | null;
@@ -83,7 +92,7 @@ export async function getStockDetail(productId: number): Promise<StockDetail | n
     is_active: boolean;
     list_price: number | null;
   }>(sql`
-    SELECT p.id, p.mars_item_no, p.raw_name, p.pattern, b.name_ko AS brand_name,
+    SELECT p.id, p.mars_item_no, p.raw_name, p.display_name, p.pattern, b.name_ko AS brand_name,
            p.width, p.aspect_ratio, p.rim_inch, p.item_type, p.is_serialized,
            p.stock_tracked, p.is_active, p.list_price
     FROM product p LEFT JOIN brand b ON b.code = p.brand_code
@@ -104,19 +113,25 @@ export async function getStockDetail(productId: number): Promise<StockDetail | n
     WHERE product_id = ${productId} AND status = '재고'
   `);
 
-  const n = parseName(p.raw_name, p.pattern);
+  const n = parseTireName(p.raw_name, p.pattern, {
+    width: p.width,
+    aspectRatio: p.aspect_ratio,
+    rimInch: p.rim_inch,
+  });
   return {
     productId: p.id,
     cai: p.mars_item_no && /^\d+$/.test(p.mars_item_no) ? p.mars_item_no : null,
-    fullName: n.full,
-    oe: n.oe,
-    name: p.raw_name,
+    model: p.display_name?.trim() || n.model,
+    /** 자동으로 만든 이름 — 사장님이 고칠 때 되돌릴 기준 */
+    autoModel: n.model,
+    displayName: p.display_name,
+    badges: n.badges,
+    unknown: n.unknown,
+    marsName: n.marsName,
+    loadSpeed: n.loadSpeed,
     pattern: p.pattern,
     brandName: p.brand_name,
-    spec:
-      p.width && p.aspect_ratio && p.rim_inch
-        ? `${p.width}/${p.aspect_ratio}R${Number(p.rim_inch)}`
-        : null,
+    spec: n.spec,
     itemType: p.item_type,
     isSerialized: p.is_serialized,
     stockTracked: p.stock_tracked,
