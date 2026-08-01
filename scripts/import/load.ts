@@ -1,0 +1,316 @@
+/**
+ * DB 적재 — 변환이 끝난 결과를 넣는다.
+ *
+ * 원칙: **여러 번 돌려도 같은 결과**여야 한다 (멱등).
+ *   한 번에 완벽하게 되는 이관은 없다. 이상치를 고치고 다시 돌리는 일이 반복된다.
+ *   그래서 전부 upsert(있으면 갱신)로 짠다. 지우고 다시 넣지 않는다.
+ */
+import { sql } from "drizzle-orm";
+import { db } from "../../src/db";
+import {
+  brand,
+  customer,
+  importIssue,
+  priceRule,
+  product,
+  serviceItem,
+  stockItem,
+  vehicle,
+  vehicleMaker,
+  vehicleMakerAlias,
+} from "../../src/db/schema";
+import { BRANDS, MAKER_ALIASES, VEHICLE_MAKERS } from "./seed-data";
+import type {
+  CustomerRow,
+  Issue,
+  PartRow,
+  ProductRow,
+  ServiceRow,
+  TireStockRow,
+  Transformed,
+  VehicleRow,
+} from "./transform";
+
+/** 파라미터 한도(65535)를 넘지 않도록 나눠 넣는다 */
+async function inBatches<T>(rows: T[], size: number, fn: (chunk: T[]) => Promise<unknown>) {
+  for (let i = 0; i < rows.length; i += size) {
+    await fn(rows.slice(i, i + size));
+    process.stdout.write(`\r     ${Math.min(i + size, rows.length)}/${rows.length}`);
+  }
+  if (rows.length) process.stdout.write("\n");
+}
+
+export async function load(data: {
+  svc: Transformed<ServiceRow>;
+  prod: Transformed<ProductRow>;
+  parts: Transformed<PartRow>;
+  cust: Transformed<CustomerRow>;
+  veh: Transformed<VehicleRow>;
+  stock: Transformed<TireStockRow>;
+  issues: Issue[];
+}) {
+  console.log(`\n${"─".repeat(64)}\nDB 적재 시작`);
+
+  /* --- 확장 (Supabase에서는 여기서 켠다) ------------------- */
+  await db.execute(sql`CREATE EXTENSION IF NOT EXISTS pg_trgm`);
+
+  /* --- 1·2. 시드 ------------------------------------------ */
+  console.log("\n  1·2. 시드");
+  await db
+    .insert(brand)
+    .values(BRANDS)
+    .onConflictDoUpdate({ target: brand.code, set: { nameKo: sql`excluded.name_ko`, sortOrder: sql`excluded.sort_order` } });
+
+  await db
+    .insert(vehicleMaker)
+    .values(VEHICLE_MAKERS)
+    .onConflictDoUpdate({
+      target: vehicleMaker.code,
+      set: { nameKo: sql`excluded.name_ko`, isImported: sql`excluded.is_imported` },
+    });
+
+  await db
+    .insert(vehicleMakerAlias)
+    .values(Object.entries(MAKER_ALIASES).map(([rawName, code]) => ({ rawName, code })))
+    .onConflictDoUpdate({ target: vehicleMakerAlias.rawName, set: { code: sql`excluded.code` } });
+  console.log(`     브랜드 ${BRANDS.length} · 제조사 ${VEHICLE_MAKERS.length} · 표기 ${Object.keys(MAKER_ALIASES).length}`);
+
+  /* --- 3. service_item ------------------------------------ */
+  console.log("\n  3. service_item");
+  await inBatches(data.svc.rows, 500, (chunk) =>
+    db
+      .insert(serviceItem)
+      .values(chunk)
+      .onConflictDoUpdate({
+        target: serviceItem.marsServiceNo,
+        set: {
+          name: sql`excluded.name`,
+          shortName: sql`excluded.short_name`,
+          price: sql`excluded.price`,
+          qtyRule: sql`excluded.qty_rule`,
+          rimMin: sql`excluded.rim_min`,
+          rimMax: sql`excluded.rim_max`,
+          forImported: sql`excluded.for_imported`,
+          isTireRelated: sql`excluded.is_tire_related`,
+          autoSuggest: sql`excluded.auto_suggest`,
+          isFavorite: sql`excluded.is_favorite`,
+        },
+      }),
+  );
+
+  /* --- 4. product (MARS 상품) ----------------------------- */
+  console.log("\n  4. product (MARS 상품)");
+  await inBatches(data.prod.rows, 800, (chunk) =>
+    db
+      .insert(product)
+      .values(chunk)
+      .onConflictDoUpdate({
+        target: product.marsItemNo,
+        set: {
+          rawName: sql`excluded.raw_name`,
+          brandCode: sql`excluded.brand_code`,
+          pattern: sql`excluded.pattern`,
+          width: sql`excluded.width`,
+          aspectRatio: sql`excluded.aspect_ratio`,
+          rimInch: sql`excluded.rim_inch`,
+          loadIndex: sql`excluded.load_index`,
+          speedRating: sql`excluded.speed_rating`,
+          season: sql`excluded.season`,
+          listPrice: sql`excluded.list_price`,
+          supplierCode: sql`excluded.supplier_code`,
+          barcode: sql`excluded.barcode`,
+          specParsed: sql`excluded.spec_parsed`,
+          updatedAt: sql`now()`,
+        },
+      }),
+  );
+
+  /* --- 5. product (부품) ---------------------------------- */
+  console.log("\n  5. product (부품)");
+  const partRows = data.parts.rows.map((p) => ({
+    // MARS에 없는 품목이므로 우리가 식별자를 만든다 (D-12 3번)
+    marsItemNo: `PART-${p.partNo}`,
+    itemType: "part" as const,
+    isSerialized: false,
+    rawName: p.rawName,
+    partNo: p.partNo,
+    fitment: p.fitment,
+    position: p.position,
+    category: p.category,
+    specParsed: true,
+  }));
+  await inBatches(partRows, 800, (chunk) =>
+    db
+      .insert(product)
+      .values(chunk)
+      .onConflictDoUpdate({
+        target: product.marsItemNo,
+        set: {
+          fitment: sql`excluded.fitment`,
+          position: sql`excluded.position`,
+          rawName: sql`excluded.raw_name`,
+          updatedAt: sql`now()`,
+        },
+      }),
+  );
+
+  /* --- 6. customer ---------------------------------------- */
+  console.log("\n  6. customer");
+  await inBatches(data.cust.rows, 800, (chunk) =>
+    db
+      .insert(customer)
+      .values(chunk)
+      .onConflictDoUpdate({
+        target: customer.marsContactNo,
+        set: {
+          name: sql`excluded.name`,
+          nameSearch: sql`excluded.name_search`,
+          memo: sql`excluded.memo`,
+          phone: sql`excluded.phone`,
+          type: sql`excluded.type`,
+          isActive: sql`excluded.is_active`,
+        },
+      }),
+  );
+
+  // 같은 전화번호를 쓰는 고객을 연결한다. ⚠️ 합치지 않는다 (D-10)
+  await db.execute(sql`
+    WITH g AS (
+      SELECT phone, MIN(id) AS gid
+      FROM customer
+      WHERE phone IS NOT NULL
+      GROUP BY phone HAVING COUNT(*) > 1
+    )
+    UPDATE customer c SET family_group_id = g.gid
+    FROM g WHERE c.phone = g.phone
+  `);
+
+  /* --- 7. vehicle ----------------------------------------- */
+  console.log("\n  7. vehicle");
+  const custIdByContact = new Map<string, number>();
+  for (const c of await db
+    .select({ id: customer.id, no: customer.marsContactNo })
+    .from(customer)) {
+    if (c.no) custIdByContact.set(c.no, c.id);
+  }
+
+  const vehRows = data.veh.rows
+    .map((v) => {
+      const customerId = v.marsContactNo ? custIdByContact.get(v.marsContactNo) : undefined;
+      if (!customerId) return null; // 연결 실패는 import_issue 로 이미 잡혀 있다
+      return {
+        marsVehicleNo: v.marsVehicleNo,
+        customerId,
+        plateNo: v.plateNo,
+        plateNoNorm: v.plateNoNorm,
+        makerCode: v.makerCode,
+        model: v.model,
+        year: v.year,
+        mileage: v.mileage,
+      };
+    })
+    .filter((v): v is NonNullable<typeof v> => v !== null);
+
+  await inBatches(vehRows, 800, (chunk) =>
+    db
+      .insert(vehicle)
+      .values(chunk)
+      .onConflictDoUpdate({
+        target: vehicle.marsVehicleNo,
+        set: {
+          plateNo: sql`excluded.plate_no`,
+          plateNoNorm: sql`excluded.plate_no_norm`,
+          makerCode: sql`excluded.maker_code`,
+          model: sql`excluded.model`,
+          year: sql`excluded.year`,
+          mileage: sql`excluded.mileage`,
+        },
+      }),
+  );
+
+  /* --- 8. stock_item (미쉐린 타이어) ----------------------- */
+  console.log("\n  8. stock_item (타이어)");
+  const prodIdByMars = new Map<string, number>();
+  for (const p of await db.select({ id: product.id, no: product.marsItemNo }).from(product)) {
+    if (p.no) prodIdByMars.set(p.no, p.id);
+  }
+
+  // 재이관 시 중복 생성을 막는다. 이관분(stock_no 접두 IMP-)만 지운다.
+  await db.execute(sql`DELETE FROM stock_item WHERE stock_no LIKE 'IMP-%'`);
+
+  let seq = 0;
+  const tireStock = data.stock.rows
+    .map((s) => {
+      const productId = prodIdByMars.get(s.marsItemNo);
+      if (!productId) return null;
+      seq += 1;
+      return {
+        stockNo: `IMP-T${String(seq).padStart(6, "0")}`,
+        productId,
+        qty: 1,
+        status: "재고",
+        dot: s.dot,
+        /** ⭐ 실사 데이터이므로 확인된 것으로 본다 (부품과 다르다) */
+        verifiedAt: new Date(),
+      };
+    })
+    .filter((s): s is NonNullable<typeof s> => s !== null);
+
+  await inBatches(tireStock, 800, (chunk) => db.insert(stockItem).values(chunk));
+
+  // ⭐ 입고된 상품만 stock_tracked = true. 나머지는 화면에 「미등록」으로 뜬다 (D-12 6번)
+  await db.execute(sql`
+    UPDATE product SET stock_tracked = true
+    WHERE id IN (SELECT DISTINCT product_id FROM stock_item)
+  `);
+
+  /* --- 9. stock_item (부품) — 수량 없이 「미확인」 ---------- */
+  console.log("\n  9. stock_item (부품 · 미확인)");
+  let pseq = 0;
+  const partStock = partRows
+    .map((p) => {
+      const productId = prodIdByMars.get(p.marsItemNo);
+      if (!productId) return null;
+      pseq += 1;
+      return {
+        stockNo: `IMP-P${String(pseq).padStart(6, "0")}`,
+        productId,
+        qty: 0,
+        status: "재고",
+        /** ⭐ verified_at 을 비운다 → 화면에 숫자 대신 「미확인」 (D-12 5번) */
+        verifiedAt: null,
+      };
+    })
+    .filter((s): s is NonNullable<typeof s> => s !== null);
+
+  await inBatches(partStock, 800, (chunk) => db.insert(stockItem).values(chunk));
+
+  /* --- 10. import_issue ----------------------------------- */
+  console.log("\n  10. import_issue");
+  await db.execute(sql`DELETE FROM import_issue WHERE status = '대기'`);
+  await inBatches(
+    data.issues.map((i) => ({
+      kind: i.kind,
+      refTable: i.refTable,
+      rawValue: i.rawValue,
+      suggestion: i.suggestion,
+      detail: i.detail,
+    })),
+    800,
+    (chunk) => db.insert(importIssue).values(chunk),
+  );
+
+  /* --- 확인 ----------------------------------------------- */
+  const counts = await db.execute<{ t: string; n: number }>(sql`
+    SELECT 'product' t, count(*) n FROM product
+    UNION ALL SELECT 'customer', count(*) FROM customer
+    UNION ALL SELECT 'vehicle', count(*) FROM vehicle
+    UNION ALL SELECT 'service_item', count(*) FROM service_item
+    UNION ALL SELECT 'stock_item', count(*) FROM stock_item
+    UNION ALL SELECT 'import_issue', count(*) FROM import_issue
+    UNION ALL SELECT 'price_rule (비어있어야 정상)', count(*) FROM ${priceRule}
+  `);
+  console.log(`\n${"─".repeat(64)}\n적재 완료 — DB 실제 건수`);
+  for (const r of counts) console.log(`   ${String(r.t).padEnd(28)} ${String(r.n).padStart(8)}`);
+  console.log("\n이제 검색 화면에서 확인하실 수 있습니다:  npm run dev");
+}
