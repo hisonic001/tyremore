@@ -225,6 +225,33 @@ function dotLabel(dot: string): string {
 }
 
 /**
+ * 주문 사이트 표기 — 눌러서 복사한다.
+ * 미쉐린 주문 화면과 나란히 놓고 대조하는 것을 전제로 만든 줄이다.
+ */
+export function CopyLine({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        navigator.clipboard?.writeText(value).then(
+          () => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          },
+          () => {},
+        );
+      }}
+      className="mt-2 flex w-full items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-left active:bg-slate-100"
+    >
+      <span className="shrink-0 text-xs text-slate-400">{label}</span>
+      <span className="tabular min-w-0 flex-1 truncate text-sm text-slate-700">{value}</span>
+      <span className="shrink-0 text-xs text-slate-400">{copied ? "복사됨 ✓" : "복사"}</span>
+    </button>
+  );
+}
+
+/**
  * ⭐ 표시 이름 직접 고치기 (2026-08-01)
  * MARS 원문에 `PILSP3` 같은 축약이 섞여 있어 자동으로는 못 편다.
  * 제목을 눌러 바로 고친다. MARS 원본은 그대로 남는다.

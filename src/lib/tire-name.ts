@@ -49,11 +49,19 @@ const CODES: [RegExp, string, string, BadgeKind][] = [
   [/(^|[\s(])ACOUSTIC([\s)]|$)/i, "ACOUSTIC", "흡음재", "feature"],
   [/(^|[\s(])(SILENT|SILENCE)([\s)]|$)/i, "SILENT", "흡음재", "feature"],
   [/(^|[\s(])SELF-?SEAL([\s)]|$)/i, "SELFSEAL", "셀프씰", "feature"],
-  [/(^|[\s(])GRNX([\s)]|$)/i, "GRNX", "저연비", "feature"], // 미쉐린 Green X 90
+  [/(^|[\s(])(GRNX|GRX)([\s)]|$)/i, "GRNX", "저연비", "feature"], // 미쉐린 Green X 90
   [/(^|[\s(])EV([\s)]|$)/i, "EV", "전기차", "feature"], // 163
-  [/(^|[\s(])CPJ([\s)]|$)/i, "CPJ", "CPJ", "feature"], // 미쉐린 코드 — 뜻 미확인
-  [/(^|[\s(])DT1?([\s)]|$)/i, "DT", "DT", "feature"], // 미쉐린 코드 — 뜻 미확인
-  [/(^|[\s(])GO([\s)]|$)/i, "GO", "GO", "feature"], // 미쉐린 코드 — 뜻 미확인
+  /**
+   * CPJ = Cordon de Protection de Jante (프랑스어) = 림 보호 (Rim Protector).
+   * 인도 턱·장애물로부터 휠과 타이어 측면을 지키는 림 가드가 적용된 사양.
+   * DT = Different Tread. 기존 모델 대비 트레드 패턴·컴파운드·내부 구조가 개선된 사양.
+   * GO = 공식 명칭이 확인되지 않는다.
+   * → 사장님 지시로 화면에는 **코드만** 띄운다 (2026-08-01).
+   */
+  [/(^|[\s(])CPJ([\s)]|$)/i, "CPJ", "CPJ", "structure"],
+  [/(^|[\s(])DT1?([\s)]|$)/i, "DT", "DT", "feature"],
+  [/(^|[\s(])GO([\s)]|$)/i, "GO", "GO", "feature"],
+  [/(^|[\s(])AC([\s)]|$)/i, "AC", "흡음재", "feature"], // 주문사이트 표기 (= ACOUSTIC)
 
   // ── OE 마킹 (어느 차 순정인가) ────────────────────────
   [/(^|[\s(])MO1([\s)]|$)/i, "MO1", "벤츠 AMG", "oe"],
@@ -83,6 +91,43 @@ const CODES: [RegExp, string, string, BadgeKind][] = [
 const DROP_TOKENS =
   /^(MI|TL|TUBELESS|MICHELIN|HANKOOK|PIRELLI|CONTINENTAL|KUMHO|NEXEN|BRIDGESTONE|GOODYEAR|BFGOODRICH|GENERAL)$/i;
 
+/**
+ * ⭐ MARS 축약 표기 → 정식 모델명 (사장님 요청 2026-08-01)
+ *
+ * MARS 원문에는 `PRIMTOURAS`, `CROSCLISUV`, `PILSP3` 같은 축약이 섞여 있다.
+ * 미쉐린 주문 사이트(mymichelin)는 정식 이름으로 표기하므로, 주문할 때
+ * 대조하려면 우리도 정식 이름이어야 한다.
+ *
+ * 긴 것부터 치환한다 (PRIMTOURAS 를 PRIM 보다 먼저).
+ */
+const MODEL_ALIASES: [RegExp, string][] = [
+  [/\bPRIMTOURAS\b/gi, "PRIMACY TOUR A/S"],
+  [/\bENRGYSVRAS\b/gi, "ENERGY SAVER A/S"],
+  [/\bENRGYSVR\b/gi, "ENERGY SAVER"],
+  [/\bCROSCLISUV\b/gi, "CROSSCLIMATE SUV"],
+  [/\bCROSSCLIMATE2\b/gi, "CROSSCLIMATE 2"],
+  [/\bPILSPOR4S\b/gi, "PILOT SPORT 4 S"],
+  [/\bPILSP(\d)\b/gi, "PILOT SPORT $1"],
+  [/\bP\s+SPT\s+CUP\s*2\b/gi, "PILOT SPORT CUP 2"],
+  [/\bPREMLTX\b/gi, "PREMIER LTX"],
+  [/\bLATTOURHP\b/gi, "LATITUDE TOUR HP"],
+  [/\bADVTOUR\b/gi, "ADVANTAGE TOURING"],
+  [/\bEXM2\+*/gi, "ENERGY XM2+"],
+  [/\bPCY(\d)\b/gi, "PRIMACY $1"],
+  [/\bPSS\b/gi, "PILOT SUPER SPORT"],
+  [/\bPS(\d)\b/gi, "PILOT SPORT $1"],
+  [/\bPRIM\s+MXM4\b/gi, "PRIMACY MXM4"],
+  [/\bPRIM\b/gi, "PRIMACY"],
+  [/\bPCY\b/gi, "PRIMACY"],
+  [/\bCNT\b/gi, "CONNECT"],
+];
+
+function expandModel(s: string): string {
+  let out = s;
+  for (const [re, to] of MODEL_ALIASES) out = out.replace(re, to);
+  return out.replace(/\s{2,}/g, " ").trim();
+}
+
 /** 브랜드 접두어 — raw_name 맨 앞에 붙는다 */
 const BRAND_PREFIX =
   /^(michelin|hankook|pirelli|continental|kumho|nexen|bridgestone|goodyear|bfgoodrich|general|dunlop|laufenn)\s+/i;
@@ -100,6 +145,8 @@ export interface TireName {
   unknown: string[];
   /** MARS 입력용 원본 (절대 바꾸지 않는다) */
   marsName: string;
+  /** ⭐ 미쉐린 주문 사이트 표기 형태 — 주문 화면과 대조할 때 쓴다 */
+  orderName: string;
 }
 
 /**
@@ -108,23 +155,65 @@ export interface TireName {
  * ⚠️ 이 처리를 **배지 추출 전에** 해야 한다. `XLTL` 상태로는 XL 이 안 잡혀서
  *    배지에도 없고 모델명에는 남는다 — 실제로 그런 버그가 났다 (2026-08-01).
  */
+/** 붙어 올 수 있는 코드들 — 순서 중요(긴 것 먼저) */
+const CODE_ALT = "MOE|MO1|MO|GRNX|CPJ|ZPS|ZP|ACOUSTIC|AC|DT|GOE|GO|AO|VOL|MI";
+const GLUED_RUN = new RegExp(`(?:${CODE_ALT}){2,}`, "g");
+const ONE_CODE = new RegExp(`^(?:${CODE_ALT})`);
+
 function loosen(s: string): string {
-  return String(s ?? "")
+  let out = String(s ?? "")
     .replace(/\bXLTL\b/gi, " XL TL ")
     .replace(/(\d{2,3}[A-Z]{1,2})(XL|TL)/gi, " $1 $2 ") // 104YXL · 97HTLPRIM
     .replace(/\b(XL|TL)(?=[A-Z]{3,})/gi, " $1 ") // TLPRIM → TL PRIM
-    .replace(/\bEXTRA\s+LOAD\b/gi, " XL ")
-    .replace(/\s{2,}/g, " ");
+    .replace(/\bEXTRA\s+LOAD\b/gi, " XL ");
+
+  /**
+   * 마킹이 통째로 붙어 오는 경우가 있다 — `MOGRNXCPJMI`, `GRNXCPJMI`, `MOMI`.
+   *
+   * ⚠️ 코드를 하나씩 떼면 **멀쩡한 단어가 잘린다.** `PRIMACY` 안의 `AC` 를 떼어
+   *    `PRIMAC Y` 가 된 적이 있다 (2026-08-01).
+   *    그래서 **코드가 2개 이상 연달아 붙은 덩어리**만 골라 그 안에서 나눈다.
+   */
+  out = out.replace(GLUED_RUN, (m) => {
+    const parts: string[] = [];
+    let rest = m;
+    while (rest) {
+      const hit = ONE_CODE.exec(rest);
+      if (!hit) break;
+      parts.push(hit[0]);
+      rest = rest.slice(hit[0].length);
+    }
+    return ` ${parts.join(" ")} ${rest} `;
+  });
+  return out.replace(/\s{2,}/g, " ");
 }
 
-/** 규격 표기를 문자열에서 걷어낸다 */
+/**
+ * 규격 표기를 걷어낸다.
+ * ⚠️ **반드시 loosen 보다 먼저** 돌려야 한다. 순서가 거꾸로면
+ *    `235/45R1797HXLTL` 에서 정규식이 규격의 마지막 자리까지 먹어
+ *    `235/45R1` 같은 잔해가 남는다 (2026-08-01에 실제로 그랬다).
+ */
 function stripSpec(s: string): string {
-  return loosen(s)
+  return String(s ?? "")
     .replace(/\d{3}\s*\/\s*\d{2,3}\s*(Z|W|Y)?\s*R\s*F?\s*\d{2}(\.\d)?/gi, " ")
     .replace(/\d{2}(\.\d+)?\s*[X×]\s*\d{1,2}(\.\d+)?\s*R\s*\d{2}/gi, " ") // 31X10.50R15
     .replace(/\(\s*\d{2,3}\/?\d{0,3}\s*[A-Z]{1,2}\s*\)/gi, " ") // (104Y)
     .replace(/\b\d{2,3}\/\d{2,3}[A-Z]{1,2}\b/g, " ") // 120/116Q
     .replace(/\b\d{2,3}[A-Z]{1,2}\b/g, " "); // 104Y
+}
+
+/**
+ * 화면·배지용 정규화 문자열.
+ * 규격 제거 → 붙은 것 띄우기 → **한 번 더** 규격 제거.
+ * 두 번 하는 이유: `104YXLTL` 은 붙어 있는 동안 하중지수로 안 잡힌다.
+ * 띄운 뒤에야 `104Y` 가 보인다.
+ */
+function clean(s: string): string {
+  return stripSpec(loosen(stripSpec(s)))
+    .replace(/[()]/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
 
 /**
@@ -139,8 +228,8 @@ export function parseTireName(
   spec?: { width: number | null; aspectRatio: number | null; rimInch: string | number | null },
 ): TireName {
   const marsName = String(rawName ?? "").trim();
-  // 배지 추출도 띄어쓰기를 푼 뒤에 한다 (XLTL → XL TL)
-  const src = loosen(`${pattern ?? ""} ${marsName}`);
+  // 배지 추출도 규격을 걷고 띄어쓰기를 푼 뒤에 한다 ((97Y)XL · XLTL · MOGRNXCPJMI)
+  const src = clean(`${pattern ?? ""} ${marsName}`);
 
   // ── 배지 뽑기 ──
   const badges: Badge[] = [];
@@ -167,8 +256,7 @@ export function parseTireName(
   // ── 모델명 ──
   // pattern 이 없으면 raw_name 에서 규격을 걷어낸 나머지가 모델명이다
   const base = pattern?.trim() || marsName.replace(BRAND_PREFIX, "");
-  const words = stripSpec(base)
-    .replace(/[()]/g, " ")
+  const words = clean(base)
     .split(/\s+/)
     .map((w) => w.trim())
     .filter(Boolean);
@@ -193,10 +281,29 @@ export function parseTireName(
     modelWords.push(w);
   }
 
-  let model = modelWords.join(" ").replace(/\s{2,}/g, " ").trim();
+  let model = expandModel(modelWords.join(" "));
   if (!model) model = pattern?.trim() || marsName;
 
-  return { model, spec: displaySpec, loadSpeed, badges, unknown, marsName };
+  /**
+   * ⭐ 미쉐린 주문 사이트(mymichelin) 표기 형태로도 만들어 둔다 (2026-08-01).
+   * 주문할 때 화면끼리 대조해야 하므로 같은 순서로 적는다:
+   *   "245/45R18 96V TL PRIMACY A/S"
+   *   규격 → 하중속도 → XL → TL → 모델명 → 마킹
+   */
+  const orderParts: string[] = [];
+  if (displaySpec) orderParts.push(displaySpec);
+  if (loadSpeed) orderParts.push(loadSpeed);
+  if (badges.some((b) => b.code === "XL")) orderParts.push("XL");
+  if (/\bTL\b/i.test(src)) orderParts.push("TL");
+  orderParts.push(model);
+  for (const b of badges) {
+    if (b.kind === "oe" || b.kind === "runflat" || b.code === "GRNX" || b.code === "AC") {
+      orderParts.push(b.code === "★" ? "*" : b.code);
+    }
+  }
+  const orderName = orderParts.join(" ");
+
+  return { model, spec: displaySpec, loadSpeed, badges, unknown, marsName, orderName };
 }
 
 /** 배지 색 — 종류별로 눈에 다르게 걸리게 */

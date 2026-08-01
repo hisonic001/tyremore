@@ -50,6 +50,8 @@ export interface StockDetail {
   unknown: string[];
   /** ⚠️ MARS 입력용 원본 — 화면 정리와 무관하게 유지 (D-08) */
   marsName: string;
+  /** 미쉐린 주문 사이트 표기 — 주문할 때 대조용 */
+  orderName: string;
   loadSpeed: string | null;
   pattern: string | null;
   brandName: string | null;
@@ -128,6 +130,7 @@ export async function getStockDetail(productId: number): Promise<StockDetail | n
     badges: n.badges,
     unknown: n.unknown,
     marsName: n.marsName,
+    orderName: n.orderName,
     loadSpeed: n.loadSpeed,
     pattern: p.pattern,
     brandName: p.brand_name,

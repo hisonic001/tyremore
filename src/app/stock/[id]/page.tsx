@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getStockDetail } from "@/lib/stock";
 import { BADGE_STYLE } from "@/lib/tire-name";
-import { DotRow, HideToggle, NameEditor, NewDotRow } from "./editor";
+import { CopyLine, DotRow, HideToggle, NameEditor, NewDotRow } from "./editor";
 
 export const dynamic = "force-dynamic";
 
@@ -75,6 +75,9 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
             </span>
           )}
         </div>
+
+        {/* ⭐ 미쉐린 주문 사이트와 같은 형태. 주문할 때 이 줄로 대조한다 */}
+        <CopyLine label="주문 사이트 표기" value={d.orderName} />
 
         {/* ⚠️ MARS 입력용 원본. 4주차 입력 대기열에서 이 이름으로 찾는다 (D-08) */}
         <details className="mt-2">
