@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { isOwner } from "@/lib/auth";
 import { getPrice } from "@/lib/pricing";
 import { getStockDetail } from "@/lib/stock";
 import { BADGE_STYLE } from "@/lib/tire-name";
@@ -15,27 +16,18 @@ export const dynamic = "force-dynamic";
  *   · 장갑 낀 손 → 버튼을 크게
  *   · 모르는 것은 「미확인」으로 두고, 실물을 볼 때 그 자리에서 확정한다
  */
-export default async function StockPage({
-  params,
-  searchParams,
-}: {
-  params: Promise<{ id: string }>;
-  searchParams: Promise<{ owner?: string }>;
-}) {
+export default async function StockPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { owner } = await searchParams;
   const productId = Number(id);
   if (!Number.isFinite(productId)) notFound();
 
-  const [d, price] = await Promise.all([getStockDetail(productId), getPrice(productId)]);
+  /** ⭐ 매입원가·마진은 사장님 계정에만 (D-05 6번) */
+  const [d, price, ownerMode] = await Promise.all([
+    getStockDetail(productId),
+    getPrice(productId),
+    isOwner(),
+  ]);
   if (!d) notFound();
-
-  /**
-   * ⚠️ 임시 — 로그인이 아직 없다. 지금은 매장 내부망이라 URL 로 전환한다.
-   *    배포하면 인터넷에 열리므로 **반드시 로그인으로 바꿔야 한다** (D-05 6번 / D-11 2번).
-   *    그때는 `role='tech'` 요청에 매입가·마진을 **서버 응답에서 아예 뺀다.**
-   */
-  const ownerMode = owner === "1";
 
   const unit = d.itemType === "tire" ? "본" : "개";
 

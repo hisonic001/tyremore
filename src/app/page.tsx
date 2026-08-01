@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { getSession, logout } from "@/lib/auth";
 import { findProducts, findVehicles, guessMode, tireBrands, type Mode } from "@/lib/search";
 import type { Season } from "@/lib/tire-attrs";
 import { FilterPanel, ModeTabs } from "./search-ui";
@@ -44,6 +45,7 @@ export default async function Home({
     (filter.suv ? 1 : 0) +
     (filter.inStock ? 1 : 0);
 
+  const session = await getSession();
   const [vehicles, products, brands] = await Promise.all([
     mode === "customer" && q ? findVehicles(q) : Promise.resolve([]),
     mode === "product" ? findProducts(q, filter) : Promise.resolve([]),
@@ -52,15 +54,22 @@ export default async function Home({
 
   return (
     <main className="mx-auto min-h-dvh max-w-3xl px-4 py-5 pb-24 xl:pb-5">
-      <header className="mb-4 flex items-baseline justify-between">
+      <header className="mb-4 flex items-baseline justify-between gap-3">
         <h1 className="text-xl font-bold tracking-tight">타이어모어</h1>
-        <nav className="flex gap-3 text-sm text-slate-500">
+        <nav className="flex items-baseline gap-3 text-sm text-slate-500">
           <Link href="/settings/catalog" className="underline underline-offset-4">
             상품 정리
           </Link>
           <Link href="/status" className="underline underline-offset-4">
             이관 현황
           </Link>
+          {session && (
+            <form action={logout}>
+              <button type="submit" className="text-slate-400 underline underline-offset-4">
+                {session.name} 나가기
+              </button>
+            </form>
+          )}
         </nav>
       </header>
 

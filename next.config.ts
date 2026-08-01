@@ -1,5 +1,8 @@
 import type { NextConfig } from "next";
 
+/** Vercel 빌드인가 — 산출물 폴더와 output 방식이 갈린다 */
+const isVercel = !!process.env.VERCEL;
+
 const nextConfig: NextConfig = {
   /**
    * ⚠️ 개발과 운영 빌드의 산출물 폴더를 분리한다.
@@ -13,11 +16,14 @@ const nextConfig: NextConfig = {
    *
    * next dev = development, next build/start = production 이므로 이걸로 갈린다.
    */
-  distDir: process.env.NODE_ENV === "production" ? ".next-prod" : ".next",
+  distDir: isVercel ? ".next" : process.env.NODE_ENV === "production" ? ".next-prod" : ".next",
 
-  // D-06 / D-11: 특정 클라우드에 종속되지 않게 표준 Node.js 서버로 빌드한다.
-  // Vercel에서도 동작하고, 자체 서버에서는 standalone 서버로 뜬다.
-  output: "standalone",
+  /**
+   * D-06 / D-11: 특정 클라우드에 종속되지 않게 표준 Node.js 서버로 빌드한다.
+   * 자체 서버로 옮길 때 standalone 산출물을 그대로 쓴다.
+   * ⚠️ Vercel 은 자체 빌드 방식을 쓰므로 거기서는 끈다 — 켜 두면 산출물이 어긋난다.
+   */
+  output: isVercel ? undefined : "standalone",
 
   // 매장 태블릿은 공용이다. 캐시된 화면이 남으면 앞 손님 정보가 보인다.
   poweredByHeader: false,
