@@ -3,10 +3,12 @@
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useScanner } from "../use-scanner";
 import {
   createProductFromInvoiceItem,
   previewInvoice,
   receiveAll,
+  receiveByScan,
   receiveLine,
   removeInvoice,
   removeInvoiceItem,
@@ -240,14 +242,94 @@ function InvoiceCard({ one }: { one: InvoicePreview }) {
   );
 }
 
+/**
+ * ⭐ 바코드 스캔 입고 (2026-08-01)
+ *
+ * 리더기는 키보드처럼 동작한다. **커서를 어디 두든** 찍으면 잡힌다 —
+ * 장갑 낀 손으로 입력칸을 먼저 눌러야 한다면 아무도 안 쓴다 (D-11 4번).
+ *
+ * 찍을 때마다 대기 수량이 1씩 줄어든다. **찍는 행위가 곧 검수다.**
+ */
+export function ScanBox() {
+  const router = useRouter();
+  const [log, setLog] = useState<{ ok: boolean; text: string; at: number }[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const handle = (code: string) => {
+    if (busy) return;
+    setBusy(true);
+    void (async () => {
+      const r = await receiveByScan(code);
+      const text = r.ok
+        ? `✅ ${r.line.model ?? r.line.cai} 1본 — 남은 ${r.remain}본`
+        : `❌ ${r.error}`;
+      setLog((l) => [{ ok: r.ok, text, at: Date.now() }, ...l].slice(0, 6));
+      setBusy(false);
+      if (r.ok) router.refresh();
+    })();
+  };
+
+  useScanner(handle);
+
+  return (
+    <section className="mt-5 rounded-2xl border-2 border-emerald-600 bg-emerald-50 p-4">
+      <h2 className="font-bold text-emerald-900">바코드로 입고</h2>
+      <p className="mt-0.5 text-sm text-emerald-800">
+        타이어 <strong>라벨지 바코드</strong>를 찍으면 1본씩 입고됩니다. 화면 아무 데나 두고 찍으세요.
+      </p>
+
+      {/* 리더기가 없을 때·폰에서 쓸 수 있게 직접 입력도 열어 둔다 */}
+      <form
+        className="mt-3 flex gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const el = (e.currentTarget.elements.namedItem("code") as HTMLInputElement) ?? null;
+          if (el?.value.trim()) {
+            handle(el.value.trim());
+            el.value = "";
+          }
+        }}
+      >
+        <input
+          name="code"
+          placeholder="441358261D590A"
+          autoComplete="off"
+          className="tabular min-w-0 flex-1 rounded-lg border-2 border-emerald-300 bg-white px-3 py-3 text-lg outline-none focus:border-emerald-700"
+        />
+        <button type="submit" className="rounded-lg bg-emerald-700 px-5 font-semibold text-white">
+          입고
+        </button>
+      </form>
+
+      {log.length > 0 && (
+        <ul className="mt-3 space-y-1">
+          {log.map((l) => (
+            <li
+              key={l.at}
+              className={`tabular rounded px-2 py-1 text-sm ${
+                l.ok ? "bg-white text-emerald-900" : "bg-red-50 text-red-700"
+              }`}
+            >
+              {l.text}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 /** ② 도착 확정 — 인보이스 단위로 묶어서 다룬다 */
 export function PendingList({ invoices }: { invoices: PendingInvoice[] }) {
   return (
-    <ul className="mt-3 space-y-4">
-      {invoices.map((inv) => (
-        <PendingInvoiceCard key={inv.invoiceId} inv={inv} />
-      ))}
-    </ul>
+    <>
+      <ScanBox />
+      <ul className="mt-4 space-y-4">
+        {invoices.map((inv) => (
+          <PendingInvoiceCard key={inv.invoiceId} inv={inv} />
+        ))}
+      </ul>
+    </>
   );
 }
 

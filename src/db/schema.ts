@@ -201,6 +201,14 @@ export const stockItem = pgTable(
     status: text("status").notNull().default("재고"),
     /** ⭐ 제조주차 'WWYY' — 1826 = 2026년 18주. 선입선출·노후화 경고의 근거 */
     dot: text("dot"),
+    /**
+     * ⭐ 라벨 바코드의 개별 식별자 (2026-08-01)
+     * 미쉐린 라벨 `441358261D590A` 의 뒤 8자리 `261D590A`.
+     * D-02 는 "바코드가 SKU 단위라 개별 본을 구분 못 한다"고 봤는데,
+     * 라벨 바코드에는 본마다 다른 값이 들어 있어 **한 본을 물리적으로 특정**할 수 있다.
+     * 보관 서비스(2개월차)에서 스티커를 대신할 수 있다.
+     */
+    serial: text("serial"),
     purchasePrice: integer("purchase_price"),
     location: text("location"),
     receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),

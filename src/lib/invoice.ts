@@ -485,6 +485,66 @@ export async function createProductFromInvoiceItem(
 }
 
 /**
+ * ⭐ 바코드 한 번 = 1본 입고 (사장님 확인 2026-08-01)
+ *
+ * 라벨 바코드 `441358261D590A` → 앞 6자리 CAI 로 입고 예정 품목을 찾아 1본 확정한다.
+ * 찍을 때마다 대기 수량이 줄어드니 **찍는 행위가 곧 검수**다.
+ * 16본 주문에 14본만 찍히면 2본이 대기로 남아 저절로 드러난다.
+ *
+ * 뒤 8자리(개별 식별자)는 재고 한 본에 그대로 박아 둔다.
+ * 나중에 "이 타이어가 어느 인보이스로 들어온 것인가"를 되짚을 수 있다.
+ */
+export async function receiveByScan(
+  rawCode: string,
+  userId?: number,
+): Promise<
+  | { ok: true; line: PendingLine; serial: string | null; remain: number }
+  | { ok: false; error: string; code?: string }
+> {
+  const { parseTireBarcode } = await import("./barcode");
+  const scanned = parseTireBarcode(rawCode);
+
+  const lines = await pendingLines();
+  // 앞자리로 찾고, 없으면 전체 문자열로도 본다 (다른 브랜드 라벨 대비)
+  let line =
+    lines.find((l) => l.cai === scanned.code) ??
+    lines.find((l) => scanned.raw.startsWith(l.cai)) ??
+    lines.find((l) => l.cai === scanned.raw);
+
+  if (!line) {
+    if (scanned.kind === "bead") {
+      return {
+        ok: false,
+        code: scanned.raw,
+        error: `비드 바코드(${scanned.raw})로는 상품을 찾을 수 없습니다. 라벨지 바코드를 찍어 주세요`,
+      };
+    }
+    return {
+      ok: false,
+      code: scanned.code,
+      error: `입고 예정 목록에 ${scanned.code} 이(가) 없습니다`,
+    };
+  }
+
+  const r = await receiveLine({
+    itemId: line.itemId,
+    qty: 1,
+    dot: null,
+    userId,
+    serial: scanned.serial,
+  });
+  if (!r.ok) return { ok: false, error: r.error, code: scanned.code };
+
+  const after = (await pendingLines()).find((l) => l.itemId === line!.itemId);
+  return {
+    ok: true,
+    line,
+    serial: scanned.serial,
+    remain: after ? after.qty - after.receivedQty : 0,
+  };
+}
+
+/**
  * ⭐ 남은 수량 전부 입고 (사장님 요청 2026-08-01)
  *   바코드를 찍지 않아도 한 번에 재고로 넘긴다.
  *   ⚠️ DOT 는 비워 둔다. 나중에 재고 화면에서 채울 수 있다 (D-02).
@@ -571,6 +631,8 @@ export async function receiveLine(input: {
   qty: number;
   dot?: string | null;
   userId?: number;
+  /** 라벨 바코드 뒤 8자리 — 재고 한 본을 물리적으로 특정한다 */
+  serial?: string | null;
 }): Promise<{ ok: true; created: number } | { ok: false; error: string }> {
   const dot = input.dot?.trim() || null;
   if (dot && !isPlausibleDot(dot)) {
@@ -610,6 +672,8 @@ export async function receiveLine(input: {
     dot,
     /** ⭐ 실매입가를 재고에 박아 둔다 — 나중에 원가를 정확히 되짚을 수 있다 */
     purchasePrice: line.unitCost,
+    /** 스캔으로 들어왔으면 개별 식별자를 남긴다 */
+    serial: input.serial ?? null,
     verifiedAt: new Date(),
     createdBy: input.userId ?? null,
   }));
