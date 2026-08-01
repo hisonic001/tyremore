@@ -67,10 +67,22 @@ async function main() {
     );
   }
 
-  const [odd] = await db.execute<{ n: number }>(sql`
-    SELECT count(*)::int n FROM product WHERE brand_code='MI' AND list_price % 100 <> 0 AND list_price > 0
+  // 반올림으로 어중간한 값이 생겼는지 브랜드별로 본다
+  console.log("\n브랜드별 끝자리 점검 (VAT 적용 대상만):");
+  const odd = await db.execute<{ name_ko: string; n: number; not100: number; not10: number }>(sql`
+    SELECT b.name_ko, count(*)::int n,
+           count(*) FILTER (WHERE p.list_price % 100 <> 0)::int not100,
+           count(*) FILTER (WHERE p.list_price % 10 <> 0)::int not10
+    FROM product p JOIN brand b ON b.code = p.brand_code
+    WHERE b.price_excludes_vat AND p.list_price > 0
+    GROUP BY b.name_ko, b.sort_order ORDER BY b.sort_order
   `);
-  console.log(`\n미쉐린 중 100원 단위로 안 떨어지는 것: ${odd.n}건 ${odd.n === 0 ? "✅" : "⚠️"}`);
+  for (const o of odd) {
+    const mark = o.not10 === 0 ? "✅" : "⚠️";
+    console.log(
+      `   ${mark} ${o.name_ko.padEnd(8)} ${String(o.n).padStart(5)}건   100원 미만 단위 ${String(o.not100).padStart(4)} · 1원 단위 ${o.not10}`,
+    );
+  }
   process.exit(0);
 }
 main();
