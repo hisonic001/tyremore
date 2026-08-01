@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { pendingInvoices } from "@/lib/invoice";
 import { InvoiceUpload, PendingList } from "./client";
+import { ManualPurchase } from "./manual";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,9 @@ export default async function ReceivingPage() {
   const invoices = await pendingInvoices();
   const totalPending = invoices.reduce((s, i) => s + i.remain, 0);
 
+  /** 진행 중인 직접 매입 장부 (아직 입고 안 한 것) */
+  const openManual = invoices.find((i) => i.invoiceNo.startsWith("직접-")) ?? null;
+
   return (
     <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6">
       <Link href="/" className="text-sm text-slate-500 underline underline-offset-4">
@@ -24,6 +28,9 @@ export default async function ReceivingPage() {
       </p>
 
       <InvoiceUpload />
+
+      {/* ⭐ 인보이스가 없는 사매입 — 바코드로 목록을 만들어 간다 */}
+      <ManualPurchase open={openManual} />
 
       <section className="mt-8">
         <h2 className="font-semibold">

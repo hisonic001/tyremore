@@ -484,6 +484,151 @@ export async function createProductFromInvoiceItem(
   return { ok: true, productId: row.id };
 }
 
+/* ============================================================
+ * 직접 매입 — 인보이스가 없는 경우 ⭐ (사장님 요청 2026-08-01)
+ *
+ * 본사 발주가 아니라 거래처에서 여러 브랜드를 사 오는 경우가 있다.
+ * 엑셀이 없으므로 **바코드를 찍어 목록을 만들어 간다.**
+ *
+ * ⭐ 구조는 인보이스와 똑같이 쓴다 (`purchase_invoice`, supplier = 거래처명).
+ *    그래야 매입 내역·원가 추적이 한 곳에서 이어진다.
+ *    따로 만들면 나중에 정산할 때 두 군데를 봐야 한다.
+ * ========================================================== */
+
+/** 직접 매입 시작 — 빈 장부를 하나 연다 */
+export async function startManualPurchase(
+  supplier: string,
+  memo?: string,
+): Promise<{ ok: true; invoiceId: number } | { ok: false; error: string }> {
+  const name = supplier.trim();
+  if (!name) return { ok: false, error: "거래처를 입력해 주세요" };
+
+  const now = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  const day = `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}`;
+
+  // 같은 날 여러 건이 있을 수 있다
+  const [seq] = await db.execute<{ n: number }>(sql`
+    SELECT count(*)::int + 1 AS n FROM purchase_invoice WHERE invoice_no LIKE ${"직접-" + day + "-%"}
+  `);
+
+  const [inv] = await db
+    .insert(purchaseInvoice)
+    .values([
+      {
+        supplier: name,
+        invoiceNo: `직접-${day}-${String(seq?.n ?? 1).padStart(2, "0")}`,
+        issuedAt: `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`,
+        status: "입고대기",
+        fileName: memo?.trim() || null,
+      },
+    ])
+    .returning({ id: purchaseInvoice.id });
+
+  refresh("/receiving");
+  return { ok: true, invoiceId: inv.id };
+}
+
+/**
+ * 직접 매입 장부에 스캔한 타이어를 더한다.
+ * 같은 상품을 또 찍으면 수량이 1 늘어난다 — 4본이면 네 번 찍으면 된다.
+ */
+export async function addScannedToPurchase(
+  invoiceId: number,
+  rawCode: string,
+): Promise<
+  | { ok: true; model: string; qty: number; via: string }
+  | { ok: false; error: string; code?: string; unknown?: boolean }
+> {
+  const { lookupBarcode } = await import("./barcode-lookup");
+  const hit = await lookupBarcode(rawCode);
+  if (!hit) {
+    return {
+      ok: false,
+      code: String(rawCode).trim().toUpperCase(),
+      error: `${rawCode} — 어느 상품인지 모릅니다. 아래에서 이어 주시면 다음부터 자동입니다`,
+      unknown: true,
+    };
+  }
+
+  const [exist] = await db
+    .select()
+    .from(purchaseInvoiceItem)
+    .where(and(eq(purchaseInvoiceItem.invoiceId, invoiceId), eq(purchaseInvoiceItem.productId, hit.productId)))
+    .limit(1);
+
+  if (exist) {
+    await db
+      .update(purchaseInvoiceItem)
+      .set({ qty: exist.qty + 1 })
+      .where(eq(purchaseInvoiceItem.id, exist.id));
+    refresh("/receiving");
+    return { ok: true, model: hit.model ?? hit.marsItemNo ?? "", qty: exist.qty + 1, via: hit.via };
+  }
+
+  await db.insert(purchaseInvoiceItem).values([
+    {
+      invoiceId,
+      cai: hit.marsItemNo ?? rawCode,
+      productId: hit.productId,
+      description: [hit.model, hit.spec].filter(Boolean).join(" ") || rawCode,
+      qty: 1,
+    },
+  ]);
+  refresh("/receiving");
+  return { ok: true, model: hit.model ?? hit.marsItemNo ?? "", qty: 1, via: hit.via };
+}
+
+/** 직접 매입 품목의 수량·매입가를 고친다 */
+export async function updatePurchaseItem(input: {
+  itemId: number;
+  qty?: number;
+  unitCost?: number | null;
+}): Promise<{ ok: boolean; error?: string }> {
+  const set: Record<string, unknown> = {};
+  if (input.qty !== undefined) {
+    if (!Number.isInteger(input.qty) || input.qty < 1) return { ok: false, error: "수량을 확인해 주세요" };
+    set.qty = input.qty;
+  }
+  if (input.unitCost !== undefined) {
+    set.unitCost = input.unitCost;
+    // 합계도 같이 맞춰 둔다 — 나중에 정산에서 쓴다
+    const [it] = await db
+      .select()
+      .from(purchaseInvoiceItem)
+      .where(eq(purchaseInvoiceItem.id, input.itemId))
+      .limit(1);
+    if (it) set.supplyAmount = (input.unitCost ?? 0) * (input.qty ?? it.qty);
+  }
+  if (Object.keys(set).length === 0) return { ok: true };
+
+  await db.update(purchaseInvoiceItem).set(set).where(eq(purchaseInvoiceItem.id, input.itemId));
+
+  // 장부 합계 갱신
+  const [it] = await db
+    .select({ invoiceId: purchaseInvoiceItem.invoiceId })
+    .from(purchaseInvoiceItem)
+    .where(eq(purchaseInvoiceItem.id, input.itemId))
+    .limit(1);
+  if (it) await recalcInvoiceTotals(it.invoiceId);
+
+  refresh("/receiving");
+  return { ok: true };
+}
+
+async function recalcInvoiceTotals(invoiceId: number) {
+  await db.execute(sql`
+    UPDATE purchase_invoice SET
+      total_qty = s.qty, subtotal = s.amt,
+      vat = round(s.amt * 0.1)::int, total = round(s.amt * 1.1)::int, updated_at = now()
+    FROM (
+      SELECT COALESCE(SUM(qty),0)::int qty, COALESCE(SUM(COALESCE(supply_amount,0)),0)::int amt
+      FROM purchase_invoice_item WHERE invoice_id = ${invoiceId}
+    ) s
+    WHERE id = ${invoiceId}
+  `);
+}
+
 /**
  * ⭐ 바코드 한 번 = 1본 입고 (사장님 확인 2026-08-01)
  *
@@ -605,23 +750,29 @@ export async function pendingLines(): Promise<PendingLine[]> {
     ORDER BY i.issued_at DESC, ii.id
   `);
 
+  /**
+   * ⚠️ `bigint` 컬럼은 드라이버가 **문자열**로 준다.
+   *    그대로 두면 `invoiceId === 128` 같은 비교가 조용히 실패한다 —
+   *    화면에서 인보이스를 못 찾거나 엉뚱한 것에 붙는다 (2026-08-01 발견).
+   *    숫자로 맞춰서 내보낸다.
+   */
   return rows.map((r) => ({
-    itemId: r.item_id,
-    invoiceId: r.invoice_id,
+    itemId: Number(r.item_id),
+    invoiceId: Number(r.invoice_id),
     invoiceNo: r.invoice_no,
     supplier: r.supplier,
     issuedAt: r.issued_at,
     cai: r.cai,
-    productId: r.product_id,
+    productId: r.product_id === null ? null : Number(r.product_id),
     description: r.description,
     model: r.display_name ?? r.pattern,
     spec:
       r.width && r.aspect_ratio && r.rim_inch
         ? `${r.width}/${r.aspect_ratio}R${Number(r.rim_inch)}`
         : null,
-    qty: r.qty,
-    receivedQty: r.received_qty,
-    unitCost: r.unit_cost,
+    qty: Number(r.qty),
+    receivedQty: Number(r.received_qty),
+    unitCost: r.unit_cost === null ? null : Number(r.unit_cost),
   }));
 }
 
