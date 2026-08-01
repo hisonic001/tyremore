@@ -1,0 +1,14 @@
+# 줄바꿈은 저장소에 LF로 저장하고, 윈도우 작업 폴더에서는 CRLF로 쓴다.
+* text=auto eol=lf
+
+*.md   text eol=lf
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.sql  text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf
+
+# 바이너리 (혹시 들어오더라도 변환하지 않는다)
+*.png  binary
+*.jpg  binary
+*.xlsx binary
