@@ -1,22 +1,31 @@
 /**
- * ⭐ 통합 검색 — D-11 1번
+ * 검색 — 두 갈래 (2026-08-01 개정)
  *
- * "무엇을 검색할지" 고르는 단계를 없앤다. 입력 패턴으로 자동 판별한다.
- * 현장 속도를 가장 크게 바꾸는 결정이다. 정비사는 검색창 하나만 본다.
+ * 원래는 검색창 하나로 전부 자동 판별했다(D-11 1번). 그런데 현장에서
+ * 고객 조회와 상품 조회는 **목적이 다르다** — 손님 앞에서 이력을 볼 때와,
+ * 재고·가격을 찾을 때는 보고 싶은 것이 다르다. 결과가 섞이면 오히려 느리다.
+ *
+ * 그래서 **버튼 하나로 갈랐다.** 다만 자동 판별은 그대로 남긴다:
+ *   차량번호를 치면 고객 쪽으로, 규격을 치면 상품 쪽으로 알아서 넘어간다.
+ *   정비사는 평소처럼 치기만 하면 되고, 필요할 때만 버튼을 누른다.
  */
-import { and, eq, gte, isNotNull, or, sql } from "drizzle-orm";
+import { and, eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
-import { brand, customer, product, stockItem, vehicle } from "@/db/schema";
-import { normalizePlate, normalizePhone } from "./normalize";
+import { brand, customer, product, vehicle } from "@/db/schema";
+import { normalizePhone, normalizePlate } from "./normalize";
 import { parseSpecQuery } from "./tire-spec";
+import type { Season } from "./tire-attrs";
 
-export type SearchKind = "plate" | "phone" | "spec" | "name" | "barcode" | "part";
+export type Mode = "customer" | "product";
 
-export interface SearchResult {
-  kind: SearchKind;
-  label: string;
-  vehicles: VehicleHit[];
-  products: ProductHit[];
+export interface ProductFilter {
+  brands?: string[];
+  seasons?: Season[];
+  runflat?: boolean;
+  acoustic?: boolean;
+  suv?: boolean;
+  /** 재고 있는 것만 */
+  inStock?: boolean;
 }
 
 export interface VehicleHit {
@@ -37,90 +46,68 @@ export interface VehicleHit {
 export interface ProductHit {
   productId: number;
   name: string;
-  /** ⭐ 모델명 'PILOT SPORT 4 S' — 고객이 말하는 이름이다. 10,316건 보유 */
   pattern: string | null;
   brandName: string | null;
   spec: string | null;
+  loadSpeed: string | null;
+  season: Season | null;
+  isRunflat: boolean;
+  isAcoustic: boolean;
+  isSuv: boolean;
+  /** ⭐ 공장도가 (MARS 단가1) */
   listPrice: number | null;
-  /** 재고 본수 */
   stockQty: number;
-  /** ⭐ false면 「미등록」 — 0본과 다르다 (D-12 6번) */
   stockTracked: boolean;
-  /** 부품: NULL이면 「미확인」 (D-12 5번) */
   verified: boolean;
   itemType: string;
   fitment: string | null;
   partNo: string | null;
 }
 
-/** 입력만 보고 무엇을 찾는지 정한다 */
-export function detectKind(q: string): SearchKind {
+/**
+ * 입력만 보고 어느 쪽을 볼지 정한다.
+ * 사용자가 버튼으로 지정했으면 그쪽이 이긴다.
+ */
+export function guessMode(q: string): Mode | null {
   const t = q.trim();
-  if (parseSpecQuery(t)) return "spec";
-  if (/^\d{2,3}[가-힣]\s?\d{4}$/.test(t) || /^[가-힣]{2}\d{2,3}[가-힣]\d{4}$/.test(t)) return "plate";
-  // 뒷 4자리만 말하는 경우 — 고객은 "3456이요" 라고 한다
-  if (/^\d{4}$/.test(t)) return "plate";
-  if (/^01\d{1,2}-?\d{3,4}-?\d{4}$/.test(t) || /^\d{9,11}$/.test(t.replace(/\D/g, ""))) return "phone";
-  if (/^\d{8,13}$/.test(t)) return "barcode";
-  if (/^[A-Za-z]{2,}-?\d/.test(t)) return "part";
-  return "name";
-}
-
-const KIND_LABEL: Record<SearchKind, string> = {
-  plate: "차량번호",
-  phone: "전화번호",
-  spec: "규격",
-  name: "이름·상품",
-  barcode: "바코드",
-  part: "부품",
-};
-
-export async function search(rawQuery: string): Promise<SearchResult> {
-  const q = rawQuery.trim();
-  const kind = detectKind(q);
-  const empty: SearchResult = { kind, label: KIND_LABEL[kind], vehicles: [], products: [] };
-  if (!q) return empty;
-
-  if (kind === "plate" || kind === "phone") {
-    return { ...empty, vehicles: await findVehicles(q, kind) };
-  }
-
-  /**
-   * ⭐ 글자를 치면 고객과 상품을 동시에 찾는다.
-   * '제네시스'는 고객 이름일 수도, 부품 적용차종일 수도 있다.
-   * 'PILOT SPORT'는 타이어 모델명이다. 정비사에게 "무엇을 찾을지" 묻지 않는다.
-   */
-  if (kind === "name" || kind === "part") {
-    const [vehicles, products] = await Promise.all([findVehicles(q, "name"), findProducts(q, kind)]);
-    return { ...empty, vehicles, products };
-  }
-  return { ...empty, products: await findProducts(q, kind) };
+  if (!t) return null;
+  if (parseSpecQuery(t)) return "product";
+  if (/^\d{2,3}[가-힣]\s?\d{4}$/.test(t) || /^[가-힣]{2}\d{2,3}[가-힣]\d{4}$/.test(t)) return "customer";
+  if (/^\d{4}$/.test(t)) return "customer"; // 고객은 "3456이요" 라고 말한다
+  if (/^01\d{1,2}-?\d{3,4}-?\d{4}$/.test(t) || /^\d{9,11}$/.test(t.replace(/\D/g, ""))) return "customer";
+  return null; // 글자만으로는 알 수 없다 — 현재 모드를 유지한다
 }
 
 /* ---------------------------------------------------------- */
 
-async function findVehicles(q: string, kind: SearchKind): Promise<VehicleHit[]> {
-  let where;
-  if (kind === "plate") {
-    const norm = normalizePlate(q);
-    where =
-      norm.length === 4
-        ? sql`right(${vehicle.plateNoNorm}, 4) = ${norm}` // 뒷자리만
-        : sql`${vehicle.plateNoNorm} LIKE ${"%" + norm + "%"}`;
-  } else if (kind === "phone") {
-    const digits = normalizePhone(q) ?? q;
-    where = sql`${customer.phone} LIKE ${"%" + digits + "%"}`;
-  } else {
-    // 이름 검색은 원문·정규화·메모를 전부 뒤진다 (D-10)
-    const like = `%${q}%`;
-    where = or(
-      sql`${customer.name} ILIKE ${like}`,
-      sql`${customer.nameSearch} ILIKE ${"%" + q.replace(/\s/g, "").toLowerCase() + "%"}`,
-      sql`${customer.memo} ILIKE ${like}`,
+export async function findVehicles(q: string): Promise<VehicleHit[]> {
+  const t = q.trim();
+  if (!t) return [];
+
+  const plate = normalizePlate(t);
+  const isPlate = /^(?:[가-힣]{2})?\d{2,3}[가-힣]?\d{0,4}$/.test(plate) && /\d/.test(plate);
+  const digits = normalizePhone(t);
+
+  const conds: SQL[] = [];
+  if (isPlate) {
+    conds.push(
+      plate.length === 4
+        ? sql`right(${vehicle.plateNoNorm}, 4) = ${plate}`
+        : sql`${vehicle.plateNoNorm} LIKE ${"%" + plate + "%"}`,
     );
   }
+  if (digits && digits.length >= 4) conds.push(sql`${customer.phone} LIKE ${"%" + digits + "%"}`);
 
-  const rows = await db
+  // 이름은 원문·정규화·메모를 전부 뒤진다 (D-10)
+  const like = `%${t}%`;
+  conds.push(
+    sql`${customer.name} ILIKE ${like}`,
+    sql`${customer.nameSearch} ILIKE ${"%" + t.replace(/\s/g, "").toLowerCase() + "%"}`,
+    sql`${customer.memo} ILIKE ${like}`,
+    sql`${vehicle.model} ILIKE ${like}`,
+  );
+
+  return db
     .select({
       vehicleId: vehicle.id,
       plateNo: vehicle.plateNo,
@@ -137,35 +124,60 @@ async function findVehicles(q: string, kind: SearchKind): Promise<VehicleHit[]> 
     })
     .from(vehicle)
     .innerJoin(customer, eq(vehicle.customerId, customer.id))
-    .where(and(where, eq(vehicle.isActive, true)))
-    .limit(30);
-
-  return rows;
+    .where(and(or(...conds), eq(vehicle.isActive, true)))
+    .limit(40);
 }
 
-async function findProducts(q: string, kind: SearchKind): Promise<ProductHit[]> {
-  let where;
-  if (kind === "spec") {
-    const s = parseSpecQuery(q)!;
-    where = and(
-      eq(product.itemType, "tire"),
-      eq(product.width, s.width),
-      eq(product.aspectRatio, s.aspectRatio),
-      sql`${product.rimInch} = ${String(s.rimInch)}`,
-    );
-  } else if (kind === "barcode") {
-    where = eq(product.barcode, q);
-  } else {
-    /**
-     * 부품은 품번·적용차종으로, 타이어는 모델명으로 찾는다.
-     * 적용차종이 부품 검색의 전부다 (D-12) — pg_trgm 인덱스가 이걸 받는다.
-     */
-    const like = `%${q}%`;
-    where = or(
-      sql`${product.partNo} ILIKE ${like}`,
-      sql`${product.fitment} ILIKE ${like}`,
-      sql`${product.pattern} ILIKE ${like}`,
-    );
+export async function findProducts(q: string, f: ProductFilter = {}): Promise<ProductHit[]> {
+  const t = q.trim();
+  const conds: SQL[] = [eq(product.isActive, true)];
+
+  if (t) {
+    const spec = parseSpecQuery(t);
+    if (spec) {
+      conds.push(
+        eq(product.width, spec.width),
+        eq(product.aspectRatio, spec.aspectRatio),
+        sql`${product.rimInch} = ${String(spec.rimInch)}`,
+      );
+    } else if (/^\d{8,13}$/.test(t)) {
+      conds.push(eq(product.barcode, t));
+    } else {
+      // 모델명 · 부품번호 · 적용차종
+      const like = `%${t}%`;
+      conds.push(
+        or(
+          sql`${product.pattern} ILIKE ${like}`,
+          sql`${product.partNo} ILIKE ${like}`,
+          sql`${product.fitment} ILIKE ${like}`,
+          sql`${product.rawName} ILIKE ${like}`,
+        )!,
+      );
+    }
+  }
+
+  // ⚠️ `= ANY(${배열})` 은 postgres.js 가 스칼라로 직렬화해 깨진다. inArray 를 쓴다.
+  if (f.brands?.length) conds.push(inArray(product.brandCode, f.brands));
+  if (f.seasons?.length) conds.push(inArray(product.season, f.seasons));
+  if (f.runflat) conds.push(eq(product.isRunflat, true));
+  if (f.acoustic) conds.push(eq(product.isAcoustic, true));
+  if (f.suv) conds.push(eq(product.isSuv, true));
+
+  const stockQty = sql<number>`COALESCE((
+    SELECT SUM(s.qty)::int FROM stock_item s
+    WHERE s.product_id = ${product.id} AND s.status = '재고'
+  ), 0)`;
+
+  if (f.inStock) {
+    conds.push(sql`EXISTS (
+      SELECT 1 FROM stock_item s
+      WHERE s.product_id = ${product.id} AND s.status = '재고' AND s.qty > 0
+    )`);
+  }
+
+  // 검색어도 조건도 없으면 전체를 긁지 않는다
+  if (!t && !f.brands?.length && !f.seasons?.length && !f.runflat && !f.acoustic && !f.suv && !f.inStock) {
+    return [];
   }
 
   const rows = await db
@@ -177,15 +189,18 @@ async function findProducts(q: string, kind: SearchKind): Promise<ProductHit[]> 
       width: product.width,
       aspectRatio: product.aspectRatio,
       rimInch: product.rimInch,
+      loadIndex: product.loadIndex,
+      speedRating: product.speedRating,
+      season: product.season,
+      isRunflat: product.isRunflat,
+      isAcoustic: product.isAcoustic,
+      isSuv: product.isSuv,
       listPrice: product.listPrice,
       stockTracked: product.stockTracked,
       itemType: product.itemType,
       fitment: product.fitment,
       partNo: product.partNo,
-      stockQty: sql<number>`COALESCE((
-        SELECT SUM(s.qty)::int FROM stock_item s
-        WHERE s.product_id = ${product.id} AND s.status = '재고'
-      ), 0)`,
+      stockQty,
       verified: sql<boolean>`EXISTS (
         SELECT 1 FROM stock_item s
         WHERE s.product_id = ${product.id} AND s.verified_at IS NOT NULL
@@ -193,20 +208,29 @@ async function findProducts(q: string, kind: SearchKind): Promise<ProductHit[]> 
     })
     .from(product)
     .leftJoin(brand, eq(product.brandCode, brand.code))
-    .where(and(where, eq(product.isActive, true)))
-    // ⭐ 재고 있는 것 → 미등록 → 소진 순. 지금 팔 수 있는 것이 먼저다
-    .orderBy(sql`
-      CASE WHEN (SELECT COUNT(*) FROM stock_item s WHERE s.product_id = ${product.id} AND s.status='재고' AND s.qty > 0) > 0 THEN 0
-           WHEN ${product.stockTracked} = false THEN 1
-           ELSE 2 END`, brand.sortOrder, product.rawName)
-    .limit(40);
+    .where(and(...conds))
+    // ⭐ 지금 팔 수 있는 것이 먼저. 그다음 미등록, 소진은 맨 뒤
+    .orderBy(
+      sql`CASE WHEN ${stockQty} > 0 THEN 0 WHEN ${product.stockTracked} = false THEN 1 ELSE 2 END`,
+      brand.sortOrder,
+      product.pattern,
+    )
+    .limit(60);
 
   return rows.map((r) => ({
     productId: r.productId,
     name: r.name,
     pattern: r.pattern,
     brandName: r.brandName,
-    spec: r.width && r.aspectRatio && r.rimInch ? `${r.width}/${r.aspectRatio}R${Number(r.rimInch)}` : null,
+    spec:
+      r.width && r.aspectRatio && r.rimInch
+        ? `${r.width}/${r.aspectRatio}R${Number(r.rimInch)}`
+        : null,
+    loadSpeed: r.loadIndex ? `${r.loadIndex}${r.speedRating ?? ""}` : null,
+    season: (r.season as Season) ?? null,
+    isRunflat: r.isRunflat,
+    isAcoustic: r.isAcoustic,
+    isSuv: r.isSuv,
     listPrice: r.listPrice,
     stockQty: Number(r.stockQty ?? 0),
     stockTracked: r.stockTracked,
@@ -215,4 +239,15 @@ async function findProducts(q: string, kind: SearchKind): Promise<ProductHit[]> 
     fitment: r.fitment,
     partNo: r.partNo,
   }));
+}
+
+/** 필터 화면에 쓸 브랜드 목록 — 타이어를 가진 브랜드만 */
+export async function tireBrands() {
+  return db.execute<{ code: string; name_ko: string; n: number }>(sql`
+    SELECT b.code, b.name_ko, count(*)::int n
+    FROM product p JOIN brand b ON b.code = p.brand_code
+    WHERE p.item_type = 'tire' AND p.is_active
+    GROUP BY b.code, b.name_ko, b.sort_order
+    ORDER BY b.sort_order
+  `);
 }

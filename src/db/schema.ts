@@ -105,7 +105,12 @@ export const product = pgTable(
     rimInch: numeric("rim_inch", { precision: 4, scale: 1 }), // 17.0 (17.5 대비)
     loadIndex: text("load_index"),
     speedRating: text("speed_rating"),
+    /** '여름'|'사계절'|'올웨더'|'겨울' — 모델명에서 판정 (src/lib/tire-attrs.ts) */
     season: text("season"),
+    /** ⭐ 상담 필터 축. 손님이 "런플랫이요"라고 말한다 */
+    isRunflat: boolean("is_runflat").notNull().default(false),
+    isAcoustic: boolean("is_acoustic").notNull().default(false),
+    isSuv: boolean("is_suv").notNull().default(false),
 
     // --- 부품 전용 (타이어는 NULL) ---
     partNo: text("part_no"), // 'MBA-039','SM188'
@@ -142,6 +147,8 @@ export const product = pgTable(
     // ⭐ 부품 검색의 전부: 적용 차종 부분검색
     index("idx_product_fitment").using("gin", sql`${t.fitment} gin_trgm_ops`),
     index("idx_product_partno").on(t.partNo).where(sql`${t.partNo} IS NOT NULL`),
+    // 규격 + 계절로 좁히는 것이 상담에서 가장 흔한 조합이다
+    index("idx_product_season").on(t.season).where(sql`${t.itemType} = 'tire' AND ${t.isActive}`),
   ],
 );
 

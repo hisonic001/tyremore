@@ -16,6 +16,7 @@ import {
   toInt,
   toText,
 } from "../../src/lib/normalize";
+import { parseTireAttrs } from "../../src/lib/tire-attrs";
 import { parseTireSpec } from "../../src/lib/tire-spec";
 import { resolveMaker } from "./seed-data";
 import { SERVICE_RULES } from "./service-rules";
@@ -49,6 +50,9 @@ export interface ProductRow {
   loadIndex: string | null;
   speedRating: string | null;
   season: string | null;
+  isRunflat: boolean;
+  isAcoustic: boolean;
+  isSuv: boolean;
   category: string | null;
   barcode: string | null;
   listPrice: number | null;
@@ -83,6 +87,13 @@ export function transformProducts(dataDir: string): Transformed<ProductRow> {
     const category = toText(r["품목 범주 코드"]);
     const isTire = category === "10-TIRES";
     const spec = isTire ? parseTireSpec(rawName) : null;
+    /**
+     * ⚠️ 속성 판정은 「설명 2」(모델명)로 한다. 「상세 항목 및 서비스」에는 모델명이 없다.
+     *    1차 이관에서 이걸 놓쳐 10,318건 중 3건만 계절이 분류됐다 (2026-08-01 발견).
+     */
+    const attrs = isTire
+      ? parseTireAttrs(toText(r["설명 2"]), rawName)
+      : { season: null, isRunflat: false, isAcoustic: false, isSuv: false };
 
     if (isTire && !spec!.parsed) {
       issues.push({
@@ -106,7 +117,10 @@ export function transformProducts(dataDir: string): Transformed<ProductRow> {
       rimInch: spec?.rimInch !== null && spec?.rimInch !== undefined ? String(spec.rimInch) : null,
       loadIndex: spec?.loadIndex ?? null,
       speedRating: spec?.speedRating ?? null,
-      season: spec?.season ?? null,
+      season: attrs.season,
+      isRunflat: attrs.isRunflat,
+      isAcoustic: attrs.isAcoustic,
+      isSuv: attrs.isSuv,
       category,
       barcode: toText(r["제조사 품목 번호"]),
       /** ⭐ 단가1 이 기표가다. 「단가」가 아니다 (D-09) */
