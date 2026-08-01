@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { ProductHit, VehicleHit } from "@/lib/search";
 import { SEASON_STYLE } from "@/lib/tire-attrs";
 import { BADGE_STYLE } from "@/lib/tire-name";
+import { PriceTool } from "./price-tool";
 
 export function VehicleCard({ v }: { v: VehicleHit }) {
   return (
@@ -38,12 +39,11 @@ export function VehicleCard({ v }: { v: VehicleHit }) {
  * MARS 원본명은 화면에서 빠지지만 `marsName` 으로 그대로 살아 있다 (D-08).
  */
 export function ProductCard({ p }: { p: ProductHit }) {
+  const unit = p.itemType === "tire" ? "본" : "개";
   return (
-    <li>
-      <Link
-        href={`/stock/${p.productId}`}
-        className="block rounded-xl border border-slate-200 bg-white p-4 active:bg-slate-50"
-      >
+    <li className="rounded-xl border border-slate-200 bg-white p-4">
+      {/* 정보 부분만 링크. 아래 가격 툴은 눌러도 화면이 넘어가면 안 된다 */}
+      <Link href={`/stock/${p.productId}`} className="block active:opacity-60">
         {/* 1줄: 브랜드 · 계절 */}
         <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
           {p.brandName && (
@@ -94,7 +94,7 @@ export function ProductCard({ p }: { p: ProductHit }) {
           </div>
         )}
 
-        {/* 4줄: CAI · 가격 */}
+        {/* 4줄: CAI · 기표가 */}
         <div className="tabular mt-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
           <span className="text-xs text-slate-400">
             {p.cai && (
@@ -104,27 +104,12 @@ export function ProductCard({ p }: { p: ProductHit }) {
             )}
             {p.partNo && <span className="ml-2">{p.partNo}</span>}
           </span>
-          {/* ⭐ 판매가가 정해져 있으면 그것을 크게. 상담에서 부르는 금액이다 */}
           <span className="text-sm">
-            {p.salePrice !== null ? (
-              <>
-                <span className="text-slate-400 line-through">{p.listPrice?.toLocaleString()}</span>
-                <span className="ml-2 text-lg font-bold text-slate-900">
-                  {p.salePrice.toLocaleString()}원
-                </span>
-                {p.salesRate !== null && (
-                  <span className="ml-1 text-xs font-medium text-emerald-700">
-                    {Math.round(p.salesRate * 1000) / 10}%↓
-                  </span>
-                )}
-              </>
-            ) : p.listPrice ? (
+            {p.listPrice ? (
               <>
                 <span className="text-slate-500">기표가 </span>
-                <span className="text-base font-bold text-slate-900">
-                  {p.listPrice.toLocaleString()}원
-                </span>
-                <span className="ml-1 text-xs text-amber-600">할인율 미설정</span>
+                <span className="font-semibold text-slate-700">{p.listPrice.toLocaleString()}원</span>
+                <span className="ml-1 text-xs text-slate-400">VAT 포함</span>
               </>
             ) : (
               <span className="text-amber-600">기표가 없음</span>
@@ -132,6 +117,20 @@ export function ProductCard({ p }: { p: ProductHit }) {
           </span>
         </div>
       </Link>
+
+      {/* ⭐ 목록에서 바로 계산한다. 상품을 눌러 들어갔다 나오는 왕복을 없앤다 */}
+      {p.listPrice !== null && (
+        <PriceTool
+          productId={p.productId}
+          cai={p.cai}
+          pattern={p.pattern}
+          brandCode={p.brandCode}
+          brandName={p.brandName}
+          listPrice={p.listPrice}
+          salesRate={p.salesRate}
+          unit={unit}
+        />
+      )}
     </li>
   );
 }

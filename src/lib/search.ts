@@ -52,6 +52,8 @@ export interface ProductHit {
   cai: string | null;
   /** ⭐ 화면용 모델명 — "CROSSCLIMATE 2" 처럼 짧게 */
   model: string;
+  /** 할인율 저장 범위를 만들기 위해 필요 */
+  brandCode: string | null;
   /** 런플랫·흡음재·저연비·OE마킹·하중강화 … 세부사항 전부 */
   badges: Badge[];
   /** 사전에 없는 표기 — 버리지 않고 그대로 보여준다 */
@@ -226,6 +228,7 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
       name: product.rawName,
       displayName: product.displayName,
       pattern: product.pattern,
+      brandCode: product.brandCode,
       brandName: brand.nameKo,
       width: product.width,
       aspectRatio: product.aspectRatio,
@@ -286,6 +289,7 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
     cai: r.cai && /^\d+$/.test(r.cai) ? r.cai : null,
     // 사장님이 정한 이름이 있으면 그것이 이긴다
     model: r.displayName?.trim() || n.model,
+    brandCode: r.brandCode,
     // 상품명 접미(GO=BFGoodrich)가 brand_code 보다 정확하다 — MARS 분류가 틀려 있다
     brandName: n.brandHint ?? r.brandName,
     badges: n.badges,
