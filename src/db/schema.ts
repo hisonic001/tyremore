@@ -481,6 +481,80 @@ export const quoteItem = pgTable(
 );
 
 /* ============================================================
+ * purchase_invoice — 매입 인보이스 (2026-08-01)
+ *
+ * 발주해서 출고된 물건의 명세다. 실물이 오기 전에 미리 등록해 두고,
+ * 도착해서 스캔하면 재고로 확정된다.
+ *
+ * ⭐ 인보이스에는 재고보다 값진 것이 있다 — **매입 할인율과 실매입가**.
+ *    D-05에서 "매입 할인율은 쓰면서 채운다"고 했는데, 채우는 것조차 자동이 된다.
+ * ========================================================== */
+export const purchaseInvoice = pgTable(
+  "purchase_invoice",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    supplier: text("supplier").notNull(), // '미쉐린'
+    /** 발행번호 — 같은 인보이스를 두 번 올리는 것을 막는다 */
+    invoiceNo: text("invoice_no").notNull().unique(),
+    orderNo: text("order_no"),
+    issuedAt: text("issued_at"), // '2026-07-31'
+    totalQty: integer("total_qty"),
+    subtotal: integer("subtotal"), // VAT 미포함
+    vat: integer("vat"),
+    total: integer("total"),
+    /**
+     * '입고대기' — 올렸지만 실물이 아직 안 왔다
+     * '부분입고' — 일부만 도착
+     * '입고완료' — 전부 도착
+     * '취소'
+     */
+    status: text("status").notNull().default("입고대기"),
+    fileName: text("file_name"),
+    /** 원문 — 나중에 파서를 고쳐 다시 읽을 수 있어야 한다 (엑셀 원본 보존과 같은 이유) */
+    rawText: text("raw_text"),
+    createdBy: bigint("created_by", { mode: "number" }).references(() => appUser.id),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    check("invoice_status", sql`${t.status} IN ('입고대기','부분입고','입고완료','취소')`),
+    index("idx_invoice_open").on(t.status, t.issuedAt).where(sql`${t.status} <> '입고완료'`),
+  ],
+);
+
+export const purchaseInvoiceItem = pgTable(
+  "purchase_invoice_item",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    invoiceId: bigint("invoice_id", { mode: "number" })
+      .notNull()
+      .references(() => purchaseInvoice.id, { onDelete: "cascade" }),
+    /** 미쉐린 CAI = MARS 품번. 이것으로 상품과 잇는다 */
+    cai: text("cai").notNull(),
+    productId: bigint("product_id", { mode: "number" }).references(() => product.id),
+    /** 인보이스에 적힌 그대로 — 상품을 못 찾아도 무엇인지는 남는다 */
+    description: text("description").notNull(),
+    qty: integer("qty").notNull(),
+    /** ⭐ 실제로 도착해 스캔한 수량 */
+    receivedQty: integer("received_qty").notNull().default(0),
+    unitListPrice: integer("unit_list_price"), // 기준단가 (VAT 미포함)
+    discountRate: numeric("discount_rate", { precision: 5, scale: 4 }), // 0.3800
+    supplyAmount: integer("supply_amount"), // 공급가액
+    /** 본당 실매입가 = 공급가액 ÷ 수량 */
+    unitCost: integer("unit_cost"),
+    createdAt,
+  },
+  (t) => [
+    check("invoice_item_qty", sql`${t.qty} > 0`),
+    check("invoice_item_received", sql`${t.receivedQty} >= 0`),
+    index("idx_invoice_item_invoice").on(t.invoiceId),
+    index("idx_invoice_item_cai").on(t.cai),
+    /** 입고 화면에서 "아직 안 온 것" 을 찾는다 */
+    index("idx_invoice_item_pending").on(t.productId).where(sql`${t.receivedQty} < ${t.qty}`),
+  ],
+);
+
+/* ============================================================
  * 3-12. import_issue — 이관 보정 대기 목록
  * 자동 처리가 안 된 건을 한 화면에 모아 사장님이 정리한다 (약 254건).
  * 이걸 안 만들면 이상 데이터가 그대로 운영에 들어가고 나중엔 못 찾는다.

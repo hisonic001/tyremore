@@ -58,6 +58,9 @@ export default async function Home({
       <header className="mb-4 flex items-baseline justify-between gap-3">
         <h1 className="text-xl font-bold tracking-tight">타이어모어</h1>
         <nav className="flex items-baseline gap-3 text-sm text-slate-500">
+          <Link href="/receiving" className="underline underline-offset-4">
+            매입 입고
+          </Link>
           <Link href="/settings/catalog" className="underline underline-offset-4">
             상품 정리
           </Link>

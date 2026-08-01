@@ -1,0 +1,268 @@
+"use client";
+
+import { useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { previewInvoice, receiveLine, saveInvoice, type InvoicePreview, type PendingLine } from "@/lib/invoice";
+
+const won = (n: number) => n.toLocaleString();
+
+/**
+ * ① 인보이스 업로드
+ * ⚠️ 바로 저장하지 않는다. 인보이스는 돈이라 잘못 읽으면 매입원가가 통째로 틀어진다.
+ *    검산 결과를 보여주고 사람이 확인한 뒤 저장한다.
+ */
+export function InvoiceUpload() {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [pv, setPv] = useState<InvoicePreview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [updatePrices, setUpdatePrices] = useState(true);
+  const fileRef = useRef<File | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function onPick(f: File | undefined) {
+    if (!f) return;
+    fileRef.current = f;
+    setError(null);
+    setMsg(null);
+    setPv(null);
+    start(async () => {
+      const r = await previewInvoice(f.name, await f.arrayBuffer());
+      if ("error" in r) setError(r.error);
+      else setPv(r);
+    });
+  }
+
+  function commit() {
+    const f = fileRef.current;
+    if (!f) return;
+    start(async () => {
+      const r = await saveInvoice(f.name, await f.arrayBuffer(), { updatePrices });
+      if (!r.ok) setError(r.error);
+      else {
+        setMsg(
+          `등록했습니다. ${updatePrices ? `매입 할인율 ${r.priceUpdates}건도 갱신했습니다.` : ""}`,
+        );
+        setPv(null);
+        fileRef.current = null;
+        if (inputRef.current) inputRef.current.value = "";
+        router.refresh();
+      }
+    });
+  }
+
+  return (
+    <section className="mt-5 rounded-2xl border-2 border-slate-900 bg-white p-4">
+      <h2 className="font-bold">인보이스 올리기</h2>
+      <p className="mt-0.5 text-sm text-slate-500">
+        미쉐린 인보이스(PDF·엑셀). 다른 브랜드는 양식을 주시면 추가합니다.
+      </p>
+
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".pdf,.xlsx,.xls"
+        onChange={(e) => onPick(e.target.files?.[0])}
+        className="mt-3 w-full rounded-xl border-2 border-dashed border-slate-300 p-4 text-sm
+                   file:mr-3 file:rounded-lg file:border-0 file:bg-slate-900 file:px-4 file:py-2
+                   file:text-sm file:font-semibold file:text-white"
+      />
+
+      {pending && <p className="mt-3 text-sm text-slate-500">읽는 중…</p>}
+      {error && <p className="mt-3 rounded-lg bg-red-50 px-4 py-3 text-red-700">{error}</p>}
+      {msg && <p className="mt-3 rounded-lg bg-emerald-50 px-4 py-3 text-emerald-800">{msg}</p>}
+
+      {pv && (
+        <div className="mt-4">
+          <dl className="tabular grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+            <dt className="text-slate-500">매입처</dt>
+            <dd className="text-right font-medium">{pv.supplier}</dd>
+            <dt className="text-slate-500">발행번호</dt>
+            <dd className="text-right font-medium">{pv.invoiceNo || "—"}</dd>
+            <dt className="text-slate-500">발행일자</dt>
+            <dd className="text-right">{pv.issuedAt ?? "—"}</dd>
+            <dt className="text-slate-500">총 수량</dt>
+            <dd className="text-right font-bold">{pv.totalQty ?? "—"}본</dd>
+            <dt className="text-slate-500">공급가액</dt>
+            <dd className="text-right">{pv.subtotal ? won(pv.subtotal) : "—"}원</dd>
+            <dt className="text-slate-500">총 합계</dt>
+            <dd className="text-right font-bold">{pv.total ? won(pv.total) : "—"}원</dd>
+          </dl>
+
+          {/* 검산 — 인보이스는 돈이다 */}
+          <p
+            className={`mt-3 rounded-lg px-3 py-2 text-sm ${
+              pv.ok ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900"
+            }`}
+          >
+            {pv.ok ? "✅ 금액 검산이 전부 맞습니다" : `⚠️ ${pv.checks.join(" / ")}`}
+          </p>
+          {pv.duplicate && (
+            <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+              이미 올린 인보이스입니다
+            </p>
+          )}
+
+          <ul className="mt-3 divide-y divide-slate-100">
+            {pv.items.map((it, i) => {
+              const m = pv.matches[i];
+              return (
+                <li key={it.cai} className="py-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold">
+                        {m?.model ?? it.description}
+                      </div>
+                      <div className="tabular text-xs text-slate-500">
+                        CAI {it.cai} · {it.qty}본 · 할인 {(it.discountRate * 100).toFixed(0)}%
+                      </div>
+                    </div>
+                    <div className="tabular shrink-0 text-right">
+                      <div className="text-sm font-bold">본당 {won(it.unitCost)}원</div>
+                      <div className="text-xs text-slate-400">{won(it.supplyAmount)}원</div>
+                    </div>
+                  </div>
+                  {!m?.productId && (
+                    <p className="mt-1 text-xs text-red-600">
+                      우리 상품 목록에 없습니다 — 먼저 등록해야 입고됩니다
+                    </p>
+                  )}
+                  {m?.priceDiffers && (
+                    <p className="mt-1 text-xs text-amber-700">
+                      기표가가 다릅니다 (우리 {won(m.ourListPrice!)} → 인보이스 {won(it.unitListPrice)})
+                    </p>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+
+          <label className="mt-3 flex items-start gap-2 rounded-lg bg-slate-50 p-3 text-sm">
+            <input
+              type="checkbox"
+              checked={updatePrices}
+              onChange={(e) => setUpdatePrices(e.target.checked)}
+              className="mt-0.5 h-5 w-5"
+            />
+            <span>
+              <strong>매입 할인율·기표가를 함께 갱신</strong>
+              <span className="block text-xs text-slate-500">
+                인보이스는 실제로 돈이 오간 근거라 가장 정확합니다. 마진이 정확해집니다.
+              </span>
+            </span>
+          </label>
+
+          <button
+            type="button"
+            disabled={pending || pv.duplicate || pv.items.length === 0}
+            onClick={commit}
+            className="mt-3 w-full rounded-xl bg-slate-900 py-4 text-lg font-semibold text-white disabled:opacity-40"
+          >
+            {pending ? "저장 중…" : "입고 예정으로 등록"}
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** ② 도착 확정 */
+export function PendingList({ lines }: { lines: PendingLine[] }) {
+  return (
+    <ul className="mt-3 space-y-2">
+      {lines.map((l) => (
+        <PendingRow key={l.itemId} l={l} />
+      ))}
+    </ul>
+  );
+}
+
+function PendingRow({ l }: { l: PendingLine }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const remain = l.qty - l.receivedQty;
+  const [qty, setQty] = useState(remain);
+  const [dot, setDot] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const BTN = "h-11 w-11 shrink-0 rounded-lg border border-slate-300 bg-white text-xl font-bold";
+
+  return (
+    <li className="rounded-xl border border-slate-200 bg-white p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate font-semibold">{l.model ?? l.description}</div>
+          <div className="tabular text-xs text-slate-500">
+            {[l.spec, `CAI ${l.cai}`].filter(Boolean).join(" · ")}
+          </div>
+          <div className="tabular mt-0.5 text-xs text-slate-400">
+            {l.supplier} {l.invoiceNo} {l.issuedAt && `· ${l.issuedAt}`}
+            {l.unitCost && ` · 본당 ${won(l.unitCost)}원`}
+          </div>
+        </div>
+        <span className="tabular shrink-0 rounded-lg bg-amber-100 px-3 py-1.5 text-sm font-bold text-amber-900">
+          {remain}본 대기
+        </span>
+      </div>
+
+      {!l.productId ? (
+        <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+          상품이 등록돼 있지 않아 입고할 수 없습니다.{" "}
+          <Link href={`/product/new?q=${encodeURIComponent(l.cai)}`} className="underline">
+            상품 등록
+          </Link>
+        </p>
+      ) : (
+        <>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-1">
+              <span className="text-xs text-slate-500">DOT</span>
+              <input
+                value={dot}
+                onChange={(e) => setDot(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                placeholder="모르면 비움"
+                inputMode="numeric"
+                className="tabular h-11 w-28 rounded-lg border border-slate-300 px-2 text-lg"
+              />
+            </label>
+            <div className="ml-auto flex items-center gap-1">
+              <button type="button" className={BTN} onClick={() => setQty((q) => Math.max(1, q - 1))}>
+                −
+              </button>
+              <input
+                value={qty}
+                onChange={(e) => setQty(Math.max(1, Math.min(remain, Number(e.target.value.replace(/\D/g, "")) || 1)))}
+                inputMode="numeric"
+                className="tabular h-11 w-14 rounded-lg border border-slate-300 text-center text-lg font-bold"
+              />
+              <span className="w-4 text-sm text-slate-500">본</span>
+              <button type="button" className={BTN} onClick={() => setQty((q) => Math.min(remain, q + 1))}>
+                +
+              </button>
+            </div>
+          </div>
+
+          {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() =>
+              start(async () => {
+                setError(null);
+                const r = await receiveLine({ itemId: l.itemId, qty, dot: dot || null });
+                if (!r.ok) setError(r.error);
+                else router.refresh();
+              })
+            }
+            className="mt-2 w-full rounded-lg bg-slate-900 py-3 font-semibold text-white disabled:opacity-50"
+          >
+            {pending ? "처리 중…" : `${qty}본 입고 확정`}
+          </button>
+        </>
+      )}
+    </li>
+  );
+}
