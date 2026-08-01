@@ -258,12 +258,6 @@ export async function load(data: {
 
   await inBatches(tireStock, 800, (chunk) => db.insert(stockItem).values(chunk));
 
-  // ⭐ 입고된 상품만 stock_tracked = true. 나머지는 화면에 「미등록」으로 뜬다 (D-12 6번)
-  await db.execute(sql`
-    UPDATE product SET stock_tracked = true
-    WHERE id IN (SELECT DISTINCT product_id FROM stock_item)
-  `);
-
   /* --- 9. stock_item (부품) — 수량 없이 「미확인」 ---------- */
   console.log("\n  9. stock_item (부품 · 미확인)");
   let pseq = 0;
@@ -284,6 +278,23 @@ export async function load(data: {
     .filter((s): s is NonNullable<typeof s> => s !== null);
 
   await inBatches(partStock, 800, (chunk) => db.insert(stockItem).values(chunk));
+
+  /**
+   * ⭐ 재고 행이 생긴 상품만 stock_tracked = true.
+   *    ⚠️ 반드시 타이어·부품 재고를 모두 넣은 뒤에 실행해야 한다.
+   *       8번 뒤에 두면 부품이 「미확인」이 아니라 「미등록」으로 뜬다.
+   *
+   *    stock_tracked=false → ⚪ 미등록 (창고엔 있을 수 있다. 0본이 아니다) — D-12 6번
+   *    stock_tracked=true + verified_at NULL → ⚪ 미확인 (부품) — D-12 5번
+   */
+  const tracked = await db.execute<{ n: number }>(sql`
+    WITH u AS (
+      UPDATE product SET stock_tracked = true
+      WHERE id IN (SELECT DISTINCT product_id FROM stock_item) AND stock_tracked = false
+      RETURNING 1
+    ) SELECT count(*)::int n FROM u
+  `);
+  console.log(`     stock_tracked 켜짐: ${tracked[0]?.n ?? 0}종 (나머지는 「미등록」)`);
 
   /* --- 10. import_issue ----------------------------------- */
   console.log("\n  10. import_issue");
