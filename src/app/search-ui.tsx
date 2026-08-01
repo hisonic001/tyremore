@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { Mode } from "@/lib/search";
 import { SEASON_ORDER } from "@/lib/tire-attrs";
+import { SearchButton } from "./search-box";
 
 /** ⭐ 버튼 하나로 갈라진다 (사장님 요청 2026-08-01) */
 export function ModeTabs({ mode, q }: { mode: Mode; q: string }) {
@@ -95,11 +96,15 @@ export function FilterPanel({
         {count > 0 && (
           <Link
             href={`/?mode=product&q=${encodeURIComponent(q)}`}
-            className="ml-auto text-sm text-slate-500 underline underline-offset-4"
+            className="text-sm text-slate-500 underline underline-offset-4"
           >
             초기화
           </Link>
         )}
+        {/* ⭐ 엔터를 안 쳐도 눌러서 검색한다 (사장님 요청 2026-08-01) */}
+        <div className="ml-auto">
+          <SearchButton />
+        </div>
       </div>
 
       {open && (

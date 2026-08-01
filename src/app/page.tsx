@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getSession, logout } from "@/lib/auth";
 import { findProducts, findVehicles, guessMode, tireBrands, type Mode } from "@/lib/search";
 import type { Season } from "@/lib/tire-attrs";
+import { SearchBox, SearchButton } from "./search-box";
 import { FilterPanel, ModeTabs } from "./search-ui";
 import { ProductCard, VehicleCard } from "./cards";
 import { ComparePanel } from "./compare-panel";
@@ -75,32 +76,15 @@ export default async function Home({
 
       <ModeTabs mode={mode} q={q} />
 
-      <form action="/" method="get" className="mt-3">
-        <input type="hidden" name="mode" value={mode} />
-        {mode === "product" && (
-          <>
-            {filter.brands.map((b) => <input key={b} type="hidden" name="brand" value={b} />)}
-            {filter.seasons.map((s) => <input key={s} type="hidden" name="season" value={s} />)}
-            {filter.runflat && <input type="hidden" name="rf" value="1" />}
-            {filter.acoustic && <input type="hidden" name="ac" value="1" />}
-            {filter.suv && <input type="hidden" name="suv" value="1" />}
-            {filter.inStock && <input type="hidden" name="stock" value="1" />}
-          </>
-        )}
-        <input
-          name="q"
-          defaultValue={q}
-          autoFocus
-          autoComplete="off"
-          placeholder={mode === "customer" ? "차량번호 · 전화 · 이름" : "규격 2254517 · 모델명 · 부품"}
-          aria-label="검색"
-          className="w-full rounded-2xl border-2 border-slate-300 bg-white px-5 py-4 text-2xl
-                     shadow-sm outline-none placeholder:text-slate-400 focus:border-slate-900"
-        />
-      </form>
+      <SearchBox mode={mode} q={q} filter={filter} />
 
-      {mode === "product" && (
+      {mode === "product" ? (
         <FilterPanel brands={brands} q={q} filter={filter} count={filterCount} />
+      ) : (
+        /* 고객 모드에도 조회 버튼은 있어야 한다 */
+        <div className="mt-3 flex justify-end">
+          <SearchButton />
+        </div>
       )}
 
       {/* ---- 결과 ---- */}
