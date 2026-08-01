@@ -18,7 +18,7 @@ import {
 } from "../../src/lib/normalize";
 import { parseTireAttrs } from "../../src/lib/tire-attrs";
 import { parseTireSpec } from "../../src/lib/tire-spec";
-import { resolveMaker } from "./seed-data";
+import { resolveBrand, resolveMaker } from "./seed-data";
 import { SERVICE_RULES } from "./service-rules";
 
 export interface Issue {
@@ -110,7 +110,8 @@ export function transformProducts(dataDir: string): Transformed<ProductRow> {
       marsItemNo,
       itemType: isTire ? "tire" : "part",
       isSerialized: isTire, // 타이어는 1본 1행, 부품은 1행에 수량
-      brandCode: toText(r["제조사 코드"]),
+      // ⚠️ MARS 는 BFGoodrich 를 미쉐린으로 분류해 놓았다. 여기서 바로잡는다
+      brandCode: resolveBrand(toText(r["제조사 코드"]), toText(r["설명 2"])),
       pattern: toText(r["설명 2"]),
       rawName,
       width: spec?.width ?? null,

@@ -46,10 +46,31 @@ export const BRANDS_TO_CONFIRM = ["GN", "LM", "HYPERINT", "ACTION BAT"];
  */
 export const VAT_EXCLUDED_BRANDS = [
   "MI", // 미쉐린   2,057건 — 전부 1,000원 단위
+  "BFG", // BFGoodrich — 미쉐린 자회사. 같은 규칙 (사장님 확인 2026-08-01)
   "PI", // 피렐리   1,535건 — 전부 1,000원 단위
   "HK", // 한국타이어 1,332건
   "CO", // 콘티넨탈    927건
 ];
+
+/**
+ * ⭐ MARS 브랜드 코드 보정 (사장님 확인 2026-08-01)
+ *
+ * MARS 는 BFGoodrich 제품을 `MI`(미쉐린)로 분류해 놓았다.
+ * 상품명 끝의 `GO` 가 BFGoodrich 표시이고(`MI` 가 미쉐린이듯),
+ * `T/A` 는 BFGoodrich 전용 모델 표기다
+ * — All-Terrain · Mud-Terrain · Advantage T/A · Trail-Terrain.
+ * 미쉐린 라인업에는 T/A 가 없다.
+ *
+ * 실측: `GO` 로 끝나는 64건 중 58건 / `T/A` 가 든 259건 중 221건이 MI 로 잘못 분류.
+ *
+ * ⚠️ 이관 단계에서 고쳐야 **재이관해도 유지된다.**
+ */
+export function resolveBrand(rawCode: string | null, pattern: string | null): string | null {
+  const p = String(pattern ?? "");
+  if (/(^|\s)GO\s*$/i.test(p.trim())) return "BFG";
+  if (/\bT\s*\/\s*A\b/i.test(p)) return "BFG";
+  return rawCode;
+}
 
 /* ============================================================
  * vehicle_maker — 47종 표기를 30종 코드로 통합

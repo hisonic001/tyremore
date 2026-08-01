@@ -17,6 +17,20 @@ async function main() {
   const { sql } = await import("drizzle-orm");
   const { VAT_EXCLUDED_BRANDS } = await import("./import/seed-data");
 
+  /**
+   * 0) 브랜드 코드 보정 — MARS 가 BFGoodrich 를 미쉐린으로 분류해 놓았다.
+   *    VAT 계산이 브랜드 기준이므로 가격보다 먼저 고쳐야 한다.
+   */
+  const fixed = await db.execute<{ n: number }>(sql`
+    WITH u AS (
+      UPDATE product SET brand_code = 'BFG', updated_at = now()
+      WHERE item_type = 'tire' AND brand_code <> 'BFG'
+        AND (pattern ~ '(^| )GO *$' OR pattern ~ 'T */ *A')
+      RETURNING 1
+    ) SELECT count(*)::int n FROM u
+  `);
+  console.log(`브랜드 보정 (→ BFGoodrich): ${fixed[0].n.toLocaleString()}건`);
+
   // 1) 원본 보존 — 아직 안 채워진 것만 (이미 VAT를 먹인 값을 원본으로 착각하면 안 된다)
   const back = await db.execute<{ n: number }>(sql`
     WITH u AS (
