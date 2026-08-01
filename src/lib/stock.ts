@@ -133,7 +133,8 @@ export async function getStockDetail(productId: number): Promise<StockDetail | n
     orderName: n.orderName,
     loadSpeed: n.loadSpeed,
     pattern: p.pattern,
-    brandName: p.brand_name,
+    // 상품명 접미(GO=BFGoodrich)가 brand_code 보다 정확하다
+    brandName: n.brandHint ?? p.brand_name,
     spec: n.spec,
     itemType: p.item_type,
     isSerialized: p.is_serialized,

@@ -268,11 +268,12 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
     cai: r.cai && /^\d+$/.test(r.cai) ? r.cai : null,
     // 사장님이 정한 이름이 있으면 그것이 이긴다
     model: r.displayName?.trim() || n.model,
+    // 상품명 접미(GO=BFGoodrich)가 brand_code 보다 정확하다 — MARS 분류가 틀려 있다
+    brandName: n.brandHint ?? r.brandName,
     badges: n.badges,
     unknown: n.unknown,
     marsName: n.marsName,
     pattern: r.pattern,
-    brandName: r.brandName,
     spec: n.spec,
     loadSpeed: n.loadSpeed ?? (r.loadIndex ? `${r.loadIndex}${r.speedRating ?? ""}` : null),
     season: (r.season as Season) ?? null,

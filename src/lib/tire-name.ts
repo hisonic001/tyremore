@@ -60,8 +60,8 @@ const CODES: [RegExp, string, string, BadgeKind][] = [
    */
   [/(^|[\s(])CPJ([\s)]|$)/i, "CPJ", "CPJ", "structure"],
   [/(^|[\s(])DT1?([\s)]|$)/i, "DT", "DT", "feature"],
-  [/(^|[\s(])GO([\s)]|$)/i, "GO", "GO", "feature"],
   [/(^|[\s(])AC([\s)]|$)/i, "AC", "흡음재", "feature"], // 주문사이트 표기 (= ACOUSTIC)
+  // ⚠️ GO 는 배지가 아니다 — 브랜드 접미다. 아래 BRAND_SUFFIX 참조
 
   // ── OE 마킹 (어느 차 순정인가) ────────────────────────
   [/(^|[\s(])MO1([\s)]|$)/i, "MO1", "벤츠 AMG", "oe"],
@@ -89,7 +89,39 @@ const CODES: [RegExp, string, string, BadgeKind][] = [
 
 /** 배지로 뽑고 나면 모델명에서 지워야 하는 토큰 (브랜드 접미·튜브리스 등) */
 const DROP_TOKENS =
-  /^(MI|TL|TUBELESS|MICHELIN|HANKOOK|PIRELLI|CONTINENTAL|KUMHO|NEXEN|BRIDGESTONE|GOODYEAR|BFGOODRICH|GENERAL)$/i;
+  /^(MI|GO|TL|TUBELESS|MICHELIN|HANKOOK|PIRELLI|CONTINENTAL|KUMHO|NEXEN|BRIDGESTONE|GOODYEAR|BFGOODRICH|GENERAL)$/i;
+
+/**
+ * ⭐ MARS 상품명 끝의 브랜드 접미 (사장님 확인 2026-08-01)
+ *
+ *   MI → 미쉐린 · GO → BFGoodrich (미쉐린 자회사)
+ *
+ * 🔴 그런데 **`brand_code` 가 틀려 있다.** `GO` 로 끝나는 64건 중 58건이
+ *    `MI`(미쉐린)로 분류돼 있는데, 모델명은 `ADVANTAGE T/A DRIVE`,
+ *    `ALL-TERRAIN T/A KO3` 처럼 전부 BFGoodrich 라인업이다.
+ *    (`T/A` 가 든 259건 중 221건이 MI 로 잘못 잡혀 있다)
+ *    브랜드 코드를 함부로 고치지 않고, **화면 표시만** 바로잡는다.
+ */
+const BRAND_SUFFIX: [RegExp, string][] = [
+  [/(^|\s)GO\s*$/i, "BFGoodrich"],
+  [/(^|\s)MI\s*$/i, "미쉐린"],
+];
+
+/**
+ * 접미가 없어도 모델명으로 알 수 있는 브랜드.
+ * `T/A` 는 BFGoodrich 전용 표기다 — All-Terrain T/A · Mud-Terrain T/A ·
+ * Advantage T/A · Trail-Terrain T/A(TRTERTA). 미쉐린 라인업에는 T/A 가 없다.
+ */
+const BRAND_MODEL: [RegExp, string][] = [[/\bT\s*\/\s*A\b/i, "BFGoodrich"]];
+
+function detectBrandSuffix(pattern: string | null): string | null {
+  const p = String(pattern ?? "").trim();
+  if (!p) return null;
+  // 접미가 가장 확실하다 (GO 를 MI 보다 먼저 본다)
+  for (const [re, name] of BRAND_SUFFIX) if (re.test(p)) return name;
+  for (const [re, name] of BRAND_MODEL) if (re.test(p)) return name;
+  return null;
+}
 
 /**
  * ⭐ MARS 축약 표기 → 정식 모델명 (사장님 요청 2026-08-01)
@@ -147,6 +179,8 @@ export interface TireName {
   marsName: string;
   /** ⭐ 미쉐린 주문 사이트 표기 형태 — 주문 화면과 대조할 때 쓴다 */
   orderName: string;
+  /** 상품명 접미로 알아낸 실제 브랜드. brand_code 가 틀린 경우를 잡는다 */
+  brandHint: string | null;
 }
 
 /**
@@ -303,7 +337,16 @@ export function parseTireName(
   }
   const orderName = orderParts.join(" ");
 
-  return { model, spec: displaySpec, loadSpeed, badges, unknown, marsName, orderName };
+  return {
+    model,
+    spec: displaySpec,
+    loadSpeed,
+    badges,
+    unknown,
+    marsName,
+    orderName,
+    brandHint: detectBrandSuffix(pattern),
+  };
 }
 
 /** 배지 색 — 종류별로 눈에 다르게 걸리게 */
