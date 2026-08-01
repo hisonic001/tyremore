@@ -45,6 +45,27 @@ export async function setBrandHandled(code: string, handled: boolean) {
 }
 
 /**
+ * ⭐ 브랜드의 MARS 단가가 VAT 미포함인지 지정하고, 기표가를 다시 계산한다.
+ *
+ * 기표가는 고객에게 말하는 금액이다. VAT가 빠져 있으면 상담 중에 10% 낮은
+ * 금액을 부르게 된다. 원본(list_price_excl)은 건드리지 않으므로 언제든 되돌린다.
+ */
+export async function setBrandVatExcluded(code: string, excludes: boolean) {
+  await db.update(brand).set({ priceExcludesVat: excludes }).where(eq(brand.code, code));
+  const r = await db.execute<{ n: number }>(sql`
+    WITH u AS (
+      UPDATE product SET
+        list_price = ${excludes ? sql`round(list_price_excl * 1.1)::int` : sql`list_price_excl`},
+        updated_at = now()
+      WHERE brand_code = ${code} AND list_price_excl IS NOT NULL
+      RETURNING 1
+    ) SELECT count(*)::int n FROM u
+  `);
+  refresh("/", "/settings/catalog");
+  return { ok: true as const, updated: r[0]?.n ?? 0 };
+}
+
+/**
  * 기표가 없는 타이어를 끈다.
  *
  * 기표가가 없으면 **가격을 계산할 수 없어 견적 자체가 나오지 않는다.**
@@ -88,7 +109,15 @@ export async function restoreProducts(reason: "no_price" | "manual" | "all") {
 }
 
 export interface CatalogStat {
-  brands: { code: string; nameKo: string; isHandled: boolean; total: number; visible: number; inStock: number }[];
+  brands: {
+    code: string;
+    nameKo: string;
+    isHandled: boolean;
+    vatExcluded: boolean;
+    total: number;
+    visible: number;
+    inStock: number;
+  }[];
   hidden: { reason: string; n: number }[];
   totals: { all: number; visible: number; hidden: number; inStock: number };
 }
@@ -98,18 +127,19 @@ export async function catalogStats(): Promise<CatalogStat> {
     code: string;
     name_ko: string;
     is_handled: boolean;
+    price_excludes_vat: boolean;
     total: number;
     visible: number;
     in_stock: number;
   }>(sql`
-    SELECT b.code, b.name_ko, b.is_handled,
+    SELECT b.code, b.name_ko, b.is_handled, b.price_excludes_vat,
            count(*)::int total,
            count(*) FILTER (WHERE p.is_active)::int visible,
            count(*) FILTER (WHERE EXISTS (
              SELECT 1 FROM stock_item s WHERE s.product_id = p.id AND s.status='재고' AND s.qty > 0
            ))::int in_stock
     FROM brand b JOIN product p ON p.brand_code = b.code AND p.item_type = 'tire'
-    GROUP BY b.code, b.name_ko, b.is_handled, b.sort_order
+    GROUP BY b.code, b.name_ko, b.is_handled, b.price_excludes_vat, b.sort_order
     ORDER BY b.sort_order
   `);
 
@@ -134,6 +164,7 @@ export async function catalogStats(): Promise<CatalogStat> {
       code: b.code,
       nameKo: b.name_ko,
       isHandled: b.is_handled,
+      vatExcluded: b.price_excludes_vat,
       total: b.total,
       visible: b.visible,
       inStock: b.in_stock,

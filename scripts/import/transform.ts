@@ -55,7 +55,8 @@ export interface ProductRow {
   isSuv: boolean;
   category: string | null;
   barcode: string | null;
-  listPrice: number | null;
+  /** MARS 「단가1」 원본 — VAT 미포함. 화면용 list_price 는 적재 단계에서 만든다 */
+  listPriceExcl: number | null;
   supplierCode: string | null;
   specParsed: boolean;
 }
@@ -123,8 +124,13 @@ export function transformProducts(dataDir: string): Transformed<ProductRow> {
       isSuv: attrs.isSuv,
       category,
       barcode: toText(r["제조사 품목 번호"]),
-      /** ⭐ 단가1 이 기표가다. 「단가」가 아니다 (D-09) */
-      listPrice: toInt(r["단가1"]),
+      /**
+       * ⭐ 단가1 이 기표가다. 「단가」가 아니다 (D-09).
+       * ⚠️ 이 값은 **VAT 미포함**이다 (2026-08-01 확인).
+       *    원본 그대로 넣고, VAT는 적재 단계에서 브랜드 설정에 따라 붙인다.
+       *    여기서 곱해 버리면 브랜드별로 다르게 처리할 수 없다.
+       */
+      listPriceExcl: toInt(r["단가1"]),
       supplierCode: toText(r["매입처 번호"]),
       specParsed: spec?.parsed ?? false,
     });

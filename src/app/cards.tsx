@@ -88,11 +88,12 @@ export function ProductCard({ p }: { p: ProductHit }) {
         <div className="tabular mt-2 text-sm">
           {p.listPrice ? (
             <>
-              <span className="text-slate-500">공장도 </span>
+              <span className="text-slate-500">기표가 </span>
               <span className="text-base font-bold text-slate-900">{p.listPrice.toLocaleString()}원</span>
+              <span className="ml-1 text-xs text-slate-400">VAT 포함</span>
             </>
           ) : (
-            <span className="text-amber-600">공장도가 없음</span>
+            <span className="text-amber-600">기표가 없음</span>
           )}
         </div>
       </Link>

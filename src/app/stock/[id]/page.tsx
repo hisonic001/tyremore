@@ -49,7 +49,12 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
               CAI <span className="font-semibold text-slate-700">{d.cai}</span>
             </span>
           )}
-          {d.listPrice && <span>기표가 {d.listPrice.toLocaleString()}원</span>}
+          {d.listPrice && (
+            <span>
+              기표가 <span className="font-semibold text-slate-700">{d.listPrice.toLocaleString()}원</span>
+              <span className="ml-1 text-xs text-slate-400">VAT 포함</span>
+            </span>
+          )}
         </div>
       </header>
 

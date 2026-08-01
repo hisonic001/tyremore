@@ -34,6 +34,17 @@ export const BRANDS: { code: string; nameKo: string; nameEn?: string; sortOrder:
 /** ⚠️ 이름을 확신하지 못하는 코드 — 사장님 확인 후 고칠 것 */
 export const BRANDS_TO_CONFIRM = ["GN", "LM", "HYPERINT", "ACTION BAT"];
 
+/**
+ * ⭐ MARS 「단가1」이 VAT를 뺀 값인 브랜드 (사장님 확인 2026-08-01)
+ *
+ * 미쉐린 2,057건은 전부 1,000원 단위로 떨어지는 VAT 미포함 정가다.
+ * 1.1을 곱하면 전부 100원 단위로 깔끔하게 떨어진다 — 반올림 손실이 없다.
+ *
+ * ⚠️ 나머지 브랜드는 아직 확인받지 못했다. 화면(상품 정리)에서 켜면 된다.
+ *    피렐리 1,535건도 전부 1,000원 단위라 같은 성격일 가능성이 높다.
+ */
+export const VAT_EXCLUDED_BRANDS = ["MI"];
+
 /* ============================================================
  * vehicle_maker — 47종 표기를 30종 코드로 통합
  *

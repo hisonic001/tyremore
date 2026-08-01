@@ -19,7 +19,7 @@ import {
   vehicleMaker,
   vehicleMakerAlias,
 } from "../../src/db/schema";
-import { BRANDS, MAKER_ALIASES, VEHICLE_MAKERS } from "./seed-data";
+import { BRANDS, MAKER_ALIASES, VAT_EXCLUDED_BRANDS, VEHICLE_MAKERS } from "./seed-data";
 import type {
   CustomerRow,
   Issue,
@@ -58,8 +58,14 @@ export async function load(data: {
   console.log("\n  1·2. 시드");
   await db
     .insert(brand)
-    .values(BRANDS)
-    .onConflictDoUpdate({ target: brand.code, set: { nameKo: sql`excluded.name_ko`, sortOrder: sql`excluded.sort_order` } });
+    .values(
+      BRANDS.map((b) => ({ ...b, priceExcludesVat: VAT_EXCLUDED_BRANDS.includes(b.code) })),
+    )
+    .onConflictDoUpdate({
+      target: brand.code,
+      // ⚠️ is_handled / price_excludes_vat 는 덮어쓰지 않는다. 사장님이 화면에서 정한 값이다
+      set: { nameKo: sql`excluded.name_ko`, sortOrder: sql`excluded.sort_order` },
+    });
 
   await db
     .insert(vehicleMaker)
@@ -119,7 +125,7 @@ export async function load(data: {
           isRunflat: sql`excluded.is_runflat`,
           isAcoustic: sql`excluded.is_acoustic`,
           isSuv: sql`excluded.is_suv`,
-          listPrice: sql`excluded.list_price`,
+          listPriceExcl: sql`excluded.list_price_excl`,
           supplierCode: sql`excluded.supplier_code`,
           barcode: sql`excluded.barcode`,
           specParsed: sql`excluded.spec_parsed`,
@@ -127,6 +133,37 @@ export async function load(data: {
         },
       }),
   );
+
+  /**
+   * ⭐ VAT 적용 — MARS 「단가1」은 VAT 미포함이다 (사장님 확인 2026-08-01).
+   *
+   * 기표가는 **고객에게 말하는 금액**이므로 세금이 들어 있어야 한다.
+   * 그대로 띄우면 상담 중에 10% 낮은 금액을 부르게 된다.
+   *
+   * 브랜드 단위로 갈린다(brand.price_excludes_vat). 여기서 처리해야
+   * **재이관해도 자동으로 다시 붙는다.** 한 번 손으로 고치면 다음 이관 때 날아간다.
+   */
+  const vat = await db.execute<{ n: number }>(sql`
+    WITH u AS (
+      UPDATE product p SET
+        list_price = CASE WHEN b.price_excludes_vat
+                          THEN round(p.list_price_excl * 1.1)::int
+                          ELSE p.list_price_excl END,
+        updated_at = now()
+      FROM brand b
+      WHERE b.code = p.brand_code AND p.list_price_excl IS NOT NULL
+      RETURNING 1
+    ) SELECT count(*)::int n FROM u
+  `);
+  // 브랜드가 없는 상품은 원본을 그대로 쓴다
+  await db.execute(sql`
+    UPDATE product SET list_price = list_price_excl
+    WHERE brand_code IS NULL AND list_price_excl IS NOT NULL
+  `);
+  const [vatBrands] = await db.execute<{ names: string | null }>(
+    sql`SELECT string_agg(name_ko, ', ') names FROM brand WHERE price_excludes_vat`,
+  );
+  console.log(`     기표가 ${vat[0]?.n ?? 0}건 정리 · VAT 가산 브랜드: ${vatBrands?.names ?? "없음"}`);
 
   /* --- 5. product (부품) ---------------------------------- */
   console.log("\n  5. product (부품)");

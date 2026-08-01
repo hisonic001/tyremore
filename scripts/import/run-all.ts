@@ -62,7 +62,11 @@ async function main() {
   const parsed = tires.filter((t) => t.specParsed).length;
   stat("규격 파싱 성공", `${parsed}`, `(${((parsed / tires.length) * 100).toFixed(1)}%)`);
   stat("↳ 실패", tires.length - parsed, "건 → import_issue");
-  stat("기표가 보유", prod.rows.filter((p) => p.listPrice !== null && p.listPrice > 0).length, "건");
+  stat(
+    "기표가 보유",
+    prod.rows.filter((p) => p.listPriceExcl !== null && p.listPriceExcl > 0).length,
+    "건 (VAT는 적재 단계에서 가산)",
+  );
 
   /* 5. product (부품) ---------------------------------------- */
   section("5. product — 부품 (재고 엑셀에서 신규 생성)");

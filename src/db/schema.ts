@@ -64,6 +64,12 @@ export const brand = pgTable("brand", {
    * false면 검색 결과에서 빠진다. 지우지 않으므로 언제든 되살릴 수 있다.
    */
   isHandled: boolean("is_handled").notNull().default(true),
+  /**
+   * ⭐ MARS 「단가1」이 VAT를 뺀 값인가 (사장님 확인 2026-08-01)
+   * 미쉐린은 VAT 미포함이라 화면에 그대로 띄우면 고객에게 낮은 금액을 말하게 된다.
+   * true면 이관·재이관 때 자동으로 1.1을 곱해 `list_price`에 넣는다.
+   */
+  priceExcludesVat: boolean("price_excludes_vat").notNull().default(false),
 });
 
 /* ============================================================
@@ -127,8 +133,16 @@ export const product = pgTable(
     category: text("category"),
     /** 제조사 바코드. SKU 단위라 같은 상품 4본은 값이 전부 같다 (D-02) */
     barcode: text("barcode"),
-    /** ⭐ 기표가 (MARS 단가1) */
+    /**
+     * ⭐ 기표가 — 화면에 띄우고 견적 계산에 쓰는 값. **VAT 포함** (2026-08-01)
+     * 고객에게 말하는 금액이므로 세금이 들어 있어야 한다.
+     */
     listPrice: integer("list_price"),
+    /**
+     * MARS 「단가1」 원본 (VAT 미포함). 손대지 않는다.
+     * 재이관 때 기준값이 되고, 원가·마진 계산에도 이쪽이 필요하다.
+     */
+    listPriceExcl: integer("list_price_excl"),
     purchasePrice: integer("purchase_price"),
     supplierCode: text("supplier_code"),
 

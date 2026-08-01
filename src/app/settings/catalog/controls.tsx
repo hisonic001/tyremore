@@ -2,53 +2,106 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { hideUnpricedTires, restoreProducts, setBrandHandled } from "@/lib/catalog";
+import { hideUnpricedTires, restoreProducts, setBrandHandled, setBrandVatExcluded } from "@/lib/catalog";
 
 export function BrandToggle({
   b,
 }: {
-  b: { code: string; nameKo: string; isHandled: boolean; total: number; visible: number; inStock: number };
+  b: {
+    code: string;
+    nameKo: string;
+    isHandled: boolean;
+    vatExcluded: boolean;
+    total: number;
+    visible: number;
+    inStock: number;
+  };
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
 
   return (
-    <li className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-3">
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2">
-          <span className={`font-semibold ${b.isHandled ? "" : "text-slate-400"}`}>{b.nameKo}</span>
-          {b.inStock > 0 && (
-            <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-medium text-emerald-800">
-              재고 {b.inStock}종
-            </span>
-          )}
+    <li className="rounded-xl border border-slate-200 bg-white p-3">
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-baseline gap-2">
+            <span className={`font-semibold ${b.isHandled ? "" : "text-slate-400"}`}>{b.nameKo}</span>
+            {b.inStock > 0 && (
+              <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-medium text-emerald-800">
+                재고 {b.inStock}종
+              </span>
+            )}
+            {b.vatExcluded && (
+              <span className="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-800">
+                VAT +10%
+              </span>
+            )}
+          </div>
+          <div className="tabular text-xs text-slate-500">
+            {b.total.toLocaleString()}종 중 {b.visible.toLocaleString()}종 표시
+          </div>
         </div>
-        <div className="tabular text-xs text-slate-500">
-          {b.total.toLocaleString()}종 중 {b.visible.toLocaleString()}종 표시
-        </div>
+
+        <Toggle
+          on={b.isHandled}
+          pending={pending}
+          label={`${b.nameKo} 취급 ${b.isHandled ? "끄기" : "켜기"}`}
+          onClick={() =>
+            start(async () => {
+              await setBrandHandled(b.code, !b.isHandled);
+              router.refresh();
+            })
+          }
+        />
       </div>
 
-      <button
-        type="button"
-        disabled={pending}
-        onClick={() =>
-          start(async () => {
-            await setBrandHandled(b.code, !b.isHandled);
-            router.refresh();
-          })
-        }
-        aria-label={`${b.nameKo} 취급 ${b.isHandled ? "끄기" : "켜기"}`}
-        className={`h-9 w-16 shrink-0 rounded-full transition-colors disabled:opacity-50 ${
-          b.isHandled ? "bg-slate-900" : "bg-slate-300"
-        }`}
-      >
-        <span
-          className={`block h-7 w-7 rounded-full bg-white transition-transform ${
-            b.isHandled ? "translate-x-8" : "translate-x-1"
-          }`}
+      {/* ⭐ MARS 단가가 VAT 미포함이면 켠다. 켜는 순간 기표가가 다시 계산된다 */}
+      <label className="mt-2 flex items-center gap-2 border-t border-slate-100 pt-2 text-sm text-slate-600">
+        <input
+          type="checkbox"
+          checked={b.vatExcluded}
+          disabled={pending}
+          onChange={() =>
+            start(async () => {
+              await setBrandVatExcluded(b.code, !b.vatExcluded);
+              router.refresh();
+            })
+          }
+          className="h-5 w-5 rounded border-slate-300"
         />
-      </button>
+        MARS 가격이 VAT 미포함 <span className="text-slate-400">(켜면 기표가에 10% 더함)</span>
+      </label>
     </li>
+  );
+}
+
+function Toggle({
+  on,
+  pending,
+  label,
+  onClick,
+}: {
+  on: boolean;
+  pending: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={pending}
+      onClick={onClick}
+      aria-label={label}
+      className={`h-9 w-16 shrink-0 rounded-full transition-colors disabled:opacity-50 ${
+        on ? "bg-slate-900" : "bg-slate-300"
+      }`}
+    >
+      <span
+        className={`block h-7 w-7 rounded-full bg-white transition-transform ${
+          on ? "translate-x-8" : "translate-x-1"
+        }`}
+      />
+    </button>
   );
 }
 
