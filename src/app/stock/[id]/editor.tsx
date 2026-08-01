@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { setProductActive } from "@/lib/catalog";
 import { changeDot, setDotQty } from "@/lib/stock";
 
 /** 현장에서 장갑 낀 손으로 누른다. 버튼을 크게. */
@@ -221,4 +222,63 @@ export function NewDotRow({
 /** 1826 → '2026년 18주' */
 function dotLabel(dot: string): string {
   return `20${dot.slice(2, 4)}년 ${Number(dot.slice(0, 2))}주`;
+}
+
+/**
+ * 단종·미취급 상품을 검색 결과에서 치운다 (2026-08-01).
+ * 지우지 않으므로 기표가·규격이 그대로 남고, 다시 받게 되면 되살리면 된다.
+ */
+export function HideToggle({
+  productId,
+  isActive,
+  hasStock,
+}: {
+  productId: number;
+  isActive: boolean;
+  hasStock: boolean;
+}) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+
+  if (!isActive) {
+    return (
+      <div className="mt-6 rounded-xl border border-slate-300 bg-slate-100 p-4">
+        <p className="font-medium text-slate-700">이 상품은 검색에서 숨겨져 있습니다</p>
+        <p className="mt-1 text-sm text-slate-500">
+          기표가·규격은 그대로 남아 있습니다. 되살리면 바로 상담에 쓸 수 있습니다.
+        </p>
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() =>
+            start(async () => {
+              await setProductActive(productId, true);
+              router.refresh();
+            })
+          }
+          className="mt-3 w-full rounded-xl bg-slate-900 py-3 font-medium text-white disabled:opacity-50"
+        >
+          {pending ? "처리 중…" : "되살리기"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-6">
+      <button
+        type="button"
+        disabled={pending || hasStock}
+        onClick={() =>
+          start(async () => {
+            await setProductActive(productId, false);
+            router.refresh();
+          })
+        }
+        className="w-full rounded-xl border border-slate-300 py-3 text-slate-600 disabled:opacity-40"
+      >
+        {hasStock ? "재고가 있어 숨길 수 없습니다" : "검색에서 숨기기 (단종·미취급)"}
+      </button>
+    </div>
+  );
 }

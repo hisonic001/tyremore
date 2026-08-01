@@ -44,6 +44,7 @@ export interface StockDetail {
   itemType: string;
   isSerialized: boolean;
   stockTracked: boolean;
+  isActive: boolean;
   listPrice: number | null;
   total: number;
   verified: boolean;
@@ -73,11 +74,12 @@ export async function getStockDetail(productId: number): Promise<StockDetail | n
     item_type: string;
     is_serialized: boolean;
     stock_tracked: boolean;
+    is_active: boolean;
     list_price: number | null;
   }>(sql`
     SELECT p.id, p.raw_name, p.pattern, b.name_ko AS brand_name,
            p.width, p.aspect_ratio, p.rim_inch, p.item_type, p.is_serialized,
-           p.stock_tracked, p.list_price
+           p.stock_tracked, p.is_active, p.list_price
     FROM product p LEFT JOIN brand b ON b.code = p.brand_code
     WHERE p.id = ${productId}
   `);
@@ -108,6 +110,7 @@ export async function getStockDetail(productId: number): Promise<StockDetail | n
     itemType: p.item_type,
     isSerialized: p.is_serialized,
     stockTracked: p.stock_tracked,
+    isActive: p.is_active,
     listPrice: p.list_price,
     total: groups.reduce((s, g) => s + Number(g.qty), 0),
     verified: v?.verified_at !== null && v?.verified_at !== undefined,

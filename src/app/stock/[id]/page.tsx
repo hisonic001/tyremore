@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getStockDetail } from "@/lib/stock";
-import { DotRow, NewDotRow } from "./editor";
+import { DotRow, HideToggle, NewDotRow } from "./editor";
 
 export const dynamic = "force-dynamic";
 
@@ -98,6 +98,8 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
           <NewDotRow productId={d.productId} unit={unit} serialized={d.isSerialized} />
         </div>
       </section>
+
+      <HideToggle productId={d.productId} isActive={d.isActive} hasStock={d.total > 0} />
 
       <p className="mt-6 text-xs text-slate-400">
         모든 변경은 이력에 남습니다. 재고가 실물과 어긋났을 때 원인을 되짚기 위해서입니다.

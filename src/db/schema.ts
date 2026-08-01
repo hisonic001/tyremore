@@ -58,6 +58,12 @@ export const brand = pgTable("brand", {
   nameKo: text("name_ko").notNull(),
   nameEn: text("name_en"),
   sortOrder: integer("sort_order").default(999),
+  /**
+   * ⭐ 우리가 취급하는 브랜드인가 (사장님 요청 2026-08-01)
+   * MARS 마스터에는 본사가 다루는 브랜드가 전부 들어 있다. 우리가 안 받는 것도 있다.
+   * false면 검색 결과에서 빠진다. 지우지 않으므로 언제든 되살릴 수 있다.
+   */
+  isHandled: boolean("is_handled").notNull().default(true),
 });
 
 /* ============================================================
@@ -133,7 +139,13 @@ export const product = pgTable(
      *   true  → 숫자를 믿는다
      */
     stockTracked: boolean("stock_tracked").notNull().default(false),
+    /**
+     * 검색 결과에 보이는가. 단종·미취급 상품을 여기서 끈다 (2026-08-01).
+     * ⚠️ 지우지 않는다. 기표가·규격·브랜드가 다 들어 있어서 지우면 손으로 다시 쳐야 한다.
+     */
     isActive: boolean("is_active").notNull().default(true),
+    /** 왜 숨겼는지 — 'no_price'(기표가 없음) | 'manual'(사람이 끔) */
+    hiddenReason: text("hidden_reason"),
     createdAt,
     updatedAt,
   },

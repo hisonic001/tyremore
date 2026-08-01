@@ -53,6 +53,9 @@ export function ProductCard({ p }: { p: ProductHit }) {
           {p.isSuv && (
             <span className="rounded bg-stone-100 px-2 py-0.5 text-xs font-medium text-stone-700">SUV</span>
           )}
+          {p.isHidden && (
+            <span className="rounded bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-600">숨김</span>
+          )}
         </div>
 
         <div className="flex items-start justify-between gap-3">

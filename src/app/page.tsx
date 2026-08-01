@@ -19,9 +19,13 @@ export default async function Home({
   const sp = await searchParams;
   const q = typeof sp.q === "string" ? sp.q : "";
 
-  // 버튼으로 고른 모드가 이긴다. 안 골랐으면 입력을 보고 정한다.
+  /**
+   * 버튼으로 고른 모드가 이긴다. 안 골랐으면 입력을 보고 정한다.
+   * ⭐ 기본은 「타이어·재고」다 (사장님 요청 2026-08-01).
+   *    상담 중 가장 자주 여는 것이 재고·가격이다. 고객 조회는 그다음.
+   */
   const picked = sp.mode === "customer" || sp.mode === "product" ? (sp.mode as Mode) : null;
-  const mode: Mode = picked ?? guessMode(q) ?? "customer";
+  const mode: Mode = picked ?? guessMode(q) ?? "product";
 
   const filter = {
     brands: arr(sp.brand),
@@ -49,9 +53,14 @@ export default async function Home({
     <main className="mx-auto min-h-dvh max-w-3xl px-4 py-5">
       <header className="mb-4 flex items-baseline justify-between">
         <h1 className="text-xl font-bold tracking-tight">타이어모어</h1>
-        <Link href="/status" className="text-sm text-slate-500 underline underline-offset-4">
-          이관 현황
-        </Link>
+        <nav className="flex gap-3 text-sm text-slate-500">
+          <Link href="/settings/catalog" className="underline underline-offset-4">
+            상품 정리
+          </Link>
+          <Link href="/status" className="underline underline-offset-4">
+            이관 현황
+          </Link>
+        </nav>
       </header>
 
       <ModeTabs mode={mode} q={q} />

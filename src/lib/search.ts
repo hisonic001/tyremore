@@ -26,6 +26,8 @@ export interface ProductFilter {
   suv?: boolean;
   /** 재고 있는 것만 */
   inStock?: boolean;
+  /** 숨긴 상품·미취급 브랜드까지 본다 (되살리려고 찾을 때) */
+  includeHidden?: boolean;
 }
 
 export interface VehicleHit {
@@ -62,6 +64,8 @@ export interface ProductHit {
   itemType: string;
   fitment: string | null;
   partNo: string | null;
+  /** 숨긴 상품(단종·미취급). includeHidden 으로 찾았을 때만 true 가 나온다 */
+  isHidden: boolean;
 }
 
 /**
@@ -130,7 +134,17 @@ export async function findVehicles(q: string): Promise<VehicleHit[]> {
 
 export async function findProducts(q: string, f: ProductFilter = {}): Promise<ProductHit[]> {
   const t = q.trim();
-  const conds: SQL[] = [eq(product.isActive, true)];
+  const conds: SQL[] = [];
+
+  /**
+   * ⭐ 기본은 「지금 팔 수 있는 것」만 보여준다 (사장님 요청 2026-08-01).
+   *   MARS 마스터 10,318건에는 단종품·미취급 브랜드가 섞여 있어 상담에 방해가 된다.
+   *   지우지 않고 끄기만 한다 — 나중에 입고할 때 되살리면 기표가·규격이 그대로 있다.
+   */
+  if (!f.includeHidden) {
+    conds.push(eq(product.isActive, true));
+    conds.push(sql`(${brand.isHandled} IS NULL OR ${brand.isHandled} = true)`);
+  }
 
   if (t) {
     const spec = parseSpecQuery(t);
@@ -180,6 +194,8 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
     return [];
   }
 
+  const isHidden = sql<boolean>`(${product.isActive} = false OR ${brand.isHandled} = false)`;
+
   const rows = await db
     .select({
       productId: product.id,
@@ -201,6 +217,7 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
       fitment: product.fitment,
       partNo: product.partNo,
       stockQty,
+      isHidden,
       verified: sql<boolean>`EXISTS (
         SELECT 1 FROM stock_item s
         WHERE s.product_id = ${product.id} AND s.verified_at IS NOT NULL
@@ -238,15 +255,16 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
     itemType: r.itemType,
     fitment: r.fitment,
     partNo: r.partNo,
+    isHidden: r.isHidden,
   }));
 }
 
-/** 필터 화면에 쓸 브랜드 목록 — 타이어를 가진 브랜드만 */
+/** 필터 화면에 쓸 브랜드 목록 — 취급 중이고 타이어를 가진 브랜드만 */
 export async function tireBrands() {
   return db.execute<{ code: string; name_ko: string; n: number }>(sql`
     SELECT b.code, b.name_ko, count(*)::int n
     FROM product p JOIN brand b ON b.code = p.brand_code
-    WHERE p.item_type = 'tire' AND p.is_active
+    WHERE p.item_type = 'tire' AND p.is_active AND b.is_handled
     GROUP BY b.code, b.name_ko, b.sort_order
     ORDER BY b.sort_order
   `);
