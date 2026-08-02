@@ -1,11 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { isOwner } from "@/lib/auth";
-import { getPrice } from "@/lib/pricing";
 import { getStockDetail } from "@/lib/stock";
 import { BADGE_STYLE } from "@/lib/tire-name";
 import { CopyLine, DotRow, HideToggle, NameEditor, NewDotRow } from "./editor";
-import { PricePanel } from "./price";
 
 export const dynamic = "force-dynamic";
 
@@ -21,12 +18,7 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
   const productId = Number(id);
   if (!Number.isFinite(productId)) notFound();
 
-  /** ⭐ 매입원가·마진은 사장님 계정에만 (D-05 6번) */
-  const [d, price, ownerMode] = await Promise.all([
-    getStockDetail(productId),
-    getPrice(productId),
-    isOwner(),
-  ]);
+  const d = await getStockDetail(productId);
   if (!d) notFound();
 
   const unit = d.itemType === "tire" ? "본" : "개";
@@ -102,9 +94,12 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
         </details>
       </header>
 
-      {/* ⭐ 상담의 핵심 — 할인율을 넣으면 판매가가 나온다 (D-05) */}
-      {price && <PricePanel productId={d.productId} price={price} ownerMode={ownerMode} />}
-
+      {/*
+        가격 계산은 검색 화면 카드에서 한다 (사장님 지시 2026-08-01).
+        상담 중에는 목록을 보며 바로 계산하는 것이 빠르고, 여기까지 들어와서
+        또 계산하는 것은 같은 일을 두 번 하는 것이다.
+        여기서는 기표가만 보여준다 — 위 머리말에 있다.
+      */}
       <section className="mt-5 rounded-2xl border border-slate-200 bg-white p-5">
         <div className="flex items-baseline justify-between">
           <span className="text-slate-600">현재 재고</span>

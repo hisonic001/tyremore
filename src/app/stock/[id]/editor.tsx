@@ -53,49 +53,60 @@ export function DotRow({
 
   return (
     <li className="rounded-xl border border-slate-200 bg-white p-3">
-      <div className="flex items-center gap-3">
-        {serialized && (
-          <div className="w-32 shrink-0">
-            {editingDot ? (
-              <div className="flex gap-1">
-                <input
-                  value={dotValue}
-                  onChange={(e) => setDotValue(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                  placeholder="1826"
-                  inputMode="numeric"
-                  className="tabular w-20 rounded-lg border-2 border-slate-900 px-2 py-1.5 text-lg"
-                />
-                <button onClick={saveDot} disabled={pending} className="rounded-lg bg-slate-900 px-2 text-sm text-white">
-                  저장
-                </button>
-              </div>
-            ) : (
-              <button onClick={() => setEditingDot(true)} className="text-left">
-                <span className="tabular text-lg font-semibold">
-                  {dot ?? <span className="font-normal text-amber-600">DOT 없음</span>}
-                </span>
-                <span className="ml-1 text-xs text-slate-400">✏️</span>
-                {dot && <div className="text-xs text-slate-500">{dotLabel(dot)}</div>}
+      {/*
+        ⚠️ DOT 와 수량을 한 줄에 두면 좁은 화면에서 「+」가 밖으로 밀린다
+           (2026-08-01 사장님 지적). 장갑 낀 손 때문에 버튼을 줄일 수는 없으므로
+           줄을 나눈다.
+      */}
+      {serialized && (
+        <div className="mb-2">
+          {editingDot ? (
+            <div className="flex gap-2">
+              <input
+                value={dotValue}
+                onChange={(e) => setDotValue(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                placeholder="1826"
+                inputMode="numeric"
+                autoFocus
+                className="tabular w-24 rounded-lg border-2 border-slate-900 px-2 py-2 text-lg"
+              />
+              <button
+                onClick={saveDot}
+                disabled={pending}
+                className="rounded-lg bg-slate-900 px-4 text-sm font-medium text-white"
+              >
+                저장
               </button>
-            )}
-          </div>
-        )}
-
-        <div className="flex flex-1 items-center justify-end gap-2">
-          <button className={BTN} onClick={() => setValue((v) => Math.max(0, v - 1))} disabled={pending}>
-            −
-          </button>
-          <input
-            value={value}
-            onChange={(e) => setValue(Math.max(0, Number(e.target.value.replace(/\D/g, "")) || 0))}
-            inputMode="numeric"
-            className="tabular h-12 w-16 rounded-xl border border-slate-300 text-center text-2xl font-bold"
-          />
-          <span className="w-5 text-slate-500">{unit}</span>
-          <button className={BTN} onClick={() => setValue((v) => v + 1)} disabled={pending}>
-            +
-          </button>
+              <button onClick={() => setEditingDot(false)} className="px-2 text-sm text-slate-400">
+                취소
+              </button>
+            </div>
+          ) : (
+            <button onClick={() => setEditingDot(true)} className="flex items-baseline gap-2 text-left">
+              <span className="tabular text-lg font-semibold">
+                {dot ?? <span className="font-normal text-amber-600">DOT 없음</span>}
+              </span>
+              {dot && <span className="text-xs text-slate-500">{dotLabel(dot)}</span>}
+              <span className="text-xs text-slate-400">✏️</span>
+            </button>
+          )}
         </div>
+      )}
+
+      <div className="flex items-center justify-end gap-2">
+        <button className={BTN} onClick={() => setValue((v) => Math.max(0, v - 1))} disabled={pending}>
+          −
+        </button>
+        <input
+          value={value}
+          onChange={(e) => setValue(Math.max(0, Number(e.target.value.replace(/\D/g, "")) || 0))}
+          inputMode="numeric"
+          className="tabular h-12 w-16 shrink-0 rounded-xl border border-slate-300 text-center text-2xl font-bold"
+        />
+        <span className="w-5 shrink-0 text-slate-500">{unit}</span>
+        <button className={BTN} onClick={() => setValue((v) => v + 1)} disabled={pending}>
+          +
+        </button>
       </div>
 
       {(dirty || error) && (
@@ -150,35 +161,33 @@ export function NewDotRow({
 
   return (
     <div className="rounded-xl border-2 border-slate-900 bg-white p-4">
-      <div className="flex items-center gap-3">
-        {serialized && (
-          <div className="w-32 shrink-0">
-            <label className="block text-xs text-slate-500">DOT (모르면 비워두세요)</label>
-            <input
-              value={dot}
-              onChange={(e) => setDot(e.target.value.replace(/\D/g, "").slice(0, 4))}
-              placeholder="1826"
-              inputMode="numeric"
-              autoFocus
-              className="tabular mt-1 w-24 rounded-lg border border-slate-300 px-2 py-2 text-lg"
-            />
-          </div>
-        )}
-        <div className="flex flex-1 items-center justify-end gap-2">
-          <button className={BTN} onClick={() => setQty((v) => Math.max(1, v - 1))}>
-            −
-          </button>
+      {serialized && (
+        <div className="mb-2">
+          <label className="block text-xs text-slate-500">DOT (모르면 비워두세요)</label>
           <input
-            value={qty}
-            onChange={(e) => setQty(Math.max(1, Number(e.target.value.replace(/\D/g, "")) || 1))}
+            value={dot}
+            onChange={(e) => setDot(e.target.value.replace(/\D/g, "").slice(0, 4))}
+            placeholder="1826"
             inputMode="numeric"
-            className="tabular h-12 w-16 rounded-xl border border-slate-300 text-center text-2xl font-bold"
+            autoFocus
+            className="tabular mt-1 w-28 rounded-lg border border-slate-300 px-3 py-2 text-lg"
           />
-          <span className="w-5 text-slate-500">{unit}</span>
-          <button className={BTN} onClick={() => setQty((v) => v + 1)}>
-            +
-          </button>
         </div>
+      )}
+      <div className="flex items-center justify-end gap-2">
+        <button className={BTN} onClick={() => setQty((v) => Math.max(1, v - 1))}>
+          −
+        </button>
+        <input
+          value={qty}
+          onChange={(e) => setQty(Math.max(1, Number(e.target.value.replace(/\D/g, "")) || 1))}
+          inputMode="numeric"
+          className="tabular h-12 w-16 shrink-0 rounded-xl border border-slate-300 text-center text-2xl font-bold"
+        />
+        <span className="w-5 shrink-0 text-slate-500">{unit}</span>
+        <button className={BTN} onClick={() => setQty((v) => v + 1)}>
+          +
+        </button>
       </div>
 
       {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
