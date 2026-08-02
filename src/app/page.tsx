@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getSession, logout } from "@/lib/auth";
+import { getSession } from "@/lib/auth";
 import { findProducts, findVehicles, guessMode, tireBrands, type Mode } from "@/lib/search";
 import type { Season } from "@/lib/tire-attrs";
 import { SearchBox, SearchButton } from "./search-box";
@@ -55,25 +55,30 @@ export default async function Home({
 
   return (
     <main className="mx-auto min-h-dvh max-w-3xl px-4 py-5 pb-24 xl:pb-5">
-      <header className="mb-4 flex items-baseline justify-between gap-3">
-        <h1 className="text-xl font-bold tracking-tight">타이어모어</h1>
-        <nav className="flex items-baseline gap-3 text-sm text-slate-500">
-          <Link href="/receiving" className="underline underline-offset-4">
+      {/*
+        ⚠️ 좁은 화면에서 제목이 「타이어모 / 어」로 줄바꿈되던 문제 (2026-08-01).
+           제목은 절대 줄이지 않고(shrink-0 · whitespace-nowrap),
+           나머지 메뉴는 설정 아이콘 하나로 접었다.
+      */}
+      <header className="mb-4 flex items-center justify-between gap-2">
+        <h1 className="shrink-0 whitespace-nowrap text-xl font-bold tracking-tight">타이어모어</h1>
+        <nav className="flex shrink-0 items-center gap-1">
+          <Link
+            href="/receiving"
+            className="rounded-lg px-3 py-2 text-sm font-medium text-slate-600 active:bg-slate-200"
+          >
             매입 입고
           </Link>
-          <Link href="/settings/catalog" className="underline underline-offset-4">
-            상품 정리
+          <Link
+            href="/settings"
+            aria-label="설정"
+            className="rounded-lg px-2 py-2 text-slate-500 active:bg-slate-200"
+          >
+            <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6" stroke="currentColor" strokeWidth="1.8">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6 1.65 1.65 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
           </Link>
-          <Link href="/status" className="underline underline-offset-4">
-            이관 현황
-          </Link>
-          {session && (
-            <form action={logout}>
-              <button type="submit" className="text-slate-400 underline underline-offset-4">
-                {session.name} 나가기
-              </button>
-            </form>
-          )}
         </nav>
       </header>
 

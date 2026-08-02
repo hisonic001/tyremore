@@ -94,7 +94,7 @@ export function PricePanel({
 
   return (
     <section className="mt-5 rounded-2xl border-2 border-slate-900 bg-white p-5">
-      <div className="flex items-baseline justify-between">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3">
         <h2 className="font-bold">가격</h2>
         {price.appliedScope && (
           <span className="text-xs text-slate-400">

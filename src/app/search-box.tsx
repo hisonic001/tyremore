@@ -23,8 +23,19 @@ export function SearchBox({ mode, q, filter }: { mode: Mode; q: string; filter: 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+
+    /**
+     * ⚠️ **검색한 뒤에는 커서를 주지 않는다** (2026-08-01 사장님 지적).
+     *    폰에서 포커스가 잡히면 글자판이 올라와 화면 절반을 가린다.
+     *    결과를 보려고 검색했는데 결과가 안 보이면 아무 소용이 없다.
+     *
+     * ⚠️ 좁은 화면(폰)에서는 처음에도 자동 포커스를 걸지 않는다.
+     *    PC·태블릿에서는 바로 칠 수 있는 편이 빠르다.
+     */
+    if (q.trim()) return;
+    if (window.matchMedia("(max-width: 640px)").matches) return;
+
     el.focus({ preventScroll: true });
-    // 이어서 고쳐 칠 수 있게 커서를 끝으로 보낸다 (전체 선택이면 실수로 지워진다)
     const n = el.value.length;
     try {
       el.setSelectionRange(n, n);

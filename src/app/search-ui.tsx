@@ -54,7 +54,12 @@ export function FilterPanel({
   count: number;
 }) {
   const router = useRouter();
-  const [open, setOpen] = useState(count > 0);
+  /**
+   * ⚠️ **항상 접힌 채로 시작한다** (2026-08-01 사장님 지적).
+   *    전에는 필터가 걸려 있으면 자동으로 펼쳤는데, 누른 적 없는데 열려 있어
+   *    화면이 밀리고 혼란스러웠다. 걸린 필터는 버튼의 숫자로 알린다.
+   */
+  const [open, setOpen] = useState(false);
 
   /** 현재 상태를 그대로 URL로 만든다 */
   function build(next: Partial<Filter>): string {
@@ -78,31 +83,34 @@ export function FilterPanel({
 
   return (
     <section className="mt-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className={`${CHIP} ${count > 0 ? CHIP_ON : CHIP_OFF}`}
-        >
-          필터 {count > 0 && `· ${count}`} {open ? "▲" : "▼"}
-        </button>
-        <button
-          type="button"
-          onClick={() => go({ inStock: !filter.inStock })}
-          className={`${CHIP} ${filter.inStock ? CHIP_ON : CHIP_OFF}`}
-        >
-          재고 있는 것만
-        </button>
-        {count > 0 && (
-          <Link
-            href={`/?mode=product&q=${encodeURIComponent(q)}`}
-            className="text-sm text-slate-500 underline underline-offset-4"
+      {/* 좁은 화면에서 줄이 넘칠 수 있으므로 조회 버튼을 먼저 오른쪽에 고정한다 */}
+      <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className={`${CHIP} ${count > 0 ? CHIP_ON : CHIP_OFF}`}
           >
-            초기화
-          </Link>
-        )}
+            필터 {count > 0 && `· ${count}`} {open ? "▲" : "▼"}
+          </button>
+          <button
+            type="button"
+            onClick={() => go({ inStock: !filter.inStock })}
+            className={`${CHIP} ${filter.inStock ? CHIP_ON : CHIP_OFF}`}
+          >
+            재고 있는 것만
+          </button>
+          {count > 0 && (
+            <Link
+              href={`/?mode=product&q=${encodeURIComponent(q)}`}
+              className="text-sm text-slate-500 underline underline-offset-4"
+            >
+              초기화
+            </Link>
+          )}
+        </div>
         {/* ⭐ 엔터를 안 쳐도 눌러서 검색한다 (사장님 요청 2026-08-01) */}
-        <div className="ml-auto">
+        <div className="shrink-0">
           <SearchButton />
         </div>
       </div>

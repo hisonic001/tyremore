@@ -7,9 +7,10 @@ import { PriceTool } from "./price-tool";
 export function VehicleCard({ v }: { v: VehicleHit }) {
   return (
     <li className="rounded-xl border border-slate-200 bg-white p-4">
+      {/* 이름이 길어도 번호판이 밀리면 안 된다 — 번호판이 식별의 기준이다 */}
       <div className="flex items-baseline justify-between gap-3">
-        <span className="tabular text-xl font-bold">{v.plateNo}</span>
-        <span className="text-lg">{v.customerName}</span>
+        <span className="tabular shrink-0 text-xl font-bold">{v.plateNo}</span>
+        <span className="truncate text-lg">{v.customerName}</span>
       </div>
       <div className="mt-1 text-sm text-slate-600">
         {[v.makerName, v.model, v.year ? `${v.year}년` : null].filter(Boolean).join(" · ")}
