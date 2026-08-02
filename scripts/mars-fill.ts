@@ -301,19 +301,34 @@ async function findCustomer(page: Page, plate: string): Promise<FindResult> {
   await page.waitForTimeout(2500);
   await passBigSearchDialog(page);
 
-  const empty = f.getByText("(이 보기에 표시할 내용이 없음)", { exact: true });
-  /** 검색칸이 아니라 **결과 표의 줄**에 번호판이 있어야 한다 */
-  const hit = f.getByRole("row").filter({ hasText: plate }).first();
+  /**
+   * 🔴 **화면 글자를 통째로 읽어서 판단한다** (2026-08-02).
+   *
+   * 전에는 `getByText("(이 보기에 표시할 내용이 없음)", {exact:true})` 로 찾았는데
+   * 화면에 분명히 떠 있는데도 못 걸려서 「모르겠다」로 빠졌다.
+   * 화면 구조를 타지 않는 쪽이 튼튼하다.
+   *
+   * ⚠️ 번호판은 **검색칸에도** 들어 있으므로, 있는지 볼 때는
+   *    `tr`(결과 표의 줄)로 좁힌다. 검색칸은 tr 안에 없다.
+   */
+  const hit = f.locator("tr").filter({ hasText: plate }).first();
 
   const until = Date.now() + 25000;
+  let lastSeen = "";
   while (Date.now() < until) {
     if (await hit.isVisible().catch(() => false)) return "found";
-    if (await empty.isVisible().catch(() => false)) return "none";
+
+    const body = ((await f.locator("body").innerText().catch(() => "")) || "").replace(/\s+/g, " ");
+    lastSeen = body.slice(0, 200);
+    if (body.includes("표시할 내용이 없음")) return "none";
+
     // 고객 화면으로 저절로 넘어가는 경우도 있다 (검색칸이 사라진다)
     if (!(await box.isVisible().catch(() => false))) return "found";
+
     await passBigSearchDialog(page);
     await page.waitForTimeout(1000);
   }
+  log(`    · 판정이 안 섭니다. 화면: «${lastSeen.slice(0, 120)}»`);
   return "unclear";
 }
 
