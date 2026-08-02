@@ -358,21 +358,49 @@ async function createCustomer(
      *    「고객이 서명하지 않은 동의 데이터가 아직 있습니다」로 저장이 막혔다.
      *    고를 수 있는 값: "" / 수락된 동의 / 거부된 동의
      */
-    const sign = row.locator('[controlname="Customer Signed"]').first();
-    await sign
-      .selectOption({ label: agreed ? "수락된 동의" : "거부된 동의" })
-      .catch(() => log(`    ⚠️ 「${purpose}」의 고객 서명을 못 골랐습니다`));
-    await page.waitForTimeout(250);
+    const cell = row.locator('[controlname="Customer Signed"]').first();
+    /**
+     * 🔴 **먼저 눌러야 고를 수 있다** (2026-08-02 사장님 조작 기록에서 확인).
+     *      클릭 :: select "고객 서명" …
+     *      입력 :: select "고객 서명" … = "1"
+     *    바로 고르려다 세 줄 다 실패했다.
+     *
+     * 값은 라벨이 아니라 번호로 들어간다 — ["", "수락된 동의", "거부된 동의"] → 1 / 2
+     */
+    await cell.click({ timeout: 6000 }).catch(() => {});
+    await page.waitForTimeout(350);
+
+    const want = agreed ? "1" : "2";
+    const label = agreed ? "수락된 동의" : "거부된 동의";
+    const targets = [cell, cell.locator("select").first(), row.locator("select").first()];
+    let signed = false;
+    for (const t of targets) {
+      if (await t.selectOption(want).then(() => true).catch(() => false)) {
+        signed = true;
+        break;
+      }
+      if (await t.selectOption({ label }).then(() => true).catch(() => false)) {
+        signed = true;
+        break;
+      }
+    }
+    if (!signed) log(`    ⚠️ 「${purpose}」의 고객 서명을 못 골랐습니다`);
+    await page.waitForTimeout(300);
   }
 
   // ── 차량 ──
   await f.getByRole("textbox", { name: "번호판 번호" }).fill(c.plateNo);
   if (c.fuelType) {
     // Fuel · Hybird · BEV · Diesel — MARS 화면에 있는 그대로여야 한다
-    await f
-      .getByRole("combobox", { name: "차량 종류" })
-      .selectOption({ label: c.fuelType })
-      .catch(() => log(`    ⚠️ 차량 종류 「${c.fuelType}」를 못 골랐습니다`));
+    // 서명 칸과 마찬가지로 **누른 뒤에** 골라야 한다
+    const fuel = f.getByRole("combobox", { name: "차량 종류" }).first();
+    await fuel.click({ timeout: 6000 }).catch(() => {});
+    await page.waitForTimeout(300);
+    const picked =
+      (await fuel.selectOption({ label: c.fuelType }).then(() => true).catch(() => false)) ||
+      (await fuel.locator("select").first().selectOption({ label: c.fuelType }).then(() => true).catch(() => false));
+    if (!picked) log(`    ⚠️ 차량 종류 「${c.fuelType}」를 못 골랐습니다`);
+    await page.waitForTimeout(300);
   }
   if (c.makerName) await f.getByRole("combobox", { name: "제조사" }).fill(c.makerName).catch(() => {});
   if (c.model) await f.getByRole("combobox", { name: "모델" }).fill(c.model).catch(() => {});
