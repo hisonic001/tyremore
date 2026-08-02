@@ -3,7 +3,7 @@ config({ path: ".env.local" });
 
 import { execSync } from "node:child_process";
 import path from "node:path";
-import { chromium, type FrameLocator, type Page } from "playwright";
+import { chromium, type FrameLocator, type Locator, type Page } from "playwright";
 
 /**
  * ⭐ MARS 자동 입력 (사장님 요청 2026-08-02)
@@ -60,6 +60,37 @@ const main = (page: Page): FrameLocator => page.frameLocator('iframe[title="Main
 /** 값이 채워져도 화면이 못 알아채는 칸이 있다 — 사장님 코드에서 쓰던 방법 그대로 */
 const SET_VALUE =
   "(el, v) => { el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); }";
+
+/**
+ * 🔴 칸 하나를 채우고 **들어갔는지 확인한다** (2026-08-02).
+ *
+ * 전에는 `.fill(...).catch(() => {})` 로 실패를 조용히 삼켰다.
+ * 그래서 주행거리가 안 들어갔는데 아무 말 없이 넘어갔고,
+ * 사장님이 화면을 보고 알려주셔야 알았다. 다시는 그러지 않는다.
+ *
+ * MARS 칸은 대부분 **먼저 눌러야** 값이 들어간다.
+ */
+async function fillField(page: Page, label: string, loc: Locator, value: string): Promise<boolean> {
+  const el = loc.first();
+  if (!(await el.isVisible({ timeout: 6000 }).catch(() => false))) {
+    log(`    ⚠️ 「${label}」 칸을 못 찾았습니다`);
+    return false;
+  }
+  await el.click({ timeout: 6000 }).catch(() => {});
+  await page.waitForTimeout(200);
+  const filled = await el.fill(value).then(() => true).catch(() => false);
+  if (!filled) {
+    // fill 이 안 되는 칸은 값을 직접 넣고 change 를 쏜다
+    await el.evaluate(SET_VALUE, value).catch(() => {});
+  }
+  await el.press("Tab").catch(() => {});
+  await page.waitForTimeout(400);
+
+  const got = (await el.inputValue().catch(() => "")) || "";
+  const ok = got.replace(/[\s,]/g, "").includes(value.replace(/[\s,]/g, ""));
+  if (!ok) log(`    ⚠️ 「${label}」에 «${value}» 를 넣었는데 «${got}» 입니다`);
+  return ok;
+}
 
 const log = (s: string) => console.log(s);
 
@@ -317,9 +348,9 @@ async function createCustomer(
     throw new Error("--inspect 이므로 저장하지 않고 멈춥니다");
   }
 
-  await f.getByRole("textbox", { name: "이름", exact: true }).fill(c.name);
-  if (c.address) await f.getByRole("textbox", { name: "주소" }).fill(c.address);
-  if (c.phone) await f.getByRole("textbox", { name: "휴대폰 번호" }).fill(c.phone);
+  await fillField(page, "이름", f.getByRole("textbox", { name: "이름", exact: true }), c.name);
+  if (c.address) await fillField(page, "주소", f.getByRole("textbox", { name: "주소" }), c.address);
+  if (c.phone) await fillField(page, "휴대폰 번호", f.getByRole("textbox", { name: "휴대폰 번호" }), c.phone);
 
   /**
    * ⭐ 동의 표 — 사장님이 실제로 하시는 것을 보고 그대로 옮겼다 (2026-08-02).
@@ -416,7 +447,7 @@ async function createCustomer(
   }
 
   // ── 차량 ──
-  await f.getByRole("textbox", { name: "번호판 번호" }).fill(c.plateNo);
+  await fillField(page, "번호판 번호", f.getByRole("textbox", { name: "번호판 번호" }), c.plateNo);
   if (c.fuelType) {
     // Fuel · Hybird · BEV · Diesel — MARS 화면에 있는 그대로여야 한다
     // 서명 칸과 마찬가지로 **누른 뒤에** 골라야 한다
@@ -429,11 +460,11 @@ async function createCustomer(
     if (!picked) log(`    ⚠️ 차량 종류 「${c.fuelType}」를 못 골랐습니다`);
     await page.waitForTimeout(300);
   }
-  if (c.makerName) await f.getByRole("combobox", { name: "제조사" }).fill(c.makerName).catch(() => {});
-  if (c.model) await f.getByRole("combobox", { name: "모델" }).fill(c.model).catch(() => {});
+  if (c.makerName) await fillField(page, "제조사", f.getByRole("combobox", { name: "제조사" }), c.makerName);
+  if (c.model) await fillField(page, "모델", f.getByRole("combobox", { name: "모델" }), c.model);
 
   if (c.year) {
-    await f.getByRole("textbox", { name: "차량 연도" }).fill(String(c.year)).catch(() => {});
+    await fillField(page, "차량 연도", f.getByRole("textbox", { name: "차량 연도" }), String(c.year));
     await page.waitForTimeout(300);
 
     /**
@@ -446,16 +477,14 @@ async function createCustomer(
     const t = new Date();
     const md = `-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
     const regDate = `${c.year}${md}`;
-    const reg = f.getByRole("combobox", { name: "등록 날짜" }).first();
     const okDate =
-      (await reg.fill(regDate).then(() => true).catch(() => false)) ||
-      (await f.getByRole("textbox", { name: "등록 날짜" }).first().fill(regDate).then(() => true).catch(() => false));
+      (await fillField(page, "등록 날짜", f.getByRole("combobox", { name: "등록 날짜" }), regDate)) ||
+      (await fillField(page, "등록 날짜", f.getByRole("textbox", { name: "등록 날짜" }), regDate));
     if (!okDate) log("    ⚠️ 등록 날짜를 못 넣었습니다");
-    await page.waitForTimeout(400);
   }
 
   if (c.mileage) {
-    await f.locator('[controlname="VehicleMileage"]').first().fill(String(c.mileage)).catch(() => {});
+    await fillField(page, "주행거리", f.locator('[controlname="VehicleMileage"]'), String(c.mileage));
   }
   await page.waitForTimeout(800);
 
