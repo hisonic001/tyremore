@@ -250,12 +250,20 @@ async function passBigSearchDialog(page: Page): Promise<boolean> {
 /**
  * 번호판으로 고객을 찾는다.
  *
- * ⚠️ 「판매 내역」이 보인다고 찾은 것이 아니다 — 그건 검색 결과 화면의
- *    **툴바 버튼이라 늘 있다.** 그걸 근거로 삼았다가 없는 손님을 찾았다고 오해했다.
- *    MARS 는 딱 맞는 것이 있으면 **고객 화면으로 저절로 넘어간다.**
- *    그러니 「이름/번호판 번호」 칸이 사라졌는지로 판단한다.
+ * ⭐ 사장님 확인 (2026-08-02):
+ *    "번호판을 입력 후 엔터를 치면 **목록에 한 줄 뜨고**, 직접 누르지 않고
+ *     그냥 바로 판매내역 → 신규 로 진행하면 됨"
+ *
+ * 🔴 그래서 **결과 줄이 떴는지**로 판단한다.
+ *    전에는 「검색칸이 사라졌는가」로 봤는데, 목록만 뜨고 화면은 그대로라
+ *    20초를 기다리다 「없음」으로 처리했다. 그리고 **이미 있는 손님을 또 만들었다.**
+ *
+ * 🔴 모호하면 **만들지 않는다.** 중복 고객은 지우기도 번거롭고 매출이 갈린다.
+ *    「없다」는 「표시할 내용이 없음」을 실제로 봤을 때만이다.
  */
-async function findCustomer(page: Page, plate: string): Promise<boolean> {
+type FindResult = "found" | "none" | "unclear";
+
+async function findCustomer(page: Page, plate: string): Promise<FindResult> {
   const f = main(page);
   await clickAny(page, "고객 정보 검색");
   await passBigSearchDialog(page);
@@ -264,22 +272,23 @@ async function findCustomer(page: Page, plate: string): Promise<boolean> {
   await box.waitFor({ timeout: 15000 });
   await box.fill(plate);
   await box.press("Enter");
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(2500);
   await passBigSearchDialog(page);
 
   const empty = f.getByText("(이 보기에 표시할 내용이 없음)", { exact: true });
-  const until = Date.now() + 20000;
+  /** 검색칸이 아니라 **결과 표의 줄**에 번호판이 있어야 한다 */
+  const hit = f.getByRole("row").filter({ hasText: plate }).first();
+
+  const until = Date.now() + 25000;
   while (Date.now() < until) {
-    // 검색 칸이 사라졌으면 고객 화면으로 넘어간 것이다 = 찾았다
-    if (!(await box.isVisible().catch(() => false))) {
-      await f.getByRole("menuitem", { name: "판매 내역" }).first().waitFor({ timeout: 15000 });
-      return true;
-    }
-    if (await empty.isVisible().catch(() => false)) return false;
+    if (await hit.isVisible().catch(() => false)) return "found";
+    if (await empty.isVisible().catch(() => false)) return "none";
+    // 고객 화면으로 저절로 넘어가는 경우도 있다 (검색칸이 사라진다)
+    if (!(await box.isVisible().catch(() => false))) return "found";
     await passBigSearchDialog(page);
     await page.waitForTimeout(1000);
   }
-  return false;
+  return "unclear";
 }
 
 /** 고객 생성 화면의 동의 표가 실제로 어떻게 생겼는지 찍어 본다 (--inspect) */
@@ -1001,7 +1010,16 @@ async function main_() {
       }
       try {
         const found = await findCustomer(page, q.plateNo);
-        if (!found) {
+
+        /**
+         * 🔴 「모르겠다」를 「없다」로 처리하지 않는다 (2026-08-02).
+         *    그렇게 했다가 이미 있는 손님을 또 만들었다. MARS 에 중복이 생겼다.
+         */
+        if (found === "unclear") {
+          throw new Error("이 손님이 MARS 에 있는지 확실하지 않아 멈췄습니다 — 직접 확인해 주세요");
+        }
+
+        if (found === "none") {
           const c = q.newCustomer;
           /**
            * 🔴 서명을 안 받은 손님은 만들지 않는다.
