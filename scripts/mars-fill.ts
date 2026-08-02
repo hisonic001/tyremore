@@ -419,9 +419,29 @@ async function createCustomer(
   }
   if (c.makerName) await f.getByRole("combobox", { name: "제조사" }).fill(c.makerName).catch(() => {});
   if (c.model) await f.getByRole("combobox", { name: "모델" }).fill(c.model).catch(() => {});
+
   if (c.year) {
     await f.getByRole("textbox", { name: "차량 연도" }).fill(String(c.year)).catch(() => {});
+    await page.waitForTimeout(300);
+
+    /**
+     * 🔴 **등록 날짜** — 리팩터링하다 빠뜨렸던 칸이다 (사장님이 순서를 알려주셔서 발견).
+     *
+     * 사장님 방식: 「오늘 날짜에서 연도만 과거로 바꾼다」
+     *   오늘이 2026-08-02 이고 14년식이면 → 2014-08-02
+     * 실제 등록일을 모르니 월·일은 오늘 것을 그대로 쓴다.
+     */
+    const t = new Date();
+    const md = `-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+    const regDate = `${c.year}${md}`;
+    const reg = f.getByRole("combobox", { name: "등록 날짜" }).first();
+    const okDate =
+      (await reg.fill(regDate).then(() => true).catch(() => false)) ||
+      (await f.getByRole("textbox", { name: "등록 날짜" }).first().fill(regDate).then(() => true).catch(() => false));
+    if (!okDate) log("    ⚠️ 등록 날짜를 못 넣었습니다");
+    await page.waitForTimeout(400);
   }
+
   if (c.mileage) {
     await f.locator('[controlname="VehicleMileage"]').first().fill(String(c.mileage)).catch(() => {});
   }
@@ -432,7 +452,13 @@ async function createCustomer(
    *    ① 생성 창의 확인  ② 뒤따라 뜨는 Dialog 의 확인
    *    전에는 ①만 누르고 성공으로 적었다.
    */
-  await f.locator('button[controlname="KOR Cust Contact Veh. Creation"]', { hasText: "확인" }).first()
+  /**
+   * ⚠️ 사장님 말씀: 「**가장 아래의** 확인 버튼 클릭」
+   *    화면에 확인이 여럿 있어서 위쪽 것을 누르면 엉뚱한 창이 닫힌다. 맨 아래 것을 누른다.
+   */
+  await f
+    .locator('button[controlname="KOR Cust Contact Veh. Creation"]', { hasText: "확인" })
+    .last()
     .click({ timeout: 10000 })
     .catch(async () => {
       await f.getByRole("button", { name: "확인", exact: true }).last().click({ timeout: 10000 });
