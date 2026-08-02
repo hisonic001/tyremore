@@ -63,11 +63,18 @@ export default async function Home({
       <header className="mb-4 flex items-center justify-between gap-2">
         <h1 className="shrink-0 whitespace-nowrap text-xl font-bold tracking-tight">타이어모어</h1>
         <nav className="flex shrink-0 items-center gap-1">
+          {/* ⭐ 판매 등록이 하루에 가장 자주 쓰는 화면이다 — 눈에 띄게 둔다 */}
+          <Link
+            href="/sale"
+            className="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white active:bg-emerald-800"
+          >
+            판매 등록
+          </Link>
           <Link
             href="/receiving"
-            className="rounded-lg px-3 py-2 text-sm font-medium text-slate-600 active:bg-slate-200"
+            className="rounded-lg px-2.5 py-2 text-sm font-medium text-slate-600 active:bg-slate-200"
           >
-            매입 입고
+            매입
           </Link>
           <Link
             href="/settings"
