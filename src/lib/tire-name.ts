@@ -348,8 +348,8 @@ export function parseTireName(
     if (ply !== null && ply <= 20) {
       if (!seen.has("PLY#")) {
         seen.add("PLY#");
-        // 겹수는 숫자가 있어야 뜻이 있다 — 아래에서 밋밋한 `PLY` 배지를 이걸로 갈아끼운다
-        badges.push({ code: `${ply}PLY`, label: "겹수", kind: "structure" });
+        // 화면에는 `4P` 로 짧게 (사장님 지시 2026-08-02 — 「겹」보다 P 가 편하다)
+        badges.push({ code: `${ply}P`, label: `${ply}겹 (ply)`, kind: "structure" });
       }
       continue;
     }
