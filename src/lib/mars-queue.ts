@@ -223,6 +223,55 @@ export async function unmarkEntered(quoteId: number): Promise<{ ok: true }> {
   return { ok: true };
 }
 
+/**
+ * ⭐ 차량 점검이 아직 안 된 판매 (2026-08-02)
+ *
+ * 전기가 끝나야 들어갈 수 있는 화면이라 매출 주문 입력과 **별개 단계**다.
+ * MARS 에 넘긴(전송완료) 것 중 점검을 아직 안 한 것을 찾는다.
+ */
+export async function pendingVehicleChecks(): Promise<
+  { quoteId: number; quoteNo: string; plateNo: string | null; customerName: string | null; tyreQty: number }[]
+> {
+  const rows = await db.execute<{
+    id: number;
+    quote_no: string;
+    plate_no: string | null;
+    name: string | null;
+    tyre_qty: number;
+  }>(sql`
+    SELECT q.id, q.quote_no, v.plate_no, c.name,
+           COALESCE(SUM(qi.qty) FILTER (WHERE qi.line_type = 'tire'), 0)::int AS tyre_qty
+    FROM quote q
+    LEFT JOIN vehicle    v ON v.id = q.vehicle_id
+    LEFT JOIN customer   c ON c.id = q.customer_id
+    LEFT JOIN quote_item qi ON qi.quote_id = q.id
+    WHERE q.status = '성사'
+      AND q.mars_status = '전송완료'
+      AND q.vehicle_check_at IS NULL
+      AND v.plate_no IS NOT NULL
+    GROUP BY q.id, q.quote_no, v.plate_no, c.name
+    HAVING COALESCE(SUM(qi.qty) FILTER (WHERE qi.line_type = 'tire'), 0) > 0
+    ORDER BY q.confirmed_at DESC NULLS LAST
+    LIMIT 40
+  `);
+  return rows.map((r) => ({
+    quoteId: Number(r.id),
+    quoteNo: r.quote_no,
+    plateNo: r.plate_no,
+    customerName: r.name,
+    tyreQty: Number(r.tyre_qty),
+  }));
+}
+
+/** 차량 점검을 제출했다 */
+export async function markVehicleChecked(quoteId: number): Promise<void> {
+  await db
+    .update(quote)
+    .set({ vehicleCheckAt: new Date(), updatedAt: new Date() })
+    .where(eq(quote.id, quoteId));
+  refresh("/mars");
+}
+
 /** 오늘 친 것 — 되돌릴 때 쓴다 */
 export async function marsDone(): Promise<
   { quoteId: number; quoteNo: string; customerName: string | null; total: number; refNo: string | null }[]

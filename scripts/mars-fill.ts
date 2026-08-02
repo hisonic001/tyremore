@@ -40,6 +40,12 @@ const DRY = process.argv.includes("--dry");
 /** 고객 생성 화면이 실제로 어떻게 생겼는지만 훑고 취소한다 — 아무것도 저장하지 않는다 */
 const INSPECT = process.argv.includes("--inspect");
 /**
+ * ⭐ 전기 후 차량 점검 모드 (사장님 지시 2026-08-02 — "이것도 꼭 해야 하는 작업이야")
+ *    전기가 끝나야 들어갈 수 있는 화면이라 매출 주문 입력과 따로 돌린다.
+ *      npm run mars -- --check
+ */
+const CHECK = process.argv.includes("--check");
+/**
  * 🔴 전기(Posting)는 하지 않는다 — 사장님이 마지막에 검토하고 누르신다 (2026-08-02 지시).
  *    매출 주문을 채워 두기만 하고, 금액이 맞는지 대조해서 보여 준다.
  */
@@ -675,16 +681,33 @@ async function fillVehicleCheck(
 }
 
 async function main_() {
-  const { marsQueue, markEntered } = await import("../src/lib/mars-queue");
-  const queue = (await marsQueue()).slice(0, LIMIT);
+  const { marsQueue, markEntered, pendingVehicleChecks, markVehicleChecked } = await import(
+    "../src/lib/mars-queue"
+  );
 
-  log(`MARS 자동 입력\n  대기열 ${queue.length}건\n`);
-  if (queue.length === 0) {
-    log("칠 것이 없습니다.");
-    process.exit(0);
-  }
-  for (const q of queue) {
-    log(`  ${q.quoteNo}  ${q.plateNo ?? "차량없음"}  ${q.customerName ?? ""}  ${q.total.toLocaleString()}원  (${q.lines.length}줄)`);
+  /** 차량 점검 모드는 대기열이 아니라 「전기까지 끝난 것」을 본다 */
+  const checks = CHECK ? (await pendingVehicleChecks()).slice(0, LIMIT) : [];
+  const queue = CHECK ? [] : (await marsQueue()).slice(0, LIMIT);
+
+  if (CHECK) {
+    log(`MARS 차량 점검\n  점검할 것 ${checks.length}건\n`);
+    for (const c of checks) {
+      log(`  ${c.quoteNo}  ${c.plateNo}  ${c.customerName ?? ""}  타이어 ${c.tyreQty}본`);
+    }
+    if (checks.length === 0) {
+      log("점검할 것이 없습니다.");
+      log("(매출 주문을 넣고 MARS 에서 전기까지 마치신 건이 대상입니다)");
+      process.exit(0);
+    }
+  } else {
+    log(`MARS 자동 입력\n  대기열 ${queue.length}건\n`);
+    if (queue.length === 0) {
+      log("칠 것이 없습니다.");
+      process.exit(0);
+    }
+    for (const q of queue) {
+      log(`  ${q.quoteNo}  ${q.plateNo ?? "차량없음"}  ${q.customerName ?? ""}  ${q.total.toLocaleString()}원  (${q.lines.length}줄)`);
+    }
   }
   if (DRY) {
     log("\n--dry 이므로 여기서 멈춥니다.");
@@ -739,6 +762,55 @@ async function main_() {
     if (!(await login(page))) {
       await ctx.close();
       process.exit(1);
+    }
+
+    /**
+     * ⭐ 차량 점검 모드 — 전기까지 끝난 송장을 찾아 점검을 제출한다.
+     *    송장 목록에서 **번호판으로** 찾는다. 전기 전이면 목록에 없으니 저절로 걸러진다.
+     */
+    if (CHECK) {
+      for (const c of checks) {
+        log(`\n── ${c.quoteNo}  ${c.plateNo} ${c.customerName ?? ""} ─────────`);
+        try {
+          await clickAny(page, "판매완료");
+          await page.waitForTimeout(700);
+          await clickAny(page, "완료된 매출 송장, 완료된 매출 송장 목록을 엽니다.");
+          await page.waitForTimeout(3000);
+          await passBigSearchDialog(page);
+
+          const f2 = main(page);
+          const row = f2.getByRole("row").filter({ hasText: c.plateNo! }).first();
+          if (!(await row.isVisible({ timeout: 10000 }).catch(() => false))) {
+            log("  ⚠️ 전기된 송장이 없습니다 — MARS 에서 전기부터 해 주세요");
+            skipped++;
+            await page.goto("https://mars.tyremore.co.kr/MARS/");
+            await waitHome(page, 40000);
+            continue;
+          }
+          await row.locator('[controlname="No."]').first().click({ timeout: 10000 });
+          await page.waitForTimeout(3000);
+
+          const r = await fillVehicleCheck(page, { plateNo: c.plateNo!, tyreQty: c.tyreQty });
+          if (!r.ok) throw new Error(`못 채운 항목: ${r.missed.join(", ")}`);
+
+          await markVehicleChecked(c.quoteId);
+          ok++;
+          log("  ✅ 차량 점검 제출 완료");
+        } catch (e) {
+          skipped++;
+          log(`  ⚠️ 실패: ${(e as Error).message.split("\n")[0]}`);
+          const shot = path.resolve(process.cwd(), "..", "tyremore-data", `mars-점검오류-${c.quoteNo}.png`);
+          await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
+          log(`     화면을 저장했습니다: ${shot}`);
+        }
+        await page.goto("https://mars.tyremore.co.kr/MARS/").catch(() => {});
+        await waitHome(page, 40000).catch(() => false);
+      }
+      log(`\n${"=".repeat(56)}`);
+      log(`  점검 제출 ${ok}건 · 넘어간 것 ${skipped}건`);
+      log(`${"=".repeat(56)}\n`);
+      log("  확인하시고 이 창에서 Ctrl+C 를 누르시면 브라우저가 닫힙니다.");
+      await new Promise(() => {});
     }
 
     for (const q of queue) {
