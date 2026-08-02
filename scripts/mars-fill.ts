@@ -40,10 +40,9 @@ const DRY = process.argv.includes("--dry");
 /** 고객 생성 화면이 실제로 어떻게 생겼는지만 훑고 취소한다 — 아무것도 저장하지 않는다 */
 const INSPECT = process.argv.includes("--inspect");
 /**
- * 매출 주문만 채우고 전기는 사장님이 하실 때.
- * 기본은 전기까지 한다 — 전기 안 하면 매출로 안 잡혀 장부가 어긋나기 때문이다.
+ * 🔴 전기(Posting)는 하지 않는다 — 사장님이 마지막에 검토하고 누르신다 (2026-08-02 지시).
+ *    매출 주문을 채워 두기만 하고, 금액이 맞는지 대조해서 보여 준다.
  */
-const NO_POST = process.argv.includes("--no-post");
 const LIMIT = (() => {
   const i = process.argv.indexOf("--limit");
   return i >= 0 ? Number(process.argv[i + 1]) || 1 : Infinity;
@@ -520,50 +519,26 @@ async function fillLines(
 }
 
 /**
- * ⭐ 전기 — 사장님 지시로 자동화한다 (2026-08-02)
+ * 🔴 전기(Posting)는 **하지 않는다.** 사장님이 검토하고 누르신다 (2026-08-02 지시).
  *
- *   "전기를 자동으로 안하면 매출로 안잡혀서 재고 및 매출관리에 문제가 있어.
- *    그러니 전기까지 자동으로 진행해도 됨."
- *
- * 맞는 말씀이다. 전기하지 않은 매출 주문은 장부에 안 잡히므로
- * 반쪽짜리 자동화가 오히려 재고·매출을 어긋나게 만든다. (D-08 을 뒤집는 결정)
- *
- * 🔴 사람이 확인하던 자리를 **빈칸으로 두지 않는다.**
- *    직전에 화면 금액과 우리 판매 합계를 대조하고, 안 맞으면 하지 않는다.
- *    사람 눈보다 이쪽이 정확하다.
+ * 대신 **대조해서 보여만 준다** — 사장님이 금액을 일일이 확인하지 않아도 되게.
+ * 우리 판매 합계(또는 공급가)가 MARS 화면에 있는지 보고 결과를 적는다.
  */
-async function postOrder(page: Page, expectTotal: number): Promise<string | null> {
+async function checkOrder(page: Page, expectTotal: number): Promise<boolean> {
   const f = main(page);
-
-  const before = (await f.locator("body").innerText().catch(() => "")) || "";
-  const nums = [...before.matchAll(/[\d,]{5,}/g)].map((m) => Number(m[0].replace(/,/g, "")));
+  const txt = (await f.locator("body").innerText().catch(() => "")) || "";
+  const nums = [...txt.matchAll(/[\d,]{5,}/g)].map((m) => Number(m[0].replace(/,/g, "")));
   const excl = Math.round(expectTotal / 1.1);
-  if (!nums.some((n) => n === expectTotal || Math.abs(n - excl) <= 2)) {
-    throw new Error(
-      `합계가 안 맞습니다 — 우리 ${expectTotal.toLocaleString()}원(공급가 ${excl.toLocaleString()}), ` +
-        `MARS 화면 값 ${nums.slice(-6).join(", ") || "없음"}. 전기하지 않았습니다`,
-    );
+  const ok = nums.some((n) => n === expectTotal || Math.abs(n - excl) <= 2);
+
+  if (ok) {
+    log(`    · 합계 대조 ✅ ${expectTotal.toLocaleString()}원 (공급가 ${excl.toLocaleString()})`);
+  } else {
+    log(`    · 합계 대조 ⚠️ 우리 ${expectTotal.toLocaleString()}원(공급가 ${excl.toLocaleString()})`);
+    log(`      MARS 화면에서 찾은 값: ${nums.slice(-6).join(", ") || "없음"}`);
+    log(`      전기하시기 전에 금액을 꼭 확인해 주세요`);
   }
-  log(`    · 합계 확인 ${expectTotal.toLocaleString()}원 (공급가 ${excl.toLocaleString()})`);
-
-  await clickAny(page, "전기");
-  await page.waitForTimeout(900);
-  await clickAny(page, "전기...");
-  await page.waitForTimeout(1500);
-
-  // 전기 옵션 창 — 기본값 그대로 확인 (사장님도 그렇게 하신다)
-  await f
-    .locator('button[controlname="String Menu"]', { hasText: "확인" })
-    .first()
-    .click({ timeout: 20000 })
-    .catch(async () => {
-      await f.getByRole("button", { name: "확인", exact: true }).last().click({ timeout: 20000 });
-    });
-  await page.waitForTimeout(6000);
-
-  /** 전기되면 송장 번호가 생긴다 — 예: 61168583-23SI+003137 */
-  const after = (await f.locator("body").innerText().catch(() => "")) || "";
-  return /\d{8}-\d{2}SI\+\d{6}/.exec(after)?.[0] ?? null;
+  return ok;
 }
 
 async function main_() {
@@ -670,23 +645,18 @@ async function main_() {
         const put = await fillLines(page, q.lines);
 
         /**
-         * 🔴 넣은 줄 수가 다르면 전기하지 않는다.
-         *    품번 없는 상품을 건너뛴 채 전기하면 매출이 모자란 채로 확정된다.
+         * 🔴 줄이 다 안 들어갔으면 「입력 완료」로 넘기지 않는다.
+         *    모자란 채로 대기열에서 내리면 빠진 줄을 아무도 모르게 된다.
+         *    사장님이 MARS 에서 마저 채우고 전기하셔야 한다.
          */
         if (put !== q.lines.length) {
-          throw new Error(`${q.lines.length}줄 중 ${put}줄만 들어갔습니다 — 전기하지 않았습니다`);
+          throw new Error(`${q.lines.length}줄 중 ${put}줄만 들어갔습니다 — MARS 에서 마저 채워 주세요`);
         }
 
-        let invoiceNo: string | null = null;
-        if (NO_POST) {
-          log("  ✅ 매출 주문을 채웠습니다 — --no-post 이므로 전기는 안 했습니다");
-        } else {
-          invoiceNo = await postOrder(page, q.total);
-          log(`  ✅ 전기 완료${invoiceNo ? ` — 송장 ${invoiceNo}` : " (송장번호를 못 읽었습니다)"}`);
-        }
-
-        await markEntered(q.quoteId, invoiceNo ?? `자동입력 ${iso}`);
+        const matched = await checkOrder(page, q.total);
+        await markEntered(q.quoteId, `자동입력 ${iso}${matched ? "" : " (금액 확인 필요)"}`);
         ok++;
+        log("  ✅ 매출 주문을 채웠습니다 — 🔴 전기는 사장님이 확인하고 눌러 주세요");
         await page.goto("https://mars.tyremore.co.kr/MARS/");
         await waitHome(page, 40000);
       } catch (e) {
