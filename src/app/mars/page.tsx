@@ -41,6 +41,25 @@ export default async function MarsPage() {
       ) : (
         <>
           <p className="tabular mt-3 text-sm text-slate-600">합계 {total.toLocaleString()}원</p>
+
+          {/*
+            ⭐ 자동 입력이 있다는 것을 여기서 알려 준다 (2026-08-02).
+               이게 없어서 사장님이 손으로 치지도 않고 「입력 완료」를 누르셨다.
+          */}
+          <div className="mt-3 rounded-xl border border-indigo-300 bg-indigo-50 p-3">
+            <div className="text-sm font-semibold text-indigo-900">자동으로 넣으시려면</div>
+            <p className="mt-1 text-xs text-indigo-800">
+              PC 에서 아래를 실행하면 MARS 매출 주문까지 대신 채웁니다. 전기는 사장님이 누르십니다.
+            </p>
+            <code className="tabular mt-1.5 block rounded-lg bg-white px-3 py-2 text-sm">
+              npm run mars -- --limit 1
+            </code>
+            <p className="mt-1.5 text-xs text-indigo-700">
+              끝나면 여기 목록에서 저절로 내려갑니다 —{" "}
+              <strong>손으로 치셨을 때만 「입력 완료」를 누르세요.</strong>
+            </p>
+          </div>
+
           <QueueList entries={queue} />
         </>
       )}

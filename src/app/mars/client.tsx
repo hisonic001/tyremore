@@ -67,8 +67,16 @@ function Entry({ e }: { e: MarsEntry }) {
           <Copy label="차종" value={e.vehicleModel} />
         </div>
         {!e.contactNo && (
-          <p className="mt-1 text-xs text-amber-800">
-            ⚠️ MARS 연락처 번호가 없습니다 — MARS 에서 이름·전화로 찾으셔야 합니다
+          <p className="mt-1 rounded-lg bg-amber-100 px-2 py-1.5 text-xs text-amber-900">
+            {e.newCustomer && !e.newCustomer.consentSigned ? (
+              <>
+                🔴 <strong>MARS 에 아직 없는 손님인데 개인정보 동의 서명이 없습니다.</strong>
+                <br />
+                자동 입력을 돌려도 고객 등록은 하지 않습니다. 서명을 받으셨으면 고객 화면에서 표시해 주세요.
+              </>
+            ) : (
+              <>⚠️ MARS 에 아직 없는 손님입니다 — 자동 입력이 고객·차량부터 만듭니다</>
+            )}
           </p>
         )}
         {e.memo && <p className="mt-1 text-xs text-indigo-800">{e.memo}</p>}
