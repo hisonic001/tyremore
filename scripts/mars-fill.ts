@@ -493,10 +493,15 @@ async function createCustomer(
      *
      * 값은 라벨이 아니라 번호로 들어간다 — ["", "수락된 동의", "거부된 동의"] → 1 / 2
      */
-    /** 🔴 select 는 누르지 않는다 — 누르면 드롭다운이 펼쳐져 selectOption 이 안 먹는다 */
+    /**
+     * 🔴 select 는 **누르지 않는다** — 누르면 드롭다운이 펼쳐져 selectOption 이 안 먹는다.
+     *
+     * ⚠️ 드롭다운을 닫으려고 Escape 를 눌렀다가 **고객 생성 창이 통째로 닫혔다** (2026-08-02).
+     *    Business Central 에서 Escape 는 창을 닫는 단축키다. 절대 누르지 않는다.
+     *    애초에 select 를 안 누르면 드롭다운도 안 열린다.
+     */
     await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
     await page.waitForTimeout(350);
-    await page.keyboard.press("Escape").catch(() => {});
 
     const want = agreed ? "1" : "2";
     const label = agreed ? "수락된 동의" : "거부된 동의";
@@ -768,8 +773,6 @@ async function fillLines(
      */
     await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
     await page.waitForTimeout(400);
-    await page.keyboard.press("Escape").catch(() => {}); // 혹시 열려 있으면 닫는다
-    await page.waitForTimeout(200);
 
     const typeCell = row.locator('[controlname="Type"]').first();
     const typeSel = row.locator('[controlname="Type"] select, select[controlname="Type"]').first();
