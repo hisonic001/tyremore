@@ -484,9 +484,27 @@ async function openSalesOrder(
 ) {
   const f = main(page);
   await clickAny(page, "판매 내역");
+  await page.waitForTimeout(3000);
   await passBigSearchDialog(page);
-  await clickAny(page, "신규");
-  await clickAny(page, "신규 매출 주문");
+
+  /**
+   * 🔴 「판매 내역」을 누르면 **「편집 - 고객/차량 이력」 창**이 뜬다.
+   *    거기서 `신규` 는 메뉴가 아니라 **탭**이고, 눌러야 아래에 `신규 매출 주문` 이 나온다.
+   *    둘을 연달아 눌렀더니 메뉴가 펼쳐지기 전에 다음 것을 찾아 실패했다 (2026-08-02).
+   */
+  const newOrder = f.getByRole("menuitem", { name: "신규 매출 주문" }).first();
+  let opened = false;
+  for (let i = 0; i < 4 && !opened; i++) {
+    if (!(await newOrder.isVisible().catch(() => false))) {
+      await clickAny(page, "신규", 8000).catch(() => {});
+      await page.waitForTimeout(1500);
+    }
+    if (await newOrder.isVisible().catch(() => false)) {
+      await newOrder.click({ timeout: 8000 }).catch(() => {});
+      opened = true;
+    }
+  }
+  if (!opened) throw new Error("「신규 매출 주문」을 열지 못했습니다");
   await page.waitForTimeout(2500);
 
   /**
