@@ -424,21 +424,31 @@ async function createCustomer(
     });
   await page.waitForTimeout(2000);
 
-  const blocked = f.getByText(/동의 데이터가 아직|입력해야|이미 존재|필수입니다/).first();
-  if (await blocked.isVisible({ timeout: 2000 }).catch(() => false)) {
-    throw new Error(`MARS 가 저장을 막았습니다: ${(await blocked.textContent())?.trim()}`);
-  }
-
   // ② 뒤따르는 확인 창
   const second = f.locator('button[controlname="Dialog"]', { hasText: "확인" }).first();
   if (await second.isVisible({ timeout: 6000 }).catch(() => false)) {
     await second.click().catch(() => {});
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(2500);
   }
 
-  /** 창이 실제로 닫혔는지 본다 — 안 닫혔으면 저장되지 않은 것이다 */
-  if (await f.getByRole("textbox", { name: "번호판 번호" }).isVisible({ timeout: 2500 }).catch(() => false)) {
-    throw new Error("고객 생성 창이 닫히지 않았습니다 — 저장되지 않았습니다");
+  /**
+   * 🔴 **문구를 외워서 판정하지 않는다.** (2026-08-02)
+   *
+   * 전에는 「동의 데이터가 아직…」 같은 특정 문구만 찾았다. 그런데 MARS 는
+   * 「거부된 동의의 경우 "불매치 코드"을(를) 제공해야 합니다!」처럼 다른 말도 한다.
+   * 그걸 못 걸러서 창이 열려 있는데 로그에는 ✅ 라고 찍혔다 — 두 번째 거짓 보고다.
+   *
+   * 그래서 **창이 닫혔는지**만 본다. 그게 저장됐다는 유일한 증거다.
+   * 안 닫혔으면 화면에 떠 있는 말을 그대로 옮겨 알린다.
+   */
+  const stillOpen = f.getByRole("textbox", { name: "번호판 번호" });
+  if (await stillOpen.isVisible({ timeout: 3000 }).catch(() => false)) {
+    const said =
+      (await f.getByRole("dialog").last().innerText().catch(() => "")) ||
+      (await f.locator('[controlname="Dialog"]').last().innerText().catch(() => "")) ||
+      "";
+    const msg = said.replace(/\s+/g, " ").replace(/확인\s*$/, "").trim();
+    throw new Error(`MARS 가 저장을 막았습니다${msg ? `: ${msg.slice(0, 120)}` : " (창이 닫히지 않았습니다)"}`);
   }
 }
 
