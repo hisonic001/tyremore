@@ -270,6 +270,7 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
       isRunflat: product.isRunflat,
       isAcoustic: product.isAcoustic,
       isSuv: product.isSuv,
+      oeMarks: product.oeMarks,
       listPrice: product.listPrice,
       stockTracked: product.stockTracked,
       itemType: product.itemType,
@@ -312,6 +313,22 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
       rimInch: r.rimInch,
     });
     const rate = r.salesRate !== null ? Number(r.salesRate) : null;
+    /**
+     * ⚠️ 배지는 **저장된 값**으로 만든다. 이름에서 다시 읽으면
+     *    사장님이 고쳐 놓은 것이 화면에 안 나타난다 (2026-08-01).
+     */
+    const badges: Badge[] = [
+      ...(r.isRunflat ? [{ code: "런플랫", label: "런플랫", kind: "runflat" as const }] : []),
+      ...(r.isAcoustic ? [{ code: "흡음재", label: "흡음재", kind: "feature" as const }] : []),
+      ...(r.isSuv ? [{ code: "SUV", label: "SUV", kind: "structure" as const }] : []),
+      ...(r.oeMarks ?? "")
+        .split(",")
+        .map((m) => m.trim())
+        .filter(Boolean)
+        .map((m) => ({ code: m, label: m, kind: "oe" as const })),
+      // 구조 표기(XL 등)는 이름에서 읽은 것을 그대로 쓴다
+      ...n.badges.filter((b) => b.kind === "structure" && b.code !== "SUV"),
+    ];
     return {
     salesRate: rate,
     salePrice: r.listPrice !== null && rate !== null ? Math.round(r.listPrice * (1 - rate)) : null,
@@ -320,10 +337,10 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
     cai: r.cai && /^\d+$/.test(r.cai) ? r.cai : null,
     // 사장님이 정한 이름이 있으면 그것이 이긴다
     model: r.displayName?.trim() || n.model,
+    badges,
     brandCode: r.brandCode,
     // 상품명 접미(GO=BFGoodrich)가 brand_code 보다 정확하다 — MARS 분류가 틀려 있다
     brandName: n.brandHint ?? r.brandName,
-    badges: n.badges,
     unknown: n.unknown,
     marsName: n.marsName,
     pattern: r.pattern,

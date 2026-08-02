@@ -344,6 +344,15 @@ export async function load(data: {
   `);
   console.log(`     stock_tracked 켜짐: ${tracked[0]?.n ?? 0}종 (나머지는 「미등록」)`);
 
+  /**
+   * ⭐ 사장님이 고친 세부사항을 되살린다 (2026-08-01).
+   *    이관은 상품명에서 계절·런플랫 등을 다시 판정해 덮어쓴다.
+   *    이 단계가 없으면 **애써 고친 것이 이관할 때마다 전부 날아간다.**
+   */
+  const { reapplyOverrides } = await import("../../src/lib/attrs");
+  const restored = await reapplyOverrides();
+  if (restored > 0) console.log(`     사람이 고친 세부사항 ${restored}건 복원`);
+
   /* --- 10. import_issue ----------------------------------- */
   console.log("\n  10. import_issue");
   await db.execute(sql`DELETE FROM import_issue WHERE status = '대기'`);

@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getStockDetail } from "@/lib/stock";
+import { SEASON_STYLE, type Season } from "@/lib/tire-attrs";
 import { BADGE_STYLE } from "@/lib/tire-name";
+import { AttrsEditor } from "./attrs-editor";
 import { CopyLine, DotRow, HideToggle, NameEditor, NewDotRow } from "./editor";
 
 export const dynamic = "force-dynamic";
@@ -46,21 +48,53 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
           {d.loadSpeed && <span>{d.loadSpeed}</span>}
         </div>
 
-        {/* 세부사항 — 런플랫·흡음재·OE마킹 등 전부 */}
-        {(d.badges.length > 0 || d.unknown.length > 0) && (
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {d.badges.map((b) => (
+        {/*
+          세부사항 — 저장된 값을 보여준다.
+          ⚠️ 이름에서 읽은 배지가 아니라 **고쳐진 값**이어야 한다.
+             안 그러면 고쳐 놓고도 화면은 그대로라 사장님이 못 믿게 된다.
+        */}
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {d.attrs.season && (
+            <span
+              className={`rounded px-2 py-1 text-sm font-medium ${
+                SEASON_STYLE[d.attrs.season as keyof typeof SEASON_STYLE] ?? "bg-slate-100 text-slate-600"
+              }`}
+            >
+              {d.attrs.season}
+            </span>
+          )}
+          {d.attrs.isRunflat && (
+            <span className="rounded bg-violet-100 px-2 py-1 text-sm font-medium text-violet-800">런플랫</span>
+          )}
+          {d.attrs.isAcoustic && (
+            <span className="rounded bg-indigo-100 px-2 py-1 text-sm font-medium text-indigo-800">흡음재</span>
+          )}
+          {d.attrs.isSuv && (
+            <span className="rounded bg-stone-100 px-2 py-1 text-sm font-medium text-stone-700">SUV</span>
+          )}
+          {d.attrs.oeMarks
+            ?.split(",")
+            .map((m) => m.trim())
+            .filter(Boolean)
+            .map((m) => (
+              <span key={m} className="rounded bg-amber-100 px-2 py-1 text-sm font-bold text-amber-900">
+                {m}
+              </span>
+            ))}
+          {/* 구조 표기(XL 등)는 이름에서 읽은 그대로 */}
+          {d.badges
+            .filter((b) => b.kind === "structure")
+            .map((b) => (
               <span key={b.code} className={`rounded px-2 py-1 text-sm font-medium ${BADGE_STYLE[b.kind]}`}>
                 {b.code === b.label ? b.code : `${b.code} ${b.label}`}
               </span>
             ))}
-            {d.unknown.map((u) => (
-              <span key={u} className="rounded bg-slate-100 px-2 py-1 text-sm text-slate-400">
-                {u}
-              </span>
-            ))}
-          </div>
-        )}
+          {d.unknown.map((u) => (
+            <span key={u} className="rounded bg-slate-100 px-2 py-1 text-sm text-slate-400">
+              {u}
+            </span>
+          ))}
+        </div>
 
         <div className="tabular mt-2 flex flex-wrap gap-x-4 text-sm text-slate-500">
           {d.cai && (
@@ -75,6 +109,19 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
             </span>
           )}
         </div>
+
+        {/* ⭐ 틀린 세부사항을 여기서 고친다. 고친 값은 재이관해도 유지된다 */}
+        <AttrsEditor
+          productId={d.productId}
+          current={{
+            season: (d.attrs.season as Season) ?? null,
+            isRunflat: d.attrs.isRunflat,
+            isAcoustic: d.attrs.isAcoustic,
+            isSuv: d.attrs.isSuv,
+            oeMarks: d.attrs.oeMarks,
+          }}
+          edited={d.attrsEdited}
+        />
 
         {/* ⭐ 미쉐린 주문 사이트와 같은 형태. 주문할 때 이 줄로 대조한다 */}
         <CopyLine label="주문 사이트 표기" value={d.orderName} />

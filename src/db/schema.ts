@@ -19,6 +19,7 @@ import {
   check,
   index,
   integer,
+  jsonb,
   numeric,
   pgTable,
   text,
@@ -130,6 +131,22 @@ export const product = pgTable(
     isRunflat: boolean("is_runflat").notNull().default(false),
     isAcoustic: boolean("is_acoustic").notNull().default(false),
     isSuv: boolean("is_suv").notNull().default(false),
+    /**
+     * ⭐ OE 마킹 — 어느 차 순정인가 (2026-08-01)
+     * MARS 상품명에 마킹이 빠진 것이 많아(4,152건 중 약 200건만 표기) 이름만으로는 못 채운다.
+     * 콤마로 구분해 담는다: 'MO,GRNX'
+     */
+    oeMarks: text("oe_marks"),
+    /**
+     * ⭐ 사람이 고친 세부사항 (2026-08-01)
+     *
+     * 계절·런플랫·흡음재·SUV·OE마킹은 상품명에서 자동으로 판정한다.
+     * 그런데 MARS 이름이 축약·누락투성이라 **틀린 것이 많다**.
+     * 사장님이 고친 값을 여기 남겨 두고, **재이관 뒤에 다시 덮어씌운다.**
+     * 안 그러면 다음 이관 때 애써 고친 것이 전부 날아간다.
+     *   { "season": "겨울", "isRunflat": true, "oeMarks": "MO" }
+     */
+    attrsOverride: jsonb("attrs_override"),
 
     // --- 부품 전용 (타이어는 NULL) ---
     partNo: text("part_no"), // 'MBA-039','SM188'

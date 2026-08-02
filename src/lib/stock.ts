@@ -48,6 +48,16 @@ export interface StockDetail {
   displayName: string | null;
   badges: Badge[];
   unknown: string[];
+  /** 고칠 수 있는 세부사항 — 자동 판정 결과 또는 사람이 고친 값 */
+  attrs: {
+    season: string | null;
+    isRunflat: boolean;
+    isAcoustic: boolean;
+    isSuv: boolean;
+    oeMarks: string | null;
+  };
+  /** 사람이 고친 적이 있는가 */
+  attrsEdited: boolean;
   /** ⚠️ MARS 입력용 원본 — 화면 정리와 무관하게 유지 (D-08) */
   marsName: string;
   /** 미쉐린 주문 사이트 표기 — 주문할 때 대조용 */
@@ -93,10 +103,18 @@ export async function getStockDetail(productId: number): Promise<StockDetail | n
     stock_tracked: boolean;
     is_active: boolean;
     list_price: number | null;
+    season: string | null;
+    is_runflat: boolean;
+    is_acoustic: boolean;
+    is_suv: boolean;
+    oe_marks: string | null;
+    attrs_edited: boolean;
   }>(sql`
     SELECT p.id, p.mars_item_no, p.raw_name, p.display_name, p.pattern, b.name_ko AS brand_name,
            p.width, p.aspect_ratio, p.rim_inch, p.item_type, p.is_serialized,
-           p.stock_tracked, p.is_active, p.list_price
+           p.stock_tracked, p.is_active, p.list_price,
+           p.season, p.is_runflat, p.is_acoustic, p.is_suv, p.oe_marks,
+           (p.attrs_override IS NOT NULL) AS attrs_edited
     FROM product p LEFT JOIN brand b ON b.code = p.brand_code
     WHERE p.id = ${productId}
   `);
@@ -127,6 +145,14 @@ export async function getStockDetail(productId: number): Promise<StockDetail | n
     /** 자동으로 만든 이름 — 사장님이 고칠 때 되돌릴 기준 */
     autoModel: n.model,
     displayName: p.display_name,
+    attrs: {
+      season: p.season,
+      isRunflat: p.is_runflat,
+      isAcoustic: p.is_acoustic,
+      isSuv: p.is_suv,
+      oeMarks: p.oe_marks,
+    },
+    attrsEdited: p.attrs_edited,
     badges: n.badges,
     unknown: n.unknown,
     marsName: n.marsName,

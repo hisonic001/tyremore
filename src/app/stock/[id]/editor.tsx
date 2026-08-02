@@ -101,9 +101,9 @@ export function DotRow({
           value={value}
           onChange={(e) => setValue(Math.max(0, Number(e.target.value.replace(/\D/g, "")) || 0))}
           inputMode="numeric"
+          aria-label="수량"
           className="tabular h-12 w-16 shrink-0 rounded-xl border border-slate-300 text-center text-2xl font-bold"
         />
-        <span className="w-5 shrink-0 text-slate-500">{unit}</span>
         <button className={BTN} onClick={() => setValue((v) => v + 1)} disabled={pending}>
           +
         </button>
@@ -182,9 +182,9 @@ export function NewDotRow({
           value={qty}
           onChange={(e) => setQty(Math.max(1, Number(e.target.value.replace(/\D/g, "")) || 1))}
           inputMode="numeric"
+          aria-label="수량"
           className="tabular h-12 w-16 shrink-0 rounded-xl border border-slate-300 text-center text-2xl font-bold"
         />
-        <span className="w-5 shrink-0 text-slate-500">{unit}</span>
         <button className={BTN} onClick={() => setQty((v) => v + 1)}>
           +
         </button>
