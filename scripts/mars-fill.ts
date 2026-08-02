@@ -113,10 +113,15 @@ async function fillField(
     return false;
   }
 
-  el = await resolveInput(el);
-
+  /**
+   * 🔴 **누른 다음에 찾는다** (2026-08-02).
+   *    BC 표·양식은 칸을 클릭해야 비로소 안에 `<input>`·`<select>` 가 생긴다.
+   *    누르기 전에 찾으면 껍데기만 잡혀서 값이 안 들어간다.
+   *    품목 표의 「유형」이 두 줄 다 실패한 원인이 이것이었다.
+   */
   await el.click({ timeout: 6000 }).catch(() => {});
-  await page.waitForTimeout(200);
+  await page.waitForTimeout(300);
+  el = await resolveInput(el);
   const filled = await el.fill(value).then(() => true).catch(() => false);
   if (!filled) {
     // fill 이 안 되는 칸은 값을 직접 넣고 change 를 쏜다
@@ -734,29 +739,41 @@ async function fillLines(
      *    🔴 「서비스」라는 항목은 **없다.** 공임은 「자원」이다.
      *       없는 이름을 찾고 있었으니 공임 줄은 전부 실패했을 것이다.
      */
-    /** 🔴 여기도 `controlname` 이 감싸는 상자다 — 안의 select 를 찾아야 한다 */
+    /**
+     * 🔴 **누른 다음에 `<select>` 를 찾는다.**
+     *    BC 표는 칸을 클릭해야 편집 상태가 되고 그때 select 가 생긴다.
+     *    누르기 전에 찾았더니 두 줄 다 실패해서 MARS 기본값(상품)으로 들어갔고,
+     *    얼라인먼트가 「자원」이 아니라 「상품」이 됐다 (2026-08-02 사장님 지적).
+     */
     const want = l.kind === "tire" ? "2" : "3";
-    const typeSel = await resolveInput(row.locator('[controlname="Type"]'));
-    await typeSel.click({ timeout: 6000 }).catch(() => {});
-    await page.waitForTimeout(300);
+    const wantLabel = l.kind === "tire" ? "상품" : "자원";
+    const typeCell = row.locator('[controlname="Type"]').first();
+    await typeCell.click({ timeout: 6000 }).catch(() => {});
+    await page.waitForTimeout(400);
+
+    const typeSel = await resolveInput(typeCell);
     const typed =
       (await typeSel.selectOption(want).then(() => true).catch(() => false)) ||
-      (await typeSel
-        .selectOption({ label: l.kind === "tire" ? "상품" : "자원" })
-        .then(() => true)
-        .catch(() => false));
-    if (!typed) {
-      log(`    ⚠️ 「유형」을 «${l.kind === "tire" ? "상품" : "자원"}» 으로 못 골랐습니다`);
+      (await typeSel.selectOption({ label: wantLabel }).then(() => true).catch(() => false));
+
+    if (typed) {
+      await page.waitForTimeout(500);
+      const now = await readField(typeCell);
+      log(`      유형 → ${wantLabel}${now && now !== want ? ` (값 «${now}»)` : ""}`);
+    } else {
+      /** 🔴 유형을 못 고르면 **그 줄은 넣지 않는다.** 엉뚱한 유형으로 들어가면 장부가 틀어진다 */
+      throw new Error(`「유형」을 «${wantLabel}» 으로 못 골랐습니다 — ${l.no} 줄을 넣지 않았습니다`);
     }
-    await page.waitForTimeout(500);
 
     /**
      * 품번을 그대로 친다.
      * 사장님은 규격·모델명으로 찾으신다 (「225/55R17」 → 「h745」, 약 2분).
      * 우리는 품번을 이미 갖고 있으니 그 검색 단계를 통째로 건너뛴다.
      */
-    const no = await resolveInput(row.locator('[controlname="No."]'));
-    await no.click({ timeout: 6000 }).catch(() => {});
+    const noCell = row.locator('[controlname="No."]').first();
+    await noCell.click({ timeout: 6000 }).catch(() => {});
+    await page.waitForTimeout(300);
+    const no = await resolveInput(noCell);
     await no.fill(l.no).catch(async () => {
       await no.evaluate(SET_VALUE, l.no!).catch(() => {});
     });
@@ -764,8 +781,10 @@ async function fillLines(
     await no.press("Enter");
     await page.waitForTimeout(2000);
 
-    const qty = await resolveInput(row.locator('[controlname="Quantity"]'));
-    await qty.click({ timeout: 6000 }).catch(() => {});
+    const qtyCell = row.locator('[controlname="Quantity"]').first();
+    await qtyCell.click({ timeout: 6000 }).catch(() => {});
+    await page.waitForTimeout(300);
+    const qty = await resolveInput(qtyCell);
     await qty.evaluate(SET_VALUE, String(l.qty)).catch(() => {});
     await qty.press("Enter");
     await page.waitForTimeout(700);
@@ -774,8 +793,10 @@ async function fillLines(
      * ⭐ MARS 도 「단가 부가세 포함」으로 받는다 — 우리 판매가와 기준이 같다.
      *    **탭**을 눌러야 「합계 부가세 포함」이 다시 계산된다 (사장님 확인).
      */
-    const price = await resolveInput(row.locator('[controlname="Unit Price"]'));
-    await price.click({ timeout: 6000 }).catch(() => {});
+    const priceCell = row.locator('[controlname="Unit Price"]').first();
+    await priceCell.click({ timeout: 6000 }).catch(() => {});
+    await page.waitForTimeout(300);
+    const price = await resolveInput(priceCell);
     await price.evaluate(SET_VALUE, String(l.unitPrice)).catch(() => {});
     await price.press("Tab");
     await page.waitForTimeout(900);
