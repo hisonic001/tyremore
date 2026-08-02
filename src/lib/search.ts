@@ -311,6 +311,7 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
       width: r.width,
       aspectRatio: r.aspectRatio,
       rimInch: r.rimInch,
+      brandCode: r.brandCode,
     });
     const rate = r.salesRate !== null ? Number(r.salesRate) : null;
     /**

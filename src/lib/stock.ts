@@ -109,8 +109,10 @@ export async function getStockDetail(productId: number): Promise<StockDetail | n
     is_suv: boolean;
     oe_marks: string | null;
     attrs_edited: boolean;
+    brand_code: string | null;
   }>(sql`
     SELECT p.id, p.mars_item_no, p.raw_name, p.display_name, p.pattern, b.name_ko AS brand_name,
+           p.brand_code,
            p.width, p.aspect_ratio, p.rim_inch, p.item_type, p.is_serialized,
            p.stock_tracked, p.is_active, p.list_price,
            p.season, p.is_runflat, p.is_acoustic, p.is_suv, p.oe_marks,
@@ -137,6 +139,7 @@ export async function getStockDetail(productId: number): Promise<StockDetail | n
     width: p.width,
     aspectRatio: p.aspect_ratio,
     rimInch: p.rim_inch,
+    brandCode: p.brand_code,
   });
   return {
     productId: p.id,

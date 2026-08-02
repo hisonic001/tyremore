@@ -48,6 +48,7 @@ const CODES: [RegExp, string, string, BadgeKind][] = [
   // ── 기능 ──────────────────────────────────────────────
   [/(^|[\s(])ACOUSTIC([\s)]|$)/i, "ACOUSTIC", "흡음재", "feature"],
   [/(^|[\s(])(SILENT|SILENCE)([\s)]|$)/i, "SILENT", "흡음재", "feature"],
+  [/흡음/, "ACOUSTIC", "흡음재", "feature"], // 금호는 한글로 적는다 — `Majesty X Solus 흡음`
   [/(^|[\s(])SELF-?SEAL([\s)]|$)/i, "SELFSEAL", "셀프씰", "feature"],
   [/(^|[\s(])(GRNX|GRX)([\s)]|$)/i, "GRNX", "저연비", "feature"], // 미쉐린 Green X 90
   [/(^|[\s(])EV([\s)]|$)/i, "EV", "전기차", "feature"], // 163
@@ -77,7 +78,13 @@ const CODES: [RegExp, string, string, BadgeKind][] = [
   [/(^|[\s(])(JLR|LR)([\s)]|$)/i, "LR", "랜드로버", "oe"], // 62
   [/(^|[\s(])MGT([\s)]|$)/i, "MGT", "마세라티", "oe"],
   [/(^|[\s(])J([\s)]|$)/i, "J", "재규어", "oe"],
-  [/\*/, "★", "BMW", "oe"], // 343
+  /**
+   * 🔴 BMW 별표는 **홀로 선 `*`** 일 때만이다.
+   *    한국타이어 모델명에 별이 들어간다 — `i*cept`, `i*Pike`.
+   *    전에는 아무 데나 있는 `*` 를 잡아서 `iON i*cept IW01` 이
+   *    `iON IW01` 로 뭉개졌다 (2026-08-02 사장님 지적으로 발견).
+   */
+  [/(^|\s)\*(\s|$)/, "★", "BMW", "oe"],
 
   // ── 구조 표기 ─────────────────────────────────────────
   [/(^|[\s(])(XL|EXTRA\s+LOAD)([\s)]|$)/i, "XL", "하중강화", "structure"], // 3,382
@@ -86,6 +93,24 @@ const CODES: [RegExp, string, string, BadgeKind][] = [
   [/(^|[\s(])LT([\s)]|$)/i, "LT", "소형트럭", "structure"],
   [/(^|[\s(])SL([\s)]|$)/i, "SL", "표준하중", "structure"],
 ];
+
+/**
+ * ⭐ 배지로 뽑았더라도 **모델명에 그대로 남겨야** 하는 것 (사장님 지적 2026-08-02)
+ *
+ * 한국·금호는 「모델명 + 모델코드」 순서로 짓는다 —
+ *   `Ventus S2 AS H462` · `Solus TA31` · `Majesty Solus EDGE TA91+`
+ * 그 순서를 흐트러뜨리면 사장님이 아는 이름이 아니게 된다.
+ * `Vantra LT RA18` 의 LT 를 배지로 떼서 `Vantra RA18` 이 된 적이 있다.
+ * (맨 앞에 홀로 오는 LT 는 미쉐린 규격 표기 `LT265/70R17` 의 잔해라 뺀다)
+ */
+const KEEP_IN_MODEL = /^(LT)$/i;
+
+/**
+ * 금호가 모델명 뒤에 붙여 놓는 겹수(ply) — `Solus TA31 98V **04**` · `Road Venture MT **06**`
+ * 0 을 채운 두 자리이거나 10·12·14·16, 혹은 4·6·8 이다.
+ * 홀수(`Majesty **9** Solus`)는 세대 번호이므로 건드리지 않는다.
+ */
+const PLY_TOKEN = /^(0[468]|1[0246]|[468])$/;
 
 /** 배지로 뽑고 나면 모델명에서 지워야 하는 토큰 (브랜드 접미·튜브리스 등) */
 const DROP_TOKENS =
@@ -232,6 +257,8 @@ function stripSpec(s: string): string {
   return String(s ?? "")
     .replace(/\d{3}\s*\/\s*\d{2,3}\s*(Z|W|Y)?\s*R\s*F?\s*\d{2}(\.\d)?/gi, " ")
     .replace(/\d{2}(\.\d+)?\s*[X×]\s*\d{1,2}(\.\d+)?\s*R\s*\d{2}/gi, " ") // 31X10.50R15
+    // 편평비 없는 밴·소형트럭 규격 — 금호 Portran 계열에 많다 (185R14 · 145R13C)
+    .replace(/\b\d{3}\s*R\s*\d{2}C?\b/gi, " ")
     .replace(/\(\s*\d{2,3}\/?\d{0,3}\s*[A-Z]{1,2}\s*\)/gi, " ") // (104Y)
     .replace(/\b\d{2,3}\/\d{2,3}[A-Z]{1,2}\b/g, " ") // 120/116Q
     .replace(/\b\d{2,3}[A-Z]{1,2}\b/g, " "); // 104Y
@@ -259,7 +286,13 @@ function clean(s: string): string {
 export function parseTireName(
   rawName: string,
   pattern: string | null,
-  spec?: { width: number | null; aspectRatio: number | null; rimInch: string | number | null },
+  spec?: {
+    width: number | null;
+    aspectRatio: number | null;
+    rimInch: string | number | null;
+    /** 브랜드마다 이름 짓는 법이 다르다 — 아래 KEEP_IN_MODEL·PLY_TOKEN 참조 */
+    brandCode?: string | null;
+  },
 ): TireName {
   const marsName = String(rawName ?? "").trim();
   // 배지 추출도 규격을 걷고 띄어쓰기를 푼 뒤에 한다 ((97Y)XL · XLTL · MOGRNXCPJMI)
@@ -295,13 +328,38 @@ export function parseTireName(
     .map((w) => w.trim())
     .filter(Boolean);
 
+  const isKumho = String(spec?.brandCode ?? "").toUpperCase() === "KM";
+
   const modelWords: string[] = [];
   const unknown: string[] = [];
   for (const w of words) {
     if (DROP_TOKENS.test(w)) continue;
+    /**
+     * ⭐ 금호는 모델명 뒤에 겹수(ply)를 그대로 붙여 놓는다 (사장님 확인 2026-08-02).
+     *   `235/55 R16 Solus TA31 98V 04` 의 `04`, `Road Venture MT 104Q 06` 의 `06`.
+     *   모델명이 아니므로 배지로 뺀다.
+     *
+     * 🔴 금호에만 적용한다. 다른 브랜드는 끝의 숫자가 **세대 번호**다 —
+     *    CROSSCLIMATE **2** · PILOT SPORT **4** S. 떼면 서로 다른 타이어가
+     *    화면에 같은 이름으로 나온다 (2026-08-01에 실제로 그랬다).
+     */
+    const pr = /^(\d{1,2})PR?$/i.exec(w); // 8P (한국·넥센) · 12PR (금호 밴)
+    const ply = pr ? Number(pr[1]) : isKumho && modelWords.length > 0 && PLY_TOKEN.test(w) ? Number(w) : null;
+    if (ply !== null && ply <= 20) {
+      if (!seen.has("PLY#")) {
+        seen.add("PLY#");
+        // 겹수는 숫자가 있어야 뜻이 있다 — 아래에서 밋밋한 `PLY` 배지를 이걸로 갈아끼운다
+        badges.push({ code: `${ply}PLY`, label: "겹수", kind: "structure" });
+      }
+      continue;
+    }
     // 배지로 이미 뽑은 코드는 모델명에서 뺀다
     const isBadge = CODES.some(([re, code]) => seen.has(code) && re.test(` ${w} `));
-    if (isBadge) continue;
+    if (isBadge) {
+      // 모델명의 일부이기도 한 코드는 배지로도 띄우고 이름에도 남긴다 (Vantra **LT** RA18)
+      if (KEEP_IN_MODEL.test(w) && modelWords.length > 0) modelWords.push(w);
+      continue;
+    }
     /**
      * ⚠️ 숫자는 모델명의 일부다. CROSSCLIMATE **2** · PILOT SPORT **4** S · E. F1 ASY **3**.
      *    이걸 코드로 오인해서 떼면 서로 다른 세대가 화면에 같은 이름으로 나온다.
@@ -315,7 +373,19 @@ export function parseTireName(
     modelWords.push(w);
   }
 
-  let model = expandModel(modelWords.join(" "));
+  // 숫자 있는 겹수를 찾았으면 밋밋한 `PLY` 배지는 지운다
+  if (seen.has("PLY#")) {
+    const i = badges.findIndex((b) => b.code === "PLY");
+    if (i >= 0) badges.splice(i, 1);
+  }
+
+  /**
+   * 같은 코드가 두 번 적힌 것을 하나로 줄인다.
+   * MARS 에 `Winter i*Pike LV(RW15) RW15` 처럼 모델코드를 괄호로도, 뒤에도 적어 놓은 것이 있다.
+   */
+  const dedup = modelWords.filter((w, i) => i === 0 || w.toUpperCase() !== modelWords[i - 1].toUpperCase());
+
+  let model = expandModel(dedup.join(" "));
   if (!model) model = pattern?.trim() || marsName;
 
   /**
