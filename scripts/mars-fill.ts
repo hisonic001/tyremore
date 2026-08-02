@@ -62,6 +62,27 @@ const SET_VALUE =
   "(el, v) => { el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); }";
 
 /**
+ * 🔴 `controlname` 이 붙은 것은 **감싸는 상자일 때도, 입력칸 자체일 때도** 있다 (2026-08-02).
+ *
+ * 상자에 값을 넣으려다 「Element is not an <input>…」 으로 죽었고,
+ * 반대로 입력칸인데 안쪽 input 을 찾다 못 찾아서 「값이 지워졌다」고 오판하기도 했다
+ * (그래서 주행거리를 두 번 넣었다). 두 경우를 한 곳에서 가린다.
+ */
+async function resolveInput(loc: Locator): Promise<Locator> {
+  const el = loc.first();
+  const tag = (await el.evaluate((e) => e.tagName).catch(() => "")) || "";
+  if (["INPUT", "TEXTAREA", "SELECT"].includes(tag)) return el;
+  const inner = el.locator("input, textarea").first();
+  return (await inner.count().catch(() => 0)) > 0 ? inner : el;
+}
+
+/** 칸의 현재 값을 읽는다 — 상자든 입력칸이든 같은 방식으로 */
+async function readField(loc: Locator): Promise<string> {
+  const el = await resolveInput(loc);
+  return (await el.inputValue().catch(() => "")) || "";
+}
+
+/**
  * 🔴 칸 하나를 채우고 **들어갔는지 확인한다** (2026-08-02).
  *
  * 전에는 `.fill(...).catch(() => {})` 로 실패를 조용히 삼켰다.
@@ -92,16 +113,7 @@ async function fillField(
     return false;
   }
 
-  /**
-   * 🔴 `controlname` 이 붙은 것은 **감싸는 상자**이고 실제 입력칸은 그 안에 있다 (2026-08-02).
-   *    상자에 값을 넣으려다 「Element is not an <input>…」 으로 죽었다.
-   *    주행거리가 조용히 빠지던 원인이 이것이다.
-   */
-  const tag = (await el.evaluate((e) => e.tagName).catch(() => "")) || "";
-  if (!["INPUT", "TEXTAREA", "SELECT"].includes(tag)) {
-    const inner = el.locator("input, textarea").first();
-    if ((await inner.count().catch(() => 0)) > 0) el = inner;
-  }
+  el = await resolveInput(el);
 
   await el.click({ timeout: 6000 }).catch(() => {});
   await page.waitForTimeout(200);
@@ -466,7 +478,7 @@ async function createCustomer(
 
     const want = agreed ? "1" : "2";
     const label = agreed ? "수락된 동의" : "거부된 동의";
-    const targets = [cell, cell.locator("select").first(), row.locator("select").first()];
+    const targets = [await resolveInput(cell), row.locator("select").first()];
     let signed = false;
     for (const t of targets) {
       if (await t.selectOption(want).then(() => true).catch(() => false)) {
@@ -487,12 +499,13 @@ async function createCustomer(
   if (c.fuelType) {
     // Fuel · Hybird · BEV · Diesel — MARS 화면에 있는 그대로여야 한다
     // 서명 칸과 마찬가지로 **누른 뒤에** 골라야 한다
-    const fuel = f.getByRole("combobox", { name: "차량 종류" }).first();
+    const fuel = await resolveInput(f.getByRole("combobox", { name: "차량 종류" }));
     await fuel.click({ timeout: 6000 }).catch(() => {});
     await page.waitForTimeout(300);
-    const picked =
-      (await fuel.selectOption({ label: c.fuelType }).then(() => true).catch(() => false)) ||
-      (await fuel.locator("select").first().selectOption({ label: c.fuelType }).then(() => true).catch(() => false));
+    const picked = await fuel
+      .selectOption({ label: c.fuelType })
+      .then(() => true)
+      .catch(() => false);
     if (!picked) log(`    ⚠️ 차량 종류 「${c.fuelType}」를 못 골랐습니다`);
     await page.waitForTimeout(300);
   }
@@ -648,10 +661,12 @@ async function openSalesOrder(
   await fillField(page, "완료 일자", f.getByRole("combobox", { name: "완료 일자" }), dateISO);
 
   // 주행거리가 살아 있는지 다시 본다 — 지워지는 것이 실제로 있었다
-  const kmNow = (await km.locator("input").first().inputValue().catch(() => "")) || "";
-  if (mileage && !kmNow.replace(/[\s,]/g, "").includes(String(mileage))) {
-    log(`    · 주행거리가 지워져서 다시 넣습니다 («${kmNow}»)`);
-    await fillField(page, "현재 주행거리", km, String(mileage), { tab: false });
+  if (mileage) {
+    const kmNow = await readField(km);
+    if (!kmNow.replace(/[\s,]/g, "").includes(String(mileage))) {
+      log(`    · 주행거리가 지워져서 다시 넣습니다 («${kmNow}»)`);
+      await fillField(page, "현재 주행거리", km, String(mileage), { tab: false });
+    }
   }
 
   /**
@@ -692,10 +707,20 @@ async function fillLines(
      *    🔴 「서비스」라는 항목은 **없다.** 공임은 「자원」이다.
      *       없는 이름을 찾고 있었으니 공임 줄은 전부 실패했을 것이다.
      */
-    await row
-      .locator('[controlname="Type"]')
-      .first()
-      .selectOption(l.kind === "tire" ? "2" : "3");
+    /** 🔴 여기도 `controlname` 이 감싸는 상자다 — 안의 select 를 찾아야 한다 */
+    const want = l.kind === "tire" ? "2" : "3";
+    const typeSel = await resolveInput(row.locator('[controlname="Type"]'));
+    await typeSel.click({ timeout: 6000 }).catch(() => {});
+    await page.waitForTimeout(300);
+    const typed =
+      (await typeSel.selectOption(want).then(() => true).catch(() => false)) ||
+      (await typeSel
+        .selectOption({ label: l.kind === "tire" ? "상품" : "자원" })
+        .then(() => true)
+        .catch(() => false));
+    if (!typed) {
+      log(`    ⚠️ 「유형」을 «${l.kind === "tire" ? "상품" : "자원"}» 으로 못 골랐습니다`);
+    }
     await page.waitForTimeout(500);
 
     /**
@@ -703,21 +728,26 @@ async function fillLines(
      * 사장님은 규격·모델명으로 찾으신다 (「225/55R17」 → 「h745」, 약 2분).
      * 우리는 품번을 이미 갖고 있으니 그 검색 단계를 통째로 건너뛴다.
      */
-    const no = row.locator('[controlname="No."]').first();
-    await no.fill(l.no);
+    const no = await resolveInput(row.locator('[controlname="No."]'));
+    await no.click({ timeout: 6000 }).catch(() => {});
+    await no.fill(l.no).catch(async () => {
+      await no.evaluate(SET_VALUE, l.no!).catch(() => {});
+    });
     await no.press("Tab");
-    await page.waitForTimeout(1600); // 품번을 넣으면 이름·기본가를 불러온다
+    await page.waitForTimeout(1800); // 품번을 넣으면 이름·기본가를 불러온다
 
-    const qty = row.locator('[controlname="Quantity"]').first();
-    await qty.evaluate(SET_VALUE, String(l.qty));
+    const qty = await resolveInput(row.locator('[controlname="Quantity"]'));
+    await qty.click({ timeout: 6000 }).catch(() => {});
+    await qty.evaluate(SET_VALUE, String(l.qty)).catch(() => {});
     await qty.press("Enter");
-    await page.waitForTimeout(600);
+    await page.waitForTimeout(700);
 
     // ⭐ MARS 도 「단가 부가세 포함」으로 받는다 — 우리 판매가와 기준이 같다
-    const price = row.locator('[controlname="Unit Price"]').first();
-    await price.evaluate(SET_VALUE, String(l.unitPrice));
+    const price = await resolveInput(row.locator('[controlname="Unit Price"]'));
+    await price.click({ timeout: 6000 }).catch(() => {});
+    await price.evaluate(SET_VALUE, String(l.unitPrice)).catch(() => {});
     await price.press("Enter");
-    await page.waitForTimeout(600);
+    await page.waitForTimeout(700);
 
     log(`    ✅ ${l.no}  ${l.marsName.slice(0, 34)}  ×${l.qty}  ${l.unitPrice.toLocaleString()}원`);
     put++;
