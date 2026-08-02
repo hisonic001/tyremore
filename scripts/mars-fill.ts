@@ -292,6 +292,25 @@ async function createCustomer(
   await clickAny(page, "연락처/고객/차량을 생성합니다");
   await page.waitForTimeout(3000);
 
+  /**
+   * 🔴 「연락처 변환 템플릿」 창이 먼저 뜬다 (2026-08-02 실제로 걸려서 발견).
+   *
+   *   CASH      외상 고객(거래처/법인)   고객그룹 FLEET  결제조건 CM
+   *   CASH-B2C  일반 고객(개인)          고객그룹 CASH   결제조건 CREDITCARD
+   *
+   * 이걸 안 넘기면 뒤 화면의 「이름」 칸을 못 채운다 — 30초 기다리다 죽는다.
+   * 우리가 만드는 것은 개인 손님이므로 **CASH-B2C** 를 고른다.
+   * (법인·거래처는 결제 조건이 달라 사람이 직접 만드셔야 한다)
+   */
+  const tmpl = f.getByRole("row").filter({ hasText: "CASH-B2C" }).first();
+  if (await tmpl.isVisible({ timeout: 6000 }).catch(() => false)) {
+    log("    · 「연락처 변환 템플릿」에서 CASH-B2C(일반 고객) 선택");
+    await tmpl.click({ position: { x: 5, y: 5 } }).catch(() => {});
+    await page.waitForTimeout(600);
+    await f.getByRole("button", { name: "확인", exact: true }).last().click({ timeout: 10000 });
+    await page.waitForTimeout(3000);
+  }
+
   if (INSPECT) {
     await dumpConsentForm(page);
     await f.getByRole("button", { name: "취소", exact: true }).first().click().catch(() => {});
