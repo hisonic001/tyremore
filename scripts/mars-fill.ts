@@ -71,11 +71,23 @@ const SET_VALUE =
  * MARS 칸은 대부분 **먼저 눌러야** 값이 들어간다.
  */
 async function fillField(page: Page, label: string, loc: Locator, value: string): Promise<boolean> {
-  const el = loc.first();
+  let el = loc.first();
   if (!(await el.isVisible({ timeout: 6000 }).catch(() => false))) {
     log(`    ⚠️ 「${label}」 칸을 못 찾았습니다`);
     return false;
   }
+
+  /**
+   * 🔴 `controlname` 이 붙은 것은 **감싸는 상자**이고 실제 입력칸은 그 안에 있다 (2026-08-02).
+   *    상자에 값을 넣으려다 「Element is not an <input>…」 으로 죽었다.
+   *    주행거리가 조용히 빠지던 원인이 이것이다.
+   */
+  const tag = (await el.evaluate((e) => e.tagName).catch(() => "")) || "";
+  if (!["INPUT", "TEXTAREA", "SELECT"].includes(tag)) {
+    const inner = el.locator("input, textarea").first();
+    if ((await inner.count().catch(() => 0)) > 0) el = inner;
+  }
+
   await el.click({ timeout: 6000 }).catch(() => {});
   await page.waitForTimeout(200);
   const filled = await el.fill(value).then(() => true).catch(() => false);
@@ -83,8 +95,9 @@ async function fillField(page: Page, label: string, loc: Locator, value: string)
     // fill 이 안 되는 칸은 값을 직접 넣고 change 를 쏜다
     await el.evaluate(SET_VALUE, value).catch(() => {});
   }
+  /** ⭐ Tab 을 눌러야 MARS 가 값을 받아들이고 「평균 주행거리/월」 같은 것을 계산한다 (사장님 확인) */
   await el.press("Tab").catch(() => {});
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(500);
 
   const got = (await el.inputValue().catch(() => "")) || "";
   const ok = got.replace(/[\s,]/g, "").includes(value.replace(/[\s,]/g, ""));
@@ -581,8 +594,10 @@ async function openSalesOrder(
    */
   const pick = f.locator('[controlname="NameLicensePlate"]').first();
   if (await pick.isVisible({ timeout: 8000 }).catch(() => false)) {
-    await pick.fill(plate);
-    await pick.press("Enter");
+    await fillField(page, "이름/번호판 번호", pick, plate);
+    await pick.locator("input").first().press("Enter").catch(async () => {
+      await pick.press("Enter").catch(() => {});
+    });
     await page.waitForTimeout(2500);
     // 결과에서 「차량」 줄을 고른다 (고객 줄이 아니라 차량 줄이어야 주행거리가 붙는다)
     const veh = f.getByRole("row").filter({ hasText: plate }).first();
@@ -600,20 +615,15 @@ async function openSalesOrder(
 
   const km = f.locator('[controlname="Mileage"]').first();
   await km.waitFor({ state: "visible", timeout: 20000 });
-  if (mileage) {
-    await km.fill(String(mileage));
-    await km.press("Tab");
-  }
+  if (mileage) await fillField(page, "현재 주행거리", km, String(mileage));
 
   // 결제 수단·조건 — 우리가 이미 알고 있는 값이다
   if (payCode) {
-    for (const cn of ["<Payment Method Code_2>", "<Payment Terms Code_2>"]) {
-      await f.locator(`[controlname="${cn}"]`).first().fill(payCode).catch(() => {});
-      await page.waitForTimeout(400);
-    }
+    await fillField(page, "결제 수단 코드", f.locator('[controlname="<Payment Method Code_2>"]'), payCode);
+    await fillField(page, "결제 조건 코드", f.locator('[controlname="<Payment Terms Code_2>"]'), payCode);
   }
 
-  await f.locator('[controlname="Document Date"]').first().fill(dateISO).catch(() => {});
+  await fillField(page, "문서 날짜", f.locator('[controlname="Document Date"]'), dateISO);
   await page.waitForTimeout(1200);
 }
 
