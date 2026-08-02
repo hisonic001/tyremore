@@ -493,12 +493,18 @@ async function createCustomer(
      *
      * 값은 라벨이 아니라 번호로 들어간다 — ["", "수락된 동의", "거부된 동의"] → 1 / 2
      */
-    await cell.click({ timeout: 6000 }).catch(() => {});
+    /** 🔴 select 는 누르지 않는다 — 누르면 드롭다운이 펼쳐져 selectOption 이 안 먹는다 */
+    await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
     await page.waitForTimeout(350);
+    await page.keyboard.press("Escape").catch(() => {});
 
     const want = agreed ? "1" : "2";
     const label = agreed ? "수락된 동의" : "거부된 동의";
-    const targets = [await resolveInput(cell), row.locator("select").first()];
+    const targets = [
+      row.locator('[controlname="Customer Signed"] select, select[controlname="Customer Signed"]').first(),
+      await resolveInput(cell),
+      row.locator("select").first(),
+    ];
     let signed = false;
     for (const t of targets) {
       if (await t.selectOption(want).then(() => true).catch(() => false)) {
@@ -519,9 +525,8 @@ async function createCustomer(
   if (c.fuelType) {
     // Fuel · Hybird · BEV · Diesel — MARS 화면에 있는 그대로여야 한다
     // 서명 칸과 마찬가지로 **누른 뒤에** 골라야 한다
+    // select 는 누르지 않는다 (드롭다운이 펼쳐지면 selectOption 이 안 먹는다)
     const fuel = await resolveInput(f.getByRole("combobox", { name: "차량 종류" }));
-    await fuel.click({ timeout: 6000 }).catch(() => {});
-    await page.waitForTimeout(300);
     const picked = await fuel
       .selectOption({ label: c.fuelType })
       .then(() => true)
@@ -680,11 +685,17 @@ async function openSalesOrder(
   await fillField(page, "문서 날짜", f.locator('[controlname="Document Date"]'), dateISO, { tab: false });
   await fillField(page, "완료 일자", f.getByRole("combobox", { name: "완료 일자" }), dateISO);
 
-  // 주행거리가 살아 있는지 다시 본다 — 지워지는 것이 실제로 있었다
+  /**
+   * 주행거리가 살아 있는지 다시 본다 — 실제로 지워지는 일이 있었다.
+   *
+   * ⚠️ 값을 **못 읽은 것**과 **지워진 것**은 다르다.
+   *    빈 문자열이면 못 읽은 것일 수도 있으므로 다시 넣지 않는다 —
+   *    그것 때문에 멀쩡한 값을 두 번 넣고 있었다 (사장님 지적 2026-08-02).
+   */
   if (mileage) {
     const kmNow = await readField(km);
-    if (!kmNow.replace(/[\s,]/g, "").includes(String(mileage))) {
-      log(`    · 주행거리가 지워져서 다시 넣습니다 («${kmNow}»)`);
+    if (kmNow !== "" && !kmNow.replace(/[\s,]/g, "").includes(String(mileage))) {
+      log(`    · 주행거리가 «${kmNow}» 로 바뀌어 다시 넣습니다`);
       await fillField(page, "현재 주행거리", km, String(mileage), { tab: false });
     }
   }
@@ -747,14 +758,26 @@ async function fillLines(
      */
     const want = l.kind === "tire" ? "2" : "3";
     const wantLabel = l.kind === "tire" ? "상품" : "자원";
-    const typeCell = row.locator('[controlname="Type"]').first();
-    await typeCell.click({ timeout: 6000 }).catch(() => {});
-    await page.waitForTimeout(400);
 
-    const typeSel = await resolveInput(typeCell);
+    /**
+     * 🔴 **`<select>` 는 누르면 안 된다** (2026-08-02 화면으로 확인).
+     *    누르면 브라우저 기본 드롭다운이 펼쳐지고, 그 상태에서는 selectOption 이 안 먹는다.
+     *    텍스트 칸에는 클릭이 도움이 됐는데 선택 칸에는 오히려 방해가 됐다.
+     *
+     *    **줄만 활성화**하고 select 는 건드리지 않은 채 값을 고른다.
+     */
+    await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+    await page.waitForTimeout(400);
+    await page.keyboard.press("Escape").catch(() => {}); // 혹시 열려 있으면 닫는다
+    await page.waitForTimeout(200);
+
+    const typeCell = row.locator('[controlname="Type"]').first();
+    const typeSel = row.locator('[controlname="Type"] select, select[controlname="Type"]').first();
+    const target = (await typeSel.count().catch(() => 0)) > 0 ? typeSel : await resolveInput(typeCell);
+
     const typed =
-      (await typeSel.selectOption(want).then(() => true).catch(() => false)) ||
-      (await typeSel.selectOption({ label: wantLabel }).then(() => true).catch(() => false));
+      (await target.selectOption(want).then(() => true).catch(() => false)) ||
+      (await target.selectOption({ label: wantLabel }).then(() => true).catch(() => false));
 
     if (typed) {
       await page.waitForTimeout(500);
