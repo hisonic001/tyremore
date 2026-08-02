@@ -329,6 +329,27 @@ export const customer = pgTable(
     /** 괄호 안 내용 복사 — 검색은 name·name_search·memo 를 전부 뒤진다 */
     memo: text("memo"),
     phone: text("phone"),
+    /** ⭐ MARS 고객 생성 필수 항목 (2026-08-02) */
+    address: text("address"),
+
+    /**
+     * ⭐ 개인정보 동의 — 종이 「차량 점검 및 주문 보고서」에서 손님이 고르고 서명한 것
+     *
+     * 🔴 **프로그램이 대신 정하지 않는다.** 손님이 종이에 표시한 그대로 옮겨 적을 뿐이다.
+     *    MARS 고객 등록 화면에는 동의 체크와 「고객 서명」 칸이 있는데,
+     *    서명받지 않은 것을 「수락된 동의」로 넣으면 안 된다.
+     *
+     * MARS 로 옮길 때:
+     *   비즈니스 목적의 동의        ← consent_privacy (필수 동의)
+     *   제3자 제공 및 국외 이전 동의  ← consent_privacy (필수 동의문에 포함돼 있다)
+     *   마케팅 및 광고 목적의 동의   ← consent_marketing (선택)
+     */
+    consentPrivacy: boolean("consent_privacy"),
+    consentMarketing: boolean("consent_marketing"),
+    michelinMember: boolean("michelin_member"),
+    /** 종이에 서명받은 시각. 비어 있으면 MARS 고객 생성을 하지 않는다 */
+    consentSignedAt: timestamp("consent_signed_at", { withTimezone: true }),
+
     type: text("type").notNull().default("개인"),
     grade: text("grade"),
     extraDiscountRate: numeric("extra_discount_rate", { precision: 5, scale: 4 }),
@@ -360,8 +381,21 @@ export const vehicle = pgTable(
     plateNo: text("plate_no").notNull(), // 원문 '12가3456'
     plateNoNorm: text("plate_no_norm").notNull(), // 공백·하이픈 제거
     makerCode: text("maker_code").references(() => vehicleMaker.code),
+    /** MARS 「제조사」 칸에 그대로 치는 글자. 코드로 못 맞추는 이름이 많다 */
+    makerName: text("maker_name"),
     model: text("model"),
     year: integer("year"),
+
+    /**
+     * ⭐ MARS 차량 등록 필수 항목 (2026-08-02)
+     * MARS 는 영문으로 받는다 — Fuel(가솔린) · Diesel · Hybrid · BEV(전기) · LPG
+     */
+    fuelType: text("fuel_type"),
+    /** 종이 보고서의 「차량 형태」 — 승용 / SUV / 소형트럭 / 밴·소형버스 / 기타 */
+    bodyType: text("body_type"),
+    /** 차대번호 */
+    vin: text("vin"),
+
     mileage: integer("mileage"),
     mileageAt: timestamp("mileage_at", { withTimezone: true }),
     /** 순정규격 대신 이것을 쓴다 (D-04). 판매할 때마다 자동으로 쌓인다 */

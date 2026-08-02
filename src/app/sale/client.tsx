@@ -4,7 +4,15 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { ProductHit, VehicleHit } from "@/lib/search";
 import { searchProducts, searchVehicles } from "@/lib/search-actions";
-import { findServices, saveSale, suggestServices, type SaleLine, type SuggestedService } from "@/lib/sale";
+import {
+  createCustomerAndVehicle,
+  findServices,
+  saveSale,
+  suggestServices,
+  type SaleLine,
+  type SuggestedService,
+} from "@/lib/sale";
+import { BODY_TYPES, FUEL_TYPES, type NewCustomerInput } from "@/lib/sale-types";
 
 const won = (n: number) => n.toLocaleString();
 
@@ -397,41 +405,250 @@ function CustomerPick({
           </button>
         </>
       ) : (
-        <>
-          <div className="mt-2 grid grid-cols-3 gap-2">
-            <input
-              value={walkIn.plateNo}
-              onChange={(e) => onWalkIn({ ...walkIn, plateNo: e.target.value })}
-              placeholder="차량번호"
-              className="rounded-lg border border-slate-300 px-2 py-2 text-sm"
-            />
-            <input
-              value={walkIn.name}
-              onChange={(e) => onWalkIn({ ...walkIn, name: e.target.value })}
-              placeholder="이름"
-              className="rounded-lg border border-slate-300 px-2 py-2 text-sm"
-            />
-            <input
-              value={walkIn.phone}
-              onChange={(e) => onWalkIn({ ...walkIn, phone: e.target.value })}
-              inputMode="tel"
-              placeholder="전화"
-              className="rounded-lg border border-slate-300 px-2 py-2 text-sm"
-            />
-          </div>
-          <p className="mt-1 text-xs text-slate-500">
-            전화번호가 이미 등록된 분과 같으면 그 고객으로 이어집니다.
-          </p>
-          <button
-            type="button"
-            onClick={() => setManual(false)}
-            className="mt-1 w-full py-2 text-sm text-slate-500 underline underline-offset-4"
-          >
-            검색으로 돌아가기
-          </button>
-        </>
+        <NewCustomer
+          initialPlate={q}
+          onCreated={(v) => {
+            onPick(v);
+            setManual(false);
+            setQ("");
+          }}
+          onCancel={() => setManual(false)}
+        />
       )}
     </section>
+  );
+}
+
+/**
+ * ⭐ 새 고객·차량 (사장님 지적 2026-08-02)
+ *   "신규고객과 차량의 경우에는 필수로 넣어야 등록이 되는 정보들이 있음."
+ *
+ * 종이 「차량 점검 및 주문 보고서」의 고객·차량 정보 칸과 같은 항목이다.
+ * 여기서 다 받아 두면 MARS 에 그대로 넘어간다.
+ */
+function NewCustomer({
+  initialPlate,
+  onCreated,
+  onCancel,
+}: {
+  initialPlate: string;
+  onCreated: (v: VehicleHit) => void;
+  onCancel: () => void;
+}) {
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [f, setF] = useState<NewCustomerInput>({
+    name: "",
+    phone: "",
+    address: "속초",
+    consentPrivacy: false,
+    consentMarketing: false,
+    michelinMember: false,
+    signed: false,
+    plateNo: /\d/.test(initialPlate) ? initialPlate : "",
+    makerName: "",
+    model: "",
+    year: "",
+    fuelType: "",
+    bodyType: "",
+    mileage: "",
+    vin: "",
+  });
+  const set = (p: Partial<NewCustomerInput>) => setF((x) => ({ ...x, ...p }));
+
+  const IN = "w-full rounded-lg border border-slate-300 px-2.5 py-2.5 text-sm outline-none focus:border-slate-900";
+  const LB = "text-xs text-slate-500";
+  const req = <span className="text-red-600">*</span>;
+
+  return (
+    <div className="mt-3 space-y-3">
+      <div className="rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600">
+        <strong>*</strong> 표시는 MARS 등록에 반드시 필요한 항목입니다.
+      </div>
+
+      <div>
+        <div className="text-sm font-semibold">고객</div>
+        <div className="mt-1 grid grid-cols-2 gap-2">
+          <label>
+            <span className={LB}>이름 {req}</span>
+            <input value={f.name} onChange={(e) => set({ name: e.target.value })} className={IN} />
+          </label>
+          <label>
+            <span className={LB}>휴대폰</span>
+            <input
+              value={f.phone}
+              onChange={(e) => set({ phone: e.target.value })}
+              inputMode="tel"
+              placeholder="010-0000-0000"
+              className={IN}
+            />
+          </label>
+          <label className="col-span-2">
+            <span className={LB}>주소 {req}</span>
+            <input value={f.address} onChange={(e) => set({ address: e.target.value })} className={IN} />
+          </label>
+        </div>
+      </div>
+
+      <div>
+        <div className="text-sm font-semibold">차량</div>
+        <div className="mt-1 grid grid-cols-2 gap-2">
+          <label>
+            <span className={LB}>차량번호 {req}</span>
+            <input value={f.plateNo} onChange={(e) => set({ plateNo: e.target.value })} className={IN} />
+          </label>
+          <label>
+            <span className={LB}>제조사</span>
+            <input
+              value={f.makerName}
+              onChange={(e) => set({ makerName: e.target.value })}
+              placeholder="현대·기아·BMW…"
+              className={IN}
+            />
+          </label>
+          <label>
+            <span className={LB}>모델</span>
+            <input value={f.model} onChange={(e) => set({ model: e.target.value })} className={IN} />
+          </label>
+          <label>
+            <span className={LB}>연식</span>
+            <input
+              value={f.year}
+              onChange={(e) => set({ year: e.target.value.replace(/\D/g, "").slice(0, 4) })}
+              inputMode="numeric"
+              placeholder="2022"
+              className={IN}
+            />
+          </label>
+          <label>
+            <span className={LB}>주행거리 (km)</span>
+            <input
+              value={f.mileage}
+              onChange={(e) => set({ mileage: e.target.value.replace(/\D/g, "") })}
+              inputMode="numeric"
+              className={IN}
+            />
+          </label>
+          <label>
+            <span className={LB}>차대번호</span>
+            <input value={f.vin} onChange={(e) => set({ vin: e.target.value })} className={IN} />
+          </label>
+        </div>
+
+        <div className="mt-2">
+          <span className={LB}>연료 {req}</span>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {FUEL_TYPES.map((t) => (
+              <button
+                key={t.value}
+                type="button"
+                onClick={() => set({ fuelType: t.value })}
+                className={`rounded-lg border px-3 py-1.5 text-sm ${
+                  f.fuelType === t.value ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white"
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-2">
+          <span className={LB}>차량 형태</span>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {BODY_TYPES.map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => set({ bodyType: f.bodyType === t ? "" : t })}
+                className={`rounded-lg border px-3 py-1.5 text-sm ${
+                  f.bodyType === t ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white"
+                }`}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/*
+        🔴 동의는 손님이 종이에 표시하고 서명한 그대로 옮겨 적는다.
+           프로그램이 대신 정하지 않는다.
+      */}
+      <div className="rounded-xl border border-amber-300 bg-amber-50 p-3">
+        <div className="text-sm font-semibold text-amber-900">개인정보 동의</div>
+        <p className="mt-0.5 text-xs text-amber-800">
+          종이 보고서에서 손님이 표시하신 그대로 눌러 주세요.
+        </p>
+        <div className="mt-2 space-y-1.5">
+          {(
+            [
+              ["consentPrivacy", "개인정보 활용 동의 (필수)"],
+              ["consentMarketing", "뉴스·프로모션 수신 동의 (카카오톡·문자)"],
+              ["michelinMember", "미쉐린 멤버십 가입"],
+            ] as const
+          ).map(([k, label]) => (
+            <label key={k} className="flex items-center gap-2 text-sm text-amber-900">
+              <input
+                type="checkbox"
+                checked={f[k]}
+                onChange={(e) => set({ [k]: e.target.checked } as Partial<NewCustomerInput>)}
+                className="h-5 w-5"
+              />
+              {label}
+            </label>
+          ))}
+          <label className="mt-1 flex items-center gap-2 border-t border-amber-300 pt-2 text-sm font-semibold text-amber-900">
+            <input
+              type="checkbox"
+              checked={f.signed}
+              onChange={(e) => set({ signed: e.target.checked })}
+              className="h-5 w-5"
+            />
+            종이 보고서에 손님 서명을 받았습니다
+          </label>
+        </div>
+        {!f.signed && (
+          <p className="mt-1.5 text-xs text-amber-800">
+            서명을 안 받으면 저장은 되지만 <strong>MARS 고객 등록은 하지 않습니다.</strong>
+          </p>
+        )}
+      </div>
+
+      {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-red-700">{error}</p>}
+
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-600"
+        >
+          취소
+        </button>
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() =>
+            start(async () => {
+              setError(null);
+              const r = await createCustomerAndVehicle(f);
+              if (!r.ok) {
+                setError(r.error);
+                return;
+              }
+              const hits = await searchVehicles(f.plateNo);
+              const v = hits.find((h) => h.vehicleId === r.vehicleId) ?? hits[0];
+              if (v) onCreated(v);
+              else onCancel();
+            })
+          }
+          className="flex-1 rounded-lg bg-slate-900 py-3 font-semibold text-white disabled:opacity-50"
+        >
+          {pending ? "등록 중…" : "등록하고 판매 계속"}
+        </button>
+      </div>
+    </div>
   );
 }
 

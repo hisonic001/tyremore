@@ -54,6 +54,29 @@ export interface MarsEntry {
   phone: string | null;
   plateNo: string | null;
   vehicleModel: string | null;
+
+  /**
+   * ⭐ MARS 에 고객·차량이 없을 때 새로 만들 재료 (2026-08-02).
+   * 사장님 지적 — "신규고객과 차량의 경우에는 필수로 넣어야 등록이 되는 정보들이 있음."
+   *
+   * 🔴 `consentSigned` 가 아니면 MARS 고객 생성을 하지 않는다.
+   *    MARS 고객 등록 화면에는 「고객 서명」 칸이 있다.
+   *    서명받지 않은 것을 「수락된 동의」로 넣으면 안 된다.
+   */
+  newCustomer: {
+    name: string;
+    phone: string | null;
+    address: string | null;
+    consentPrivacy: boolean;
+    consentMarketing: boolean;
+    consentSigned: boolean;
+    plateNo: string;
+    makerName: string | null;
+    model: string | null;
+    year: number | null;
+    fuelType: string | null;
+    mileage: number | null;
+  } | null;
   paymentMethod: string | null;
   total: number;
   memo: string | null;
@@ -74,10 +97,19 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     payment_method: string | null;
     total_amount: number;
     mars_memo: string | null;
+    address: string | null;
+    consent_privacy: boolean | null;
+    consent_marketing: boolean | null;
+    consent_signed_at: Date | null;
+    maker_name: string | null;
+    year: number | null;
+    fuel_type: string | null;
+    mileage: number | null;
   }>(sql`
     SELECT q.id, q.quote_no, q.confirmed_at, q.payment_method, q.total_amount, q.mars_memo,
            c.mars_contact_no AS contact_no, c.name AS customer_name, c.phone,
-           v.plate_no, v.model AS vehicle_model
+           c.address, c.consent_privacy, c.consent_marketing, c.consent_signed_at,
+           v.plate_no, v.model AS vehicle_model, v.maker_name, v.year, v.fuel_type, v.mileage
     FROM quote q
     LEFT JOIN customer c ON c.id = q.customer_id
     LEFT JOIN vehicle  v ON v.id = q.vehicle_id
@@ -135,6 +167,24 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     total: h.total_amount,
     memo: h.mars_memo,
     lines: byQuote.get(Number(h.id)) ?? [],
+    // MARS 연락처 번호가 없으면 = 아직 MARS 에 없는 손님이다
+    newCustomer:
+      !h.contact_no && h.customer_name && h.plate_no
+        ? {
+            name: h.customer_name,
+            phone: h.phone,
+            address: h.address,
+            consentPrivacy: h.consent_privacy ?? false,
+            consentMarketing: h.consent_marketing ?? false,
+            consentSigned: !!h.consent_signed_at,
+            plateNo: h.plate_no,
+            makerName: h.maker_name,
+            model: h.vehicle_model,
+            year: h.year,
+            fuelType: h.fuel_type,
+            mileage: h.mileage,
+          }
+        : null,
   }));
 }
 

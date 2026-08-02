@@ -87,6 +87,95 @@ async function findCustomer(page: Page, plate: string): Promise<boolean> {
   return true;
 }
 
+/**
+ * ⭐ MARS 에 고객·차량을 만든다 (사장님 지적 2026-08-02)
+ *   "신규고객과 차량의 경우에는 필수로 넣어야 등록이 되는 정보들이 있음."
+ *
+ * 🔴 동의는 **손님이 종이에 표시한 그대로**만 넣는다.
+ *    사장님 파이썬 코드는 3개 목적 × 4개 채널을 전부 켜고 서명을 「수락된 동의」로 넣었다.
+ *    그건 손님이 고른 것이 아니다. 여기서는 판매 등록에 적어 둔 값을 따른다.
+ *    서명을 안 받은 손님은 애초에 여기까지 오지 않는다 (호출 쪽에서 막는다).
+ */
+async function createCustomer(
+  page: Page,
+  c: NonNullable<import("../src/lib/mars-queue").MarsEntry["newCustomer"]>,
+) {
+  const f = main(page);
+  await f.getByRole("menuitem", { name: "연락처/고객/차량을 생성합니다" }).click();
+  await f
+    .getByRole("button", { name: "코드, 오름차순 순서로 정렬됨 CASH-B2C", exact: true })
+    .click()
+    .catch(() => {
+      /* 정렬 버튼이 없을 수도 있다 — 없으면 그냥 진행 */
+    });
+
+  await f.getByRole("textbox", { name: "이름", exact: true }).fill(c.name);
+  if (c.address) await f.getByRole("textbox", { name: "주소" }).fill(c.address);
+  if (c.phone) await f.getByRole("textbox", { name: "휴대폰 번호" }).fill(c.phone);
+
+  /**
+   * 동의 표는 목적(행) × 채널(열)이다.
+   *   비즈니스 목적 · 제3자 제공 및 국외 이전  ← 필수 동의 (종이의 「개인정보 활용 동의」)
+   *   마케팅 및 광고 목적                     ← 선택 동의 (종이의 「뉴스·프로모션 수신」)
+   *
+   * 채널은 종이에 있는 것만 켠다 — 카카오톡·문자와 전화.
+   * 이메일은 우리가 아예 받지 않고(D-10), 하드카피도 종이에 없다.
+   */
+  const PURPOSES: [string, boolean][] = [
+    ["비즈니스 목적의 동의", c.consentPrivacy],
+    ["제3자 제공 및 국외 이전에 대한 동의", c.consentPrivacy],
+    ["마케팅 및 광고 목적의 동의", c.consentMarketing],
+  ];
+  const CHANNELS = ["Accepts SMS & KAKAO 알림톡(Bizmessage)", "전화 통화 수락"];
+
+  for (const [purpose, agreed] of PURPOSES) {
+    const row = f.getByRole("row").filter({ hasText: purpose });
+    for (const ch of CHANNELS) {
+      const box = row.getByRole("gridcell", { name: ch }).locator("[role=checkbox]");
+      const now = (await box.getAttribute("aria-checked").catch(() => null)) === "true";
+      if (now !== agreed) await box.click().catch(() => {});
+    }
+    await row
+      .getByRole("combobox", { name: "고객 서명" })
+      .selectOption({ label: agreed ? "수락된 동의" : "거부된 동의" })
+      .catch(async () => {
+        // 「거부된 동의」라는 항목이 없는 화면이면 동의한 것만 표시하고 넘어간다
+        if (agreed) await row.getByRole("combobox", { name: "고객 서명" }).selectOption({ label: "수락된 동의" });
+      });
+  }
+
+  // 차량
+  const sec = f.getByRole("button", { name: "차량" });
+  if ((await sec.getAttribute("aria-expanded")) === "false") {
+    await sec.click();
+    await f.getByRole("textbox", { name: "번호판 번호" }).waitFor({ timeout: 10000 });
+  }
+  await f.getByRole("textbox", { name: "번호판 번호" }).fill(c.plateNo);
+  if (c.fuelType)
+    await f.getByRole("combobox", { name: "차량 종류" }).selectOption({ label: c.fuelType }).catch(() => {});
+  if (c.makerName) await f.getByRole("combobox", { name: "제조사" }).fill(c.makerName);
+  if (c.model) await f.getByRole("combobox", { name: "모델" }).fill(c.model);
+  if (c.year) {
+    await f.getByRole("textbox", { name: "차량 연도" }).fill(String(c.year));
+    const t = new Date();
+    const md = `-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+    await f.getByRole("combobox", { name: "등록 날짜" }).fill(`${c.year}${md}`);
+  }
+  if (c.mileage) await f.getByRole("textbox", { name: "주행거리", exact: true }).fill(String(c.mileage));
+
+  await f.locator(".task-dialog-content").click({ position: { x: 5, y: 5 } });
+
+  // 중복 등 유효성 오류가 뜨면 저장하지 않고 알린다
+  const err = f.locator(".ms-nav-validationmessage-error");
+  if (await err.isVisible({ timeout: 3000 }).catch(() => false)) {
+    throw new Error(`MARS 가 거부했습니다: ${await err.innerText()}`);
+  }
+
+  await page.waitForTimeout(1500);
+  await f.getByRole("button", { name: "확인" }).click();
+  await page.waitForTimeout(2000);
+}
+
 /** 신규 매출 주문을 열고 주행거리·날짜를 넣는다 */
 async function openSalesOrder(page: Page, mileage: number | null, dateISO: string) {
   const f = main(page);
@@ -209,15 +298,25 @@ async function main_() {
       try {
         const found = await findCustomer(page, q.plateNo);
         if (!found) {
+          const c = q.newCustomer;
           /**
-           * 🔴 고객·차량을 새로 만드는 것은 자동으로 하지 않는다.
-           *    개인정보 동의 항목까지 대신 체크하게 되는데, 그건 손님이 서명하는 것이다.
-           *    (사장님 파이썬 코드에는 있었지만 여기서는 일부러 뺐다)
+           * 🔴 서명을 안 받은 손님은 만들지 않는다.
+           *    MARS 고객 등록 화면에는 「고객 서명」 칸이 있다.
+           *    받지도 않은 서명을 「수락된 동의」로 넣을 수는 없다.
            */
-          log("  ⚠️ MARS 에 없는 차량입니다 — 고객·차량 등록은 직접 해 주세요");
-          skipped++;
-          await page.goto("https://mars.tyremore.co.kr/MARS/");
-          continue;
+          if (!c || !c.consentSigned) {
+            log(
+              c
+                ? "  ⚠️ 개인정보 동의 서명이 없어 고객 등록을 하지 않습니다 — 판매 등록에서 서명 확인을 체크해 주세요"
+                : "  ⚠️ MARS 에 없는 차량입니다 — 고객·차량 등록은 직접 해 주세요",
+            );
+            skipped++;
+            await page.goto("https://mars.tyremore.co.kr/MARS/");
+            continue;
+          }
+          log(`  → MARS 에 없는 손님입니다. 새로 만듭니다 (${c.name} ${c.plateNo})`);
+          await createCustomer(page, c);
+          log("    ✅ 고객·차량 등록 완료");
         }
 
         const today = new Date();

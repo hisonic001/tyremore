@@ -22,6 +22,7 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { customer, quote, quoteItem, serviceItem, stockItem, stockMovement, vehicle } from "@/db/schema";
+import type { NewCustomerInput } from "./sale-types";
 
 function refresh(...paths: string[]) {
   for (const p of paths) {
@@ -283,6 +284,94 @@ export async function suggestServices(
     });
   }
   return out;
+}
+
+/* ------------------------------------------------------------------ */
+
+/**
+ * ⭐ MARS 가 새 고객·차량에 요구하는 항목 (사장님 지적 2026-08-02)
+ *
+ *   "신규고객과 차량의 경우에는 필수로 넣어야 등록이 되는 정보들이 있음."
+ *
+ * MARS-auto-register 의 `process_customer_form` / `process_vehicle_form` 에서 확인:
+ *   고객 — 이름 · 주소 · 휴대폰 번호 · 동의 3종 · 고객 서명
+ *   차량 — 번호판 · 차량 종류(영문) · 제조사 · 모델 · 차량 연도 · 주행거리 · 등록 날짜
+ *
+ * 종이 「차량 점검 및 주문 보고서」에 있는 칸과 같다. 그 종이를 대신하는 것이므로
+ * 여기서 다 받아 두면 MARS 에 그대로 넘길 수 있다.
+ */
+export async function createCustomerAndVehicle(
+  input: NewCustomerInput,
+): Promise<{ ok: true; customerId: number; vehicleId: number } | { ok: false; error: string }> {
+  const name = input.name.trim();
+  const plateNo = input.plateNo.trim();
+  if (!name) return { ok: false, error: "이름을 넣어 주세요" };
+  if (!plateNo) return { ok: false, error: "차량번호를 넣어 주세요" };
+  if (!input.address.trim()) return { ok: false, error: "주소를 넣어 주세요 (MARS 필수 항목입니다)" };
+  if (!input.fuelType) return { ok: false, error: "연료를 골라 주세요 (MARS 필수 항목입니다)" };
+
+  const plateNorm = plateNo.replace(/[\s-]/g, "");
+  const phone = input.phone.replace(/[^\d]/g, "");
+
+  // 같은 번호판이 이미 있으면 그것을 쓴다 — 중복 차량을 만들지 않는다
+  const [dupV] = await db
+    .select({ id: vehicle.id, customerId: vehicle.customerId })
+    .from(vehicle)
+    .where(eq(vehicle.plateNoNorm, plateNorm))
+    .limit(1);
+  if (dupV) return { ok: true, customerId: dupV.customerId, vehicleId: dupV.id };
+
+  // 같은 전화번호가 있으면 그 손님의 차량으로 붙인다
+  let customerId: number | null = null;
+  if (phone.length >= 9) {
+    const [dupC] = await db
+      .select({ id: customer.id })
+      .from(customer)
+      .where(sql`replace(replace(${customer.phone},'-',''),' ','') = ${phone}`)
+      .limit(1);
+    customerId = dupC?.id ?? null;
+  }
+
+  const now = new Date();
+  if (!customerId) {
+    const [c] = await db
+      .insert(customer)
+      .values({
+        name,
+        nameSearch: name.replace(/\s/g, "").toLowerCase(),
+        phone: input.phone.trim() || null,
+        address: input.address.trim(),
+        consentPrivacy: input.consentPrivacy,
+        consentMarketing: input.consentMarketing,
+        michelinMember: input.michelinMember,
+        /** 서명을 받았을 때만 시각을 남긴다 — 이게 없으면 MARS 로 안 넘어간다 */
+        consentSignedAt: input.signed ? now : null,
+        type: "개인",
+      })
+      .returning({ id: customer.id });
+    customerId = c.id;
+  }
+
+  const year = Number(input.year.replace(/\D/g, "")) || null;
+  const [v] = await db
+    .insert(vehicle)
+    .values({
+      customerId,
+      plateNo,
+      plateNoNorm: plateNorm,
+      makerName: input.makerName.trim() || null,
+      model: input.model.trim() || null,
+      year,
+      fuelType: input.fuelType,
+      bodyType: input.bodyType || null,
+      vin: input.vin.trim() || null,
+      mileage: Number(input.mileage.replace(/\D/g, "")) || null,
+      mileageAt: input.mileage ? now : null,
+    })
+    .returning({ id: vehicle.id });
+
+  refresh("/sale", "/mars");
+  return { ok: true, customerId, vehicleId: v.id };
 }
 
 /** 서비스·공임 찾기 (직접 추가용) */
