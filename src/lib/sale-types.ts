@@ -9,12 +9,17 @@
  * ⭐ MARS 차량 등록의 「차량 종류」 — 영문으로 받는다.
  * MARS-auto-register 의 vehicle_type_map 에서 확인한 값이다.
  */
+/**
+ * 🔴 값은 **MARS 화면에 있는 그대로**여야 한다 (2026-08-02 사장님 조작을 보고 확인).
+ *    MARS 실제 선택지: Fuel · Hybird · BEV · Diesel  — 그게 전부다.
+ *    - `Hybird` 는 MARS 쪽 오타지만 고쳐 넣으면 선택이 안 된다. 그대로 쓴다.
+ *    - LPG 는 MARS 에 없다. 넣어 뒀다가는 등록이 실패한다.
+ */
 export const FUEL_TYPES = [
   { value: "Fuel", label: "가솔린" },
   { value: "Diesel", label: "디젤" },
-  { value: "Hybrid", label: "하이브리드" },
+  { value: "Hybird", label: "하이브리드" },
   { value: "BEV", label: "전기차" },
-  { value: "LPG", label: "LPG" },
 ] as const;
 
 /** 종이 「차량 점검 및 주문 보고서」의 「차량 형태」 */

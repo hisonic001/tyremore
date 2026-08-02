@@ -39,6 +39,11 @@ const SIGNIN =
 const DRY = process.argv.includes("--dry");
 /** 고객 생성 화면이 실제로 어떻게 생겼는지만 훑고 취소한다 — 아무것도 저장하지 않는다 */
 const INSPECT = process.argv.includes("--inspect");
+/**
+ * 매출 주문만 채우고 전기는 사장님이 하실 때.
+ * 기본은 전기까지 한다 — 전기 안 하면 매출로 안 잡혀 장부가 어긋나기 때문이다.
+ */
+const NO_POST = process.argv.includes("--no-post");
 const LIMIT = (() => {
   const i = process.argv.indexOf("--limit");
   return i >= 0 ? Number(process.argv[i + 1]) || 1 : Infinity;
@@ -280,127 +285,174 @@ async function createCustomer(
 ) {
   const f = main(page);
   await clickAny(page, "연락처/고객/차량을 생성합니다");
-  await page.waitForTimeout(2500);
+  await page.waitForTimeout(3000);
 
   if (INSPECT) {
     await dumpConsentForm(page);
     await f.getByRole("button", { name: "취소", exact: true }).first().click().catch(() => {});
     throw new Error("--inspect 이므로 저장하지 않고 멈춥니다");
   }
-  await f
-    .getByRole("button", { name: "코드, 오름차순 순서로 정렬됨 CASH-B2C", exact: true })
-    .click()
-    .catch(() => {
-      /* 정렬 버튼이 없을 수도 있다 — 없으면 그냥 진행 */
-    });
 
   await f.getByRole("textbox", { name: "이름", exact: true }).fill(c.name);
   if (c.address) await f.getByRole("textbox", { name: "주소" }).fill(c.address);
   if (c.phone) await f.getByRole("textbox", { name: "휴대폰 번호" }).fill(c.phone);
 
   /**
-   * 동의 표는 목적(행) × 채널(열)이다.
-   *   비즈니스 목적 · 제3자 제공 및 국외 이전  ← 필수 동의 (종이의 「개인정보 활용 동의」)
-   *   마케팅 및 광고 목적                     ← 선택 동의 (종이의 「뉴스·프로모션 수신」)
+   * ⭐ 동의 표 — 사장님이 실제로 하시는 것을 보고 그대로 옮겼다 (2026-08-02).
    *
-   * 채널은 종이에 있는 것만 켠다 — 카카오톡·문자와 전화.
-   * 이메일은 우리가 아예 받지 않고(D-10), 하드카피도 종이에 없다.
+   * 목적(행) 3줄 × 채널(열). 화면 글자 대신 `controlname` 으로 짚는다 —
+   * 훨씬 튼튼하고, 글자로 찾다가 계속 헛짚었다.
+   *
+   * 🔴 **줄을 먼저 눌러 활성화한 뒤**에 그 줄의 칸을 눌러야 먹는다.
+   *    이 단계를 빼먹어서 계속 실패했다.
    */
   const PURPOSES: [string, boolean][] = [
-    ["비즈니스 목적의 동의", c.consentPrivacy],
-    ["제3자 제공 및 국외 이전에 대한 동의", c.consentPrivacy],
-    ["마케팅 및 광고 목적의 동의", c.consentMarketing],
+    ["비즈니스 목적", c.consentPrivacy],
+    ["제3자 제공", c.consentPrivacy],
+    ["마케팅 및 광고", c.consentMarketing],
   ];
-  const CHANNELS = ["Accepts SMS & KAKAO 알림톡(Bizmessage)", "전화 통화 수락"];
+  /** 사장님이 켜시는 채널 그대로 (이메일 칸은 손대지 않으신다) */
+  const CHANNELS = ["Accepts SMS", "Accepts Phone Call", "Accepts Hard Copy"];
 
   for (const [purpose, agreed] of PURPOSES) {
-    const row = f.getByRole("row").filter({ hasText: purpose });
+    const row = f.getByRole("row").filter({ hasText: purpose }).first();
+    await row.click({ position: { x: 5, y: 5 } }).catch(() => {}); // 줄 활성화
+
     for (const ch of CHANNELS) {
-      const box = row.getByRole("gridcell", { name: ch }).locator("[role=checkbox]");
+      const box = row.locator(`[controlname="${ch}"]`).first();
+      if (!(await box.isVisible().catch(() => false))) continue;
       const now = (await box.getAttribute("aria-checked").catch(() => null)) === "true";
-      if (now !== agreed) await box.click().catch(() => {});
+      if (now !== agreed) {
+        await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+        await box.click({ timeout: 6000 }).catch(() => {});
+        await page.waitForTimeout(250);
+      }
     }
-    await row
-      .getByRole("combobox", { name: "고객 서명" })
+
+    /**
+     * 🔴 「고객 서명」은 **비워 둘 수 없다.** 비워 뒀다가
+     *    「고객이 서명하지 않은 동의 데이터가 아직 있습니다」로 저장이 막혔다.
+     *    고를 수 있는 값: "" / 수락된 동의 / 거부된 동의
+     */
+    const sign = row.locator('[controlname="Customer Signed"]').first();
+    await sign
       .selectOption({ label: agreed ? "수락된 동의" : "거부된 동의" })
-      .catch(async () => {
-        // 「거부된 동의」라는 항목이 없는 화면이면 동의한 것만 표시하고 넘어간다
-        if (agreed) await row.getByRole("combobox", { name: "고객 서명" }).selectOption({ label: "수락된 동의" });
-      });
+      .catch(() => log(`    ⚠️ 「${purpose}」의 고객 서명을 못 골랐습니다`));
+    await page.waitForTimeout(250);
   }
 
-  // 차량
-  const sec = f.getByRole("button", { name: "차량" });
-  if ((await sec.getAttribute("aria-expanded")) === "false") {
-    await sec.click();
-    await f.getByRole("textbox", { name: "번호판 번호" }).waitFor({ timeout: 10000 });
-  }
+  // ── 차량 ──
   await f.getByRole("textbox", { name: "번호판 번호" }).fill(c.plateNo);
-  if (c.fuelType)
-    await f.getByRole("combobox", { name: "차량 종류" }).selectOption({ label: c.fuelType }).catch(() => {});
-  if (c.makerName) await f.getByRole("combobox", { name: "제조사" }).fill(c.makerName);
-  if (c.model) await f.getByRole("combobox", { name: "모델" }).fill(c.model);
+  if (c.fuelType) {
+    // Fuel · Hybird · BEV · Diesel — MARS 화면에 있는 그대로여야 한다
+    await f
+      .getByRole("combobox", { name: "차량 종류" })
+      .selectOption({ label: c.fuelType })
+      .catch(() => log(`    ⚠️ 차량 종류 「${c.fuelType}」를 못 골랐습니다`));
+  }
+  if (c.makerName) await f.getByRole("combobox", { name: "제조사" }).fill(c.makerName).catch(() => {});
+  if (c.model) await f.getByRole("combobox", { name: "모델" }).fill(c.model).catch(() => {});
   if (c.year) {
-    await f.getByRole("textbox", { name: "차량 연도" }).fill(String(c.year));
-    const t = new Date();
-    const md = `-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
-    await f.getByRole("combobox", { name: "등록 날짜" }).fill(`${c.year}${md}`);
+    await f.getByRole("textbox", { name: "차량 연도" }).fill(String(c.year)).catch(() => {});
   }
-  if (c.mileage) await f.getByRole("textbox", { name: "주행거리", exact: true }).fill(String(c.mileage));
-
-  await f.locator(".task-dialog-content").click({ position: { x: 5, y: 5 } });
-
-  // 중복 등 유효성 오류가 뜨면 저장하지 않고 알린다
-  const err = f.locator(".ms-nav-validationmessage-error");
-  if (await err.isVisible({ timeout: 3000 }).catch(() => false)) {
-    throw new Error(`MARS 가 거부했습니다: ${await err.innerText()}`);
+  if (c.mileage) {
+    await f.locator('[controlname="VehicleMileage"]').first().fill(String(c.mileage)).catch(() => {});
   }
-
-  await page.waitForTimeout(1500);
-  await f.getByRole("button", { name: "확인", exact: true }).last().click();
-  await page.waitForTimeout(2500);
+  await page.waitForTimeout(800);
 
   /**
-   * 🔴 **저장됐는지 반드시 확인한다.** (2026-08-02)
-   *    전에는 「확인」을 누르고 바로 성공이라고 적었다. 그런데 MARS 가
-   *    「고객이 서명하지 않은 동의 데이터가 아직 있습니다」라며 막고 있었고,
-   *    화면에는 창이 그대로 떠 있는데 로그에는 ✅ 라고 찍혔다.
-   *    사장님께 거짓으로 보고한 셈이다. 다시는 그러지 않는다.
+   * 🔴 「확인」이 **두 번** 필요하다 (2026-08-02 사장님 조작에서 확인).
+   *    ① 생성 창의 확인  ② 뒤따라 뜨는 Dialog 의 확인
+   *    전에는 ①만 누르고 성공으로 적었다.
    */
-  const notice = f.getByText(/동의 데이터가 아직|입력해야|필수|이미 존재/).first();
-  if (await notice.isVisible({ timeout: 2500 }).catch(() => false)) {
-    throw new Error(`MARS 가 저장을 막았습니다: ${(await notice.textContent())?.trim()}`);
+  await f.locator('button[controlname="KOR Cust Contact Veh. Creation"]', { hasText: "확인" }).first()
+    .click({ timeout: 10000 })
+    .catch(async () => {
+      await f.getByRole("button", { name: "확인", exact: true }).last().click({ timeout: 10000 });
+    });
+  await page.waitForTimeout(2000);
+
+  const blocked = f.getByText(/동의 데이터가 아직|입력해야|이미 존재|필수입니다/).first();
+  if (await blocked.isVisible({ timeout: 2000 }).catch(() => false)) {
+    throw new Error(`MARS 가 저장을 막았습니다: ${(await blocked.textContent())?.trim()}`);
   }
-  const stillOpen = f.getByRole("textbox", { name: "번호판 번호" });
-  if (await stillOpen.isVisible({ timeout: 2000 }).catch(() => false)) {
+
+  // ② 뒤따르는 확인 창
+  const second = f.locator('button[controlname="Dialog"]', { hasText: "확인" }).first();
+  if (await second.isVisible({ timeout: 6000 }).catch(() => false)) {
+    await second.click().catch(() => {});
+    await page.waitForTimeout(2000);
+  }
+
+  /** 창이 실제로 닫혔는지 본다 — 안 닫혔으면 저장되지 않은 것이다 */
+  if (await f.getByRole("textbox", { name: "번호판 번호" }).isVisible({ timeout: 2500 }).catch(() => false)) {
     throw new Error("고객 생성 창이 닫히지 않았습니다 — 저장되지 않았습니다");
   }
 }
 
-/** 신규 매출 주문을 열고 주행거리·날짜를 넣는다 */
-async function openSalesOrder(page: Page, mileage: number | null, dateISO: string) {
+/** 우리 결제 방법 → MARS 결제 수단 코드 */
+const PAY_CODE: Record<string, string> = {
+  카드: "CREDITCARD",
+  현금: "CASH",
+  계좌이체: "BANK",
+};
+
+/** 신규 매출 주문을 열고 고객·주행거리·결제·날짜를 넣는다 */
+async function openSalesOrder(
+  page: Page,
+  plate: string,
+  mileage: number | null,
+  dateISO: string,
+  payCode: string | null,
+) {
   const f = main(page);
   await clickAny(page, "판매 내역");
   await passBigSearchDialog(page);
   await clickAny(page, "신규");
   await clickAny(page, "신규 매출 주문");
+  await page.waitForTimeout(2500);
 
-  const more = f.getByRole("button", { name: "일반, 더 보기" });
-  await more.waitFor({ timeout: 15000 });
-  if ((await more.getAttribute("aria-expanded")) === "false") {
-    await more.click();
+  /**
+   * 🔴 **고객·차량을 다시 고르는 창이 먼저 뜬다** (2026-08-02 사장님 조작에서 확인).
+   *    내 코드에는 이 단계가 아예 없어서 바로 주행거리부터 넣으려다 실패했다.
+   *    번호판으로 찾아 「차량」 줄을 고르고 확인을 누른다.
+   */
+  const pick = f.locator('[controlname="NameLicensePlate"]').first();
+  if (await pick.isVisible({ timeout: 8000 }).catch(() => false)) {
+    await pick.fill(plate);
+    await pick.press("Enter");
+    await page.waitForTimeout(2500);
+    // 결과에서 「차량」 줄을 고른다 (고객 줄이 아니라 차량 줄이어야 주행거리가 붙는다)
+    const veh = f.getByRole("row").filter({ hasText: plate }).first();
+    await veh.click({ position: { x: 5, y: 5 } }).catch(() => {});
     await page.waitForTimeout(500);
+    await f
+      .locator('button[controlname="Contact Search Results"]', { hasText: "확인" })
+      .first()
+      .click({ timeout: 8000 })
+      .catch(async () => {
+        await f.getByRole("button", { name: "확인", exact: true }).last().click({ timeout: 8000 });
+      });
+    await page.waitForTimeout(2500);
   }
 
-  const km = f.getByRole("textbox", { name: "현재 주행거리" });
-  await km.waitFor({ state: "visible", timeout: 10000 });
-  if (mileage) await km.fill(String(mileage));
+  const km = f.locator('[controlname="Mileage"]').first();
+  await km.waitFor({ state: "visible", timeout: 20000 });
+  if (mileage) {
+    await km.fill(String(mileage));
+    await km.press("Tab");
+  }
 
-  await f.getByRole("combobox", { name: "문서 날짜" }).fill(dateISO);
-  const done = f.getByRole("combobox", { name: "완료 일자" });
-  await done.fill(dateISO);
-  // Tab 을 눌러야 아래 표가 뜬다
-  await done.press("Tab");
+  // 결제 수단·조건 — 우리가 이미 알고 있는 값이다
+  if (payCode) {
+    for (const cn of ["<Payment Method Code_2>", "<Payment Terms Code_2>"]) {
+      await f.locator(`[controlname="${cn}"]`).first().fill(payCode).catch(() => {});
+      await page.waitForTimeout(400);
+    }
+  }
+
+  await f.locator('[controlname="Document Date"]').first().fill(dateISO).catch(() => {});
+  await page.waitForTimeout(1200);
 }
 
 /** 품목 표를 채운다 */
@@ -410,9 +462,11 @@ async function fillLines(
 ) {
   const f = main(page);
   const grid = f.locator("div[controlname='Sales Order Subform']");
-  await grid.waitFor({ state: "visible", timeout: 20000 });
+  await grid.waitFor({ state: "visible", timeout: 25000 });
   await grid.scrollIntoViewIfNeeded();
 
+  /** 실제로 넣은 줄 수 — 건너뛴 줄이 있으면 다음 행 위치가 달라진다 */
+  let put = 0;
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
     if (!l.no) {
@@ -421,33 +475,95 @@ async function fillLines(
     }
     const row = grid.locator("tr.real-current");
 
-    // 유형: 타이어·부품은 「상품」, 공임은 「서비스」
-    await row.getByRole("combobox", { name: "유형" }).selectOption({
-      label: l.kind === "tire" ? "상품" : "서비스",
-    });
+    /**
+     * ⭐ 유형은 **숫자 값**으로 고른다 (2026-08-02 사장님 조작에서 확인).
+     *    ["", "G/L 계정", "상품", "자원", "고정 자산", "요금(품목)"] → 상품=2, 자원=3
+     *    🔴 「서비스」라는 항목은 **없다.** 공임은 「자원」이다.
+     *       없는 이름을 찾고 있었으니 공임 줄은 전부 실패했을 것이다.
+     */
+    await row
+      .locator('[controlname="Type"]')
+      .first()
+      .selectOption(l.kind === "tire" ? "2" : "3");
+    await page.waitForTimeout(500);
 
-    const no = row.getByRole("combobox", { name: "번호", exact: true });
+    /**
+     * 품번을 그대로 친다.
+     * 사장님은 규격·모델명으로 찾으신다 (「225/55R17」 → 「h745」, 약 2분).
+     * 우리는 품번을 이미 갖고 있으니 그 검색 단계를 통째로 건너뛴다.
+     */
+    const no = row.locator('[controlname="No."]').first();
     await no.fill(l.no);
     await no.press("Tab");
-    await page.waitForTimeout(1200); // 품번을 넣으면 이름·기본가를 불러온다
+    await page.waitForTimeout(1600); // 품번을 넣으면 이름·기본가를 불러온다
 
-    const qty = row.getByLabel("수량", { exact: true });
+    const qty = row.locator('[controlname="Quantity"]').first();
     await qty.evaluate(SET_VALUE, String(l.qty));
     await qty.press("Enter");
+    await page.waitForTimeout(600);
 
     // ⭐ MARS 도 「단가 부가세 포함」으로 받는다 — 우리 판매가와 기준이 같다
-    const price = row.getByLabel("단가 부가세 포함");
+    const price = row.locator('[controlname="Unit Price"]').first();
     await price.evaluate(SET_VALUE, String(l.unitPrice));
     await price.press("Enter");
+    await page.waitForTimeout(600);
 
     log(`    ✅ ${l.no}  ${l.marsName.slice(0, 34)}  ×${l.qty}  ${l.unitPrice.toLocaleString()}원`);
+    put++;
 
     if (i < lines.length - 1) {
-      // 다음 줄로 내린다 — 늘 두 번째 행 머리글을 누르는 것이 가장 안정적이었다
-      await f.getByRole("rowheader").nth(i + 1).click();
-      await page.waitForTimeout(500);
+      await f.getByRole("rowheader").nth(put).click().catch(() => {});
+      await page.waitForTimeout(700);
     }
   }
+  return put;
+}
+
+/**
+ * ⭐ 전기 — 사장님 지시로 자동화한다 (2026-08-02)
+ *
+ *   "전기를 자동으로 안하면 매출로 안잡혀서 재고 및 매출관리에 문제가 있어.
+ *    그러니 전기까지 자동으로 진행해도 됨."
+ *
+ * 맞는 말씀이다. 전기하지 않은 매출 주문은 장부에 안 잡히므로
+ * 반쪽짜리 자동화가 오히려 재고·매출을 어긋나게 만든다. (D-08 을 뒤집는 결정)
+ *
+ * 🔴 사람이 확인하던 자리를 **빈칸으로 두지 않는다.**
+ *    직전에 화면 금액과 우리 판매 합계를 대조하고, 안 맞으면 하지 않는다.
+ *    사람 눈보다 이쪽이 정확하다.
+ */
+async function postOrder(page: Page, expectTotal: number): Promise<string | null> {
+  const f = main(page);
+
+  const before = (await f.locator("body").innerText().catch(() => "")) || "";
+  const nums = [...before.matchAll(/[\d,]{5,}/g)].map((m) => Number(m[0].replace(/,/g, "")));
+  const excl = Math.round(expectTotal / 1.1);
+  if (!nums.some((n) => n === expectTotal || Math.abs(n - excl) <= 2)) {
+    throw new Error(
+      `합계가 안 맞습니다 — 우리 ${expectTotal.toLocaleString()}원(공급가 ${excl.toLocaleString()}), ` +
+        `MARS 화면 값 ${nums.slice(-6).join(", ") || "없음"}. 전기하지 않았습니다`,
+    );
+  }
+  log(`    · 합계 확인 ${expectTotal.toLocaleString()}원 (공급가 ${excl.toLocaleString()})`);
+
+  await clickAny(page, "전기");
+  await page.waitForTimeout(900);
+  await clickAny(page, "전기...");
+  await page.waitForTimeout(1500);
+
+  // 전기 옵션 창 — 기본값 그대로 확인 (사장님도 그렇게 하신다)
+  await f
+    .locator('button[controlname="String Menu"]', { hasText: "확인" })
+    .first()
+    .click({ timeout: 20000 })
+    .catch(async () => {
+      await f.getByRole("button", { name: "확인", exact: true }).last().click({ timeout: 20000 });
+    });
+  await page.waitForTimeout(6000);
+
+  /** 전기되면 송장 번호가 생긴다 — 예: 61168583-23SI+003137 */
+  const after = (await f.locator("body").innerText().catch(() => "")) || "";
+  return /\d{8}-\d{2}SI\+\d{6}/.exec(after)?.[0] ?? null;
 }
 
 async function main_() {
@@ -550,12 +666,27 @@ async function main_() {
 
         const today = new Date();
         const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-        await openSalesOrder(page, null, iso);
-        await fillLines(page, q.lines);
+        await openSalesOrder(page, q.plateNo, q.newCustomer?.mileage ?? null, iso, PAY_CODE[q.paymentMethod ?? ""] ?? null);
+        const put = await fillLines(page, q.lines);
 
-        await markEntered(q.quoteId, `자동입력 ${iso}`);
+        /**
+         * 🔴 넣은 줄 수가 다르면 전기하지 않는다.
+         *    품번 없는 상품을 건너뛴 채 전기하면 매출이 모자란 채로 확정된다.
+         */
+        if (put !== q.lines.length) {
+          throw new Error(`${q.lines.length}줄 중 ${put}줄만 들어갔습니다 — 전기하지 않았습니다`);
+        }
+
+        let invoiceNo: string | null = null;
+        if (NO_POST) {
+          log("  ✅ 매출 주문을 채웠습니다 — --no-post 이므로 전기는 안 했습니다");
+        } else {
+          invoiceNo = await postOrder(page, q.total);
+          log(`  ✅ 전기 완료${invoiceNo ? ` — 송장 ${invoiceNo}` : " (송장번호를 못 읽었습니다)"}`);
+        }
+
+        await markEntered(q.quoteId, invoiceNo ?? `자동입력 ${iso}`);
         ok++;
-        log("  ✅ 매출 주문을 채웠습니다 — 전기는 안 했습니다");
         await page.goto("https://mars.tyremore.co.kr/MARS/");
         await waitHome(page, 40000);
       } catch (e) {
