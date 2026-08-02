@@ -1,6 +1,8 @@
 import { config } from "dotenv";
 config({ path: ".env.local" });
 
+import { execSync } from "node:child_process";
+import path from "node:path";
 import { chromium, type FrameLocator, type Page } from "playwright";
 
 /**
@@ -35,6 +37,8 @@ const SIGNIN =
   "https://mars.tyremore.co.kr/MARS/SignIn?ReturnUrl=%2FMARS%2F%3Ftenant%3D61168583";
 
 const DRY = process.argv.includes("--dry");
+/** 고객 생성 화면이 실제로 어떻게 생겼는지만 훑고 취소한다 — 아무것도 저장하지 않는다 */
+const INSPECT = process.argv.includes("--inspect");
 const LIMIT = (() => {
   const i = process.argv.indexOf("--limit");
   return i >= 0 ? Number(process.argv[i + 1]) || 1 : Infinity;
@@ -49,42 +53,216 @@ const SET_VALUE =
 
 const log = (s: string) => console.log(s);
 
-async function login(page: Page, id: string, pw: string): Promise<boolean> {
-  log("로그인합니다…");
-  await page.goto(SIGNIN);
-  await page.locator("input#UserName").fill(id);
-  await page.locator("input#Password").fill(pw);
-  await page.locator("button#submitButton").click();
+/**
+ * ⭐ 같은 이름이 button 으로도 menuitem 으로도 있다 (2026-08-02 화면 훑어서 확인).
+ *   「고객 정보 검색」·「매출 주문」이 그렇다. 어느 쪽이든 되는 것을 누른다.
+ */
+async function clickAny(page: Page, name: string, timeout = 20000): Promise<void> {
+  const f = main(page);
+  const cands = [
+    f.getByRole("button", { name, exact: true }),
+    f.getByRole("menuitem", { name, exact: true }),
+    f.getByRole("button", { name }),
+    f.getByRole("menuitem", { name }),
+  ];
+  const until = Date.now() + timeout;
+  let last = "";
+  while (Date.now() < until) {
+    for (const c of cands) {
+      const el = c.first();
+      if (!(await el.isVisible().catch(() => false))) continue;
+      try {
+        await el.click({ timeout: 4000 });
+        return;
+      } catch (e) {
+        last = (e as Error).message.split("\n")[0];
+      }
+    }
+    await page.waitForTimeout(700);
+  }
+  throw new Error(`「${name}」을 누르지 못했습니다${last ? ` (${last})` : ""}`);
+}
+
+/**
+ * 🔴 시작 화면이 준비될 때까지 기다린다.
+ *
+ * 첫 시도가 여기서 죽었다 — 로그인 팝업을 닫자마자 바로 눌렀더니
+ * 화면이 아직 그려지는 중이라 30초를 기다리다 실패했다 (2026-08-02).
+ * 「고객 정보 검색」이 실제로 보일 때까지 기다리고, 그 사이 뜨는 팝업은 닫는다.
+ */
+async function waitHome(page: Page, timeout = 90000): Promise<boolean> {
+  const f = main(page);
+  const anchor = f.getByRole("button", { name: "고객 정보 검색" }).first();
+  const until = Date.now() + timeout;
+  while (Date.now() < until) {
+    if (await anchor.isVisible().catch(() => false)) {
+      await page.waitForTimeout(800); // 그려지는 것을 마저 기다린다
+      return true;
+    }
+    // 걸리적거리는 팝업이 있으면 닫는다
+    for (const n of ["확인", "닫기"]) {
+      const b = f.getByRole("button", { name: n, exact: true }).first();
+      if (await b.isVisible().catch(() => false)) {
+        await b.click({ timeout: 3000 }).catch(() => {});
+        await page.waitForTimeout(1200);
+      }
+    }
+    await page.waitForTimeout(1000);
+  }
+  return false;
+}
+
+/**
+ * ⭐ 로그인 (사장님 확인 2026-08-02)
+ *   "mars_id와 password는 필요없음. 어차피 자동 로그인이 설정되어서
+ *    링크로 이동하면 바로 mars 시작 화면이 크롬에서 켜질 것임."
+ *
+ * 🔴 그런데 그 자동 로그인은 **사장님 Chrome 프로필**에 저장돼 있다.
+ *    Playwright 는 기본적으로 **빈 프로필**로 새 브라우저를 띄우므로 그대로는 안 된다.
+ *    그래서 전용 프로필 폴더를 하나 두고 계속 쓴다 —
+ *    **처음 한 번만** 사장님이 창에서 로그인하시면 그 뒤로는 저절로 들어간다.
+ *
+ * 아이디·비밀번호를 .env.local 에 넣어 두셨으면 그것으로 채운다. 없으면 기다린다.
+ */
+async function login(page: Page): Promise<boolean> {
+  log("MARS 를 엽니다…");
+  await page.goto(SIGNIN, { waitUntil: "domcontentloaded" });
+
+  const idBox = page.locator("input#UserName");
+  const frameReady = () => main(page).getByRole("button", { name: "확인" }).first();
+
+  // 이미 로그인돼 있으면 시작 화면이 바로 뜬다
+  const already = await frameReady()
+    .waitFor({ timeout: 12000 })
+    .then(() => true)
+    .catch(() => false);
+
+  if (!already && (await idBox.isVisible().catch(() => false))) {
+    const id = process.env.MARS_ID;
+    const pw = process.env.MARS_PASSWORD;
+    if (id && pw) {
+      log("  로그인 화면입니다 — .env.local 의 계정으로 들어갑니다");
+      await idBox.fill(id);
+      await page.locator("input#Password").fill(pw);
+      await page.locator("button#submitButton").click();
+    } else {
+      /**
+       * 🔴 비밀번호를 대신 치지 않는다. 사장님이 창에서 직접 로그인하신다.
+       *    한 번만 하시면 프로필에 남아 다음부터는 안 물어본다.
+       */
+      log("");
+      log("  ".padEnd(58, "─"));
+      log("  🔑 뜬 창에서 직접 로그인해 주세요.");
+      log("     이 프로필은 그대로 남아서 다음부터는 안 물어봅니다.");
+      log("     로그인이 끝나면 알아서 이어집니다 (최대 5분 기다립니다)");
+      log("  ".padEnd(58, "─"));
+      log("");
+    }
+  }
+
   try {
-    await main(page).getByRole("button", { name: "확인" }).waitFor({ timeout: 20000 });
-    await main(page).getByRole("button", { name: "확인" }).click();
-    log("  로그인 성공\n");
-    return true;
+    await frameReady().waitFor({ timeout: 300_000 }); // 사람이 로그인할 시간
   } catch {
-    log("  ⚠️ 로그인 실패 — 아이디·비밀번호를 확인해 주세요");
+    log("  ⚠️ 로그인 화면을 벗어나지 못했습니다");
     return false;
   }
+
+  log("  ✅ 로그인 상태 확인 — 시작 화면을 기다립니다");
+  if (!(await waitHome(page))) {
+    log("  ⚠️ 시작 화면이 뜨지 않았습니다 (「고객 정보 검색」을 못 찾음)");
+    return false;
+  }
+  log("  ✅ 시작 화면 준비됨\n");
+  return true;
+}
+
+/**
+ * 🔴 「50개 이상의 레코드가 발견되었습니다. 진행 하시겠습니까?」
+ *
+ * 고객 정보 검색을 열면 연락처 2,600건을 다 불러오려다 이 창이 뜬다.
+ * 이게 떠 있으면 **뒤 화면을 아무것도 못 누른다.** 첫 시도가 여기서 막혔다 (2026-08-02).
+ * 읽기만 하는 조회라 「예」로 진행한다.
+ */
+async function passBigSearchDialog(page: Page): Promise<boolean> {
+  const f = main(page);
+  const ask = f.getByText("50개 이상의 레코드", { exact: false }).first();
+  if (!(await ask.isVisible().catch(() => false))) return false;
+  log("    · 「50개 이상의 레코드」 창을 넘깁니다");
+  await f.getByRole("button", { name: "예", exact: true }).first().click({ timeout: 8000 }).catch(() => {});
+  await page.waitForTimeout(2500);
+  return true;
 }
 
 /**
  * 번호판으로 고객을 찾는다.
- * 「(이 보기에 표시할 내용이 없음)」이 보이면 등록 안 된 손님이다.
+ *
+ * ⚠️ 「판매 내역」이 보인다고 찾은 것이 아니다 — 그건 검색 결과 화면의
+ *    **툴바 버튼이라 늘 있다.** 그걸 근거로 삼았다가 없는 손님을 찾았다고 오해했다.
+ *    MARS 는 딱 맞는 것이 있으면 **고객 화면으로 저절로 넘어간다.**
+ *    그러니 「이름/번호판 번호」 칸이 사라졌는지로 판단한다.
  */
 async function findCustomer(page: Page, plate: string): Promise<boolean> {
   const f = main(page);
-  await f.getByRole("button", { name: "고객 정보 검색" }).click();
+  await clickAny(page, "고객 정보 검색");
+  await passBigSearchDialog(page);
+
   const box = f.getByRole("textbox", { name: "이름/번호판 번호" });
-  await box.waitFor({ timeout: 10000 });
+  await box.waitFor({ timeout: 15000 });
   await box.fill(plate);
   await box.press("Enter");
-  await page.waitForTimeout(3000);
+  await page.waitForTimeout(2000);
+  await passBigSearchDialog(page);
 
   const empty = f.getByText("(이 보기에 표시할 내용이 없음)", { exact: true });
-  if (await empty.isVisible().catch(() => false)) return false;
+  const until = Date.now() + 20000;
+  while (Date.now() < until) {
+    // 검색 칸이 사라졌으면 고객 화면으로 넘어간 것이다 = 찾았다
+    if (!(await box.isVisible().catch(() => false))) {
+      await f.getByRole("menuitem", { name: "판매 내역" }).first().waitFor({ timeout: 15000 });
+      return true;
+    }
+    if (await empty.isVisible().catch(() => false)) return false;
+    await passBigSearchDialog(page);
+    await page.waitForTimeout(1000);
+  }
+  return false;
+}
 
-  // 찾으면 고객 상세로 저절로 넘어간다 — 「판매 내역」 메뉴가 보이면 준비된 것이다
-  await f.getByRole("menuitem", { name: "판매 내역" }).waitFor({ timeout: 15000 });
-  return true;
+/** 고객 생성 화면의 동의 표가 실제로 어떻게 생겼는지 찍어 본다 (--inspect) */
+async function dumpConsentForm(page: Page) {
+  const f = main(page);
+  log("\n── 「고객 서명」 고를 수 있는 값 ──");
+  const sel = f.getByRole("combobox", { name: "고객 서명" });
+  const n = await sel.count().catch(() => 0);
+  log(`   셀렉트 ${n}개`);
+  for (let i = 0; i < n; i++) {
+    const opts = await sel
+      .nth(i)
+      .evaluate((el) => Array.from((el as HTMLSelectElement).options).map((o) => o.label))
+      .catch(() => null);
+    const cur = await sel.nth(i).inputValue().catch(() => "?");
+    log(`   [${i}] 현재="${cur}"  값=${opts ? JSON.stringify(opts) : "(select 태그가 아님 — 눌러서 고르는 방식)"}`);
+  }
+
+  log("\n── 동의 표 행별 상태 ──");
+  for (const key of ["비즈니스 목적", "마케팅 및 광고", "제3자 제공"]) {
+    const row = f.getByRole("row").filter({ hasText: key }).first();
+    if (!(await row.isVisible().catch(() => false))) {
+      log(`   ${key} → 행 못 찾음`);
+      continue;
+    }
+    log(`   ${key}`);
+    const cells = row.getByRole("gridcell");
+    const cn = await cells.count().catch(() => 0);
+    for (let i = 0; i < cn; i++) {
+      const name = (await cells.nth(i).getAttribute("aria-label").catch(() => null)) ?? "";
+      const txt = (await cells.nth(i).textContent().catch(() => ""))?.replace(/\s+/g, " ").trim() ?? "";
+      const cb = cells.nth(i).locator("[role=checkbox]");
+      const has = (await cb.count().catch(() => 0)) > 0;
+      const st = has ? await cb.first().getAttribute("aria-checked").catch(() => "?") : null;
+      log(`      ${i}. ${(name || txt).slice(0, 40)}${has ? `  [체크=${st}]` : ""}`);
+    }
+  }
 }
 
 /**
@@ -101,7 +279,14 @@ async function createCustomer(
   c: NonNullable<import("../src/lib/mars-queue").MarsEntry["newCustomer"]>,
 ) {
   const f = main(page);
-  await f.getByRole("menuitem", { name: "연락처/고객/차량을 생성합니다" }).click();
+  await clickAny(page, "연락처/고객/차량을 생성합니다");
+  await page.waitForTimeout(2500);
+
+  if (INSPECT) {
+    await dumpConsentForm(page);
+    await f.getByRole("button", { name: "취소", exact: true }).first().click().catch(() => {});
+    throw new Error("--inspect 이므로 저장하지 않고 멈춥니다");
+  }
   await f
     .getByRole("button", { name: "코드, 오름차순 순서로 정렬됨 CASH-B2C", exact: true })
     .click()
@@ -172,16 +357,33 @@ async function createCustomer(
   }
 
   await page.waitForTimeout(1500);
-  await f.getByRole("button", { name: "확인" }).click();
-  await page.waitForTimeout(2000);
+  await f.getByRole("button", { name: "확인", exact: true }).last().click();
+  await page.waitForTimeout(2500);
+
+  /**
+   * 🔴 **저장됐는지 반드시 확인한다.** (2026-08-02)
+   *    전에는 「확인」을 누르고 바로 성공이라고 적었다. 그런데 MARS 가
+   *    「고객이 서명하지 않은 동의 데이터가 아직 있습니다」라며 막고 있었고,
+   *    화면에는 창이 그대로 떠 있는데 로그에는 ✅ 라고 찍혔다.
+   *    사장님께 거짓으로 보고한 셈이다. 다시는 그러지 않는다.
+   */
+  const notice = f.getByText(/동의 데이터가 아직|입력해야|필수|이미 존재/).first();
+  if (await notice.isVisible({ timeout: 2500 }).catch(() => false)) {
+    throw new Error(`MARS 가 저장을 막았습니다: ${(await notice.textContent())?.trim()}`);
+  }
+  const stillOpen = f.getByRole("textbox", { name: "번호판 번호" });
+  if (await stillOpen.isVisible({ timeout: 2000 }).catch(() => false)) {
+    throw new Error("고객 생성 창이 닫히지 않았습니다 — 저장되지 않았습니다");
+  }
 }
 
 /** 신규 매출 주문을 열고 주행거리·날짜를 넣는다 */
 async function openSalesOrder(page: Page, mileage: number | null, dateISO: string) {
   const f = main(page);
-  await f.getByRole("menuitem", { name: "판매 내역" }).click();
-  await f.getByRole("menuitem", { name: "신규" }).click();
-  await f.getByRole("menuitem", { name: "신규 매출 주문" }).click();
+  await clickAny(page, "판매 내역");
+  await passBigSearchDialog(page);
+  await clickAny(page, "신규");
+  await clickAny(page, "신규 매출 주문");
 
   const more = f.getByRole("button", { name: "일반, 더 보기" });
   await more.waitFor({ timeout: 15000 });
@@ -249,14 +451,6 @@ async function fillLines(
 }
 
 async function main_() {
-  const id = process.env.MARS_ID;
-  const pw = process.env.MARS_PASSWORD;
-  if (!id || !pw) {
-    log("⚠️ .env.local 에 MARS_ID / MARS_PASSWORD 를 넣어 주세요.");
-    log("   (이 파일은 깃허브에도 Vercel 에도 올라가지 않습니다)");
-    process.exit(1);
-  }
-
   const { marsQueue, markEntered } = await import("../src/lib/mars-queue");
   const queue = (await marsQueue()).slice(0, LIMIT);
 
@@ -273,18 +467,53 @@ async function main_() {
     process.exit(0);
   }
 
-  // 사장님이 눈으로 보실 수 있게 창을 띄운다. 설치된 Chrome 이 있으면 그것을 쓴다
-  const browser = await chromium
-    .launch({ headless: false, channel: "chrome" })
-    .catch(() => chromium.launch({ headless: false }));
-  const page = await browser.newPage();
+  /**
+   * ⭐ 전용 Chrome 프로필을 계속 쓴다 — 로그인 상태가 남는다.
+   *   사장님이 평소 쓰시는 Chrome 프로필을 그대로 쓰려면 Chrome 을 완전히 닫아야 해서
+   *   (프로필이 잠긴다) 일부러 따로 둔다. 처음 한 번만 로그인하시면 된다.
+   */
+  const profileDir =
+    process.env.MARS_PROFILE_DIR ?? path.resolve(process.cwd(), "..", "tyremore-data", "chrome-mars");
+  log(`  브라우저 프로필: ${profileDir}`);
+
+  /**
+   * 🔴 지난번 창이 안 닫혔으면 프로필이 잠겨 있어 브라우저가 안 뜬다 (2026-08-02).
+   *    이 프로필을 쓰는 창만 골라 닫는다 — 사장님이 평소 쓰시는 Chrome 은 건드리지 않는다.
+   */
+  try {
+    const leaf = path.basename(profileDir);
+    execSync(
+      `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name='chrome.exe'\\" | ` +
+        `Where-Object { $_.CommandLine -like '*${leaf}*' } | ` +
+        `ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"`,
+      { stdio: "ignore", timeout: 20000 },
+    );
+  } catch {
+    /* 없으면 그만이다 */
+  }
+  log("");
+
+  const ctx = await chromium
+    .launchPersistentContext(profileDir, {
+      headless: false,
+      channel: "chrome",
+      viewport: null,
+      args: ["--start-maximized"],
+    })
+    .catch(async (e) => {
+      log(`  ⚠️ 설치된 Chrome 으로 못 열었습니다: ${(e as Error).message.split("\n")[0]}`);
+      log("     내장 브라우저로 시도합니다 (없으면 npx playwright install chromium)");
+      return chromium.launchPersistentContext(profileDir, { headless: false, viewport: null });
+    });
+
+  const page = ctx.pages()[0] ?? (await ctx.newPage());
   page.setDefaultTimeout(30000);
 
   let ok = 0;
   let skipped = 0;
   try {
-    if (!(await login(page, id, pw))) {
-      await browser.close();
+    if (!(await login(page))) {
+      await ctx.close();
       process.exit(1);
     }
 
@@ -328,11 +557,19 @@ async function main_() {
         ok++;
         log("  ✅ 매출 주문을 채웠습니다 — 전기는 안 했습니다");
         await page.goto("https://mars.tyremore.co.kr/MARS/");
-        await page.waitForTimeout(1500);
+        await waitHome(page, 40000);
       } catch (e) {
         skipped++;
         log(`  ⚠️ 실패: ${(e as Error).message.split("\n")[0]}`);
+        /**
+         * 어디서 막혔는지 나중에 볼 수 있게 남긴다.
+         * 화면 조작은 MARS 가 바뀌면 어긋난다 — 그때 이 그림이 유일한 단서다.
+         */
+        const shot = path.resolve(process.cwd(), "..", "tyremore-data", `mars-오류-${q.quoteNo}.png`);
+        await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
+        log(`     화면을 저장했습니다: ${shot}`);
         await page.goto("https://mars.tyremore.co.kr/MARS/").catch(() => {});
+        await waitHome(page, 30000).catch(() => false);
       }
     }
   } finally {
