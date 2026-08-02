@@ -14,7 +14,8 @@
     "db:studio": "drizzle-kit studio",
     "import": "tsx scripts/import/run-all.ts",
     "import:report": "tsx scripts/import/report.ts",
-    "collect": "tsx scripts/collect.ts"
+    "collect": "tsx scripts/collect.ts",
+    "mars": "tsx scripts/mars-fill.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.44.0",
@@ -32,6 +33,7 @@
     "@types/react-dom": "^19.1.0",
     "dotenv": "^17.0.0",
     "drizzle-kit": "^0.31.0",
+    "playwright": "^1.62.1",
     "tailwindcss": "^4.1.0",
     "tsx": "^4.20.0",
     "typescript": "^5.8.0",
