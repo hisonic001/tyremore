@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { linkBarcode } from "@/lib/barcode-lookup";
 import {
   addScannedToPurchase,
+  removeInvoice,
   startManualPurchase,
   updatePurchaseItem,
   type PendingInvoice,
@@ -183,6 +184,22 @@ function ManualScanning({ inv }: { inv: PendingInvoice }) {
         매입가는 나중에 넣어도 됩니다. 비워 두면 원가·마진만 안 나옵니다.
         아래 「입고 예정」에서 <strong>전량 입고</strong>를 누르면 재고가 됩니다.
       </p>
+
+      {/* 잘못 열었거나 그만둘 때 — 이게 없으면 빈 장부가 화면을 계속 차지한다 */}
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() =>
+          start(async () => {
+            await removeInvoice(inv.invoiceId);
+            router.refresh();
+          })
+        }
+        className="mt-2 w-full rounded-lg border border-indigo-300 bg-white py-2 text-sm text-indigo-700"
+      >
+        {inv.lines.length === 0 ? "그만두기" : "이 장부 지우기"}
+      </button>
+
       {pending && <p className="mt-1 text-sm text-indigo-700">처리 중…</p>}
     </section>
   );

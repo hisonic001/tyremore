@@ -14,8 +14,17 @@ export default async function ReceivingPage() {
   const invoices = await pendingInvoices();
   const totalPending = invoices.reduce((s, i) => s + i.remain, 0);
 
-  /** 진행 중인 직접 매입 장부 (아직 입고 안 한 것) */
-  const openManual = invoices.find((i) => i.invoiceNo.startsWith("직접-")) ?? null;
+  /**
+   * 진행 중인 직접 매입 장부 (아직 입고 안 한 것).
+   * 여럿이면 **가장 최근 것**을 연다 — 장부 번호에 날짜와 순번이 들어 있다.
+   */
+  const openManual =
+    invoices
+      .filter((i) => i.invoiceNo.startsWith("직접-"))
+      .sort((a, b) => b.invoiceNo.localeCompare(a.invoiceNo))[0] ?? null;
+
+  /** 위 스캔 화면에 이미 떠 있는 장부는 아래 목록에서 뺀다 (같은 것이 두 번 나오지 않게) */
+  const listed = invoices.filter((i) => i.invoiceId !== openManual?.invoiceId);
 
   return (
     <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6">
@@ -41,12 +50,12 @@ export default async function ReceivingPage() {
             </span>
           )}
         </h2>
-        {invoices.length === 0 ? (
+        {listed.length === 0 ? (
           <p className="mt-3 rounded-xl border border-dashed border-slate-300 p-6 text-center text-slate-500">
             기다리는 물건이 없습니다
           </p>
         ) : (
-          <PendingList invoices={invoices} />
+          <PendingList invoices={listed} />
         )}
       </section>
     </main>

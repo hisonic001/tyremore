@@ -311,6 +311,43 @@ export async function pendingInvoices(): Promise<PendingInvoice[]> {
     g.lines.push(l);
     g.remain += l.qty - l.receivedQty;
   }
+
+  /**
+   * 🔴 **품목이 하나도 없는 장부도 넣어야 한다.** (2026-08-02 사장님 신고로 발견)
+   *
+   * 위 목록은 `purchase_invoice_item` 에서 만든다. 그런데 직접 매입은
+   * **빈 장부로 시작**한다 — 바코드를 찍어야 첫 품목이 생긴다.
+   * 그래서 「시작」을 눌러도 장부가 목록에 안 나오고, 화면이 스캔 모드로
+   * 바뀌지 않았다. 사장님이 바코드를 찍으면 커서가 아직 거래처 칸에 있어서
+   * **바코드가 거래처 이름 뒤에 타이핑됐다** (`오픈링크8808563590301`).
+   */
+  const heads = await db.execute<{
+    id: number;
+    invoice_no: string;
+    supplier: string;
+    issued_at: string | null;
+    status: string;
+  }>(sql`
+    SELECT i.id, i.invoice_no, i.supplier, i.issued_at, i.status
+    FROM purchase_invoice i
+    WHERE i.status <> '취소'
+      AND NOT EXISTS (SELECT 1 FROM purchase_invoice_item x WHERE x.invoice_id = i.id)
+    ORDER BY i.created_at DESC
+  `);
+  for (const h of heads) {
+    const id = Number(h.id);
+    if (map.has(id)) continue;
+    map.set(id, {
+      invoiceId: id,
+      invoiceNo: h.invoice_no,
+      supplier: h.supplier,
+      issuedAt: h.issued_at,
+      status: h.status,
+      lines: [],
+      remain: 0,
+    });
+  }
+
   return [...map.values()];
 }
 
@@ -523,6 +560,31 @@ export async function startManualPurchase(
 ): Promise<{ ok: true; invoiceId: number } | { ok: false; error: string }> {
   const name = supplier.trim();
   if (!name) return { ok: false, error: "거래처를 입력해 주세요" };
+  /**
+   * 바코드가 거래처 칸에 딸려 들어온 것을 막는다.
+   * 실제로 `오픈링크8808563590301` 같은 거래처가 만들어졌다 (2026-08-02).
+   */
+  if (/\d{8,}$/.test(name)) {
+    return { ok: false, error: "거래처 이름에 바코드가 섞였습니다. 숫자를 지우고 다시 눌러 주세요" };
+  }
+
+  /**
+   * ⭐ 이미 열려 있는 같은 거래처 장부가 있으면 **그것을 다시 쓴다.**
+   * 안 그러면 「시작」을 누를 때마다 빈 장부가 쌓인다 — 실제로 5건이 쌓였다.
+   */
+  const [dup] = await db.execute<{ id: number }>(sql`
+    SELECT i.id FROM purchase_invoice i
+    WHERE i.invoice_no LIKE '직접-%' AND i.status = '입고대기'
+      AND replace(lower(i.supplier), ' ', '') = ${name.replace(/\s/g, "").toLowerCase()}
+      AND NOT EXISTS (
+        SELECT 1 FROM purchase_invoice_item x WHERE x.invoice_id = i.id AND x.received_qty > 0
+      )
+    ORDER BY i.created_at DESC LIMIT 1
+  `);
+  if (dup) {
+    refresh("/receiving");
+    return { ok: true, invoiceId: Number(dup.id) };
+  }
 
   const now = new Date();
   const p = (n: number) => String(n).padStart(2, "0");
