@@ -82,6 +82,8 @@ export interface MarsEntry {
   workDate: string | null;
   total: number;
   memo: string | null;
+  /** 판매 등록에서 적으신 메모 — MARS 품목 줄의 「설명 2」에 들어간다 */
+  saleMemo: string | null;
   lines: MarsLine[];
 }
 
@@ -100,6 +102,7 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     work_date: string | null;
     total_amount: number;
     mars_memo: string | null;
+    payment_memo: string | null;
     address: string | null;
     consent_privacy: boolean | null;
     consent_marketing: boolean | null;
@@ -110,7 +113,7 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     mileage: number | null;
   }>(sql`
     SELECT q.id, q.quote_no, q.confirmed_at, q.payment_method, q.work_date::text AS work_date,
-           q.total_amount, q.mars_memo,
+           q.total_amount, q.mars_memo, q.payment_memo,
            c.mars_contact_no AS contact_no, c.name AS customer_name, c.phone,
            c.address, c.consent_privacy, c.consent_marketing, c.consent_signed_at,
            v.plate_no, v.model AS vehicle_model, v.maker_name, v.year, v.fuel_type, v.mileage
@@ -171,6 +174,7 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     workDate: h.work_date,
     total: h.total_amount,
     memo: h.mars_memo,
+    saleMemo: h.payment_memo,
     lines: byQuote.get(Number(h.id)) ?? [],
     // MARS 연락처 번호가 없으면 = 아직 MARS 에 없는 손님이다
     newCustomer:

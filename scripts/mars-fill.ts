@@ -681,10 +681,22 @@ async function openSalesOrder(
   await page.waitForTimeout(1200);
 }
 
-/** 품목 표를 채운다 */
+/**
+ * 품목 표를 채운다.
+ *
+ * ⭐ 사장님이 알려주신 순서 (2026-08-02):
+ *   "번호에 품번을 치고 **엔터**를 치면 바로 수량으로 넘어갈 것.
+ *    수량을 바꾸고 단가를 바꾸고 **탭**을 누르면 합계 부가세 포함도 바뀜.
+ *    메모는 **설명 2 칸을 지우고** 그 안에 들어가게."
+ *
+ * 표 컬럼: 유효성 · 유형 · 번호 · 상세 항목 및 서비스 · **설명 2** ·
+ *          측정단위코드 · 수량 · 단가 부가세 포함 · 라인 할인 % ·
+ *          정가 부가세 포함 · 합계 부가세 포함
+ */
 async function fillLines(
   page: Page,
   lines: { kind: string; no: string | null; qty: number; unitPrice: number; marsName: string }[],
+  memo?: string | null,
 ) {
   const f = main(page);
   const grid = f.locator("div[controlname='Sales Order Subform']");
@@ -733,8 +745,9 @@ async function fillLines(
     await no.fill(l.no).catch(async () => {
       await no.evaluate(SET_VALUE, l.no!).catch(() => {});
     });
-    await no.press("Tab");
-    await page.waitForTimeout(1800); // 품번을 넣으면 이름·기본가를 불러온다
+    /** ⭐ 엔터를 치면 품목을 불러오고 **바로 수량으로 넘어간다** (사장님 확인) */
+    await no.press("Enter");
+    await page.waitForTimeout(2000);
 
     const qty = await resolveInput(row.locator('[controlname="Quantity"]'));
     await qty.click({ timeout: 6000 }).catch(() => {});
@@ -742,12 +755,38 @@ async function fillLines(
     await qty.press("Enter");
     await page.waitForTimeout(700);
 
-    // ⭐ MARS 도 「단가 부가세 포함」으로 받는다 — 우리 판매가와 기준이 같다
+    /**
+     * ⭐ MARS 도 「단가 부가세 포함」으로 받는다 — 우리 판매가와 기준이 같다.
+     *    **탭**을 눌러야 「합계 부가세 포함」이 다시 계산된다 (사장님 확인).
+     */
     const price = await resolveInput(row.locator('[controlname="Unit Price"]'));
     await price.click({ timeout: 6000 }).catch(() => {});
     await price.evaluate(SET_VALUE, String(l.unitPrice)).catch(() => {});
-    await price.press("Enter");
-    await page.waitForTimeout(700);
+    await price.press("Tab");
+    await page.waitForTimeout(900);
+
+    /**
+     * ⭐ 메모는 **「설명 2」 칸을 지우고** 그 안에 넣는다 (사장님 지시).
+     *    기본값으로 규격·모델명이 들어와 있는데, 그걸 메모로 갈아 끼운다.
+     *    메모가 없으면 손대지 않는다 — 멀쩡한 기본값을 지울 이유가 없다.
+     */
+    if (memo?.trim() && i === 0) {
+      const d2 = await resolveInput(
+        (await row.locator('[controlname="Description 2"]').count().catch(() => 0)) > 0
+          ? row.locator('[controlname="Description 2"]')
+          : row.getByRole("textbox", { name: "설명 2" }),
+      );
+      if (await d2.isVisible().catch(() => false)) {
+        await d2.click({ timeout: 6000 }).catch(() => {});
+        const ok = await d2.fill(memo.trim()).then(() => true).catch(() => false);
+        if (!ok) await d2.evaluate(SET_VALUE, memo.trim()).catch(() => {});
+        await d2.press("Tab").catch(() => {});
+        await page.waitForTimeout(700);
+        log(`      설명 2 → «${memo.trim().slice(0, 30)}»`);
+      } else {
+        log("      ⚠️ 「설명 2」 칸을 못 찾아 메모를 못 넣었습니다");
+      }
+    }
 
     log(`    ✅ ${l.no}  ${l.marsName.slice(0, 34)}  ×${l.qty}  ${l.unitPrice.toLocaleString()}원`);
     put++;
@@ -1106,7 +1145,7 @@ async function main_() {
           `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
         log(`    · 작업일자 ${iso} · 결제 ${q.paymentMethod ?? "-"}`);
         await openSalesOrder(page, q.plateNo, q.newCustomer?.mileage ?? null, iso, PAY_CODE[q.paymentMethod ?? ""] ?? null);
-        const put = await fillLines(page, q.lines);
+        const put = await fillLines(page, q.lines, q.saleMemo);
 
         /**
          * 🔴 줄이 다 안 들어갔으면 「입력 완료」로 넘기지 않는다.
