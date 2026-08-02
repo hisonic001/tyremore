@@ -4,14 +4,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { ProductHit, VehicleHit } from "@/lib/search";
 import { searchProducts, searchVehicles } from "@/lib/search-actions";
-import {
-  createCustomerAndVehicle,
-  findServices,
-  saveSale,
-  suggestServices,
-  type SaleLine,
-  type SuggestedService,
-} from "@/lib/sale";
+import { createCustomerAndVehicle, findServices, saveSale, type SaleLine } from "@/lib/sale";
 import { BODY_TYPES, FUEL_TYPES, type NewCustomerInput } from "@/lib/sale-types";
 
 const won = (n: number) => n.toLocaleString();
@@ -19,8 +12,7 @@ const won = (n: number) => n.toLocaleString();
 /** 담긴 한 줄 */
 interface Row extends SaleLine {
   key: string;
-  /** 공임 자동 추천으로 들어온 줄인지 — 타이어를 빼면 같이 다시 계산한다 */
-  auto?: boolean;
+  /** 인치 — 화면에서만 쓴다 (저장할 때는 뺀다) */
   rimInch?: number | null;
 }
 
@@ -40,47 +32,16 @@ export function SaleForm() {
   const [error, setError] = useState<string | null>(null);
 
   const total = rows.reduce((s, r) => s + r.unitPrice * r.qty, 0);
-  const tires = rows.filter((r) => r.kind === "tire");
 
   /**
-   * ⭐ 타이어가 바뀌면 공임·밸런스를 다시 올린다.
-   * 빼는 것은 쉽고 넣는 것은 잊는다 — 그래서 자동으로 올려 둔다.
-   * 사장님이 직접 지운 것은 다시 올리지 않는다.
+   * 🔴 공임·밸런스를 **자동으로 올리지 않는다** (사장님 지시 2026-08-02).
+   *
+   *   "타이어를 입력하면 자동으로 휠타이어 교환이나 휠밸런스가 올라가는데
+   *    그럴 필요 없음. 그냥 타이어 값에 보통 포함되거든."
+   *
+   * 처음엔 「빼는 것은 쉽고 넣는 것은 잊는다」고 보고 자동으로 올렸는데,
+   * 매장 실제와 달랐다. 따로 받는 경우에만 아래 「공임·정비 추가」로 넣으시면 된다.
    */
-  const [dismissed, setDismissed] = useState<Set<number>>(new Set());
-  const tireKey = tires.map((t) => `${t.productId}:${t.qty}:${t.rimInch}`).join("|");
-  useEffect(() => {
-    let alive = true;
-    if (tires.length === 0) {
-      setRows((rs) => rs.filter((r) => !r.auto));
-      return;
-    }
-    void (async () => {
-      const sug = await suggestServices(tires.map((t) => ({ rimInch: t.rimInch ?? null, qty: t.qty })));
-      if (!alive) return;
-      setRows((rs) => [
-        ...rs.filter((r) => !r.auto),
-        ...sug
-          .filter((s) => !dismissed.has(s.serviceItemId))
-          .map(
-            (s: SuggestedService): Row => ({
-              key: `auto-${s.serviceItemId}`,
-              kind: "service",
-              serviceItemId: s.serviceItemId,
-              marsNo: s.marsNo,
-              description: s.name,
-              qty: s.qty,
-              unitPrice: s.price,
-              auto: true,
-            }),
-          ),
-      ]);
-    })();
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tireKey, dismissed]);
 
   const addTire = (p: ProductHit) => {
     const price = p.salePrice ?? p.listPrice ?? 0;
@@ -88,7 +49,7 @@ export function SaleForm() {
       const hit = rs.find((r) => r.productId === p.productId);
       if (hit) return rs.map((r) => (r === hit ? { ...r, qty: r.qty + 1 } : r));
       return [
-        ...rs.filter((r) => !r.auto),
+        ...rs,
         {
           key: `t-${p.productId}`,
           kind: "tire",
@@ -102,7 +63,6 @@ export function SaleForm() {
           unitPrice: price,
           rimInch: p.spec ? Number(/R(\d{2})/.exec(p.spec)?.[1] ?? 0) || null : null,
         },
-        ...rs.filter((r) => r.auto),
       ];
     });
   };
@@ -111,7 +71,6 @@ export function SaleForm() {
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
 
   const removeRow = (r: Row) => {
-    if (r.auto && r.serviceItemId) setDismissed((d) => new Set(d).add(r.serviceItemId!));
     setRows((rs) => rs.filter((x) => x.key !== r.key));
   };
 
@@ -122,7 +81,7 @@ export function SaleForm() {
         vehicleId: vehicle?.vehicleId ?? null,
         customerId: vehicle?.customerId ?? null,
         walkIn: vehicle ? null : walkIn.name || walkIn.phone || walkIn.plateNo ? walkIn : null,
-        lines: rows.map(({ key, auto, rimInch, ...l }) => l),
+        lines: rows.map(({ key, rimInch, ...l }) => l),
         paymentMethod: payment,
         memo: memo.trim() || null,
         mileage: mileage ? Number(mileage.replace(/\D/g, "")) : null,
@@ -137,7 +96,6 @@ export function SaleForm() {
       setWalkIn({ name: "", phone: "", plateNo: "" });
       setMileage("");
       setMemo("");
-      setDismissed(new Set());
       router.refresh();
     });
 
@@ -280,13 +238,10 @@ function LineRow({
 }) {
   const BTN = "h-9 w-9 shrink-0 rounded-lg border border-slate-300 bg-white text-lg font-bold";
   return (
-    <li className={`rounded-lg p-2 ${row.auto ? "bg-sky-50" : "bg-slate-50"}`}>
+    <li className="rounded-lg bg-slate-50 p-2">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium">
-            {row.description}
-            {row.auto && <span className="ml-1 text-xs font-normal text-sky-700">자동</span>}
-          </div>
+          <div className="truncate text-sm font-medium">{row.description}</div>
           {row.marsNo && <div className="tabular text-xs text-slate-500">{row.marsNo}</div>}
         </div>
         <button type="button" onClick={onRemove} className="shrink-0 px-1.5 text-slate-400" aria-label="빼기">

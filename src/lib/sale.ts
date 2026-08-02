@@ -209,82 +209,20 @@ export async function saveSale(
 
 /* ------------------------------------------------------------------ */
 
-export interface SuggestedService {
-  serviceItemId: number;
-  marsNo: string | null;
-  name: string;
-  price: number;
-  qty: number;
-  qtyRule: string;
-  why: string;
-}
-
 /**
- * ⭐ 타이어를 담으면 공임·밸런스를 알아서 올린다.
+ * 🔴 공임·밸런스 자동 추천은 **없앴다** (사장님 지시 2026-08-02).
  *
- * 빼는 것은 쉽고 넣는 것은 잊는다 (D-11 6번).
- * 인치에 따라 요금이 다르고, 휠밸런스는 **2개당**이라 사람이 매번 틀린다 —
- * MARS 서비스 목록에 「휠밸런스 - 타이어 2개당」이라고 적혀 있는 그대로다.
+ *   "타이어를 입력하면 자동으로 휠타이어 교환이나 휠밸런스가 올라가는데
+ *    그럴 필요 없음. 그냥 타이어 값에 보통 포함되거든."
+ *
+ * 처음엔 D-11 6번(「빼는 것은 쉽고 넣는 것은 잊는다」)을 근거로 자동으로 올렸는데,
+ * 매장 실제와 달랐다. 공임은 보통 타이어 값에 포함되어 따로 청구하지 않는다.
+ * 따로 받으실 때만 화면의 「공임·정비 추가」로 넣으시면 된다.
+ *
+ * ⚠️ MARS 서비스 목록의 「2개당」 규칙(`qty_rule = per_2_units`)은 그대로 남아 있다.
+ *    나중에 다시 필요해지면 그 값으로 계산하면 된다 —
+ *    휠밸런스는 4본이면 2회다.
  */
-export async function suggestServices(
-  tires: { rimInch: number | null; qty: number }[],
-): Promise<SuggestedService[]> {
-  const totalQty = tires.reduce((s, t) => s + t.qty, 0);
-  if (totalQty === 0) return [];
-  const maxRim = Math.max(...tires.map((t) => t.rimInch ?? 0));
-
-  const rows = await db
-    .select({
-      id: serviceItem.id,
-      no: serviceItem.marsServiceNo,
-      name: serviceItem.name,
-      price: serviceItem.price,
-      rule: serviceItem.qtyRule,
-    })
-    .from(serviceItem)
-    .where(and(eq(serviceItem.isTireRelated, true), eq(serviceItem.autoSuggest, true), eq(serviceItem.isActive, true)));
-
-  /** 이름에 적힌 인치 조건을 읽어 지금 규격에 맞는 것 하나만 고른다 */
-  const pick = (kind: "교환" | "밸런스"): (typeof rows)[number] | null => {
-    const group = rows.filter((r) =>
-      kind === "교환" ? /교환/.test(r.name) && !/밸런스/.test(r.name) : /밸런스/.test(r.name),
-    );
-    if (group.length === 0) return null;
-    // 「17인치 이하」·「18인치 이상」·「21인치 이상」 → 조건에 맞는 것 중 가장 비싼 것
-    const fit = group.filter((r) => {
-      const below = /(\d{2})\s*인치\s*이하/.exec(r.name);
-      const above = /(\d{2})\s*인치\s*이상/.exec(r.name);
-      if (below) return maxRim <= Number(below[1]);
-      if (above) return maxRim >= Number(above[1]);
-      return true;
-    });
-    const cand = fit.length ? fit : group;
-    return cand.reduce((a, b) => ((b.price ?? 0) > (a.price ?? 0) ? b : a));
-  };
-
-  const out: SuggestedService[] = [];
-  for (const kind of ["교환", "밸런스"] as const) {
-    const s = pick(kind);
-    if (!s) continue;
-    const qty =
-      s.rule === "per_unit" ? totalQty : s.rule === "per_2_units" ? Math.ceil(totalQty / 2) : 1;
-    out.push({
-      serviceItemId: s.id,
-      marsNo: s.no,
-      name: s.name,
-      price: s.price ?? 0,
-      qty,
-      qtyRule: s.rule,
-      why:
-        s.rule === "per_2_units"
-          ? `${totalQty}본 → 2개당 ${qty}회`
-          : s.rule === "per_unit"
-            ? `${totalQty}본`
-            : "1회",
-    });
-  }
-  return out;
-}
 
 /* ------------------------------------------------------------------ */
 
