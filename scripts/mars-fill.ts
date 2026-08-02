@@ -330,11 +330,26 @@ async function createCustomer(
    * 🔴 **줄을 먼저 눌러 활성화한 뒤**에 그 줄의 칸을 눌러야 먹는다.
    *    이 단계를 빼먹어서 계속 실패했다.
    */
+  /**
+   * ⚠️ **MARS 에는 세 줄 모두 「수락된 동의」로 넣는다** (사장님 결정 2026-08-02).
+   *
+   * MARS 는 「거부된 동의」를 넣으면 **「불매치 코드」를 따로 요구**한다 —
+   *   「거부된 동의의 경우 "불매치 코드"을(를) 제공해야 합니다!」
+   * 그 코드가 무엇인지 정해진 것이 없어 자동으로는 넣을 수 없다.
+   *
+   * 🔴 그래서 **우리 기록과 MARS 기록이 다를 수 있다.**
+   *    손님이 실제로 고르신 값은 `customer.consent_marketing` 에 그대로 남는다 —
+   *    거기가 사실이고, MARS 는 그 시스템이 요구하는 형식이다.
+   *    나중에 불매치 코드를 알게 되면 아래 한 줄만 되돌리면 된다.
+   */
   const PURPOSES: [string, boolean][] = [
     ["비즈니스 목적", c.consentPrivacy],
     ["제3자 제공", c.consentPrivacy],
-    ["마케팅 및 광고", c.consentMarketing],
+    ["마케팅 및 광고", true],
   ];
+  if (!c.consentMarketing) {
+    log("    ⚠️ 마케팅 수신은 동의 안 하셨지만 MARS 에는 수락으로 넣습니다 (불매치 코드 미정)");
+  }
   /** 사장님이 켜시는 채널 그대로 (이메일 칸은 손대지 않으신다) */
   const CHANNELS = ["Accepts SMS", "Accepts Phone Call", "Accepts Hard Copy"];
 
