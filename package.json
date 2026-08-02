@@ -13,7 +13,8 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "import": "tsx scripts/import/run-all.ts",
-    "import:report": "tsx scripts/import/report.ts"
+    "import:report": "tsx scripts/import/report.ts",
+    "collect": "tsx scripts/collect.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.44.0",
