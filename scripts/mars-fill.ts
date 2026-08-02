@@ -541,6 +541,139 @@ async function checkOrder(page: Page, expectTotal: number): Promise<boolean> {
   return ok;
 }
 
+/* ================================================================
+ * 전기 후 차량 점검 (사장님 지시 2026-08-02 — "이것도 꼭 해야 하는 작업이야")
+ *
+ * 전기가 끝나야 들어갈 수 있는 화면이라 매출 주문 입력과 **별개 단계**다.
+ *   완료된 매출 송장 → 탐색 → 전기 후 차량 점검 → … → 프로세스 → 제출
+ *
+ * 필수 항목 5개 (사장님 확인):
+ *   타이어 · 브레이크 패드(디스크 제외) · 얼라인먼트 · 배터리 · 엔진오일
+ *
+ * 규칙 (사장님): "왠만하면 작업하지 않은 것들은 100%를 체크하면 돼"
+ *   → 우리가 실제로 판 것만 표시하고, 나머지는 100%(매우 양호)로 채운다.
+ * ============================================================== */
+
+/**
+ * 그 줄을 100%(매우 양호)로 만든다.
+ *
+ * ⭐ 사장님 확인 (2026-08-02): **맨 오른쪽 칸이 100%**, 맨 왼쪽 체크란이 교체.
+ *    표마다 열 개수가 달라서 이름이 다르다 —
+ *    브레이크는 `Value 3`, 엔진오일·얼라인먼트는 `Value 2` 가 각각 그 표의 마지막 열이다.
+ *    그러니 **이름을 외우지 않고 「가장 오른쪽」을 찾는다.**
+ *
+ * 🔴 그래도 눌러 보고 줄에 「100」이 생겼는지 확인한다.
+ *    틀린 등급이 손님 점검표에 남으면 안 되므로, 아니면 되돌리고 왼쪽으로 옮겨 간다.
+ */
+async function setGrade100(page: Page, rowText: string): Promise<boolean> {
+  const f = main(page);
+  const row = f.getByRole("row").filter({ hasText: rowText }).first();
+  if (!(await row.isVisible().catch(() => false))) return false;
+
+  const has100 = async () => ((await row.innerText().catch(() => "")) || "").includes("100");
+  await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+  if (await has100()) return true;
+
+  const cells = row.locator('[controlname^="Value "]');
+  const n = await cells.count().catch(() => 0);
+  // 오른쪽부터 왼쪽으로
+  for (let i = n - 1; i >= 0; i--) {
+    const cell = cells.nth(i);
+    if (!(await cell.isVisible().catch(() => false))) continue;
+    await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+    await cell.click({ timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(450);
+    if (await has100()) return true;
+    await cell.click({ timeout: 5000 }).catch(() => {}); // 되돌린다
+    await page.waitForTimeout(300);
+  }
+  return false;
+}
+
+/** 판매한 타이어 본수로 어느 바퀴를 갈았는지 정한다 */
+function wheelsFor(qty: number): string[] {
+  const all = ["전륜 좌측", "전륜 우측", "후륜 좌측", "후륜 우측"];
+  if (qty >= 4) return all;
+  if (qty === 2) return ["전륜 좌측", "전륜 우측"]; // 2본이면 보통 앞이다
+  return all.slice(0, Math.max(1, qty));
+}
+
+async function fillVehicleCheck(
+  page: Page,
+  opts: { plateNo: string; tyreQty: number },
+): Promise<{ ok: boolean; missed: string[] }> {
+  const f = main(page);
+  await clickAny(page, "탐색");
+  await page.waitForTimeout(700);
+  await clickAny(page, "전기 후 차량 점검");
+  await page.waitForTimeout(3500);
+
+  // 방문 이유 — 타이어 교체는 CHANGE
+  const reason = f.locator('[controlname="Reason for Visit"]').first();
+  if (await reason.isVisible().catch(() => false)) {
+    await reason.fill("CHANGE").catch(() => {});
+    await reason.press("Tab").catch(() => {});
+    await page.waitForTimeout(800);
+  }
+
+  const missed: string[] = [];
+
+  // ① 타이어 — 실제로 간 바퀴만 Replace
+  await clickAny(page, "타이어").catch(() => {});
+  await page.waitForTimeout(1200);
+  for (const w of wheelsFor(opts.tyreQty)) {
+    const row = f.getByRole("row").filter({ hasText: `타이어 - ${w}` }).first();
+    if (!(await row.isVisible().catch(() => false))) {
+      missed.push(`타이어 ${w}`);
+      continue;
+    }
+    await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+    const rep = row.locator('[controlname="Replace"]').first();
+    if ((await rep.getAttribute("aria-checked").catch(() => null)) !== "true") {
+      await rep.click({ timeout: 6000 }).catch(() => {});
+      await page.waitForTimeout(350);
+    }
+    log(`      타이어 ${w} — 교체 표시`);
+  }
+
+  /**
+   * ②③④⑤ 나머지 필수 항목은 100%.
+   *   브레이크는 **패드만** — 디스크는 필수가 아니다 (사장님 확인).
+   */
+  const REST: [string, string][] = [
+    ["브레이크", "패드 - 전륜"],
+    ["브레이크", "패드/슈 - 후륜"],
+    ["얼라인먼트", "얼라이먼트"],
+    ["배터리", "배터리"],
+    ["기타", "엔진오일"],
+  ];
+  let tab = "";
+  for (const [t, rowText] of REST) {
+    if (t !== tab) {
+      await clickAny(page, t).catch(() => {});
+      await page.waitForTimeout(1200);
+      tab = t;
+    }
+    const done = await setGrade100(page, rowText);
+    log(`      ${rowText} — ${done ? "100%" : "⚠️ 못 넣었습니다"}`);
+    if (!done) missed.push(rowText);
+  }
+
+  if (missed.length) return { ok: false, missed };
+
+  // 제출
+  await clickAny(page, "프로세스");
+  await page.waitForTimeout(800);
+  await clickAny(page, "제출");
+  await page.waitForTimeout(3000);
+
+  const blocked = f.getByText(/입력해야|필수|없습니다/).first();
+  if (await blocked.isVisible({ timeout: 2000 }).catch(() => false)) {
+    return { ok: false, missed: [`MARS: ${(await blocked.textContent())?.trim()}`] };
+  }
+  return { ok: true, missed: [] };
+}
+
 async function main_() {
   const { marsQueue, markEntered } = await import("../src/lib/mars-queue");
   const queue = (await marsQueue()).slice(0, LIMIT);

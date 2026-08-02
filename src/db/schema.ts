@@ -515,6 +515,18 @@ export const quote = pgTable(
     marsRefNo: text("mars_ref_no"), // MARS 매출주문/송장 번호
     marsMemo: text("mars_memo"),
 
+    /**
+     * ⭐ 전기 후 차량 점검을 제출한 시각 (2026-08-02)
+     *
+     * 사장님: "이것도 꼭 해야 하는 작업이야."
+     * 전기가 끝나야 들어갈 수 있는 화면이라 매출 주문 입력과 **별개 단계**다.
+     * 비어 있으면 아직 안 한 것이다.
+     *
+     * 필수 항목 5개 (사장님 확인): 타이어 · 브레이크 패드(디스크 제외) ·
+     * 얼라인먼트 · 배터리 · 엔진오일
+     */
+    vehicleCheckAt: timestamp("vehicle_check_at", { withTimezone: true }),
+
     createdBy: bigint("created_by", { mode: "number" }).references(() => appUser.id),
     createdAt,
     updatedAt,
