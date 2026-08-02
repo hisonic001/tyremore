@@ -350,22 +350,34 @@ async function createCustomer(
   if (!c.consentMarketing) {
     log("    ⚠️ 마케팅 수신은 동의 안 하셨지만 MARS 에는 수락으로 넣습니다 (불매치 코드 미정)");
   }
-  /** 사장님이 켜시는 채널 그대로 (이메일 칸은 손대지 않으신다) */
-  const CHANNELS = ["Accepts SMS", "Accepts Phone Call", "Accepts Hard Copy"];
+
+  /**
+   * ⭐ MARS 기본 상태 (사장님 스크린샷 2026-08-02):
+   *
+   *              이메일접수  SMS&카톡  전화통화  하드카피   고객서명
+   *   BUSINESS      ☐        ☑        ☑       ☐        (비어있음)
+   *   MARKETING     ☐        ☑        ☑       ☐        (비어있음)
+   *   PERSONAL      ☐        ☑        ☑       ☐        (비어있음)
+   *
+   * 🔴 손댈 것은 **하드카피 켜기**와 **고객 서명** 둘뿐이다.
+   *    SMS·전화는 이미 켜져 있다 — 건드리면 오히려 꺼진다.
+   *    전에는 세 칸을 다 만지고 있었으니 멀쩡한 것을 꺼뜨렸을 수 있다.
+   *    이메일 접수는 사장님도 손대지 않으신다 (우리는 이메일을 안 받는다, D-10).
+   */
+  const TURN_ON = ["Accepts Hard Copy"];
 
   for (const [purpose, agreed] of PURPOSES) {
     const row = f.getByRole("row").filter({ hasText: purpose }).first();
     await row.click({ position: { x: 5, y: 5 } }).catch(() => {}); // 줄 활성화
 
-    for (const ch of CHANNELS) {
+    for (const ch of TURN_ON) {
       const box = row.locator(`[controlname="${ch}"]`).first();
       if (!(await box.isVisible().catch(() => false))) continue;
-      const now = (await box.getAttribute("aria-checked").catch(() => null)) === "true";
-      if (now !== agreed) {
-        await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
-        await box.click({ timeout: 6000 }).catch(() => {});
-        await page.waitForTimeout(250);
-      }
+      // 이미 켜져 있으면 그대로 둔다 — 또 누르면 꺼진다
+      if ((await box.getAttribute("aria-checked").catch(() => null)) === "true") continue;
+      await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+      await box.click({ timeout: 6000 }).catch(() => {});
+      await page.waitForTimeout(300);
     }
 
     /**
