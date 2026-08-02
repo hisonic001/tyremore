@@ -28,6 +28,9 @@ export function SaleForm() {
   const [rows, setRows] = useState<Row[]>([]);
   const [payment, setPayment] = useState<string>("카드");
   const [memo, setMemo] = useState("");
+  /** 실제로 정비한 날 — 기본은 오늘이지만 고칠 수 있다 */
+  const today = new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD
+  const [workDate, setWorkDate] = useState(today);
   const [done, setDone] = useState<{ quoteNo: string; shortages: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -83,6 +86,7 @@ export function SaleForm() {
         walkIn: vehicle ? null : walkIn.name || walkIn.phone || walkIn.plateNo ? walkIn : null,
         lines: rows.map(({ key, rimInch, ...l }) => l),
         paymentMethod: payment,
+        workDate,
         memo: memo.trim() || null,
         mileage: mileage ? Number(mileage.replace(/\D/g, "")) : null,
       });
@@ -180,6 +184,31 @@ export function SaleForm() {
 
       <section className="rounded-2xl border border-slate-300 bg-white p-3">
         <h2 className="font-bold">결제</h2>
+
+        {/*
+          ⭐ 실제로 정비한 날 (사장님 지시 2026-08-02)
+             "입력은 오늘 해도 실제 정비는 이전에 했을 수도 있음"
+             MARS 매출 주문의 문서 날짜·완료 일자로 그대로 들어간다.
+        */}
+        <label className="mt-2 flex items-center gap-2">
+          <span className="text-sm text-slate-500">작업일자</span>
+          <input
+            type="date"
+            value={workDate}
+            onChange={(e) => setWorkDate(e.target.value)}
+            className="tabular rounded-lg border border-slate-300 px-3 py-2"
+          />
+          {workDate !== today && (
+            <button
+              type="button"
+              onClick={() => setWorkDate(today)}
+              className="text-xs text-slate-500 underline underline-offset-4"
+            >
+              오늘로
+            </button>
+          )}
+        </label>
+
         <div className="mt-2 flex flex-wrap gap-2">
           {PAYMENTS.map((p) => (
             <button
@@ -194,6 +223,11 @@ export function SaleForm() {
             </button>
           ))}
         </div>
+        {payment === "외상" && (
+          <p className="mt-1.5 rounded-lg bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+            외상은 <strong>MARS 자동 입력에서 빠집니다.</strong> 여기 기록만 남고, MARS 는 직접 처리해 주세요.
+          </p>
+        )}
         <input
           value={memo}
           onChange={(e) => setMemo(e.target.value)}

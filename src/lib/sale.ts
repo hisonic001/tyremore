@@ -61,6 +61,18 @@ export interface SaleInput {
   memo?: string | null;
   /** 주행거리를 적어 주면 차량 기록을 갱신한다 */
   mileage?: number | null;
+  /**
+   * ⭐ 실제로 정비한 날 (사장님 지시 2026-08-02).
+   * 안 적으면 오늘. MARS 매출 주문의 문서 날짜·완료 일자로 들어간다.
+   */
+  workDate?: string | null;
+}
+
+/** 오늘 (YYYY-MM-DD) */
+function todayISO(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 /** Q26-0802-001 */
@@ -160,6 +172,7 @@ export async function saveSale(
       vehicleId: input.vehicleId ?? null,
       status: "성사",
       confirmedAt: now,
+      workDate: input.workDate?.trim() || todayISO(),
       totalAmount: total,
       paymentMethod: input.paymentMethod ?? null,
       paidAmount: total,

@@ -588,42 +588,44 @@ async function openSalesOrder(
   await page.waitForTimeout(2500);
 
   /**
-   * 🔴 **고객·차량을 다시 고르는 창이 먼저 뜬다** (2026-08-02 사장님 조작에서 확인).
-   *    내 코드에는 이 단계가 아예 없어서 바로 주행거리부터 넣으려다 실패했다.
-   *    번호판으로 찾아 「차량」 줄을 고르고 확인을 누른다.
+   * ⚠️ 고객을 방금 만들고 바로 들어오면 **고객 선택 창이 뜨지 않는다** (사장님 확인 2026-08-02).
+   *    "고객/차량 등록을 마치자마자 바로 판매내역 클릭 → 신규 → 신규 매출 주문"
+   *
+   *    어제 사장님 조작에서는 이 창이 떴는데, 그건 검색 화면을 거쳐 돌아가셨기 때문이다.
+   *    그래서 **뜰 때만** 처리한다. 없으면 그냥 넘어간다.
    */
-  const pick = f.locator('[controlname="NameLicensePlate"]').first();
-  if (await pick.isVisible({ timeout: 8000 }).catch(() => false)) {
-    await fillField(page, "이름/번호판 번호", pick, plate);
-    await pick.locator("input").first().press("Enter").catch(async () => {
-      await pick.press("Enter").catch(() => {});
-    });
-    await page.waitForTimeout(2500);
-    // 결과에서 「차량」 줄을 고른다 (고객 줄이 아니라 차량 줄이어야 주행거리가 붙는다)
-    const veh = f.getByRole("row").filter({ hasText: plate }).first();
-    await veh.click({ position: { x: 5, y: 5 } }).catch(() => {});
+  const picker = f.locator('button[controlname="Contact Search Results"]').filter({ hasText: "확인" }).first();
+  if (await picker.isVisible({ timeout: 4000 }).catch(() => false)) {
+    log("    · 고객 선택 창이 떠서 번호판으로 고릅니다");
+    await fillField(page, "이름/번호판 번호", f.locator('[controlname="NameLicensePlate"]'), plate);
+    await page.waitForTimeout(2000);
+    await f.getByRole("row").filter({ hasText: plate }).first().click({ position: { x: 5, y: 5 } }).catch(() => {});
     await page.waitForTimeout(500);
-    await f
-      .locator('button[controlname="Contact Search Results"]', { hasText: "확인" })
-      .first()
-      .click({ timeout: 8000 })
-      .catch(async () => {
-        await f.getByRole("button", { name: "확인", exact: true }).last().click({ timeout: 8000 });
-      });
+    await picker.click({ timeout: 8000 }).catch(() => {});
     await page.waitForTimeout(2500);
   }
 
+  // ① 현재 주행거리
   const km = f.locator('[controlname="Mileage"]').first();
   await km.waitFor({ state: "visible", timeout: 20000 });
   if (mileage) await fillField(page, "현재 주행거리", km, String(mileage));
 
-  // 결제 수단·조건 — 우리가 이미 알고 있는 값이다
+  /**
+   * ② 문서 날짜 · 완료 일자 — **실제로 정비한 날**을 넣는다 (사장님 지시).
+   *    "입력은 오늘 해도 실제 정비는 이전에 했을 수도 있음"
+   */
+  await fillField(page, "문서 날짜", f.locator('[controlname="Document Date"]'), dateISO);
+  await fillField(page, "완료 일자", f.getByRole("combobox", { name: "완료 일자" }), dateISO);
+
+  /**
+   * ③ 결제 수단 코드 (사장님 확인)
+   *    현금 CASH · 카드 CREDITCARD · 계좌이체 BANK
+   *    외상은 여기까지 오지 않는다 — 호출 쪽에서 걸러 낸다.
+   */
   if (payCode) {
     await fillField(page, "결제 수단 코드", f.locator('[controlname="<Payment Method Code_2>"]'), payCode);
     await fillField(page, "결제 조건 코드", f.locator('[controlname="<Payment Terms Code_2>"]'), payCode);
   }
-
-  await fillField(page, "문서 날짜", f.locator('[controlname="Document Date"]'), dateISO);
   await page.waitForTimeout(1200);
 }
 
@@ -987,6 +989,16 @@ async function main_() {
         skipped++;
         continue;
       }
+      /**
+       * 🔴 외상은 MARS 에 넣지 않는다 (사장님 지시 2026-08-02).
+       *    "외상은 일단 mars 에 입력 보류하고 저장해놔야됨"
+       *    우리 쪽에는 기록이 그대로 남고, 대기열에도 남아 나중에 처리할 수 있다.
+       */
+      if (q.paymentMethod === "외상") {
+        log("  ⏸️ 외상이라 MARS 입력을 보류합니다 — 우리 기록에는 남아 있습니다");
+        skipped++;
+        continue;
+      }
       try {
         const found = await findCustomer(page, q.plateNo);
         if (!found) {
@@ -1011,8 +1023,12 @@ async function main_() {
           log("    ✅ 고객·차량 등록 완료");
         }
 
-        const today = new Date();
-        const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+        /** ⭐ 실제로 정비한 날. 사장님이 판매 등록에서 고치실 수 있다 (기본은 오늘) */
+        const d = new Date();
+        const iso =
+          q.workDate ??
+          `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        log(`    · 작업일자 ${iso} · 결제 ${q.paymentMethod ?? "-"}`);
         await openSalesOrder(page, q.plateNo, q.newCustomer?.mileage ?? null, iso, PAY_CODE[q.paymentMethod ?? ""] ?? null);
         const put = await fillLines(page, q.lines);
 

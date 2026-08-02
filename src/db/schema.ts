@@ -17,6 +17,7 @@ import {
   bigserial,
   boolean,
   check,
+  date,
   index,
   integer,
   jsonb,
@@ -496,6 +497,17 @@ export const quote = pgTable(
      */
     status: text("status").notNull().default("작성중"),
     confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+
+    /**
+     * ⭐ 실제로 정비한 날 (사장님 지시 2026-08-02)
+     *
+     *   "입력은 오늘 해도 실제 정비는 이전에 했을 수도 있음.
+     *    default 값은 오늘이지만 app 에서 입력받을 때 수정도 가능하도록 해야 함"
+     *
+     * MARS 매출 주문의 **문서 날짜·완료 일자**에 그대로 들어간다.
+     * 등록한 날(created_at)과 다를 수 있으므로 따로 둔다.
+     */
+    workDate: date("work_date"),
     confirmedBy: bigint("confirmed_by", { mode: "number" }).references(() => appUser.id),
 
     totalAmount: integer("total_amount").notNull().default(0),

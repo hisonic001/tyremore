@@ -78,6 +78,8 @@ export interface MarsEntry {
     mileage: number | null;
   } | null;
   paymentMethod: string | null;
+  /** 실제로 정비한 날 — MARS 문서 날짜·완료 일자 (YYYY-MM-DD) */
+  workDate: string | null;
   total: number;
   memo: string | null;
   lines: MarsLine[];
@@ -95,6 +97,7 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     plate_no: string | null;
     vehicle_model: string | null;
     payment_method: string | null;
+    work_date: string | null;
     total_amount: number;
     mars_memo: string | null;
     address: string | null;
@@ -106,7 +109,8 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     fuel_type: string | null;
     mileage: number | null;
   }>(sql`
-    SELECT q.id, q.quote_no, q.confirmed_at, q.payment_method, q.total_amount, q.mars_memo,
+    SELECT q.id, q.quote_no, q.confirmed_at, q.payment_method, q.work_date::text AS work_date,
+           q.total_amount, q.mars_memo,
            c.mars_contact_no AS contact_no, c.name AS customer_name, c.phone,
            c.address, c.consent_privacy, c.consent_marketing, c.consent_signed_at,
            v.plate_no, v.model AS vehicle_model, v.maker_name, v.year, v.fuel_type, v.mileage
@@ -164,6 +168,7 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     plateNo: h.plate_no,
     vehicleModel: h.vehicle_model,
     paymentMethod: h.payment_method,
+    workDate: h.work_date,
     total: h.total_amount,
     memo: h.mars_memo,
     lines: byQuote.get(Number(h.id)) ?? [],
