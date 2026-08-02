@@ -70,7 +70,22 @@ const SET_VALUE =
  *
  * MARS 칸은 대부분 **먼저 눌러야** 값이 들어간다.
  */
-async function fillField(page: Page, label: string, loc: Locator, value: string): Promise<boolean> {
+async function fillField(
+  page: Page,
+  label: string,
+  loc: Locator,
+  value: string,
+  /**
+   * ⚠️ Tab 을 누를지. **기본은 누른다** — 그래야 MARS 가 값을 받아들이고
+   *    「평균 주행거리/월」 같은 것을 계산한다.
+   *
+   * 🔴 그런데 칸마다 누르면 안 되는 데가 있다. 매출 주문의 「현재 주행거리」는
+   *    넣자마자 Tab 을 누르면 MARS 가 화면을 다시 그리며 **값을 지운다** (2026-08-02).
+   *    사장님 파이썬 코드도 주행거리·문서날짜는 그냥 채우고
+   *    **완료 일자에서 한 번만** Tab 을 눌렀다. 그 순서가 맞다.
+   */
+  opts: { tab?: boolean } = {},
+): Promise<boolean> {
   let el = loc.first();
   if (!(await el.isVisible({ timeout: 6000 }).catch(() => false))) {
     log(`    ⚠️ 「${label}」 칸을 못 찾았습니다`);
@@ -95,8 +110,7 @@ async function fillField(page: Page, label: string, loc: Locator, value: string)
     // fill 이 안 되는 칸은 값을 직접 넣고 change 를 쏜다
     await el.evaluate(SET_VALUE, value).catch(() => {});
   }
-  /** ⭐ Tab 을 눌러야 MARS 가 값을 받아들이고 「평균 주행거리/월」 같은 것을 계산한다 (사장님 확인) */
-  await el.press("Tab").catch(() => {});
+  if (opts.tab !== false) await el.press("Tab").catch(() => {});
   await page.waitForTimeout(500);
 
   const got = (await el.inputValue().catch(() => "")) || "";
@@ -614,17 +628,31 @@ async function openSalesOrder(
     await page.waitForTimeout(2500);
   }
 
+  /**
+   * 🔴 **Tab 은 맨 마지막에 한 번만** 누른다 (2026-08-02).
+   *    주행거리를 넣자마자 Tab 을 눌렀더니 MARS 가 화면을 다시 그리며 값을 지웠다.
+   *    사장님 파이썬 코드도 셋을 그냥 채우고 완료 일자에서만 Tab 을 눌렀다.
+   *    그 Tab 이 아래 품목 표를 불러오는 신호이기도 하다.
+   */
+
   // ① 현재 주행거리
   const km = f.locator('[controlname="Mileage"]').first();
   await km.waitFor({ state: "visible", timeout: 20000 });
-  if (mileage) await fillField(page, "현재 주행거리", km, String(mileage));
+  if (mileage) await fillField(page, "현재 주행거리", km, String(mileage), { tab: false });
 
   /**
    * ② 문서 날짜 · 완료 일자 — **실제로 정비한 날**을 넣는다 (사장님 지시).
    *    "입력은 오늘 해도 실제 정비는 이전에 했을 수도 있음"
    */
-  await fillField(page, "문서 날짜", f.locator('[controlname="Document Date"]'), dateISO);
+  await fillField(page, "문서 날짜", f.locator('[controlname="Document Date"]'), dateISO, { tab: false });
   await fillField(page, "완료 일자", f.getByRole("combobox", { name: "완료 일자" }), dateISO);
+
+  // 주행거리가 살아 있는지 다시 본다 — 지워지는 것이 실제로 있었다
+  const kmNow = (await km.locator("input").first().inputValue().catch(() => "")) || "";
+  if (mileage && !kmNow.replace(/[\s,]/g, "").includes(String(mileage))) {
+    log(`    · 주행거리가 지워져서 다시 넣습니다 («${kmNow}»)`);
+    await fillField(page, "현재 주행거리", km, String(mileage), { tab: false });
+  }
 
   /**
    * ③ 결제 수단 코드 (사장님 확인)
