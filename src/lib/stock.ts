@@ -392,45 +392,13 @@ export async function setDotQty(input: {
   return { ok: true, delta };
 }
 
-/** DOT를 나중에 채우거나 고친다. 같은 DOT 묶음 전체가 바뀐다 */
-export async function changeDot(input: {
-  productId: number;
-  fromDot: string | null;
-  toDot: string | null;
-  userId?: number;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
-  const to = input.toDot?.trim() || null;
-  if (to) {
-    const err = await validateDot(to);
-    if (err) return { ok: false, error: err };
-  }
-  const fromCond = input.fromDot === null ? isNull(stockItem.dot) : eq(stockItem.dot, input.fromDot);
-
-  const rows = await db
-    .select({ id: stockItem.id })
-    .from(stockItem)
-    .where(and(eq(stockItem.productId, input.productId), eq(stockItem.status, "재고"), fromCond));
-  if (rows.length === 0) return { ok: false, error: "해당 재고를 찾지 못했습니다" };
-
-  await db
-    .update(stockItem)
-    .set({ dot: to, verifiedAt: new Date() })
-    .where(and(eq(stockItem.productId, input.productId), eq(stockItem.status, "재고"), fromCond));
-
-  await db.insert(stockMovement).values(
-    rows.map((r) => ({
-      stockItemId: r.id,
-      type: "조정",
-      reason: "DOT 수정",
-      qtyDelta: 0,
-      memo: `${input.fromDot ?? "(없음)"} → ${to ?? "(없음)"}`,
-      createdBy: input.userId ?? null,
-    })),
-  );
-
-  refresh(`/stock/${input.productId}`, "/");
-  return { ok: true };
-}
+/**
+ * 🔴 `changeDot`(DOT 직접 수정)은 지웠다 (2026-08-03).
+ *    그 버튼이 있던 화면을 걷어내서 부르는 곳이 없고,
+ *    "use server" 파일의 export 는 그대로 열려 있는 서버 엔드포인트가 된다.
+ *    DOT 가 틀렸으면 재고 엑셀에서 그 줄을 0본으로 두고,
+ *    맞는 DOT 로 새 줄을 적으면 된다.
+ */
 
 /** 새 상품 등록 — MARS 마스터에 없는 신모델용 */
 export async function createProduct(input: {

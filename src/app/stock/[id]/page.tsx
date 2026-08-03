@@ -4,7 +4,12 @@ import { getStockDetail } from "@/lib/stock";
 import { SEASON_STYLE, type Season } from "@/lib/tire-attrs";
 import { BADGE_STYLE } from "@/lib/tire-name";
 import { AttrsEditor } from "./attrs-editor";
-import { CopyLine, DotRow, HideToggle, NameEditor, NewDotRow } from "./editor";
+import { CopyLine, HideToggle, NameEditor } from "./editor";
+
+/** 1826 → '26년 18주' */
+function dotLabel(dot: string): string {
+  return `${dot.slice(2, 4)}년 ${Number(dot.slice(0, 2))}주`;
+}
 
 export const dynamic = "force-dynamic";
 
@@ -174,6 +179,11 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
         )}
       </section>
 
+      {/*
+        ⭐ 수량은 여기서 고치지 않는다 (사장님 지시 2026-08-03).
+           한 줄씩 ± 로 맞추는 대신 **엑셀로 한꺼번에** 고친다.
+           여기서는 지금 몇 본인지 보여 주기만 한다.
+      */}
       <section className="mt-4">
         <h2 className="mb-2 font-semibold">
           {d.isSerialized ? "DOT별 수량" : "수량"}
@@ -184,14 +194,19 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
 
         <ul className="space-y-2">
           {d.groups.map((g) => (
-            <DotRow
+            <li
               key={g.dot ?? "none"}
-              productId={d.productId}
-              dot={g.dot}
-              qty={g.qty}
-              unit={unit}
-              serialized={d.isSerialized}
-            />
+              className="flex items-baseline justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3"
+            >
+              <span className="tabular text-lg font-semibold">
+                {g.dot ?? <span className="font-normal text-amber-600">DOT 없음</span>}
+                {g.dot && <span className="ml-2 text-xs font-normal text-slate-500">{dotLabel(g.dot)}</span>}
+              </span>
+              <span className="tabular text-2xl font-bold">
+                {g.qty}
+                <span className="ml-0.5 text-sm font-medium text-slate-500">{unit}</span>
+              </span>
+            </li>
           ))}
           {d.groups.length === 0 && (
             <li className="rounded-xl border border-dashed border-slate-300 p-4 text-center text-slate-500">
@@ -200,9 +215,12 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
           )}
         </ul>
 
-        <div className="mt-3">
-          <NewDotRow productId={d.productId} unit={unit} serialized={d.isSerialized} />
-        </div>
+        <Link
+          href="/stock"
+          className="mt-3 block rounded-xl border border-slate-300 py-3 text-center font-medium text-slate-600 active:bg-slate-100"
+        >
+          수량 고치기 — 재고 엑셀로
+        </Link>
       </section>
 
       <HideToggle productId={d.productId} isActive={d.isActive} hasStock={d.total > 0} />
