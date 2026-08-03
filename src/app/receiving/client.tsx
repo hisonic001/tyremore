@@ -220,6 +220,16 @@ function InvoiceCard({ one }: { one: InvoicePreview }) {
                     {it.cai} · {it.qty}본
                     {it.discountRate > 0 && ` · 할인 ${(it.discountRate * 100).toFixed(0)}%`}
                   </div>
+                  {/*
+                    ⭐ 품번이 안 맞아 규격+모델로 찾은 것은 알려 준다 (2026-08-03).
+                       거의 맞지만 **다른 상품일 수도** 있어 사장님 눈이 한 번 필요하다.
+                  */}
+                  {m?.matchedBy === "규격+모델" && (
+                    <p className="text-xs text-sky-700">
+                      품번이 달라 규격·모델로 찾았습니다 — 맞는지 봐 주세요
+                      <span className="block truncate text-slate-400">{it.description}</span>
+                    </p>
+                  )}
                 </div>
                 <div className="tabular shrink-0 text-right">
                   <div className="text-sm font-bold">{won(it.unitCost)}원</div>

@@ -29,8 +29,25 @@ import { savePriceRule } from "./pricing";
  * ⚠️ 접두를 고정하면 안 된다. **콘티넨탈 인보이스에 제네럴(GN) 제품이 섞여 온다.**
  *    실제로 04492050000(GRAB HT6)이 GN 으로 들어 있었다.
  */
-async function matchProduct(code: string) {
-  const [p] = await db.execute<{ id: number; pattern: string | null; excl: number | null }>(sql`
+const BRAND_CODE: Record<string, string> = { 미쉐린: "MI", 콘티넨탈: "CO", 금호: "KM" };
+
+type Matched = { id: number; pattern: string | null; excl: number | null; via: "품번" | "규격+모델" };
+
+/**
+ * 인보이스 한 줄이 우리 상품 표의 어느 것인지 찾는다.
+ *
+ * ① 품번으로 (가장 확실하다)
+ * ② ⭐ 못 찾으면 **규격 + 모델코드**로 (사장님 지적 2026-08-03)
+ *
+ * 🔴 예전에는 ①만 했다. 그래서 같은 타이어가 카탈로그에 **다른 품번**으로 들어 있으면
+ *    "이미 있는데도 못 알아본다". 실제로 금호는 한 카탈로그 안에 `KM2170042` 와
+ *    `180/001/00024` 두 형태가 섞여 있다.
+ *
+ * ⚠️ ②에서 후보가 **둘 이상이면 고르지 않는다.** 매입원가가 엉뚱한 상품에 붙으면
+ *    마진이 통째로 틀어진다. 애매하면 사람이 고르는 편이 낫다.
+ */
+async function matchProduct(code: string, description = "", supplier = ""): Promise<Matched | null> {
+  const [byCode] = await db.execute<{ id: number; pattern: string | null; excl: number | null }>(sql`
     SELECT p.id, COALESCE(p.display_name, p.pattern) pattern, p.list_price_excl excl
     FROM product p
     WHERE p.mars_item_no = ${code}
@@ -41,7 +58,38 @@ async function matchProduct(code: string) {
     ORDER BY (p.mars_item_no = ${code}) DESC
     LIMIT 1
   `);
-  return p ?? null;
+  if (byCode) return { ...byCode, via: "품번" };
+  if (!description.trim()) return null;
+
+  const { parseTireSpec } = await import("./tire-spec");
+  const { modelTokens } = await import("./invoice-desc");
+  const spec = parseTireSpec(description);
+  if (!spec.parsed || spec.width === null || spec.rimInch === null) return null;
+
+  const tokens = modelTokens(description);
+  if (tokens.length === 0) return null;
+
+  const brand = BRAND_CODE[supplier] ?? null;
+  /** 모델코드가 하나라도 이름에 들어 있어야 한다 */
+  const like = sql.join(
+    tokens.map((t) => sql`(p.raw_name ILIKE ${"%" + t + "%"} OR p.pattern ILIKE ${"%" + t + "%"})`),
+    sql` OR `,
+  );
+
+  const rows = await db.execute<{ id: number; pattern: string | null; excl: number | null }>(sql`
+    SELECT p.id, COALESCE(p.display_name, p.pattern) pattern, p.list_price_excl excl
+    FROM product p
+    WHERE p.item_type = 'tire'
+      AND p.width = ${spec.width}
+      AND p.rim_inch = ${String(spec.rimInch)}
+      AND p.aspect_ratio IS NOT DISTINCT FROM ${spec.aspectRatio}
+      ${brand ? sql`AND p.brand_code = ${brand}` : sql``}
+      AND (${like})
+    LIMIT 2
+  `);
+  // 둘 이상이면 고르지 않는다 — 잘못 붙이면 매입원가가 엉뚱한 상품에 들어간다
+  if (rows.length !== 1) return null;
+  return { ...rows[0], via: "규격+모델" };
 }
 
 function refresh(...paths: string[]) {
@@ -62,6 +110,8 @@ export interface InvoicePreview extends ParsedInvoice {
     cai: string;
     productId: number | null;
     model: string | null;
+    /** 품번으로 찾았나, 규격+모델로 찾았나 — 후자는 사람이 한 번 봐야 한다 */
+    matchedBy: "품번" | "규격+모델" | null;
     /** 우리가 아는 기표가(VAT 미포함) */
     ourListPrice: number | null;
     /** 인보이스 기준단가와 다른가 — 다르면 인보이스가 최신이다 */
@@ -135,11 +185,12 @@ export async function previewInvoice(
 
     const matches: InvoicePreview["matches"] = [];
     for (const it of parsed.items) {
-      const p = await matchProduct(it.cai);
+      const p = await matchProduct(it.cai, it.description, parsed.supplier);
       matches.push({
         cai: it.cai,
         productId: p?.id ?? null,
         model: p?.pattern ?? null,
+        matchedBy: p?.via ?? null,
         ourListPrice: p?.excl ?? null,
         // 기표가를 주는 것은 미쉐린뿐이다. 없는 브랜드는 비교할 것이 없다
         priceDiffers: !!p && it.unitListPrice > 0 && p.excl !== null && p.excl !== it.unitListPrice,
@@ -451,29 +502,30 @@ export async function createProductFromInvoiceItem(
   }
 
   const { parseTireSpec } = await import("./tire-spec");
-  const { parseTireName } = await import("./tire-name");
   const { parseTireAttrs } = await import("./tire-attrs");
+  const { readModelName } = await import("./invoice-desc");
 
-  /**
-   * ⚠️ 브랜드마다 자재명에 내부 코드가 섞여 온다.
-   *    금호 `KH 245/60  R18 V04L HP72 8K;RK` — `KH`(브랜드) `V04L`·`8K;RK`(내부코드)
-   *    이걸 그대로 모델명으로 쓰면 화면이 읽을 수 없게 된다.
-   */
-  const desc = line.description
-    .replace(/;.*$/, " ") // `;RK` 뒤는 내부 코드
-    .replace(/^\s*(KH|KM|CO|MI|BS|HK|NX|GY)\s+/i, " ") // 브랜드 접두
-    .replace(/\s+/g, " ")
-    .trim();
-
-  const spec = parseTireSpec(desc);
+  const spec = parseTireSpec(line.description);
   if (!spec.parsed) {
     return {
       ok: false,
       error: `규격을 읽지 못했습니다 («${line.description}»). 「새 상품 등록」에서 직접 넣어 주세요`,
     };
   }
-  const name = parseTireName(desc, desc, spec);
-  const attrs = parseTireAttrs(desc, desc);
+
+  /**
+   * ⭐ 모델명은 `invoice-desc` 가 만든다 (2026-08-03 사장님 지적으로 고침).
+   *
+   *    예전에는 규격만 대충 걷어내고 `parseTireName(desc, desc, spec)` 에 넘겼다.
+   *    그 결과 이런 이름이 만들어졌다:
+   *      `KH 245/60 R18 V04L HP72 8K;RK`  → «V04L HP72 8K»
+   *      `275/35R19 96W FR PROCRX SIL`    → «PROCRX SIL»
+   *      `195/70R15C 104/102R VANCAP`     → «C VANCAP»   ← 규격의 C 까지 새어 들어갔다
+   *    이제 내부코드를 걷고 줄임말을 편다:
+   *      → «Crugen HP72» · «ProContact RX ContiSilent» · «VanContact AP»
+   */
+  const model = readModelName(line.description);
+  const attrs = parseTireAttrs(model, line.description);
 
   // 기표가 — 인보이스에 없으면 매입가로 대신 채워 둔다 (0 보다 낫다)
   const excl = line.unit_list_price && line.unit_list_price > 0 ? line.unit_list_price : line.unit_cost;
@@ -490,7 +542,7 @@ export async function createProductFromInvoiceItem(
         itemType: "tire",
         isSerialized: true,
         brandCode: b.code,
-        pattern: name.model,
+        pattern: model,
         // 원문은 손대지 않은 것을 남긴다 — 나중에 다시 읽을 수 있어야 한다
         rawName: line.description,
         width: spec.width,
