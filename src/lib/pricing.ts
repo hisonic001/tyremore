@@ -91,29 +91,36 @@ export async function getPrice(productId: number): Promise<PriceInfo | null> {
   `);
   if (!p) return null;
 
-  // 좁은 것이 이긴다 — priority 순으로 첫 줄만
-  const [rule] = await db.execute<{
-    scope: RuleScope;
-    target: string;
-    purchase_discount_rate: string | null;
-    sales_discount_rate: string | null;
-  }>(sql`
-    SELECT scope, target, purchase_discount_rate, sales_discount_rate
-    FROM price_rule
-    WHERE (scope = 'item'     AND target = ${p.mars_item_no ?? ""})
-       OR (scope = 'pattern'  AND target = ${p.pattern ?? ""})
-       OR (scope = 'brand'    AND target = ${p.brand_code ?? ""})
-       OR (scope = 'category' AND target = ${p.category ?? ""})
-    ORDER BY priority
-    LIMIT 1
-  `);
+  /**
+   * 좁은 것이 이긴다 — priority 순으로 첫 줄만.
+   *
+   * 🔴 판매·매입을 **따로** 찾는다 (2026-08-03).
+   *    예전에는 한 번에 한 줄만 뽑아 두 값을 다 읽었다. 그래서
+   *      · 개별 상품에 매입 할인율만 있는 줄이 있으면 그 줄이 이겨 버려서
+   *        판매 할인율이 `null` 이 되고, **기본 25% 가 안 먹었다.**
+   *      · 반대로 판매만 있는 줄이 이기면 브랜드 매입 할인율이 묻혔다.
+   *    값이 실제로 들어 있는 줄만 골라 각자 찾으면 둘 다 제대로 적용된다.
+   */
+  const pick = async (col: "sales_discount_rate" | "purchase_discount_rate") => {
+    const [r] = await db.execute<{ scope: RuleScope; target: string; v: string | null }>(sql`
+      SELECT scope, target, ${sql.raw(col)} AS v
+      FROM price_rule
+      WHERE ${sql.raw(col)} IS NOT NULL
+        AND ( (scope = 'item'     AND target = ${p.mars_item_no ?? ""})
+           OR (scope = 'pattern'  AND target = ${p.pattern ?? ""})
+           OR (scope = 'brand'    AND target = ${p.brand_code ?? ""})
+           OR (scope = 'category' AND target = ${p.category ?? ""}) )
+      ORDER BY priority
+      LIMIT 1
+    `);
+    return r ? { scope: r.scope, target: r.target, rate: Number(r.v) } : null;
+  };
 
-  const salesRate = rule?.sales_discount_rate !== null && rule?.sales_discount_rate !== undefined
-    ? Number(rule.sales_discount_rate)
-    : null;
-  const purchaseRate = rule?.purchase_discount_rate !== null && rule?.purchase_discount_rate !== undefined
-    ? Number(rule.purchase_discount_rate)
-    : null;
+  const sales = await pick("sales_discount_rate");
+  const purchase = await pick("purchase_discount_rate");
+
+  const salesRate = sales?.rate ?? null;
+  const purchaseRate = purchase?.rate ?? null;
 
   const listPrice = p.list_price;
   const listPriceExcl = p.list_price_excl;
@@ -146,8 +153,8 @@ export async function getPrice(productId: number): Promise<PriceInfo | null> {
     purchaseCost,
     margin,
     marginRate,
-    appliedScope: rule?.scope ?? null,
-    appliedTarget: rule?.target ?? null,
+    appliedScope: sales?.scope ?? null,
+    appliedTarget: sales?.target ?? null,
     scopes,
   };
 }

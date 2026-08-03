@@ -34,6 +34,20 @@ const EMPTY: TireSpec = {
 const RE_METRIC =
   /(?:^|[^0-9])(?:P|LT|ST)?\s*(\d{3})\s*\/\s*(\d{2,3})\s*(?:Z|W|Y)?\s*R\s*F?\s*(\d{2}(?:\.\d)?)/i;
 
+/**
+ * ⭐ 편평비 없는 규격 — 밴·소형트럭에 쓴다.  145R13 · 185R14C · 195 R 15
+ *
+ * 사장님 지적 (2026-08-03) — "145R13 사이즈는 145R 까지만 표기됨"
+ *   MARS 원문이 `Kumho  145    R 13  C  94/92R` 인데 이 형태를 못 읽어서
+ *   규격이 통째로 비고, 대신 하중지수 정규식이 앞의 `145`+`R` 을 집어
+ *   화면에 「145R」 이 하중지수 자리에 찍히고 있었다.
+ *
+ * ⚠️ **반드시 RE_METRIC 이 실패했을 때만** 쓴다. 안 그러면 `225/45R17` 의
+ *    `45R17` 같은 조각을 규격으로 오인한다.
+ * 편평비는 관례상 80 이지만 **추측해 넣지 않는다.** null 로 두고 `145R13` 으로 적는다.
+ */
+const RE_METRIC_NO_ASPECT = /(?:^|[^0-9./])(?:P|LT|ST)?\s*(\d{3})\s*R\s*(\d{2}(?:\.\d)?)\s*C?/i;
+
 /** 플로테이션 규격 (SUV·트럭).  31X10.50R15 */
 const RE_FLOTATION = /(?:^|[^0-9])(\d{2}(?:\.\d+)?)\s*[X×]\s*(\d{1,2}(?:\.\d+)?)\s*R\s*(\d{2}(?:\.\d)?)/i;
 
@@ -71,6 +85,12 @@ export function parseTireSpec(rawName: string): TireSpec {
     aspectRatio = Number(m[2]);
     rimInch = Number(m[3]);
     matchEnd = m.index + m[0].length;
+  } else if (RE_METRIC_NO_ASPECT.test(name)) {
+    const v = RE_METRIC_NO_ASPECT.exec(name)!;
+    width = Number(v[1]);
+    aspectRatio = null; // 145R13 에는 편평비가 없다 — 추측해 넣지 않는다
+    rimInch = Number(v[2]);
+    matchEnd = v.index + v[0].length;
   } else {
     const f = RE_FLOTATION.exec(name);
     if (f) {
@@ -109,13 +129,14 @@ export function parseTireSpec(rawName: string): TireSpec {
   return { width, aspectRatio, rimInch, loadIndex, speedRating, season, parsed: true };
 }
 
-/** '225/45R17' 형태의 표시용 문자열 */
+/**
+ * '225/45R17' 형태의 표시용 문자열.
+ * 편평비가 없는 밴 규격은 '145R13' 으로 적는다 (MARS 표기와 같다).
+ */
 export function formatSpec(s: Pick<TireSpec, "width" | "aspectRatio" | "rimInch">): string | null {
-  if (s.width && s.aspectRatio && s.rimInch !== null) {
-    const rim = Number.isInteger(s.rimInch) ? String(s.rimInch) : String(s.rimInch);
-    return `${s.width}/${s.aspectRatio}R${rim}`;
-  }
-  return null;
+  if (!s.width || s.rimInch === null) return null;
+  const rim = String(s.rimInch);
+  return s.aspectRatio ? `${s.width}/${s.aspectRatio}R${rim}` : `${s.width}R${rim}`;
 }
 
 /**

@@ -179,7 +179,7 @@ const MODEL_ALIASES: [RegExp, string][] = [
   [/\bCNT\b/gi, "CONNECT"],
 ];
 
-function expandModel(s: string): string {
+export function expandModel(s: string): string {
   let out = s;
   for (const [re, to] of MODEL_ALIASES) out = out.replace(re, to);
   return out.replace(/\s{2,}/g, " ").trim();
@@ -309,14 +309,24 @@ export function parseTireName(
   }
 
   // ── 규격 · 하중/속도 ──
+  // 편평비 없는 밴 규격(145R13)은 편평비 자리를 비우고 적는다 (2026-08-03)
   const displaySpec =
-    spec && spec.width && spec.aspectRatio && spec.rimInch !== null
-      ? `${spec.width}/${spec.aspectRatio}R${Number(spec.rimInch)}`
+    spec && spec.width && spec.rimInch !== null
+      ? spec.aspectRatio
+        ? `${spec.width}/${spec.aspectRatio}R${Number(spec.rimInch)}`
+        : `${spec.width}R${Number(spec.rimInch)}`
       : null;
 
-  // 하중지수+속도기호는 raw_name 쪽이 정확하다 ("105H", "120/116Q")
+  /**
+   * 하중지수+속도기호는 raw_name 쪽이 정확하다 ("105H", "120/116Q").
+   * 🔴 규격을 **먼저 지워야** 한다. 안 지우면 `145 R 13` 의 `145`+`R` 을
+   *    하중지수로 읽어 화면에 「145R」 이 찍힌다 (사장님 지적 2026-08-03).
+   */
   const ls = /(\d{2,3}(?:\/\d{2,3})?)\s*([A-Z]{1,2})(?=\s|$)/.exec(
-    marsName.replace(BRAND_PREFIX, "").replace(/\d{3}\s*\/\s*\d{2,3}\s*Z?R\s*\d{2}(\.\d)?/i, " "),
+    marsName
+      .replace(BRAND_PREFIX, "")
+      .replace(/\d{3}\s*\/\s*\d{2,3}\s*Z?R\s*\d{2}(\.\d)?/i, " ")
+      .replace(/\d{3}\s*R\s*\d{2}(\.\d)?\s*C?/i, " "),
   );
   const loadSpeed = ls ? `${ls[1]}${ls[2].toUpperCase()}` : null;
 

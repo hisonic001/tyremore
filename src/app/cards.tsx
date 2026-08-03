@@ -52,11 +52,20 @@ export function ProductCard({ p }: { p: ProductHit }) {
               {p.brandName}
             </span>
           )}
-          {p.season && (
+          {/*
+            ⭐ 계절을 모르면 **모른다고 한다** (2026-08-03).
+               예전에는 사전에 없는 모델을 전부 「여름」으로 찍어서, 사계절·겨울 타이어까지
+               여름으로 나왔다. 누르면 상세 화면에서 바로 고칠 수 있다.
+          */}
+          {p.season ? (
             <span className={`rounded px-2 py-0.5 text-xs font-medium ${SEASON_STYLE[p.season]}`}>
               {p.season}
             </span>
-          )}
+          ) : p.itemType === "tire" ? (
+            <span className="rounded border border-dashed border-amber-400 px-2 py-0.5 text-xs font-medium text-amber-700">
+              계절 미확인 ✏️
+            </span>
+          ) : null}
           {p.isHidden && (
             <span className="rounded bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-600">숨김</span>
           )}
@@ -123,7 +132,6 @@ export function ProductCard({ p }: { p: ProductHit }) {
       {p.listPrice !== null && (
         <PriceTool
           productId={p.productId}
-          cai={p.cai}
           model={p.model}
           spec={p.spec}
           brandName={p.brandName}

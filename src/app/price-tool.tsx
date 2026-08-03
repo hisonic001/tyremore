@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
-import { savePriceRule } from "@/lib/pricing";
+import { useState } from "react";
 import { addToCompare } from "./compare-store";
 
 const won = (n: number) => n.toLocaleString();
@@ -14,10 +13,21 @@ const won = (n: number) => n.toLocaleString();
  *
  * 수량 기본값은 **1본**. 4본 금액은 항상 따로 보여준다 — 타이어는 4본 교체가 흔하고,
  * 고객이 묻는 것도 대개 "네 짝 얼마"다.
+ *
+ * 🔴 여기서 친 할인율은 **저장하지 않는다** (사장님 지시 2026-08-03).
+ *
+ *    "25% 돌리기 버튼 만들기보다는 차라리 새로고침이나 새 창을 열면
+ *     25%로 돌아가게 만드는 게 훨씬 나을 것 같아"
+ *
+ *    상담 중에 깎아 주는 값은 그 손님에게 한 번 쓰는 값이지, 그 상품의 새 가격이
+ *    아니다. 예전에는 자동 저장돼서 다음 손님에게도 그 할인율이 따라붙었고,
+ *    되돌릴 방법도 없었다. 이제 새로고침하면 언제나 기본 할인율(25%)에서 시작한다.
+ *
+ *    ⚠️ 기본 할인율 자체를 바꾸려면 `scripts/set-default-rate.ts` 를 쓴다.
+ *       상담 화면에서 무심코 친 숫자가 마스터를 덮는 일은 이제 없다.
  */
 export function PriceTool({
   productId,
-  cai,
   model,
   spec,
   brandName,
@@ -26,72 +36,34 @@ export function PriceTool({
   unit,
 }: {
   productId: number;
-  cai: string | null;
   model: string;
   spec: string | null;
   brandName: string | null;
   listPrice: number;
+  /** 기본 할인율 — 화면을 열 때마다 여기서 시작한다 */
   salesRate: number | null;
   unit: string;
 }) {
-  const [, start] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-
-  const [rate, setRate] = useState(salesRate !== null ? String(Math.round(salesRate * 1000) / 10) : "");
+  const pct = (r: number) => String(Math.round(r * 1000) / 10);
+  const [rate, setRate] = useState(salesRate !== null ? pct(salesRate) : "");
   const [sale, setSale] = useState(salesRate !== null ? String(Math.round(listPrice * (1 - salesRate))) : "");
   const [qty, setQty] = useState(1);
-
-  /**
-   * ⭐ 저장 버튼을 없앴다 (사장님 지시 2026-08-01).
-   *    입력을 멈추면 잠시 뒤 **이 상품에만** 자동 저장된다.
-   *    타자 칠 때마다 저장하면 중간값(2 → 25 의 "2")까지 저장되므로 잠깐 기다린다.
-   *    ⚠️ 모델·브랜드 단위로 넓게 저장하는 것은 상세 화면(/stock/[id])에 남겨 두었다.
-   *       목록에서 무심코 누른 값이 브랜드 전체에 퍼지면 되돌리기 어렵다.
-   */
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-
-  function autoSave(nextRate: number | null) {
-    if (!cai) return; // 자체 등록품은 개별 저장 대상이 없다
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
-      start(async () => {
-        setError(null);
-        const r = await savePriceRule({ scope: "item", target: cai, salesRate: nextRate, productId });
-        if (!r.ok) setError(r.error);
-        else {
-          setSaved(true);
-          setTimeout(() => setSaved(false), 1200);
-        }
-      });
-    }, 900);
-  }
+  /** 기본값에서 손댔나 — 손댔을 때만 「이번만」 이라고 알려 준다 */
+  const touched = salesRate === null ? rate !== "" : rate !== pct(salesRate);
 
   /** 할인율 → 판매가 */
   function onRate(v: string) {
     const c = v.replace(/[^\d.]/g, "");
     setRate(c);
-    if (c === "" || Number.isNaN(Number(c))) {
-      setSale("");
-      autoSave(null);
-      return;
-    }
+    if (c === "" || Number.isNaN(Number(c))) return setSale("");
     setSale(String(Math.round(listPrice * (1 - Number(c) / 100))));
-    autoSave(Number(c) / 100);
   }
   /** 판매가 → 할인율 */
   function onSale(v: string) {
     const c = v.replace(/\D/g, "");
     setSale(c);
-    if (c === "" || listPrice <= 0) {
-      setRate("");
-      autoSave(null);
-      return;
-    }
-    const r = 1 - Number(c) / listPrice;
-    setRate(String(Math.round(r * 1000) / 10));
-    autoSave(r);
+    if (c === "" || listPrice <= 0) return setRate("");
+    setRate(String(Math.round((1 - Number(c) / listPrice) * 1000) / 10));
   }
 
   const saleNum = sale === "" ? null : Number(sale);
@@ -128,7 +100,19 @@ export function PriceTool({
           <span className="text-sm text-slate-500">원</span>
         </label>
 
-        {/* 수량 — 기본 1본 */}
+        {/*
+          기본값에서 손댔을 때만 알려 준다 — 이 값은 저장되지 않는다는 뜻이다.
+          되돌리려면 새로고침만 하면 된다 (사장님 지시 2026-08-03).
+        */}
+        {touched && salesRate !== null && (
+          <span className="text-xs text-slate-400">이번만 · 새로고침하면 {pct(salesRate)}%</span>
+        )}
+
+        {/*
+          수량 — 기본 1본.
+          단위(「본」)는 빼 두었다 (사장님 지시 2026-08-03). 아래 합계 줄에 이미 적혀 있고,
+          − □ + 사이에 끼면 눌러야 할 버튼이 좁아진다.
+        */}
         <div className="ml-auto flex items-center gap-1">
           <button type="button" className={BTN} onClick={() => setQty((q) => Math.max(1, q - 1))}>
             −
@@ -137,10 +121,9 @@ export function PriceTool({
             value={qty}
             onChange={(e) => setQty(Math.max(1, Number(e.target.value.replace(/\D/g, "")) || 1))}
             inputMode="numeric"
-            aria-label="수량"
+            aria-label={`수량(${unit})`}
             className="tabular h-11 w-12 rounded-lg border border-slate-300 text-center text-lg font-bold"
           />
-          <span className="w-4 text-sm text-slate-500">{unit}</span>
           <button type="button" className={BTN} onClick={() => setQty((q) => q + 1)}>
             +
           </button>
@@ -175,8 +158,6 @@ export function PriceTool({
         {saleNum === null && <span className="text-xs text-amber-600">기표가 기준</span>}
       </div>
 
-      {error && <p className="mt-1 text-sm text-red-600">{error}</p>}
-
       {/* ⭐ 스태거드(앞뒤 규격이 다른 차) 대응 — 담아두면 다시 검색해도 안 사라진다 */}
       <div className="mt-2 flex items-center gap-2">
         <button
@@ -197,7 +178,6 @@ export function PriceTool({
         >
           담기
         </button>
-        {saved && <span className="text-xs text-emerald-600">저장됨 ✓</span>}
       </div>
     </div>
   );

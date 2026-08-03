@@ -48,8 +48,10 @@ export interface VehicleHit {
 
 export interface ProductHit {
   productId: number;
-  /** ⭐ CAI — 미쉐린 고유번호. MARS 품번과 같은 값이다 */
+  /** ⭐ CAI — 미쉐린 고유번호. 숫자로만 된 MARS 품번이 곧 CAI 다 (화면 표시용) */
   cai: string | null;
+  /** MARS 품번 — 품번은 CAI 가 아닌 것도 있다 (`KM2284672`). 매입·MARS 입력에 쓴다 */
+  marsItemNo: string | null;
   /** ⭐ 화면용 모델명 — "CROSSCLIMATE 2" 처럼 짧게 */
   model: string;
   /** 할인율 저장 범위를 만들기 위해 필요 */
@@ -281,13 +283,19 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
       /**
        * ⭐ 판매 할인율 — 좁은 것이 이긴다 (개별 > 모델 > 브랜드 > 범주).
        * 상담 화면에서 바로 판매가를 보여주기 위해 검색에서 함께 가져온다.
+       *
+       * 🔴 `sales_discount_rate IS NOT NULL` 이 중요하다 (2026-08-03).
+       *    인보이스에서 들어온 개별 규칙은 **매입 할인율만** 있고 판매는 비어 있는
+       *    경우가 많은데, 그 줄이 우선순위에서 이기면 판매 할인율이 null 이 되어
+       *    **기본 25% 가 아예 안 먹었다.** 값이 실제로 들어 있는 줄만 본다.
        */
       salesRate: sql<string | null>`(
         SELECT r.sales_discount_rate FROM price_rule r
-        WHERE (r.scope='item'     AND r.target = ${product.marsItemNo})
-           OR (r.scope='pattern'  AND r.target = ${product.pattern})
-           OR (r.scope='brand'    AND r.target = ${product.brandCode})
-           OR (r.scope='category' AND r.target = ${product.category})
+        WHERE r.sales_discount_rate IS NOT NULL
+          AND ( (r.scope='item'     AND r.target = ${product.marsItemNo})
+             OR (r.scope='pattern'  AND r.target = ${product.pattern})
+             OR (r.scope='brand'    AND r.target = ${product.brandCode})
+             OR (r.scope='category' AND r.target = ${product.category}) )
         ORDER BY r.priority LIMIT 1
       )`,
       verified: sql<boolean>`EXISTS (
@@ -334,8 +342,10 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
     salesRate: rate,
     salePrice: r.listPrice !== null && rate !== null ? Math.round(r.listPrice * (1 - rate)) : null,
     productId: r.productId,
-    // MARS 이관품은 품번이 곧 CAI. 자체 등록품(NEW-…)은 CAI가 없다
+    // 숫자로만 된 품번이 곧 CAI(미쉐린). 나머지 브랜드·자체 등록품은 CAI가 없다
     cai: r.cai && /^\d+$/.test(r.cai) ? r.cai : null,
+    // 할인율 저장은 CAI 유무와 상관없이 품번으로 한다
+    marsItemNo: r.cai,
     // 사장님이 정한 이름이 있으면 그것이 이긴다
     model: r.displayName?.trim() || n.model,
     badges,
