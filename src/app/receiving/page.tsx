@@ -31,7 +31,16 @@ export default async function ReceivingPage() {
       <Link href="/" className="text-sm text-slate-500 underline underline-offset-4">
         ← 검색으로
       </Link>
-      <h1 className="mt-3 text-2xl font-bold">매입 입고</h1>
+      <div className="mt-3 flex items-baseline justify-between gap-3">
+        <h1 className="text-2xl font-bold">매입 입고</h1>
+        {/* 지나간 매입까지 되짚는 화면 — 여기가 가장 찾기 쉬운 자리다 */}
+        <Link
+          href="/receiving/history"
+          className="shrink-0 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-600 active:bg-slate-100"
+        >
+          매입 내역
+        </Link>
+      </div>
       <p className="mt-1 text-sm text-slate-500">
         인보이스를 올려 두면 물건이 도착했을 때 확정만 하면 됩니다.
       </p>

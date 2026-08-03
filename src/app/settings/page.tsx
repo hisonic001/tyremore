@@ -14,6 +14,7 @@ export default async function SettingsPage() {
     { href: "/settings/suppliers", title: "거래처", desc: "추가 · 이름 고치기 · 합치기 · 숨기기" },
     { href: "/settings/catalog", title: "상품 정리", desc: "안 받는 브랜드·단종 상품 숨기기" },
     { href: "/receiving", title: "매입 입고", desc: "인보이스 올리기 · 바코드 입고 · 직접 매입" },
+    { href: "/receiving/history", title: "매입 내역", desc: "날짜별로 언제 어디서 얼마에 샀는지" },
     { href: "/stock", title: "재고", desc: "엑셀로 내려받고 고쳐서 올리기" },
     { href: "/product/new", title: "새 상품 등록", desc: "MARS 에 없는 신모델" },
     { href: "/status", title: "이관 현황", desc: "들어온 데이터와 보정 대기 목록" },
