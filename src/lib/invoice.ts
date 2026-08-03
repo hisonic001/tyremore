@@ -662,6 +662,101 @@ export async function addScannedToPurchase(
   return { ok: true, model: hit.model ?? hit.marsItemNo ?? "", qty: 1, via: hit.via };
 }
 
+/**
+ * ⭐ 품목을 **찾아서** 매입 장부에 담는다 (사장님 요청 2026-08-03)
+ *
+ *   "바코드 이외에도 품목 검색을 통해서도 매입 입고가 가능하게 해줬으면 좋겠어.
+ *    한 품목이 아니라 여러 품목도 가능했으면 좋겠음."
+ *
+ * 바코드가 안 찍히는 경우가 흔하다 — 라벨이 떨어졌거나, 처음 보는 바코드거나,
+ * 아예 거래처가 라벨을 안 붙여 보내기도 한다. 그럴 때 규격·모델로 찾아 담는다.
+ *
+ * ⚠️ 인보이스 장부에도 담을 수 있다. 인보이스보다 물건이 더 온 경우다.
+ *    같은 상품이 이미 있으면 **수량을 더한다** — 새 줄을 만들면 같은 상품이
+ *    두 줄이 되어 입고할 때 헷갈린다.
+ */
+export async function addProductToPurchase(input: {
+  invoiceId: number;
+  productId: number;
+  qty: number;
+  unitCost?: number | null;
+}): Promise<{ ok: true; model: string; qty: number } | { ok: false; error: string }> {
+  const { invoiceId, productId } = input;
+  const qty = Number(input.qty);
+  if (!Number.isInteger(qty) || qty < 1) return { ok: false, error: "수량은 1 이상이어야 합니다" };
+
+  const [inv] = await db
+    .select({ id: purchaseInvoice.id, status: purchaseInvoice.status })
+    .from(purchaseInvoice)
+    .where(eq(purchaseInvoice.id, invoiceId))
+    .limit(1);
+  if (!inv) return { ok: false, error: "매입 장부를 찾지 못했습니다" };
+  if (inv.status === "입고완료") return { ok: false, error: "이미 입고를 마친 장부입니다" };
+
+  const [p] = await db.execute<{
+    id: number;
+    mars_item_no: string | null;
+    raw_name: string;
+    pattern: string | null;
+    display_name: string | null;
+    brand_code: string | null;
+    width: number | null;
+    aspect_ratio: number | null;
+    rim_inch: string | null;
+  }>(sql`
+    SELECT id, mars_item_no, raw_name, pattern, display_name, brand_code, width, aspect_ratio, rim_inch
+    FROM product WHERE id = ${productId}
+  `);
+  if (!p) return { ok: false, error: "상품을 찾지 못했습니다" };
+
+  const { parseTireName } = await import("./tire-name");
+  const n = parseTireName(p.raw_name, p.pattern, {
+    width: p.width,
+    aspectRatio: p.aspect_ratio,
+    rimInch: p.rim_inch,
+    brandCode: p.brand_code,
+  });
+  const model = p.display_name?.trim() || n.model;
+
+  const [exist] = await db
+    .select()
+    .from(purchaseInvoiceItem)
+    .where(and(eq(purchaseInvoiceItem.invoiceId, invoiceId), eq(purchaseInvoiceItem.productId, productId)))
+    .limit(1);
+
+  if (exist) {
+    const next = exist.qty + qty;
+    await db
+      .update(purchaseInvoiceItem)
+      .set({
+        qty: next,
+        ...(input.unitCost !== undefined && input.unitCost !== null
+          ? { unitCost: input.unitCost, supplyAmount: input.unitCost * next }
+          : {}),
+      })
+      .where(eq(purchaseInvoiceItem.id, exist.id));
+    await recalcInvoiceTotals(invoiceId);
+    refresh("/receiving");
+    return { ok: true, model, qty: next };
+  }
+
+  await db.insert(purchaseInvoiceItem).values([
+    {
+      invoiceId,
+      // cai 는 비울 수 없다. 품번이 없는 상품(거의 없다)은 내부 번호로 채운다
+      cai: p.mars_item_no ?? `ID-${p.id}`,
+      productId: Number(p.id),
+      description: [model, n.spec].filter(Boolean).join(" ") || p.raw_name,
+      qty,
+      unitCost: input.unitCost ?? null,
+      supplyAmount: input.unitCost ? input.unitCost * qty : null,
+    },
+  ]);
+  await recalcInvoiceTotals(invoiceId);
+  refresh("/receiving");
+  return { ok: true, model, qty };
+}
+
 /** 직접 매입 품목의 수량·매입가를 고친다 */
 export async function updatePurchaseItem(input: {
   itemId: number;

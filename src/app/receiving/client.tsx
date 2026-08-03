@@ -6,6 +6,7 @@ import Link from "next/link";
 import { linkBarcode } from "@/lib/barcode-lookup";
 import { ScanIndicator } from "../scan-indicator";
 import { useScanner } from "../use-scanner";
+import { ProductPicker } from "./product-picker";
 import {
   createProductFromInvoiceItem,
   previewInvoice,
@@ -459,6 +460,7 @@ function PendingInvoiceCard({ inv }: { inv: PendingInvoice }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
 
   return (
     <li className="rounded-xl border-2 border-slate-300 bg-white p-3">
@@ -532,6 +534,31 @@ function PendingInvoiceCard({ inv }: { inv: PendingInvoice }) {
       <p className="mt-1 text-xs text-slate-400">
         전량 입고는 DOT 없이 들어갑니다. DOT 를 넣으려면 아래에서 품목별로 하세요.
       </p>
+
+      {/*
+        ⭐ 인보이스에 없던 물건이 같이 온 경우 (사장님 요청 2026-08-03).
+           찾아서 이 장부에 담으면 매입 내역이 한 곳에서 이어진다.
+           평소에는 접어 둔다 — 대부분은 인보이스 그대로 들어온다.
+      */}
+      {addOpen ? (
+        <div className="mt-3 rounded-xl border border-slate-300 bg-slate-50 p-3">
+          <div className="flex items-baseline justify-between">
+            <span className="text-sm font-semibold text-slate-700">품목 찾아서 담기</span>
+            <button type="button" onClick={() => setAddOpen(false)} className="text-sm text-slate-500">
+              닫기
+            </button>
+          </div>
+          <ProductPicker invoiceId={inv.invoiceId} tone="slate" />
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setAddOpen(true)}
+          className="mt-2 w-full rounded-lg border border-dashed border-slate-300 py-2.5 text-sm font-medium text-slate-600 active:bg-slate-100"
+        >
+          + 인보이스에 없는 품목 담기
+        </button>
+      )}
 
       <ul className="mt-2 space-y-2">
         {inv.lines.map((l) => (

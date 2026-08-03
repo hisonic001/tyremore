@@ -12,6 +12,7 @@ import {
 } from "@/lib/invoice";
 import { ScanIndicator } from "../scan-indicator";
 import { useScanner } from "../use-scanner";
+import { ProductPicker } from "./product-picker";
 import { SupplierInput } from "./supplier-input";
 
 const won = (n: number) => n.toLocaleString();
@@ -78,6 +79,13 @@ function ManualScanning({ inv }: { inv: PendingInvoice }) {
   const [log, setLog] = useState<{ ok: boolean; text: string; at: number }[]>([]);
   const [unknown, setUnknown] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /**
+   * ⭐ 담는 방법이 둘이다 (사장님 요청 2026-08-03) — 바코드 · 품목 검색.
+   *    라벨이 떨어졌거나 거래처가 아예 안 붙여 보내는 경우가 흔하다.
+   *    🔴 탭을 나눈 이유: 스캐너는 키보드로 들어온다. 검색창에 초점이 있으면
+   *       바코드가 검색어로 들어가 버린다. 「품목 검색」일 때는 스캐너를 끈다.
+   */
+  const [mode, setMode] = useState<"scan" | "search">("scan");
 
   const handle = (code: string) => {
     if (busy) return;
@@ -100,7 +108,8 @@ function ManualScanning({ inv }: { inv: PendingInvoice }) {
     })();
   };
 
-  useScanner(handle, !unknown);
+  // 「품목 검색」일 때는 스캐너를 끈다 — 안 그러면 바코드가 검색어 칸에 박힌다
+  useScanner(handle, mode === "scan" && !unknown);
 
   const total = inv.lines.reduce((s, l) => s + (l.unitCost ?? 0) * l.qty, 0);
 
@@ -116,47 +125,79 @@ function ManualScanning({ inv }: { inv: PendingInvoice }) {
           {total > 0 && ` · ${won(total)}원`}
         </span>
       </div>
-      <div className="mt-1 flex flex-wrap items-center gap-2">
-        <ScanIndicator active={!unknown} busy={busy} tone="indigo" />
-        <span className="text-sm text-indigo-800">
-          {unknown ? "바코드를 이어 주면 다시 시작합니다" : "찍으면 수량이 1씩 늘어납니다"}
-        </span>
+      {/* 담는 방법 고르기 — 바코드가 안 찍히는 물건이 흔하다 */}
+      <div className="mt-3 flex gap-1 rounded-xl bg-white/70 p-1">
+        {(
+          [
+            ["scan", "바코드"],
+            ["search", "품목 검색"],
+          ] as const
+        ).map(([m, label]) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => setMode(m)}
+            className={`flex-1 rounded-lg py-2.5 text-sm font-semibold ${
+              mode === m ? "bg-indigo-700 text-white" : "text-indigo-800 active:bg-indigo-100"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
-      <form
-        className="mt-3 flex gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          const el = (e.currentTarget.elements.namedItem("code") as HTMLInputElement) ?? null;
-          if (el?.value.trim()) {
-            handle(el.value.trim());
-            el.value = "";
-          }
-        }}
-      >
-        <input
-          name="code"
-          placeholder="바코드"
-          autoComplete="off"
-          className="tabular min-w-0 flex-1 rounded-lg border-2 border-indigo-300 bg-white px-3 py-3 text-lg outline-none focus:border-indigo-700"
-        />
-        <button type="submit" className="rounded-lg bg-indigo-700 px-5 font-semibold text-white">
-          추가
-        </button>
-      </form>
+      {mode === "scan" ? (
+        <>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <ScanIndicator active={!unknown} busy={busy} tone="indigo" />
+            <span className="text-sm text-indigo-800">
+              {unknown ? "바코드를 이어 주면 다시 시작합니다" : "찍으면 수량이 1씩 늘어납니다"}
+            </span>
+          </div>
 
-      {unknown && (
-        <UnknownForManual
-          code={unknown}
-          onDone={() => {
-            setUnknown(null);
-            router.refresh();
-          }}
-          onCancel={() => setUnknown(null)}
-        />
+          <form
+            className="mt-2 flex gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const el = (e.currentTarget.elements.namedItem("code") as HTMLInputElement) ?? null;
+              if (el?.value.trim()) {
+                handle(el.value.trim());
+                el.value = "";
+              }
+            }}
+          >
+            <input
+              name="code"
+              placeholder="바코드"
+              autoComplete="off"
+              className="tabular min-w-0 flex-1 rounded-lg border-2 border-indigo-300 bg-white px-3 py-3 text-lg outline-none focus:border-indigo-700"
+            />
+            <button type="submit" className="rounded-lg bg-indigo-700 px-5 font-semibold text-white">
+              추가
+            </button>
+          </form>
+
+          {unknown && (
+            <UnknownForManual
+              code={unknown}
+              onDone={() => {
+                setUnknown(null);
+                router.refresh();
+              }}
+              onCancel={() => setUnknown(null)}
+            />
+          )}
+        </>
+      ) : (
+        <>
+          <p className="mt-2 text-sm text-indigo-800">
+            바코드가 없거나 안 찍힐 때. <strong>여러 품목을 이어서 담을 수 있습니다.</strong>
+          </p>
+          <ProductPicker invoiceId={inv.invoiceId} tone="indigo" />
+        </>
       )}
 
-      {log.length > 0 && (
+      {mode === "scan" && log.length > 0 && (
         <ul className="mt-3 space-y-1">
           {log.map((l) => (
             <li
