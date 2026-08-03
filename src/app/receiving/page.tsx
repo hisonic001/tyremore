@@ -38,7 +38,7 @@ export default async function ReceivingPage() {
 
       <InvoiceUpload />
 
-      {/* ⭐ 인보이스가 없는 사매입 — 바코드로 목록을 만들어 간다 */}
+      {/* ⭐ 인보이스가 없는 사매입 — 바코드 또는 품목 검색으로 목록을 만들어 간다 */}
       <ManualPurchase open={openManual} />
 
       <section className="mt-8">

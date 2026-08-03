@@ -601,6 +601,39 @@ export const quoteItem = pgTable(
 );
 
 /* ============================================================
+ * supplier — 거래처 (2026-08-03)
+ *
+ * 사장님 요청: "설정에 거래처 추가 수정 삭제가 가능한 기능도 추가해줘"
+ *
+ * 그동안 거래처는 `purchase_invoice.supplier` 에 **글자로만** 있었다.
+ * 그래서 아직 거래한 적 없는 곳은 미리 넣어 둘 수 없었고,
+ * 「쌍성」·「쌍성 타이어」처럼 갈라진 이름을 합칠 방법도 없었다.
+ *
+ * ⚠️ `purchase_invoice.supplier` 는 글자 그대로 둔다. 외래키로 묶으면 옛 인보이스 때문에
+ *    거래처를 손대기가 어려워진다. 대신 **이름을 바꾸면 인보이스도 같이 바꾼다**
+ *    (`renameSupplier`) — 매입 내역이 갈라지지 않게.
+ * ========================================================== */
+export const supplier = pgTable(
+  "supplier",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    name: text("name").notNull(),
+    /**
+     * 공백·대소문자를 지운 이름. 「쌍성 타이어」와 「쌍성타이어」가 따로 생기는 것을
+     * DB 차원에서 막는다 — 화면 경고만으로는 언젠가 뚫린다.
+     */
+    nameKey: text("name_key").notNull(),
+    phone: text("phone"),
+    memo: text("memo"),
+    /** 거래를 끊은 곳. 지우지 않고 숨긴다 — 옛 매입 내역이 남아 있다 */
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [uniqueIndex("uq_supplier_key").on(t.nameKey)],
+);
+
+/* ============================================================
  * purchase_invoice — 매입 인보이스 (2026-08-01)
  *
  * 발주해서 출고된 물건의 명세다. 실물이 오기 전에 미리 등록해 두고,

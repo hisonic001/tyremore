@@ -540,11 +540,31 @@ export async function createProductFromInvoiceItem(
  */
 export async function supplierList(q = ""): Promise<{ name: string; count: number; lastAt: string | null }[]> {
   const term = q.replace(/\s/g, "").toLowerCase();
+  /**
+   * ⭐ 거래처 표(`supplier`)와 인보이스에 적힌 이름을 **둘 다** 본다 (2026-08-03).
+   *    · 표에만 있는 곳 — 설정에서 미리 등록만 해 둔 새 거래처
+   *    · 인보이스에만 있는 곳 — 거래처 표를 만들기 전에 쓰던 이름
+   *    숨긴 거래처(`is_active = false`)는 제안하지 않는다.
+   */
   const rows = await db.execute<{ supplier: string; n: number; last_at: string | null }>(sql`
-    SELECT supplier, count(*)::int n, max(issued_at) last_at
-    FROM purchase_invoice
-    GROUP BY supplier
-    ORDER BY max(created_at) DESC
+    WITH inv AS (
+      SELECT replace(lower(supplier),' ','') k, max(supplier) supplier,
+             count(*)::int n, max(issued_at) last_at, max(created_at) at
+      FROM purchase_invoice WHERE btrim(supplier) <> '' GROUP BY 1
+    ), reg AS (
+      SELECT name_key k, name supplier, 0 n, NULL::text last_at, created_at at
+      FROM supplier WHERE is_active
+    )
+    SELECT COALESCE(r.supplier, i.supplier) supplier,
+           COALESCE(i.n, 0) n,
+           i.last_at,
+           COALESCE(i.at, r.at) at
+    FROM inv i
+    FULL OUTER JOIN reg r ON r.k = i.k
+    -- 표에 있으면 그대로, 인보이스에만 있으면 「숨김」으로 꺼 두지 않은 것만
+    WHERE r.k IS NOT NULL
+       OR NOT EXISTS (SELECT 1 FROM supplier s WHERE s.name_key = i.k AND NOT s.is_active)
+    ORDER BY at DESC NULLS LAST
     LIMIT 200
   `);
   const all = rows.map((r) => ({ name: r.supplier, count: r.n, lastAt: r.last_at }));

@@ -30,50 +30,78 @@ export function ManualPurchase({ open }: { open: PendingInvoice | null }) {
   const [pending, start] = useTransition();
   const [supplier, setSupplier] = useState("");
   const [error, setError] = useState<string | null>(null);
+  /**
+   * 🔴 담는 방법을 **장부를 열기 전에** 고르게 한다 (2026-08-03).
+   *    처음엔 장부 안에만 탭을 넣었는데, 열려 있는 장부가 없으면 「거래처 + 시작」
+   *    폼만 보여서 품목 검색이 있다는 것 자체를 알 수 없었다.
+   *    사장님이 "적용이 안 됐는데?" 하신 것이 이것이다.
+   */
+  const [startMode, setStartMode] = useState<"scan" | "search">("scan");
+
+  function begin(mode: "scan" | "search") {
+    setStartMode(mode);
+    start(async () => {
+      setError(null);
+      const r = await startManualPurchase(supplier);
+      if (!r.ok) setError(r.error);
+      else {
+        setSupplier("");
+        router.refresh();
+      }
+    });
+  }
 
   if (!open) {
+    const ready = !pending && supplier.trim().length > 0;
     return (
       <section className="mt-5 rounded-2xl border border-slate-300 bg-white p-4">
         <h2 className="font-bold">직접 매입</h2>
         <p className="mt-0.5 text-sm text-slate-500">
-          거래처에서 사 오신 타이어는 여기서 바코드를 찍어 등록합니다. 인보이스가 없어도 됩니다.
+          거래처에서 사 오신 타이어를 등록합니다. 인보이스가 없어도 됩니다.
         </p>
-        <form
-          className="mt-3 flex items-start gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            start(async () => {
-              setError(null);
-              const r = await startManualPurchase(supplier);
-              if (!r.ok) setError(r.error);
-              else {
-                setSupplier("");
-                router.refresh();
-              }
-            });
-          }}
-        >
-          <div className="min-w-0 flex-1">
-            {/* ⭐ 같은 거래처가 두 이름으로 갈리지 않게 치는 동안 보여준다 */}
-            <SupplierInput value={supplier} onChange={setSupplier} />
+
+        <form className="mt-3" onSubmit={(e) => e.preventDefault()}>
+          {/* ⭐ 같은 거래처가 두 이름으로 갈리지 않게 치는 동안 보여준다 */}
+          <SupplierInput value={supplier} onChange={setSupplier} />
+
+          {/* 담는 방법을 여기서 고른다 — 바코드가 안 찍히는 물건이 흔하다 */}
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              disabled={!ready}
+              onClick={() => begin("scan")}
+              className="rounded-xl bg-slate-900 py-3.5 font-semibold text-white active:bg-slate-700 disabled:opacity-40"
+            >
+              바코드로 담기
+            </button>
+            <button
+              type="button"
+              disabled={!ready}
+              onClick={() => begin("search")}
+              className="rounded-xl border-2 border-slate-900 py-3.5 font-semibold text-slate-900 active:bg-slate-100 disabled:opacity-40"
+            >
+              품목 검색으로 담기
+            </button>
           </div>
-          <button
-            type="submit"
-            disabled={pending || !supplier.trim()}
-            className="shrink-0 rounded-lg bg-slate-900 px-5 py-3 font-semibold text-white disabled:opacity-50"
-          >
-            시작
-          </button>
+          <p className="mt-2 text-xs text-slate-500">
+            거래처를 먼저 적어 주세요. 담는 방법은 나중에 바꿔도 됩니다.
+          </p>
         </form>
         {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
       </section>
     );
   }
 
-  return <ManualScanning inv={open} />;
+  return <ManualScanning inv={open} initialMode={startMode} />;
 }
 
-function ManualScanning({ inv }: { inv: PendingInvoice }) {
+function ManualScanning({
+  inv,
+  initialMode = "scan",
+}: {
+  inv: PendingInvoice;
+  initialMode?: "scan" | "search";
+}) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [log, setLog] = useState<{ ok: boolean; text: string; at: number }[]>([]);
@@ -85,7 +113,7 @@ function ManualScanning({ inv }: { inv: PendingInvoice }) {
    *    🔴 탭을 나눈 이유: 스캐너는 키보드로 들어온다. 검색창에 초점이 있으면
    *       바코드가 검색어로 들어가 버린다. 「품목 검색」일 때는 스캐너를 끈다.
    */
-  const [mode, setMode] = useState<"scan" | "search">("scan");
+  const [mode, setMode] = useState<"scan" | "search">(initialMode);
 
   const handle = (code: string) => {
     if (busy) return;
