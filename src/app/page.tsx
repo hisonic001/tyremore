@@ -76,6 +76,13 @@ export default async function Home({
           >
             매입
           </Link>
+          {/* 창고에서 세는 화면 — 자주는 아니지만 찾을 때 바로 보여야 한다 */}
+          <Link
+            href="/stock"
+            className="rounded-lg px-2.5 py-2 text-sm font-medium text-slate-600 active:bg-slate-200"
+          >
+            재고
+          </Link>
           <Link
             href="/settings"
             aria-label="설정"

@@ -36,6 +36,91 @@ export interface DotGroup {
   qty: number;
 }
 
+/**
+ * ⭐ 창고 실사용 한 줄 — 「상품 + DOT」 한 묶음 (사장님 요청 2026-08-03)
+ *
+ *   "한눈에 현 재고들을 전부 파악하고 싶은데" → "창고 실사용 화면으로 간편하게. 타이어만."
+ *
+ * 타이어는 1본 1행이라 재고 295본이 stock_item 295줄이다. 그대로 늘어놓으면
+ * 창고에서 못 쓴다. 실제로 세는 단위인 **같은 상품·같은 DOT** 로 묶는다.
+ */
+export interface StockLot {
+  productId: number;
+  model: string;
+  spec: string | null;
+  loadSpeed: string | null;
+  season: string | null;
+  /** 인치별로 갈라 보여주기 위해 따로 둔다 — 창고가 인치로 정리돼 있다 */
+  rimInch: number | null;
+  width: number | null;
+  aspectRatio: number | null;
+  dot: string | null;
+  /** 장부상 수량 */
+  qty: number;
+  /** 마지막으로 실물을 확인한 때. null 이면 한 번도 안 셌다 */
+  verifiedAt: string | null;
+  /** 제조 후 지난 햇수 — 오래된 것부터 팔아야 한다 */
+  ageYears: number | null;
+}
+
+/**
+ * 재고가 있는 타이어를 전부 가져온다. **인치 → 폭 → 편평비 → DOT** 순.
+ * 창고를 도는 순서와 같게 놓아야 눈이 화면과 선반 사이를 왔다 갔다 하지 않는다.
+ */
+export async function stockLots(): Promise<StockLot[]> {
+  const rows = await db.execute<{
+    product_id: number;
+    raw_name: string;
+    pattern: string | null;
+    display_name: string | null;
+    brand_code: string | null;
+    season: string | null;
+    width: number | null;
+    aspect_ratio: number | null;
+    rim_inch: string | null;
+    load_index: string | null;
+    speed_rating: string | null;
+    dot: string | null;
+    qty: number;
+    verified_at: Date | null;
+  }>(sql`
+    SELECT p.id product_id, p.raw_name, p.pattern, p.display_name, p.brand_code, p.season,
+           p.width, p.aspect_ratio, p.rim_inch, p.load_index, p.speed_rating,
+           s.dot, SUM(s.qty)::int qty, MAX(s.verified_at) verified_at
+    FROM stock_item s JOIN product p ON p.id = s.product_id
+    WHERE s.status = '재고' AND s.qty > 0 AND p.item_type = 'tire'
+    GROUP BY p.id, p.raw_name, p.pattern, p.display_name, p.brand_code, p.season,
+             p.width, p.aspect_ratio, p.rim_inch, p.load_index, p.speed_rating, s.dot
+    ORDER BY p.rim_inch NULLS LAST, p.width NULLS LAST, p.aspect_ratio NULLS LAST, s.dot NULLS FIRST
+  `);
+
+  const thisYear = new Date().getFullYear();
+  return rows.map((r) => {
+    const n = parseTireName(r.raw_name, r.pattern, {
+      width: r.width,
+      aspectRatio: r.aspect_ratio,
+      rimInch: r.rim_inch,
+      brandCode: r.brand_code,
+    });
+    /** DOT 뒤 두 자리가 제조 연도다 — `0426` = 2026년 4주차 */
+    const made = r.dot && /^\d{4}$/.test(r.dot) ? 2000 + Number(r.dot.slice(2, 4)) : null;
+    return {
+      productId: Number(r.product_id),
+      model: r.display_name?.trim() || n.model,
+      spec: n.spec,
+      loadSpeed: n.loadSpeed ?? (r.load_index ? `${r.load_index}${r.speed_rating ?? ""}` : null),
+      season: r.season,
+      rimInch: r.rim_inch === null ? null : Number(r.rim_inch),
+      width: r.width,
+      aspectRatio: r.aspect_ratio,
+      dot: r.dot,
+      qty: Number(r.qty),
+      verifiedAt: r.verified_at ? new Date(r.verified_at).toISOString() : null,
+      ageYears: made === null ? null : Math.max(0, thisYear - made),
+    };
+  });
+}
+
 export interface StockDetail {
   productId: number;
   /** CAI — 미쉐린 고유번호 (MARS 품번) */
@@ -303,7 +388,7 @@ export async function setDotQty(input: {
     await db.update(product).set({ stockTracked: true }).where(eq(product.id, productId));
   }
 
-  refresh(`/stock/${productId}`, "/");
+  refresh(`/stock/${productId}`, "/stock", "/");
   return { ok: true, delta };
 }
 
