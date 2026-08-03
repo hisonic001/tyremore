@@ -78,6 +78,34 @@ const ALIASES: [RegExp, string][] = [
 ];
 
 /**
+ * ⭐ 타이어가 아닌 줄 (사장님 확인 2026-08-03 — "타이어 아님으로 표시하고 넘김")
+ *
+ * 미쉐린 인보이스에는 `TYREPLUS FRANCHISE EXPRESS` 같은 **프랜차이즈 수수료** 줄이
+ * 섞여 들어온다. 물건이 아니므로 재고가 될 수 없다.
+ * 예전에는 이런 줄이 「상품 미등록 — 먼저 등록해야 입고됩니다」로 빨갛게 떠서,
+ * 사장님이 등록하려다 규격을 못 읽는다는 오류만 보게 됐다.
+ *
+ * 🔴 **규격이 없다는 이유만으로 「타이어 아님」이라고 하지 않는다.**
+ *    우리가 규격을 못 읽는 진짜 타이어가 있을 수 있고, 그걸 조용히 넘기면
+ *    매입한 타이어가 재고에서 통째로 빠진다. 요금성 낱말이 함께 있어야 한다.
+ */
+const FEE_WORDS =
+  /FRANCHISE|ROYALTY|MEMBERSHIP|SUBSCRIPTION|\bFEE\b|CHARGE|FREIGHT|DELIVERY|SHIPPING|SERVICE|수수료|운임|배송|보증금|교육|광고/i;
+
+export type LineKind = "tire" | "notTire" | "unreadable";
+
+/**
+ * 이 줄이 타이어인가.
+ *   `tire`        — 규격을 읽었다. 상품으로 다룬다
+ *   `notTire`     — 규격이 없고 요금성 낱말이 있다. 넘긴다
+ *   `unreadable`  — 규격이 없는데 요금인지도 모르겠다. **사람이 봐야 한다**
+ */
+export function classifyLine(description: string, specParsed: boolean): LineKind {
+  if (specParsed) return "tire";
+  return FEE_WORDS.test(String(description ?? "")) ? "notTire" : "unreadable";
+}
+
+/**
  * 자재명에서 **모델코드**만 뽑는다 — `HP72` · `PROCRX` · `VANCAP`.
  * 이미 있는 상품을 규격+모델로 찾을 때 쓴다.
  * 규격·하중속도·내부코드를 걷어내고 남는 토큰 중 가장 그럴듯한 것.

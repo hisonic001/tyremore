@@ -15,6 +15,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { product, purchaseInvoice, purchaseInvoiceItem, stockItem, stockMovement } from "@/db/schema";
+import type { LineKind } from "./invoice-desc";
 import { parseInvoiceRows, parseInvoiceText, type ParsedInvoice } from "./invoice-parse";
 import { isPlausibleDot } from "./normalize";
 import { savePriceRule } from "./pricing";
@@ -108,6 +109,8 @@ export interface InvoicePreview extends ParsedInvoice {
   /** 품목별로 우리 DB와 대조한 결과 */
   matches: {
     cai: string;
+    /** 타이어인가 · 수수료 같은 딴 줄인가 · 읽지 못했나 */
+    kind: LineKind;
     productId: number | null;
     model: string | null;
     /** 품번으로 찾았나, 규격+모델로 찾았나 — 후자는 사람이 한 번 봐야 한다 */
@@ -183,11 +186,17 @@ export async function previewInvoice(
           .limit(1)
       : [];
 
+    const { classifyLine } = await import("./invoice-desc");
+    const { parseTireSpec } = await import("./tire-spec");
+
     const matches: InvoicePreview["matches"] = [];
     for (const it of parsed.items) {
-      const p = await matchProduct(it.cai, it.description, parsed.supplier);
+      const kind = classifyLine(it.description, parseTireSpec(it.description).parsed);
+      // 타이어가 아닌 줄(프랜차이즈 수수료 등)은 상품을 찾을 것도 없다
+      const p = kind === "notTire" ? null : await matchProduct(it.cai, it.description, parsed.supplier);
       matches.push({
         cai: it.cai,
+        kind,
         productId: p?.id ?? null,
         model: p?.pattern ?? null,
         matchedBy: p?.via ?? null,
@@ -505,8 +514,13 @@ export async function createProductFromInvoiceItem(
   const { parseTireAttrs } = await import("./tire-attrs");
   const { readModelName } = await import("./invoice-desc");
 
+  const { classifyLine } = await import("./invoice-desc");
   const spec = parseTireSpec(line.description);
   if (!spec.parsed) {
+    // 프랜차이즈 수수료 같은 줄은 상품이 될 수 없다 — 왜 안 되는지 분명히 말한다
+    if (classifyLine(line.description, false) === "notTire") {
+      return { ok: false, error: `타이어가 아닙니다 («${line.description}») — 등록하지 않고 넘어갑니다` };
+    }
     return {
       ok: false,
       error: `규격을 읽지 못했습니다 («${line.description}»). 「새 상품 등록」에서 직접 넣어 주세요`,
@@ -952,21 +966,57 @@ export async function receiveByScan(
 export async function receiveAll(
   invoiceId: number,
   userId?: number,
-): Promise<{ ok: true; created: number; failed: string[] } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; created: number; failed: string[]; skipped: number }
+  | { ok: false; error: string }
+> {
   const lines = (await pendingLines()).filter((l) => l.invoiceId === invoiceId);
   if (lines.length === 0) return { ok: false, error: "입고할 것이 없습니다" };
 
+  const { classifyLine } = await import("./invoice-desc");
+  const { parseTireSpec } = await import("./tire-spec");
+
   let created = 0;
+  let skipped = 0;
   const failed: string[] = [];
   for (const l of lines) {
     const remain = l.qty - l.receivedQty;
     if (remain <= 0) continue;
+
+    /**
+     * ⭐ 타이어가 아닌 줄(프랜차이즈 수수료 등)은 재고가 될 수 없다 (사장님 확인 2026-08-03).
+     *
+     * ⚠️ 그냥 건너뛰면 안 된다. 인보이스 상태는 「모든 품목이 다 들어왔는가」로 정해지는데,
+     *    수수료 줄이 영원히 안 들어온 상태로 남아 **입고완료가 되지 않는다.**
+     *    재고는 만들지 않고 **받은 것으로만 표시**한다 — 실제로 청구된 값이니 맞는 표현이다.
+     */
+    if (!l.productId && classifyLine(l.description, parseTireSpec(l.description).parsed) === "notTire") {
+      await db
+        .update(purchaseInvoiceItem)
+        .set({ receivedQty: l.qty })
+        .where(eq(purchaseInvoiceItem.id, l.itemId));
+      skipped++;
+      continue;
+    }
+
     const r = await receiveLine({ itemId: l.itemId, qty: remain, dot: null, userId });
     if (r.ok) created += r.created;
     else failed.push(`${l.model ?? l.cai}: ${r.error}`);
   }
+
+  // 수수료 줄만 있었을 수도 있다 — 그때도 인보이스 상태를 다시 계산해 준다
+  if (skipped > 0) {
+    await db.execute(sql`
+      UPDATE purchase_invoice SET
+        status = CASE WHEN EXISTS (SELECT 1 FROM purchase_invoice_item x
+                                   WHERE x.invoice_id = ${invoiceId} AND x.received_qty < x.qty)
+                      THEN '부분입고' ELSE '입고완료' END,
+        updated_at = now()
+      WHERE id = ${invoiceId}
+    `);
+  }
   refresh("/receiving", "/");
-  return { ok: true, created, failed };
+  return { ok: true, created, failed, skipped };
 }
 
 /** 아직 다 안 들어온 인보이스 품목 */

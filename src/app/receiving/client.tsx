@@ -180,7 +180,9 @@ export function InvoiceUpload() {
 
 /** 인보이스 한 건 미리보기 */
 function InvoiceCard({ one }: { one: InvoicePreview }) {
-  const missing = one.matches.filter((m) => !m.productId).length;
+  // 타이어가 아닌 줄은 「미등록」으로 세지 않는다 — 등록할 것이 아니다
+  const missing = one.matches.filter((m) => !m.productId && m.kind !== "notTire").length;
+  const notTire = one.matches.filter((m) => m.kind === "notTire").length;
   return (
     <li
       className={`rounded-xl border p-3 ${
@@ -236,9 +238,18 @@ function InvoiceCard({ one }: { one: InvoicePreview }) {
                   <div className="text-xs text-slate-400">{won(it.supplyAmount)}</div>
                 </div>
               </div>
-              {!m?.productId && (
+              {/*
+                ⭐ 「상품 미등록」과 「타이어가 아님」을 구분한다 (사장님 확인 2026-08-03).
+                   미쉐린 인보이스의 `TYREPLUS FRANCHISE EXPRESS` 같은 수수료 줄이
+                   빨갛게 떠서, 등록하려다 규격 오류만 보게 됐다.
+              */}
+              {m?.kind === "notTire" ? (
+                <p className="text-xs text-slate-500">타이어가 아닙니다 — 입고에서 넘어갑니다</p>
+              ) : m?.kind === "unreadable" && !m?.productId ? (
+                <p className="text-xs text-amber-700">규격을 읽지 못했습니다 — 확인해 주세요</p>
+              ) : !m?.productId ? (
                 <p className="text-xs text-red-600">상품 미등록 — 먼저 등록해야 입고됩니다</p>
-              )}
+              ) : null}
               {m?.priceDiffers && (
                 <p className="text-xs text-amber-700">
                   기표가 {won(m.ourListPrice!)} → {won(it.unitListPrice)} 로 갱신됩니다
@@ -248,9 +259,8 @@ function InvoiceCard({ one }: { one: InvoicePreview }) {
           );
         })}
       </ul>
-      {missing > 0 && (
-        <p className="mt-1 text-xs text-red-600">상품 미등록 {missing}건</p>
-      )}
+      {missing > 0 && <p className="mt-1 text-xs text-red-600">상품 미등록 {missing}건</p>}
+      {notTire > 0 && <p className="mt-1 text-xs text-slate-500">타이어가 아닌 줄 {notTire}건 (수수료 등)</p>}
     </li>
   );
 }
@@ -497,7 +507,12 @@ function PendingInvoiceCard({ inv }: { inv: PendingInvoice }) {
               const r = await receiveAll(inv.invoiceId);
               if (!r.ok) setError(r.error);
               else {
-                if (r.failed.length) setError(`${r.created}본 입고. 남은 문제:\n${r.failed.join("\n")}`);
+                const notes = [
+                  r.failed.length ? `남은 문제:\n${r.failed.join("\n")}` : null,
+                  // 수수료 줄은 문제가 아니다 — 넘어갔다고만 알린다
+                  r.skipped > 0 ? `타이어가 아닌 줄 ${r.skipped}건은 넘어갔습니다` : null,
+                ].filter(Boolean);
+                if (notes.length) setError(`${r.created}본 입고. ${notes.join("\n")}`);
                 router.refresh();
               }
             })
