@@ -128,7 +128,8 @@ function Entry({ e }: { e: MarsEntry }) {
           disabled={pending}
           onClick={() =>
             start(async () => {
-              await markEntered(e.quoteId, refNo);
+              // 자동 입력과 구분해 둔다 — 나중에 「어떻게 들어갔나」를 되짚을 수 있게
+              await markEntered(e.quoteId, refNo, "손으로 입력");
               router.refresh();
             })
           }

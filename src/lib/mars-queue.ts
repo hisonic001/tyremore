@@ -199,11 +199,19 @@ export async function marsQueue(): Promise<MarsEntry[]> {
 
 /**
  * MARS 에 다 쳤다 — 대기열에서 내린다.
- * @param refNo MARS 매출주문·송장 번호를 적어 두면 나중에 대조할 수 있다
+ *
+ * 🔴 **번호 칸과 메모 칸을 섞지 않는다** (2026-08-04).
+ *    자동 입력이 「자동입력 2026-08-02 (금액 확인 필요)」 라는 메모를 `mars_ref_no`
+ *    (송장번호 칸)에 넣고 있었다. 그래서 번호로 송장을 찾을 수 없었고, 정작 메모 칸은
+ *    비어 있어 **왜 금액이 안 맞았는지도 남지 않았다.**
+ *
+ * @param refNo MARS 매출주문 번호 (`61168583-23SO+000123`). 없으면 비운다
+ * @param memo  무슨 일이 있었는지 — 합계 대조 결과 같은 것
  */
 export async function markEntered(
   quoteId: number,
   refNo?: string | null,
+  memo?: string | null,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const [q] = await db.select({ id: quote.id }).from(quote).where(eq(quote.id, quoteId)).limit(1);
   if (!q) return { ok: false, error: "판매 기록을 찾을 수 없습니다" };
@@ -214,6 +222,7 @@ export async function markEntered(
       marsStatus: "전송완료",
       marsSyncedAt: new Date(),
       marsRefNo: refNo?.trim() || null,
+      marsMemo: memo?.trim() || null,
       updatedAt: new Date(),
     })
     .where(eq(quote.id, quoteId));
@@ -226,7 +235,13 @@ export async function markEntered(
 export async function unmarkEntered(quoteId: number): Promise<{ ok: true }> {
   await db
     .update(quote)
-    .set({ marsStatus: "미전송", marsSyncedAt: null, marsRefNo: null, updatedAt: new Date() })
+    .set({
+      marsStatus: "미전송",
+      marsSyncedAt: null,
+      marsRefNo: null,
+      marsMemo: null,
+      updatedAt: new Date(),
+    })
     .where(eq(quote.id, quoteId));
   refresh("/mars");
   return { ok: true };
@@ -238,17 +253,36 @@ export async function unmarkEntered(quoteId: number): Promise<{ ok: true }> {
  * 전기가 끝나야 들어갈 수 있는 화면이라 매출 주문 입력과 **별개 단계**다.
  * MARS 에 넘긴(전송완료) 것 중 점검을 아직 안 한 것을 찾는다.
  */
-export async function pendingVehicleChecks(): Promise<
-  { quoteId: number; quoteNo: string; plateNo: string | null; customerName: string | null; tyreQty: number }[]
-> {
+export interface PendingCheck {
+  quoteId: number;
+  quoteNo: string;
+  plateNo: string | null;
+  customerName: string | null;
+  tyreQty: number;
+  /**
+   * ⭐ 송장을 **번호판만으로** 찾으면 안 된다 (2026-08-04).
+   *    단골이면 그 번호판의 송장이 여러 개다. 아래 값들로 한 줄까지 좁힌다.
+   */
+  total: number;
+  /** 실제로 정비한 날 'YYYY-MM-DD' */
+  workDate: string | null;
+  /** MARS 매출 주문 번호 — 있으면 가장 확실하다 */
+  marsRefNo: string | null;
+}
+
+export async function pendingVehicleChecks(): Promise<PendingCheck[]> {
   const rows = await db.execute<{
     id: number;
     quote_no: string;
     plate_no: string | null;
     name: string | null;
     tyre_qty: number;
+    total_amount: number;
+    work_date: string | null;
+    mars_ref_no: string | null;
   }>(sql`
-    SELECT q.id, q.quote_no, v.plate_no, c.name,
+    SELECT q.id, q.quote_no, v.plate_no, c.name, q.total_amount, q.mars_ref_no,
+           to_char(COALESCE(q.work_date, q.confirmed_at::date, q.created_at::date), 'YYYY-MM-DD') work_date,
            COALESCE(SUM(qi.qty) FILTER (WHERE qi.line_type = 'tire'), 0)::int AS tyre_qty
     FROM quote q
     LEFT JOIN vehicle    v ON v.id = q.vehicle_id
@@ -258,7 +292,7 @@ export async function pendingVehicleChecks(): Promise<
       AND q.mars_status = '전송완료'
       AND q.vehicle_check_at IS NULL
       AND v.plate_no IS NOT NULL
-    GROUP BY q.id, q.quote_no, v.plate_no, c.name
+    GROUP BY q.id, q.quote_no, v.plate_no, c.name, q.total_amount, q.mars_ref_no
     HAVING COALESCE(SUM(qi.qty) FILTER (WHERE qi.line_type = 'tire'), 0) > 0
     ORDER BY q.confirmed_at DESC NULLS LAST
     LIMIT 40
@@ -269,6 +303,9 @@ export async function pendingVehicleChecks(): Promise<
     plateNo: r.plate_no,
     customerName: r.name,
     tyreQty: Number(r.tyre_qty),
+    total: Number(r.total_amount),
+    workDate: r.work_date,
+    marsRefNo: r.mars_ref_no,
   }));
 }
 

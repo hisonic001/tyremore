@@ -28,13 +28,26 @@ import { chromium, type FrameLocator, type Locator, type Page } from "playwright
  *    깃허브에도 Vercel 에도 올리지 않는다.
  *
  * 쓰는 법
- *   npm run mars                 대기열 전부 처리 (브라우저가 보이게 열린다)
- *   npm run mars -- --dry        로그인해서 대기열만 보여주고 아무것도 안 만든다
- *   npm run mars -- --limit 1    한 건만
+ *   npm run mars                        대기열 전부 처리 (브라우저가 보이게 열린다)
+ *   npm run mars -- --dry               대기열만 보여주고 브라우저도 안 연다
+ *   npm run mars -- --limit 1           한 건만
+ *   npm run mars -- --check             전기 후 차량 점검 (전기가 끝난 건 대상)
+ *   npm run mars -- --check --look      👀 전기됐는지 **보기만** 하고 아무것도 제출 안 함
  */
 
 const SIGNIN =
   "https://mars.tyremore.co.kr/MARS/SignIn?ReturnUrl=%2FMARS%2F%3Ftenant%3D61168583";
+
+/**
+ * 🔴 시작 화면으로 돌아갈 때 **`?tenant=` 를 빼면 안 된다** (2026-08-04).
+ *
+ * 한 건을 끝내고 `https://mars.tyremore.co.kr/MARS/` 로 갔더니 Azure AD 가
+ *   「Something went wrong. WSFederationLoginEndpoint 구성 설정의 값은 비워둘 수 없습니다.
+ *    Azure AD tenant: **null**」
+ * 로 튕겼다. 그래서 **첫 건은 되고 두 번째부터 「판매완료를 누르지 못했습니다」** 로 죽었다.
+ * 한 건씩만 돌릴 때는 드러나지 않던 문제다.
+ */
+const HOME = "https://mars.tyremore.co.kr/MARS/?tenant=61168583";
 
 const DRY = process.argv.includes("--dry");
 /** 고객 생성 화면이 실제로 어떻게 생겼는지만 훑고 취소한다 — 아무것도 저장하지 않는다 */
@@ -45,6 +58,12 @@ const INSPECT = process.argv.includes("--inspect");
  *      npm run mars -- --check
  */
 const CHECK = process.argv.includes("--check");
+/**
+ * ⭐ 「보기만」 — 송장을 찾는 데까지만 하고 **아무것도 제출하지 않는다** (2026-08-04).
+ *    전기가 됐는지, 어느 송장이 걸리는지 눈으로 먼저 보려고 둔다.
+ *      npm run mars -- --check --look
+ */
+const LOOK = process.argv.includes("--look");
 /**
  * 🔴 전기(Posting)는 하지 않는다 — 사장님이 마지막에 검토하고 누르신다 (2026-08-02 지시).
  *    매출 주문을 채워 두기만 하고, 금액이 맞는지 대조해서 보여 준다.
@@ -867,7 +886,18 @@ async function fillLines(
  * 대신 **대조해서 보여만 준다** — 사장님이 금액을 일일이 확인하지 않아도 되게.
  * 우리 판매 합계(또는 공급가)가 MARS 화면에 있는지 보고 결과를 적는다.
  */
-async function checkOrder(page: Page, expectTotal: number): Promise<boolean> {
+interface AmountCheck {
+  ok: boolean;
+  /** 사람이 읽을 한 줄 — DB 에 남겨 나중에 원인을 찾는다 */
+  note: string;
+}
+
+/**
+ * 🔴 결과를 **글로 남긴다** (2026-08-04). 전에는 콘솔에만 찍혀 사라졌다.
+ *    실제로 `56가6433` 건이 「금액 확인 필요」로 남았는데 MARS 화면에서 무엇을 봤는지
+ *    아무 데도 없어서 왜 안 맞았는지 지금도 모른다. 다시는 그러지 않는다.
+ */
+async function checkOrder(page: Page, expectTotal: number): Promise<AmountCheck> {
   const f = main(page);
   const txt = (await f.locator("body").innerText().catch(() => "")) || "";
   const nums = [...txt.matchAll(/[\d,]{5,}/g)].map((m) => Number(m[0].replace(/,/g, "")));
@@ -876,12 +906,45 @@ async function checkOrder(page: Page, expectTotal: number): Promise<boolean> {
 
   if (ok) {
     log(`    · 합계 대조 ✅ ${expectTotal.toLocaleString()}원 (공급가 ${excl.toLocaleString()})`);
-  } else {
-    log(`    · 합계 대조 ⚠️ 우리 ${expectTotal.toLocaleString()}원(공급가 ${excl.toLocaleString()})`);
-    log(`      MARS 화면에서 찾은 값: ${nums.slice(-6).join(", ") || "없음"}`);
-    log(`      전기하시기 전에 금액을 꼭 확인해 주세요`);
+    return { ok, note: `합계 맞음 ${expectTotal.toLocaleString()}원` };
   }
-  return ok;
+
+  // 우리 금액에 가까운 순으로 몇 개만 — 전부 남기면 읽을 수가 없다
+  const near = [...new Set(nums)]
+    .sort((a, b) => Math.abs(a - excl) - Math.abs(b - excl))
+    .slice(0, 4)
+    .map((n) => n.toLocaleString());
+  log(`    · 합계 대조 ⚠️ 우리 ${expectTotal.toLocaleString()}원(공급가 ${excl.toLocaleString()})`);
+  log(`      MARS 화면에서 찾은 값: ${near.join(", ") || "없음"}`);
+  log(`      전기하시기 전에 금액을 꼭 확인해 주세요`);
+  return {
+    ok,
+    note:
+      `금액 확인 필요 — 우리 ${expectTotal.toLocaleString()}원(공급가 ${excl.toLocaleString()})` +
+      ` · MARS 화면 값 ${near.join(", ") || "없음"}`,
+  };
+}
+
+/**
+ * ⭐ 방금 만든 매출 주문의 **번호**를 읽는다 (2026-08-04).
+ *
+ * 전에는 안 읽었다. 그래서 전기 후 차량 점검 단계에서 송장을 **번호판으로만** 찾았고,
+ * 단골이면 그 번호판의 송장이 여러 개라 엉뚱한 송장에 점검을 낼 수 있었다.
+ * 번호를 남겨 두면 사장님이 MARS 에서 그 주문을 바로 찾으실 수도 있다.
+ *
+ * ⚠️ 못 읽어도 실패로 치지 않는다 — 주문은 이미 잘 만들어져 있다.
+ */
+async function readOrderNo(page: Page): Promise<string | null> {
+  const f = main(page);
+  for (const loc of [
+    f.locator('[controlname="No."]').first(),
+    f.getByRole("textbox", { name: "번호" }).first(),
+  ]) {
+    const v = ((await readField(loc).catch(() => "")) || "").trim();
+    // `61168583-23SO+000123` 같은 모양
+    if (/[A-Z]{2}\+?\d{4,}/i.test(v)) return v;
+  }
+  return null;
 }
 
 /* ================================================================
@@ -931,6 +994,62 @@ async function setGrade100(page: Page, rowText: string): Promise<boolean> {
     await page.waitForTimeout(300);
   }
   return false;
+}
+
+/**
+ * ⭐ 전기된 송장 목록에서 **이 판매의 송장 한 줄**을 고른다 (2026-08-04).
+ *
+ * 🔴 전에는 `번호판이 든 첫 줄` 을 그냥 집었다. 단골이면 그 번호판의 송장이 여러 개라
+ *    **엉뚱한 송장에 점검을 제출**할 수 있었다. 점검표는 손님에게 나가는 것이라
+ *    잘못 붙으면 되돌리기 어렵다.
+ *
+ * 좁히는 순서 — 번호판 → 작업일자 → 금액. 그래도 여럿이면 **고르지 않고 멈춘다**
+ * (인보이스 상품 매칭·거래처 품번 사전과 같은 태도).
+ */
+type Picked =
+  | { ok: true; row: Locator; label: string }
+  | { ok: false; why: string };
+
+async function pickInvoiceRow(
+  page: Page,
+  c: { plateNo: string | null; workDate: string | null; total: number; marsRefNo: string | null },
+): Promise<Picked> {
+  const f = main(page);
+  const rows = f.getByRole("row").filter({ hasText: c.plateNo! });
+  const n = await rows.count().catch(() => 0);
+  if (n === 0) return { ok: false, why: "전기된 송장이 없습니다 — MARS 에서 전기부터 해 주세요" };
+
+  const texts: string[] = [];
+  for (let i = 0; i < n; i++) texts.push(((await rows.nth(i).innerText().catch(() => "")) || "").replace(/\s+/g, " "));
+
+  /** 후보를 줄이는 잣대. 하나씩 걸러 보고 남는 것이 하나면 그것이다 */
+  const idx = [...texts.keys()];
+  const narrow = (keep: (t: string) => boolean, name: string) => {
+    const left = idx.filter((i) => keep(texts[i]));
+    if (left.length > 0 && left.length < idx.length) {
+      log(`    · ${name} 로 ${idx.length}건 → ${left.length}건`);
+      idx.length = 0;
+      idx.push(...left);
+    }
+  };
+
+  if (c.workDate) narrow((t) => t.includes(c.workDate!), "작업일자");
+  // 금액은 공급가(부가세 제외)로 적힌다. 둘 다 본다
+  const excl = Math.round(c.total / 1.1);
+  narrow(
+    (t) => t.includes(c.total.toLocaleString()) || t.includes(excl.toLocaleString()),
+    "금액",
+  );
+
+  if (idx.length === 1) {
+    return { ok: true, row: rows.nth(idx[0]), label: texts[idx[0]].slice(0, 60) };
+  }
+  return {
+    ok: false,
+    why:
+      `이 번호판의 전기된 송장이 ${idx.length}건이라 어느 것인지 고르지 못했습니다 — ` +
+      `MARS 에서 직접 골라 점검해 주세요 (작업일 ${c.workDate ?? "?"} · ${c.total.toLocaleString()}원)`,
+  };
 }
 
 /** 판매한 타이어 본수로 어느 바퀴를 갈았는지 정한다 */
@@ -1115,16 +1234,29 @@ async function main_() {
           await page.waitForTimeout(3000);
           await passBigSearchDialog(page);
 
-          const f2 = main(page);
-          const row = f2.getByRole("row").filter({ hasText: c.plateNo! }).first();
-          if (!(await row.isVisible({ timeout: 10000 }).catch(() => false))) {
-            log("  ⚠️ 전기된 송장이 없습니다 — MARS 에서 전기부터 해 주세요");
+          const picked = await pickInvoiceRow(page, c);
+          if (!picked.ok) {
+            log(`  ⚠️ ${picked.why}`);
             skipped++;
-            await page.goto("https://mars.tyremore.co.kr/MARS/");
+            await page.goto(HOME);
             await waitHome(page, 40000);
             continue;
           }
-          await row.locator('[controlname="No."]').first().click({ timeout: 10000 });
+          log(`  · 송장 ${picked.label}`);
+
+          /**
+           * ⭐ 「보기만」 모드 — 전기가 됐는지 확인만 하고 아무것도 제출하지 않는다.
+           *      npm run mars -- --check --look
+           */
+          if (LOOK) {
+            log("  👀 보기만 하는 모드라 여기서 멈춥니다 (제출하지 않았습니다)");
+            ok++;
+            await page.goto(HOME);
+            await waitHome(page, 40000);
+            continue;
+          }
+
+          await picked.row.locator('[controlname="No."]').first().click({ timeout: 10000 });
           await page.waitForTimeout(3000);
 
           const r = await fillVehicleCheck(page, { plateNo: c.plateNo!, tyreQty: c.tyreQty });
@@ -1140,12 +1272,17 @@ async function main_() {
           await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
           log(`     화면을 저장했습니다: ${shot}`);
         }
-        await page.goto("https://mars.tyremore.co.kr/MARS/").catch(() => {});
+        await page.goto(HOME).catch(() => {});
         await waitHome(page, 40000).catch(() => false);
       }
       log(`\n${"=".repeat(56)}`);
-      log(`  점검 제출 ${ok}건 · 넘어간 것 ${skipped}건`);
+      log(LOOK ? `  전기된 송장을 찾은 것 ${ok}건 · 못 찾은 것 ${skipped}건  (제출 안 함)` : `  점검 제출 ${ok}건 · 넘어간 것 ${skipped}건`);
       log(`${"=".repeat(56)}\n`);
+      /** 보기만 하는 모드는 스스로 닫는다 — 볼 것을 다 봤고, 고칠 것이 없다 */
+      if (LOOK) {
+        await ctx.close().catch(() => {});
+        process.exit(0);
+      }
       log("  확인하시고 이 창에서 Ctrl+C 를 누르시면 브라우저가 닫힙니다.");
       await new Promise(() => {});
     }
@@ -1192,7 +1329,7 @@ async function main_() {
                 : "  ⚠️ MARS 에 없는 차량입니다 — 고객·차량 등록은 직접 해 주세요",
             );
             skipped++;
-            await page.goto("https://mars.tyremore.co.kr/MARS/");
+            await page.goto(HOME);
             continue;
           }
           log(`  → MARS 에 없는 손님입니다. 새로 만듭니다 (${c.name} ${c.plateNo})`);
@@ -1218,11 +1355,19 @@ async function main_() {
           throw new Error(`${q.lines.length}줄 중 ${put}줄만 들어갔습니다 — MARS 에서 마저 채워 주세요`);
         }
 
-        const matched = await checkOrder(page, q.total);
-        await markEntered(q.quoteId, `자동입력 ${iso}${matched ? "" : " (금액 확인 필요)"}`);
+        const amount = await checkOrder(page, q.total);
+        /**
+         * 🔴 번호 칸과 메모 칸을 섞지 않는다 (2026-08-04).
+         *    전에는 「자동입력 2026-08-02 (금액 확인 필요)」 라는 **메모**를
+         *    송장번호 칸(`mars_ref_no`)에 넣었다. 그래서 번호로 송장을 찾을 수 없었고
+         *    메모 칸은 비어 있었다.
+         */
+        const orderNo = await readOrderNo(page);
+        if (orderNo) log(`    · 매출 주문 번호 ${orderNo}`);
+        await markEntered(q.quoteId, orderNo, `자동입력 ${iso} · ${amount.note}`);
         ok++;
         log("  ✅ 매출 주문을 채웠습니다 — 🔴 전기는 사장님이 확인하고 눌러 주세요");
-        await page.goto("https://mars.tyremore.co.kr/MARS/");
+        await page.goto(HOME);
         await waitHome(page, 40000);
       } catch (e) {
         skipped++;
@@ -1234,7 +1379,7 @@ async function main_() {
         const shot = path.resolve(process.cwd(), "..", "tyremore-data", `mars-오류-${q.quoteNo}.png`);
         await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
         log(`     화면을 저장했습니다: ${shot}`);
-        await page.goto("https://mars.tyremore.co.kr/MARS/").catch(() => {});
+        await page.goto(HOME).catch(() => {});
         await waitHome(page, 30000).catch(() => false);
       }
     }
