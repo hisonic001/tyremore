@@ -904,6 +904,36 @@ async function fillLines(
     await page.waitForTimeout(2000);
 
     /**
+     * 🔴 **MARS 가 이 품번을 아는지 확인한다** (사장님 질문 2026-08-04 —
+     *    "mars에 코드가 없는 상품을 판매할 시에는 어떻게 해야할지").
+     *
+     * 거래처 목록·손 등록으로 만든 상품(KM+자재코드, ID-… 등)은 MARS 마스터에 없다.
+     * 엔터를 쳐도 상품이 안 실리는데 모르고 지나가면 **빈 품번에 수량·단가만 든
+     * 깨진 줄**이 생긴다. 오류 창이 떴으면 닫고, 상세 항목이 비었으면 이 줄을 멈춘다.
+     */
+    const errDlg = f.locator('[controlname="Dialog"]').last();
+    if (await errDlg.isVisible({ timeout: 1500 }).catch(() => false)) {
+      const said = ((await errDlg.innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
+      await f
+        .locator('button[controlname="Dialog"]', { hasText: "확인" })
+        .first()
+        .click()
+        .catch(() => {});
+      await page.waitForTimeout(600);
+      if (/없|존재|찾을 수/.test(said)) {
+        throw new Error(
+          `MARS 에 없는 품번입니다: ${l.no} «${l.marsName}» — 이 줄은 MARS 에서 직접 처리해 주세요`,
+        );
+      }
+    }
+    const descBack = ((await readField(row.locator('[controlname="Description"]').first())) || "").trim();
+    if (!descBack) {
+      throw new Error(
+        `MARS 가 품번 ${l.no} 을 알아보지 못했습니다 (상세 항목이 비어 있음) — «${l.marsName}» 줄을 넣지 않았습니다`,
+      );
+    }
+
+    /**
      * 🔴 수량도 **넣고 읽어서 확인한다** (2026-08-04).
      *    단가를 고치고 나니 이번엔 수량 2가 안 먹고 1로 남아 합계가 370,000 이 됐다.
      *    SET_VALUE(값 대입)는 이 표에서 조용히 실패할 때가 있다 — **fill(실제 타이핑)** 이
