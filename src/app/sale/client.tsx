@@ -445,6 +445,17 @@ function NewCustomer({
   });
   const set = (p: Partial<NewCustomerInput>) => setF((x) => ({ ...x, ...p }));
 
+  /**
+   * 🔴 동의는 「동의함/거부함」 중 **반드시 하나를 고르게** 한다 (사장님 지시 2026-08-05).
+   *    체크박스는 「안 본 것」과 「거부」가 구분되지 않아서, 깜빡 넘어가면
+   *    거부가 아닌데 거부로 — 또는 그 반대로 — MARS 에 올라갈 수 있다.
+   *    거부는 MARS 에 「거부된 동의 + 불매치 코드 NONEED」로 그대로 올라간다.
+   */
+  const [choices, setChoices] = useState<{ privacy: boolean | null; marketing: boolean | null }>({
+    privacy: null,
+    marketing: null,
+  });
+
   const IN = "w-full rounded-lg border border-slate-300 px-2.5 py-2.5 text-sm outline-none focus:border-slate-900";
   const LB = "text-xs text-slate-500";
   const req = <span className="text-red-600">*</span>;
@@ -570,24 +581,53 @@ function NewCustomer({
         <p className="mt-0.5 text-xs text-amber-800">
           종이 보고서에서 손님이 표시하신 그대로 눌러 주세요.
         </p>
-        <div className="mt-2 space-y-1.5">
+        <div className="mt-2 space-y-2">
           {(
             [
-              ["consentPrivacy", "개인정보 활용 동의 (필수)"],
-              ["consentMarketing", "뉴스·프로모션 수신 동의 (카카오톡·문자)"],
-              ["michelinMember", "미쉐린 멤버십 가입"],
+              ["privacy", "개인정보 활용 동의"],
+              ["marketing", "뉴스·프로모션 수신 (카카오톡·문자)"],
             ] as const
           ).map(([k, label]) => (
-            <label key={k} className="flex items-center gap-2 text-sm text-amber-900">
-              <input
-                type="checkbox"
-                checked={f[k]}
-                onChange={(e) => set({ [k]: e.target.checked } as Partial<NewCustomerInput>)}
-                className="h-5 w-5"
-              />
-              {label}
-            </label>
+            <div key={k} className="flex items-center justify-between gap-2">
+              <span className="text-sm text-amber-900">{label}</span>
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  onClick={() => setChoices((c) => ({ ...c, [k]: true }))}
+                  className={`rounded-lg border px-3 py-1.5 text-sm font-medium ${
+                    choices[k] === true
+                      ? "border-emerald-700 bg-emerald-600 text-white"
+                      : "border-amber-300 bg-white text-amber-900"
+                  }`}
+                >
+                  동의함
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChoices((c) => ({ ...c, [k]: false }))}
+                  className={`rounded-lg border px-3 py-1.5 text-sm font-medium ${
+                    choices[k] === false
+                      ? "border-red-700 bg-red-600 text-white"
+                      : "border-amber-300 bg-white text-amber-900"
+                  }`}
+                >
+                  거부함
+                </button>
+              </div>
+            </div>
           ))}
+          <p className="text-xs text-amber-800">
+            종이에 표시된 그대로 골라 주세요. 거부는 MARS 에 「거부된 동의」로 그대로 올라갑니다.
+          </p>
+          <label className="flex items-center gap-2 text-sm text-amber-900">
+            <input
+              type="checkbox"
+              checked={f.michelinMember}
+              onChange={(e) => set({ michelinMember: e.target.checked })}
+              className="h-5 w-5"
+            />
+            미쉐린 멤버십 가입
+          </label>
           <label className="mt-1 flex items-center gap-2 border-t border-amber-300 pt-2 text-sm font-semibold text-amber-900">
             <input
               type="checkbox"
@@ -621,7 +661,19 @@ function NewCustomer({
           onClick={() =>
             start(async () => {
               setError(null);
-              const r = await createCustomerAndVehicle(f);
+              /**
+               * 🔴 서명을 받았는데 동의/거부를 안 골랐으면 막는다 (사장님 지시 2026-08-05).
+               *    앱에서 애매하게 남으면 MARS 동의 기록이 종이와 어긋난다.
+               */
+              if (f.signed && (choices.privacy === null || choices.marketing === null)) {
+                setError("개인정보 동의를 종이 보고서대로 「동의함/거부함」 중에 골라 주세요.");
+                return;
+              }
+              const r = await createCustomerAndVehicle({
+                ...f,
+                consentPrivacy: choices.privacy ?? false,
+                consentMarketing: choices.marketing ?? false,
+              });
               if (!r.ok) {
                 setError(r.error);
                 return;

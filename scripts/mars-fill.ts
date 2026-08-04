@@ -68,6 +68,13 @@ const DRY = process.argv.includes("--dry");
 /** 고객 생성 화면이 실제로 어떻게 생겼는지만 훑고 취소한다 — 아무것도 저장하지 않는다 */
 const INSPECT = process.argv.includes("--inspect");
 /**
+ * 🔍 동의 표 시험 (2026-08-05) — 고객 생성 창에서 **동의 표까지만** 채워 보고
+ *    (마케팅 거부 → 거부된 동의 + NONEED) 저장하지 않고 취소한다.
+ *    NONEED 칸을 실제로 못 넣던 문제를 저장 없이 재현·검증하기 위한 것.
+ *      npx tsx scripts/mars-fill.ts --try-consent
+ */
+const TRY_CONSENT = process.argv.includes("--try-consent");
+/**
  * ⭐ 전기 후 차량 점검 모드 (사장님 지시 2026-08-02 — "이것도 꼭 해야 하는 작업이야")
  *    전기가 끝나야 들어갈 수 있는 화면이라 매출 주문 입력과 따로 돌린다.
  *      npm run mars -- --check
@@ -93,6 +100,30 @@ const AGENT = process.argv.includes("--agent");
 const PROBE_ORDER = (() => {
   const i = process.argv.indexOf("--probe-order");
   return i >= 0 ? process.argv[i + 1] : null;
+})();
+/**
+ * 🔍 범용 품번 시험 (2026-08-05) — 지정한 번호판의 **기존 초안**을 열어
+ *    FALLBACK_ITEM 을 줄 하나에 쳐 보고 MARS 가 받는지만 확인한다.
+ *    전기는 하지 않는다. 지난번 후보(580/001/00290)가 목록엔 있는데 실제
+ *    입력에서 거부됐기 때문에, 새 후보는 반드시 이걸로 먼저 확인한다.
+ *      npx tsx scripts/mars-fill.ts --try-item 123테4567
+ */
+const TRY_ITEM = (() => {
+  const i = process.argv.indexOf("--try-item");
+  return i >= 0 ? process.argv[i + 1] : null;
+})();
+/**
+ * 🔍 전기된 송장 확인 (2026-08-05) — 완료된 매출 송장 목록에서 번호판으로 줄들을 찍고,
+ *    두 번째 인자(금액 등 줄에 든 글자, 또는 줄 번호)를 주면 그 송장을 열어
+ *    번호와 품목 줄까지 읽는다. **읽기만 한다.**
+ *      npx tsx scripts/mars-fill.ts --peek-invoices 123테4567 8,000
+ */
+const PEEK_INV = (() => {
+  const i = process.argv.indexOf("--peek-invoices");
+  if (i < 0) return null;
+  const plate = process.argv[i + 1];
+  const pick = process.argv[i + 2];
+  return { plate, pick: pick && !pick.startsWith("--") ? pick : null };
 })();
 /**
  * 🔴 전기(Posting)는 하지 않는다 — 사장님이 마지막에 검토하고 누르신다 (2026-08-02 지시).
@@ -568,56 +599,118 @@ async function createCustomer(
       row.locator("select").first(),
     ];
     let signed = false;
+    let okTarget: Locator | null = null;
     for (const t of targets) {
       if (await t.selectOption(want).then(() => true).catch(() => false)) {
         signed = true;
+        okTarget = t;
         break;
       }
       if (await t.selectOption({ label }).then(() => true).catch(() => false)) {
         signed = true;
+        okTarget = t;
         break;
       }
     }
-    if (!signed) log(`    ⚠️ 「${purpose}」의 고객 서명을 못 골랐습니다`);
+    /**
+     * 🔴 골랐다고 믿지 않는다 — 고른 select 의 값을 읽어서 확인한다 (2026-08-05).
+     *    사장님이 스크린샷으로 확인하셨다: 앱에서 마케팅을 체크 안 했는데 MARS 에는
+     *    「수락된 동의」로 남아 있었다. 동의는 법적 기록이라 어긋나면 안 된다.
+     */
+    if (signed && okTarget) {
+      await page.waitForTimeout(400);
+      const nowVal = (await okTarget.inputValue().catch(() => "")) || "";
+      const rowNow = ((await row.innerText().catch(() => "")) || "").replace(/\s+/g, " ");
+      if (nowVal !== want && !rowNow.includes(label)) signed = false;
+    }
+    if (!signed) {
+      throw new Error(`「${purpose}」의 고객 서명을 «${label}» 로 고치지 못했습니다 — 고객 등록을 멈춥니다 (동의 기록이 어긋나면 안 됩니다)`);
+    }
 
     /**
      * ⭐ 거부된 동의에는 **불매치 코드 NONEED** (사장님 확인 2026-08-04).
      *    이걸 안 넣으면 「거부된 동의의 경우 "불매치 코드"을(를) 제공해야 합니다!」로
-     *    저장이 막힌다. 칸 이름을 몰라 후보를 차례로 시도하고 **줄에 NONEED 가
-     *    생겼는지 읽어서 확인**한다. 끝내 못 넣으면 수락으로 되돌린다 —
-     *    막혀서 고객 등록 전체가 죽는 것보다는 낫다 (로그에 크게 남긴다).
+     *    저장이 막힌다. controlname 후보가 다 빗나가서 (2026-08-05 실측)
+     *    **열 이름(aria-label)** 으로도 찾는다 — 편집 상태의 칸은 열 머리글이 이름이 된다.
+     *
+     * 🔴 끝내 못 넣으면 **수락으로 되돌리지 않는다** (사장님 지시 2026-08-05 —
+     *    "체크를 안했으면 거부된 동의 → NONEED 로 바꾸는 것이 확실해지게").
+     *    받지도 않은 동의를 「수락」으로 남기는 것이 최악이다. 등록을 멈추고 알린다.
      */
-    if (!agreed && signed) {
-      const MISMATCH_CELLS = ["Mismatch Code", "KOR Mismatch Code", "Unmatch Code", "Mismatched Code"];
+    if (!agreed) {
+      // ⭐ 칸의 실제 이름은 **Disagreement Code** (2026-08-05 --try-consent 로 줄을 찍어 확인).
+      //    "Mismatch" 후보들은 전부 헛짚었던 것 — 화면 이름(불매치 코드)과 영어가 다르다.
+      const candidates: Locator[] = [
+        row.locator('[controlname="Disagreement Code"]').first(),
+        row.locator('[controlname*="Disagreement"]').first(),
+        row.getByRole("textbox", { name: /불매치|Mismatch|Disagreement/i }).first(),
+        row.locator('[controlname*="Mismatch"], [controlname*="Unmatch"]').first(),
+      ];
       let coded = false;
-      for (const cn of MISMATCH_CELLS) {
-        const cell = row.locator(`[controlname="${cn}"]`).first();
-        if ((await cell.count().catch(() => 0)) === 0) continue;
-        await cell.click({ timeout: 4000 }).catch(() => {});
+      for (const cell2 of candidates) {
+        if ((await cell2.count().catch(() => 0)) === 0) continue;
+        await cell2.click({ timeout: 4000 }).catch(() => {});
         await page.waitForTimeout(300);
-        const input = await resolveInput(cell);
+        const input = await resolveInput(cell2);
         await input.fill("NONEED").catch(async () => {
           await input.evaluate(SET_VALUE, "NONEED").catch(() => {});
         });
         await input.press("Tab").catch(() => {});
         await page.waitForTimeout(500);
+        // 🔴 편집 중인 칸은 innerText 가 비어 보인다 — **입력값을 되읽어** 확인한다
+        //    (2026-08-05: 실제로는 NONEED 가 들어갔는데 innerText 검증이 놓쳐 실패 처리했다)
+        const back = ((await readField(cell2)) || "").toUpperCase();
         const rowText = ((await row.innerText().catch(() => "")) || "").toUpperCase();
-        if (rowText.includes("NONEED")) {
+        if (back.includes("NONEED") || rowText.includes("NONEED")) {
           coded = true;
           log(`      「${purpose}」 거부 + 불매치 코드 NONEED ✓`);
           break;
         }
       }
       if (!coded) {
-        log(`    ⚠️ 「${purpose}」의 불매치 코드를 못 넣어 수락으로 되돌립니다 — 화면에서 칸 이름 확인 필요`);
-        await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
-        await page.waitForTimeout(300);
-        for (const t of targets) {
-          if (await t.selectOption("1").then(() => true).catch(() => false)) break;
+        // 마지막 수단 — 줄의 칸 이름을 전부 찍는다 (다음에 후보로 쓴다)
+        const cells = row.locator("[controlname]");
+        const nc = await cells.count().catch(() => 0);
+        const names: string[] = [];
+        for (let i = 0; i < Math.min(nc, 40); i++) {
+          const cn = (await cells.nth(i).getAttribute("controlname").catch(() => null)) ?? "";
+          if (cn) names.push(cn);
         }
+        log(`      · 이 줄의 controlname 들: ${names.join(" | ").slice(0, 400)}`);
+        const inputs = row.locator("input, select");
+        const ni = await inputs.count().catch(() => 0);
+        const als: string[] = [];
+        for (let i = 0; i < Math.min(ni, 20); i++) {
+          const al = (await inputs.nth(i).getAttribute("aria-label").catch(() => null)) ?? "";
+          if (al) als.push(al);
+        }
+        if (als.length) log(`      · 입력칸 aria-label 들: ${als.join(" | ").slice(0, 300)}`);
+        const shotC = path.resolve(process.cwd(), "..", "tyremore-data", "mars-consent-fail.png");
+        await page.screenshot({ path: shotC, fullPage: true }).catch(() => {});
+        log(`      · 화면: ${shotC}`);
+        throw new Error(`「${purpose}」 거부에 불매치 코드 NONEED 를 넣지 못했습니다 — 고객 등록을 멈춥니다 (수락으로 바꿔 넣지 않습니다)`);
       }
     }
     await page.waitForTimeout(300);
+  }
+
+  /** 🔍 동의 표 시험 — 여기까지만 하고 **저장하지 않고** 취소한다 */
+  if (TRY_CONSENT) {
+    const shot = path.resolve(process.cwd(), "..", "tyremore-data", "mars-try-consent.png");
+    await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
+    log(`    화면: ${shot}`);
+    await f.getByRole("button", { name: "취소", exact: true }).first().click().catch(() => {});
+    await page.waitForTimeout(1200);
+    // 혹시 「저장하시겠습니까」류 확인 창이 뜨면 **저장하지 않는 쪽**을 누른다
+    const dlg = f.locator('[controlname="Dialog"]').last();
+    if (await dlg.isVisible({ timeout: 2000 }).catch(() => false)) {
+      const said = ((await dlg.innerText().catch(() => "")) || "").replace(/\s+/g, " ");
+      log(`    · 확인 창: «${said.slice(0, 80)}»`);
+      const no = f.locator('button[controlname="Dialog"]', { hasText: "아니요" }).first();
+      if (await no.isVisible().catch(() => false)) await no.click().catch(() => {});
+      else await f.locator('button[controlname="Dialog"]', { hasText: "확인" }).first().click().catch(() => {});
+    }
+    throw new Error("--try-consent 이므로 저장하지 않았습니다 (시험 정상 종료)");
   }
 
   // ── 차량 ──
@@ -790,8 +883,12 @@ async function openSalesOrder(
    */
 
   // ① 현재 주행거리
-  const km = f.locator('[controlname="Mileage"]').first();
-  await km.waitFor({ state: "visible", timeout: 20000 });
+  //    🔴 **.last() 로 찾는다** (2026-08-05). 주문 화면은 「고객/차량 이력」 창 위에
+  //    겹쳐 뜨는데 뒤층에도 Mileage 칸이 있다 — .first() 는 그 **안 보이는 뒤층 칸**을
+  //    잡고 45초를 기다리다 죽었다 (화면에는 칸이 멀쩡히 보이는데도).
+  //    전기 버튼에서 배운 층 규칙과 같다: 겹친 화면에서는 뒤(마지막)가 앞이다.
+  const km = f.locator('[controlname="Mileage"]').last();
+  await km.waitFor({ state: "visible", timeout: 45000 });
   if (mileage) await fillField(page, "현재 주행거리", km, String(mileage), { tab: false });
 
   /**
@@ -826,7 +923,11 @@ async function openSalesOrder(
    */
   if (payCode) {
     await fillField(page, "결제 수단 코드", f.locator('[controlname="<Payment Method Code_2>"]'), payCode);
-    await fillField(page, "결제 조건 코드", f.locator('[controlname="<Payment Terms Code_2>"]'), payCode);
+    /**
+     * 🔴 「결제 조건 코드」는 **건드리지 않는다** (사장님 지시 2026-08-05).
+     *    "결제 수단 코드만 바꾸면 되고 결제 조건 코드는 건드리면 안되는 것 같아."
+     *    수단을 고르면 MARS 가 조건을 알아서 맞춘다.
+     */
   }
   await page.waitForTimeout(1200);
 }
@@ -950,9 +1051,75 @@ async function fillLines(
      *    아니면 늘 빈 값을 돌려준다 — 멀쩡한 126081 을 미등록으로 오판해
      *    범용 품번으로 갈아치웠다. 확실한 신호(오류 창)만 믿는다.
      */
-    const noDlg = await clearDialog();
+    /**
+     * 🔴 모르는 품번이면 오류 창 대신 **「매치 코드 검색」 창**이 뜨기도 한다 (2026-08-05 발견).
+     *    친 코드가 검색어로 넘어가 「표시할 내용이 없음」이 뜬다 — 그 창이 뜬 것
+     *    자체가 「마스터에 없는 품번」이라는 신호다. 취소로 닫고 대체 경로로 간다.
+     *    (안 닫으면 화면을 막아서 뒤의 수량·단가 입력이 전부 실패한다.)
+     */
+    /**
+     * 🔴 「매치 코드 검색」 창 판별 (2026-08-05, 네 번 고쳐 배운 것):
+     *    ① 「매치 코드 검색」 글자로 찾으면 홈(뒤층) 메뉴의 같은 글자에 오탐한다.
+     *    ② role=dialog 로 좁히면 진짜 창을 놓친다 (제목이 dialog 노드 밖).
+     *    ③ 「비교 수량」 exact 일치도 놓쳤다 — 공백이 다르게 렌더링되는 듯하다.
+     *    → 창에만 있는 칸 이름을 **정규식**으로 찾는다.
+     */
+    const closeMatchWin = async (timeout = 1500): Promise<boolean> => {
+      // 🔴 .last() 는 못 쓴다 — 같은 글자가 **안 보이는 복제 노드**로도 존재해서
+      //    마지막 것이 하필 숨은 노드면 창이 떠 있어도 false 가 났다 (2026-08-05, frame 덤프로 확인).
+      //    **보이는 노드가 하나라도 있는지**를 직접 훑는다. 취소 버튼도 같은 함정이라 뒤에서부터 보이는 것을 누른다.
+      const marks = f.getByText(/비교\s*수량|인벤토리\s*필터/);
+      const until = Date.now() + timeout;
+      let seen = false;
+      do {
+        const n = await marks.count().catch(() => 0);
+        for (let i = 0; i < n && !seen; i++) {
+          if (await marks.nth(i).isVisible().catch(() => false)) seen = true;
+        }
+        if (!seen) await page.waitForTimeout(250);
+      } while (!seen && Date.now() < until);
+      if (!seen) return false;
+      const cancels = f.getByRole("button", { name: "취소" });
+      const nc = await cancels.count().catch(() => 0);
+      for (let i = nc - 1; i >= 0; i--) {
+        if (await cancels.nth(i).isVisible().catch(() => false)) {
+          await cancels.nth(i).click().catch(() => {});
+          break;
+        }
+      }
+      await page.waitForTimeout(900);
+      return true;
+    };
+
+    /**
+     * 🔴 품번 엔터 후에는 **신호가 잡힐 때까지 기다린다** (최대 15초, 2026-08-05).
+     *    고정 2초 대기로는 서버가 느린 날 매치 창을 놓치고 지나가 줄이 깨졌다.
+     *    신호 셋 중 하나는 반드시 온다:
+     *      · 오류 창                   → 미등록 품번
+     *      · 매치 코드 검색 창          → 미등록 품번 (닫고 대체)
+     *      · 측정 단위 칸이 채워짐(PCS) → 품목이 실렸다
+     *    15초 다 지나도 아무 신호가 없으면 실린 것으로 보고 넘어간다 —
+     *    안 실렸으면 뒤의 수량·단가 되읽기 검증이 잡는다.
+     */
+    const settleItemNo = async (): Promise<{ dlg: string; match: boolean }> => {
+      const uomCell = row.locator('[controlname="Unit of Measure Code"]').first();
+      const until = Date.now() + 15000;
+      while (Date.now() < until) {
+        const dlg = await clearDialog();
+        if (dlg) return { dlg, match: false };
+        if (await closeMatchWin(400)) return { dlg: "", match: true };
+        const u = ((await readField(uomCell).catch(() => "")) || "").trim();
+        if (u) return { dlg: "", match: false };
+        await page.waitForTimeout(700);
+      }
+      return { dlg: "", match: false };
+    };
+
+    const s1 = await settleItemNo();
+    const noDlg = s1.dlg;
+    const wasMatchWin = s1.match;
     let usedFallback = false;
-    if (/찾을 수 없|존재하지 않|않습니다|없습니다/.test(noDlg)) {
+    if (wasMatchWin || /찾을 수 없|존재하지 않|않습니다|없습니다/.test(noDlg)) {
       if (!FALLBACK_ITEM) {
         throw new Error(
           `MARS 에 없는 품번입니다: ${l.no} «${l.marsName}» — 범용 품번이 아직 없어 이 줄은 직접 처리해 주세요` +
@@ -968,9 +1135,11 @@ async function fillLines(
       });
       await no2.press("Enter");
       await page.waitForTimeout(2000);
-      const dlg2 = await clearDialog();
-      if (dlg2) {
-        throw new Error(`범용 품번 ${FALLBACK_ITEM} 도 MARS 가 거부했습니다: ${dlg2.slice(0, 80)}`);
+      const s2 = await settleItemNo();
+      if (s2.dlg || s2.match) {
+        throw new Error(
+          `범용 품번 ${FALLBACK_ITEM} 도 MARS 가 거부했습니다: ${s2.match ? "매치 코드 검색 창이 떴습니다 (마스터에 없음)" : s2.dlg.slice(0, 80)}`,
+        );
       }
       usedFallback = true;
     }
@@ -1602,7 +1771,7 @@ async function main_() {
     }
   } else {
     log(`MARS 자동 입력\n  대기열 ${queue.length}건\n`);
-    if (queue.length === 0 && !PROBE_ORDER) {
+    if (queue.length === 0 && !PROBE_ORDER && !TRY_ITEM && !PEEK_INV && !TRY_CONSENT) {
       log("칠 것이 없습니다.");
       process.exit(0);
     }
@@ -1663,6 +1832,154 @@ async function main_() {
     if (!(await login(page))) {
       await ctx.close();
       process.exit(1);
+    }
+
+    /**
+     * 🔍 범용 품번 시험 — 시험 고객으로 **새 초안**을 만들고, 일부러 없는 품번을 넣어
+     *    실제 대체 경로(fillLines 의 FALLBACK_ITEM 분기)를 그대로 태운다.
+     *    전기는 하지 않는다. 초안 하나가 남으므로 끝나면 지워 달라고 알린다.
+     *    (처음엔 기존 초안에 줄만 넣으려 했는데, 사장님이 시험 초안을 이미 다
+     *     지우셔서 새로 만든다 — 2026-08-05 확인.)
+     */
+    if (TRY_ITEM) {
+      if (!FALLBACK_ITEM) {
+        log("  ⚠️ .env.local 에 MARS_FALLBACK_ITEM 이 없습니다 — 시험할 품번이 없습니다");
+        await ctx.close().catch(() => {});
+        process.exit(1);
+      }
+      log(`\n── 범용 품번 시험: ${FALLBACK_ITEM}  (시험 고객 ${TRY_ITEM}) ─────────`);
+      const f = main(page);
+      const shotPath = path.resolve(process.cwd(), "..", "tyremore-data", "mars-try-item.png");
+      try {
+        const found = await findCustomer(page, TRY_ITEM);
+        if (found !== "found") {
+          throw new Error(
+            found === "none"
+              ? `시험 고객(${TRY_ITEM})이 MARS 에 없습니다 — 시험 주문을 만들 수 없습니다`
+              : `시험 고객(${TRY_ITEM})이 있는지 확실하지 않습니다`,
+          );
+        }
+        const d = new Date();
+        const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        await openSalesOrder(page, TRY_ITEM, null, iso, null);
+
+        // 🔴 일부러 없는 품번 — fillLines 가 오류 창을 보고 FALLBACK_ITEM 으로 갈아끼운다
+        const put = await fillLines(page, [
+          { kind: "tire", no: "KMTRY0000000", qty: 1, unitPrice: 100000, marsName: "범용 품번 시험 (지워도 되는 초안)" },
+        ]);
+        if (put !== 1) throw new Error("시험 줄이 들어가지 않았습니다");
+
+        // 줄 머리의 「오류 N개」 표시 — 지난 후보(580/001/00290)의 실패 신호가 이것이었다
+        await page.waitForTimeout(1500);
+        const grid = f.locator("div[controlname='Sales Order Subform']");
+        const rowText = ((await grid.locator("tr.real-current").innerText().catch(() => "")) || "")
+          .replace(/\s+/g, " ")
+          .trim();
+        log(`  줄 내용: ${rowText.slice(0, 160)}`);
+        const errBadge = f.getByText(/오류\s*\d/).last();
+        const errText = (await errBadge.isVisible({ timeout: 2000 }).catch(() => false))
+          ? ((await errBadge.innerText().catch(() => "")) || "").trim()
+          : "";
+        await page.screenshot({ path: shotPath, fullPage: true }).catch(() => {});
+        log(`  화면: ${shotPath}`);
+        if (errText) throw new Error(`줄에 오류 표시가 있습니다: ${errText}`);
+
+        log(`  ✅ ${FALLBACK_ITEM} 을 MARS 가 받았습니다 — 범용 품번으로 쓸 수 있습니다`);
+        log(`     ⚠️ 시험 초안이 하나 남았습니다 (${TRY_ITEM}, 전기 안 함) — MARS 에서 지워 주세요`);
+        await ctx.close().catch(() => {});
+        process.exit(0);
+      } catch (e) {
+        log(`  ❌ 시험 실패: ${(e as Error).message.split("\n")[0]}`);
+        // 매치 창이 어느 frame 에 있는지 찍는다 — 감지가 계속 빗나가는 원인 추적
+        for (const fr of page.frames()) {
+          const has = await fr.locator("text=/비교\\s*수량/").count().catch(() => 0);
+          if (has > 0) log(`  · 「비교 수량」이 있는 frame: ${fr.url().slice(0, 120)}`);
+        }
+        const nIf = await page.locator('iframe[title="Main Content"]').count().catch(() => 0);
+        log(`  · iframe[title="Main Content"]: ${nIf}개 · 전체 frame: ${page.frames().length}개`);
+        await page.screenshot({ path: shotPath, fullPage: true }).catch(() => {});
+        log(`     화면: ${shotPath}`);
+        await ctx.close().catch(() => {});
+        process.exit(1);
+      }
+    }
+
+    /* 🔍 동의 표 시험 — 고객 생성 창을 열어 동의만 채워 보고 저장 없이 취소한다 */
+    if (TRY_CONSENT) {
+      log(`\n── 동의 표 시험 (저장 안 함) ─────────`);
+      const f = main(page);
+      try {
+        // 「생성」 버튼은 고객 검색 화면에 있다 — 없는 번호판으로 검색해 들어간다
+        const where = await findCustomer(page, "999테9999");
+        if (where === "unclear") throw new Error("고객 검색 화면 판정이 안 서서 멈춥니다");
+        await createCustomer(page, {
+          name: "동의시험",
+          phone: null,
+          address: null,
+          consentPrivacy: true,
+          consentMarketing: false,
+          consentSigned: true,
+          plateNo: "999테9999",
+          makerName: null,
+          model: null,
+          year: null,
+          fuelType: null,
+          mileage: null,
+        });
+      } catch (e) {
+        log(`  ${(e as Error).message.split("\n")[0]}`);
+        // 시험이 어떻게 끝났든 생성 창은 저장하지 않고 닫는다
+        await f.getByRole("button", { name: "취소", exact: true }).first().click().catch(() => {});
+        await page.waitForTimeout(800);
+      }
+      await ctx.close().catch(() => {});
+      process.exit(0);
+    }
+
+    /* 🔍 전기된 송장 확인 — 읽기만 한다 */
+    if (PEEK_INV) {
+      await clickAny(page, "판매완료");
+      await page.waitForTimeout(700);
+      await clickAny(page, "완료된 매출 송장, 완료된 매출 송장 목록을 엽니다.");
+      await page.waitForTimeout(3000);
+      await passBigSearchDialog(page);
+      const f = main(page);
+      const rows = f.getByRole("row").filter({ hasText: PEEK_INV.plate });
+      const n = await rows.count().catch(() => 0);
+      log(`\n── ${PEEK_INV.plate} 의 전기된 송장 ${n}건 ──`);
+      for (let i = 0; i < n; i++) {
+        const t = (((await rows.nth(i).innerText().catch(() => "")) || "").replace(/\s+/g, " ")).trim();
+        log(`  [${i}] ${t.slice(0, 200)}`);
+      }
+      if (n > 0 && PEEK_INV.pick) {
+        const byIdx = /^\d+$/.test(PEEK_INV.pick) && Number(PEEK_INV.pick) < n;
+        const row = byIdx ? rows.nth(Number(PEEK_INV.pick)) : rows.filter({ hasText: PEEK_INV.pick }).first();
+        if (!(await row.isVisible().catch(() => false))) {
+          log(`  ⚠️ «${PEEK_INV.pick}» 이 든 줄이 없습니다`);
+        } else if (await openInvoice(page, row)) {
+          await page.waitForTimeout(2000);
+          // 송장 번호는 목록에서 잘려 보이므로 **연 카드에서** 읽는다 — 자릿수를 못박아
+          // 옆 숫자와 붙어 읽히는 것을 막는다 (8-2SI+6 형식)
+          const body = ((await f.locator("body").innerText().catch(() => "")) || "").replace(/\s+/g, " ");
+          const no = /\d{8}-\d{2}SI\+\d{6}/.exec(body)?.[0] ?? "(못 읽음)";
+          log(`  송장 번호: ${no}`);
+          const sub = f.locator("div[controlname*='Subform']").last();
+          const lrs = sub.getByRole("row");
+          const m = await lrs.count().catch(() => 0);
+          log(`  품목 줄 ${m}개:`);
+          for (let i = 0; i < m; i++) {
+            const t = (((await lrs.nth(i).innerText().catch(() => "")) || "").replace(/\s+/g, " ")).trim();
+            if (t) log(`    ${t.slice(0, 200)}`);
+          }
+        } else {
+          log("  ⚠️ 송장을 못 열었습니다");
+        }
+      }
+      const shotP = path.resolve(process.cwd(), "..", "tyremore-data", "mars-peek-inv.png");
+      await page.screenshot({ path: shotP, fullPage: true }).catch(() => {});
+      log(`  화면: ${shotP}`);
+      await ctx.close().catch(() => {});
+      process.exit(0);
     }
 
     /* 🔍 품목표 탐침 — 읽기만 한다 */
