@@ -30,10 +30,10 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { parseTireSpec } from "./tire-spec";
+import { formatSpec, parseTireSpec } from "./tire-spec";
 // 패턴코드 → 모델명 표는 인보이스 읽기와 **같은 것을 쓴다** — 두 곳이 갈라지면
 // 인보이스로 만든 상품과 목록으로 만든 상품의 이름이 달라진다
-import { modelForPattern } from "./invoice-desc";
+import { KUMHO_SEASON, modelForPattern } from "./invoice-desc";
 
 export const SUPPLIER = "금호";
 
@@ -377,6 +377,23 @@ export async function applyCatalog(
         continue;
       }
       const attrs = parseTireAttrs(r.model, r.name);
+      /**
+       * ⭐ 이름을 몰라 계절을 못 읽은 코드는 사장님이 알려 주신 값을 쓴다.
+       *    계절이 비면 「사계절 있어요?」 필터에서 이 상품이 통째로 빠진다.
+       */
+      const season = attrs.season ?? KUMHO_SEASON[r.patternCode] ?? null;
+      /**
+       * ⭐ `pattern` 이 검색에 걸리는 글자다 (규격·모델·하중속도를 한 줄로).
+       *    기존 상품들과 같은 모양으로 맞춘다 — `225/60R17 Crugen Premium KL33 99H`
+       */
+      const label = [
+        formatSpec({ width: r.width, aspectRatio: r.aspectRatio, rimInch: Number(r.rimInch) }),
+        r.model,
+        `${r.loadIndex ?? ""}${r.speedRating ?? ""}`,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
       const [ins] = await db.execute<{ id: number }>(sql`
         INSERT INTO product (
           mars_item_no, item_type, is_serialized, brand_code, pattern, raw_name,
@@ -384,9 +401,9 @@ export async function applyCatalog(
           is_runflat, is_acoustic, is_suv, list_price, list_price_excl,
           spec_parsed, is_active, created_at, updated_at
         ) VALUES (
-          ${"KM" + r.code}, 'tire', true, 'KM', ${`${r.width}/${r.aspectRatio ?? ""}R${r.rimInch} ${r.model} ${r.loadIndex ?? ""}${r.speedRating ?? ""}`.replace(/\s+/g, " ").trim()},
+          ${"KM" + r.code}, 'tire', true, 'KM', ${label},
           ${`Kumho ${r.name}`},
-          ${r.width}, ${r.aspectRatio}, ${r.rimInch}, ${r.loadIndex}, ${r.speedRating}, ${attrs.season},
+          ${r.width}, ${r.aspectRatio}, ${r.rimInch}, ${r.loadIndex}, ${r.speedRating}, ${season},
           ${attrs.isRunflat}, ${attrs.isAcoustic}, ${attrs.isSuv},
           ${r.listPrice}, ${r.listPrice === null ? null : Math.round(r.listPrice / 1.1)},
           true, true, now(), now()

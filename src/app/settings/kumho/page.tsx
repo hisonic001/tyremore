@@ -36,6 +36,12 @@ export default async function KumhoPage() {
   const [{ n: dict }] = await db.execute<{ n: number }>(
     sql`SELECT count(*)::int n FROM supplier_item_code WHERE supplier = '금호'`,
   );
+  /** 검색에 실제로 나오는 금호 타이어 — 올린 만큼 여기가 늘어난다 */
+  const [tires] = await db.execute<{ total: number; noSeason: number }>(sql`
+    SELECT count(*)::int total,
+           count(*) FILTER (WHERE season IS NULL)::int "noSeason"
+    FROM product
+    WHERE item_type = 'tire' AND is_active AND brand_code = 'KM'`);
 
   return (
     <main className="mx-auto min-h-dvh max-w-2xl px-4 py-5">
@@ -44,9 +50,31 @@ export default async function KumhoPage() {
       </Link>
       <h1 className="mt-3 text-2xl font-bold">금호 상품목록</h1>
       <p className="mt-1 text-sm text-slate-500">
-        금호 인보이스에 찍히는 <strong>자재코드</strong>와 우리 품번을 이어 둡니다. 지금{" "}
-        <strong className="tabular">{dict}개</strong> 이어져 있습니다.
+        인보이스가 알아보게 하고, <strong>타이어 검색에도 함께 채웁니다.</strong>
       </p>
+
+      <dl className="mt-3 grid grid-cols-3 gap-2">
+        <div className="rounded-xl border border-slate-200 bg-white p-3">
+          <dt className="text-xs text-slate-500">검색에 나오는 금호</dt>
+          <dd className="tabular mt-0.5 text-xl font-bold">{tires.total}</dd>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-3">
+          <dt className="text-xs text-slate-500">자재코드 이어짐</dt>
+          <dd className="tabular mt-0.5 text-xl font-bold">{dict}</dd>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-3">
+          <dt className="text-xs text-slate-500">계절 미확인</dt>
+          <dd className={`tabular mt-0.5 text-xl font-bold ${tires.noSeason ? "text-amber-700" : ""}`}>
+            {tires.noSeason}
+          </dd>
+        </div>
+      </dl>
+      {tires.noSeason > 0 && (
+        <p className="mt-2 text-xs text-slate-500">
+          계절 미확인은 금호가 모델 이름 없이 <strong>패턴코드만</strong> 적어 보내는 것들입니다 (PA71 · KL78
+          같은 것). 짐작으로 이름을 붙이지 않습니다 — 상품 화면에서 고쳐 주시면 그대로 남습니다.
+        </p>
+      )}
 
       <KumhoCatalog />
 

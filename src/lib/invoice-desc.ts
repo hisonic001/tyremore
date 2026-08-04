@@ -71,6 +71,8 @@ const ALIASES: [RegExp, string][] = [
   [/\bHP71\b/gi, "Crugen HP71"],
   [/\bHP5(\d)\b/gi, "Crugen HP5$1"],
   [/\bKL33\b/gi, "Crugen Premium KL33"],
+  [/\bKL71\b/gi, "Road Venture MT KL71"],
+  [/\bVX51\b/gi, "Ennov SuperMile VX51"],
   [/\bTA92\b/gi, "Majesty X Solus TA92"],
   [/\bTA91\b/gi, "Majesty 9 Solus TA91"],
   [/\bTA([1235]\d)\b/gi, "Solus TA$1"],
@@ -101,14 +103,36 @@ const ALIASES: [RegExp, string][] = [
  * ========================================================== */
 export const KUMHO_MODEL: Record<string, string> = {
   KL33: "Crugen Premium KL33",
+  KL71: "Road Venture MT KL71",
   TA11: "Solus TA11",
   TA21: "Solus TA21",
   TA31: "Solus TA31",
   TA51: "Solus TA51",
   TA91: "Majesty 9 Solus TA91",
   TA92: "Majesty X Solus TA92",
+  HP51: "Crugen HP51",
   HP71: "Crugen HP71",
   HP72: "Crugen GT Pro HP72",
+  VX51: "Ennov SuperMile VX51",
+};
+
+/**
+ * 아직 이름을 모르는 코드: HP91 · KL12 · KL21 · KL61 · KL78 · PA41 · PA71.
+ * KL·PA 계열은 사이즈로 보면 오프로드·UHP 인데, 근거가 될 상품이 우리 카탈로그에
+ * 하나도 없다. **짐작으로 이름을 붙이지 않는다** — 코드 그대로 둔다.
+ * 사장님이 상품 화면에서 이름을 고쳐 주시면 그게 `display_name` 으로 남는다.
+ */
+
+/**
+ * ⭐ 계절만 아는 코드 (2026-08-04)
+ *
+ * 이름은 몰라도 계절은 아는 경우가 있다. 계절은 상담에서 바로 쓰는 값이라
+ * (「사계절 있어요?」) 비워 두면 그 상품이 검색 필터에서 통째로 빠진다.
+ *
+ *   HP91 — 사장님 확인 (2026-08-03): "금호 hp91은 사계절이 맞음"
+ */
+export const KUMHO_SEASON: Record<string, string> = {
+  HP91: "사계절",
 };
 
 /** 패턴코드로 모델명을 만든다. 모르는 코드는 그대로 돌려준다 */

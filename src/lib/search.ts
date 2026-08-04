@@ -85,6 +85,50 @@ export interface ProductHit {
   isHidden: boolean;
 }
 
+/* ============================================================
+ * 한글 모델명 ⭐ (2026-08-04)
+ *
+ * MARS 카탈로그의 모델명은 **전부 영문**이다 (`Solus TA51`, `Majesty 9`).
+ * 그런데 사장님도 손님도 「솔루스」·「마제스티」라고 말한다.
+ * 그대로 치면 0건이 나와서, 상품이 있는데도 없는 것처럼 보인다.
+ *
+ * ⚠️ 브랜드 이름은 여기 넣지 않는다 — `brand.name_ko` 로 이미 걸린다.
+ * ⚠️ 한 낱말이 여러 철자를 가질 수 있다 (`컨티넨탈` → Conti / Continental).
+ *    넓히기만 하고 좁히지 않으므로, 애매하면 여러 개를 적어 두는 편이 낫다.
+ * ========================================================== */
+const KO_MODEL: Record<string, string[]> = {
+  // ── 금호 ──
+  솔루스: ["Solus"],
+  마제스티: ["Majesty"],
+  크루젠: ["Crugen"],
+  엑스타: ["Ecsta"],
+  윈터크래프트: ["Wintercraft"],
+  로드벤처: ["Road Venture"],
+  포트란: ["PorTran"],
+  이노브: ["Ennov"],
+  // ── 미쉐린 ──
+  프라이머시: ["Primacy"],
+  파일럿: ["Pilot"],
+  크로스클라이밋: ["CrossClimate", "CROSCLI"],
+  라티튜드: ["Latitude"],
+  에너지: ["Energy"],
+  // ── 콘티넨탈 ──
+  프리미엄콘택트: ["PremiumContact", "PREMC"],
+  에코콘택트: ["EcoContact", "ECOC"],
+  스포츠콘택트: ["SportContact", "SPOC"],
+  울트라콘택트: ["UltraContact", "ULTC"],
+  // ── 한국타이어 ──
+  벤투스: ["Ventus"],
+  다이나프로: ["Dynapro"],
+  키너지: ["Kinergy"],
+};
+/**
+ * 🔴 「겨울」·「사계절」·「런플랫」은 여기 넣지 않는다.
+ *    이름 글자만 훑으면 `WinterCraft` 는 걸리고 미쉐린 `Alpin` 은 안 걸려
+ *    **겨울 타이어 일부만** 나온다. 그게 전부인 줄 아시면 안 넣느니만 못하다.
+ *    그건 `season` 칸을 보는 필터 버튼이 정확하다.
+ */
+
 /**
  * 입력만 보고 어느 쪽을 볼지 정한다.
  * 사용자가 버튼으로 지정했으면 그쪽이 이긴다.
@@ -212,9 +256,17 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
      * 적용차종이 부품 검색의 전부다 (D-12).
      */
     for (const w of words) {
-      const like = `%${w}%`;
-      conds.push(
-        or(
+      /**
+       * ⭐ 사장님은 모델을 한글로 부르신다 — 「솔루스」·「마제스티」·「크루젠」
+       *    (2026-08-04, 금호 목록을 들이면서 드러났다).
+       *    카탈로그에는 영문만 있어 그대로 치면 **0건**이 나온다.
+       *    한 낱말을 여러 철자로 넓혀 그중 하나만 걸려도 되게 한다
+       *    (낱말과 낱말 사이는 여전히 AND — 칠수록 좁아지는 성질은 그대로).
+       */
+      const spellings = [w, ...(KO_MODEL[w.toLowerCase()] ?? [])];
+      const per = spellings.flatMap((s) => {
+        const like = `%${s}%`;
+        return [
           sql`${product.pattern} ILIKE ${like}`,
           sql`${product.partNo} ILIKE ${like}`,
           sql`${product.fitment} ILIKE ${like}`,
@@ -223,8 +275,9 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
           // 브랜드는 한글로도 친다 — 원문에는 "Michelin" 뿐이라 "미쉐린"이 안 걸린다
           sql`${brand.nameKo} ILIKE ${like}`,
           sql`${brand.nameEn} ILIKE ${like}`,
-        )!,
-      );
+        ];
+      });
+      conds.push(or(...per)!);
     }
   }
 
