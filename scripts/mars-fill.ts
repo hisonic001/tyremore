@@ -54,10 +54,15 @@ const HOME = "https://mars.tyremore.co.kr/MARS/?tenant=61168583";
  *
  * 거래처 목록·손 등록으로 만든 상품(235개)은 MARS 마스터에 없다. 그 줄은 이 품번으로
  * 넣고 실제 상품명을 「설명 2」에 남긴다 — 금액·수량 실적은 정확하고 브랜드만 뭉개진다.
- * 상품 마스터 수출본에서 찾은 것: 이름이 비고 단가 0, 범주 10-TIRES 인 자리표시 품목.
- * 다른 품번을 쓰려면 .env.local 에 MARS_FALLBACK_ITEM 을 넣는다.
+ *
+ * 🔴 아직 **쓸 수 있는 범용 품번이 없다** (2026-08-04 실측).
+ *    마스터에서 찾았던 후보 `580/001/00290`(이름 빈 10-TIRES 자리표시)를 실제로
+ *    넣어 봤더니 **줄에 오류 두 개**가 떴다 — 마스터 설정이 미완성이라 MARS 가 거부한다.
+ *    사장님이 MARS 에서 범용 품목을 하나 만들거나(또는 이 품목을 고치거나) 코드를
+ *    주시면 .env.local 에 `MARS_FALLBACK_ITEM=코드` 로 넣는다. 그 전까지
+ *    미등록 상품 줄은 **명확한 실패**로 알린다 — 깨진 줄을 만드는 것보다 낫다.
  */
-const FALLBACK_ITEM = process.env.MARS_FALLBACK_ITEM ?? "580/001/00290";
+const FALLBACK_ITEM = process.env.MARS_FALLBACK_ITEM ?? null;
 
 const DRY = process.argv.includes("--dry");
 /** 고객 생성 화면이 실제로 어떻게 생겼는지만 훑고 취소한다 — 아무것도 저장하지 않는다 */
@@ -935,11 +940,22 @@ async function fillLines(
       await page.waitForTimeout(600);
       return said;
     };
-    await clearDialog();
 
-    let descBack = ((await readField(row.locator('[controlname="Description"]').first())) || "").trim();
+    /**
+     * 🔴 미등록 품번 판정은 **오류 창이 떴을 때만** 한다 (2026-08-04 세 번 고쳐 배운 것).
+     *    처음엔 「상세 항목」 칸을 읽어 비면 미등록으로 봤는데, 그 칸은 편집 상태가
+     *    아니면 늘 빈 값을 돌려준다 — 멀쩡한 126081 을 미등록으로 오판해
+     *    범용 품번으로 갈아치웠다. 확실한 신호(오류 창)만 믿는다.
+     */
+    const noDlg = await clearDialog();
     let usedFallback = false;
-    if (!descBack) {
+    if (/찾을 수 없|존재하지 않|않습니다|없습니다/.test(noDlg)) {
+      if (!FALLBACK_ITEM) {
+        throw new Error(
+          `MARS 에 없는 품번입니다: ${l.no} «${l.marsName}» — 범용 품번이 아직 없어 이 줄은 직접 처리해 주세요` +
+            ` (MARS: ${noDlg.slice(0, 80)})`,
+        );
+      }
       log(`      ⚠️ MARS 에 없는 품번 ${l.no} — 범용 품번 ${FALLBACK_ITEM} 으로 대신 넣습니다`);
       await noCell.click({ timeout: 6000 }).catch(() => {});
       await page.waitForTimeout(300);
@@ -949,13 +965,9 @@ async function fillLines(
       });
       await no2.press("Enter");
       await page.waitForTimeout(2000);
-      await clearDialog();
-      // 범용 품번은 이름이 비어 있을 수 있다 — 품번 칸에 값이 실렸는지로 확인한다
-      const noBack = ((await readField(noCell)) || "").replace(/\s/g, "");
-      if (noBack !== FALLBACK_ITEM.replace(/\s/g, "")) {
-        throw new Error(
-          `범용 품번 ${FALLBACK_ITEM} 도 MARS 가 알아보지 못했습니다 (칸에는 «${noBack}») — «${l.marsName}» 줄 실패`,
-        );
+      const dlg2 = await clearDialog();
+      if (dlg2) {
+        throw new Error(`범용 품번 ${FALLBACK_ITEM} 도 MARS 가 거부했습니다: ${dlg2.slice(0, 80)}`);
       }
       usedFallback = true;
     }
