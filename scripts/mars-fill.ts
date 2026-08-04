@@ -802,17 +802,20 @@ async function openSalesOrder(
   await fillField(page, "완료 일자", f.getByRole("combobox", { name: "완료 일자" }), dateISO);
 
   /**
-   * 주행거리가 살아 있는지 다시 본다 — 실제로 지워지는 일이 있었다.
+   * 🔴 주행거리가 살아 있는지 다시 본다 — **비어 있어도 다시 넣는다** (2026-08-04).
    *
-   * ⚠️ 값을 **못 읽은 것**과 **지워진 것**은 다르다.
-   *    빈 문자열이면 못 읽은 것일 수도 있으므로 다시 넣지 않는다 —
-   *    그것 때문에 멀쩡한 값을 두 번 넣고 있었다 (사장님 지적 2026-08-02).
+   * 사장님이 육안으로 확인하셨다: "주행거리가 입력되었다가 완료일자 입력 이후
+   * 즈음에 사라지는 현상을 발견함." 8/2 에는 「빈 값 = 못 읽은 것일 수도」라며
+   * 다시 넣지 않았는데, 실제로는 **지워진 것**이었다. 같은 값을 두 번 넣는 것은
+   * 해가 없지만(덮어쓸 뿐), 빈 채로 두면 MARS 기록에서 주행거리가 사라진다.
    */
   if (mileage) {
-    const kmNow = await readField(km);
-    if (kmNow !== "" && !kmNow.replace(/[\s,]/g, "").includes(String(mileage))) {
-      log(`    · 주행거리가 «${kmNow}» 로 바뀌어 다시 넣습니다`);
+    const kmNow = ((await readField(km)) || "").replace(/[\s,]/g, "");
+    if (!kmNow.includes(String(mileage))) {
+      log(`    · 주행거리가 «${kmNow || "(비어 있음)"}» 라 다시 넣습니다`);
       await fillField(page, "현재 주행거리", km, String(mileage), { tab: false });
+      const kmAfter = ((await readField(km)) || "").replace(/[\s,]/g, "");
+      log(`    · 주행거리 확인: «${kmAfter || "(못 읽음)"}»`);
     }
   }
 
@@ -1173,36 +1176,70 @@ async function readOrderNo(page: Page): Promise<string | null> {
  *
  * 매출 주문 카드에서: 「전기」 → 「출하 및 송장」 → 확인.
  */
-async function postOrder(page: Page): Promise<{ ok: boolean; invoiceNo: string | null; why?: string }> {
+async function postOrder(
+  page: Page,
+): Promise<{ ok: boolean; invoiceNo: string | null; why?: string; unsure?: boolean }> {
   const f = main(page);
 
-  // 「전기」는 바로 보이기도, 「송장」·「프로세스」 메뉴 안에 있기도 하다
-  let clicked = false;
-  for (const path_ of [["전기"], ["송장", "전기"], ["프로세스", "전기"]]) {
-    try {
-      for (const step of path_) {
-        await clickAny(page, step, 6000);
-        await page.waitForTimeout(700);
-      }
-      clicked = true;
+  /**
+   * 🔴 다섯 번째 시도 끝에 배운 것 (2026-08-04):
+   *   · 주문 화면은 홈 **위에 겹쳐진 층**이다. 앞에서부터 세면 뒤에 깔린 홈 메뉴
+   *     수십 개가 먼저 잡혀 위층의 「전기...」에 못 닿는다.
+   *   · F9(BC 표준 전기 단축키)는 이 화면에서 아무 일도 안 한다.
+   *   → 「전기」 묶음을 연 뒤, **DOM 끝에서부터 거꾸로** 찾는다.
+   *     팝업 메뉴는 문서 끝에 붙는다 — 끝에서 처음 만나는 「전기...」가 위층 것이다.
+   */
+  try {
+    await clickAny(page, "전기", 8000);
+  } catch {
+    return { ok: false, invoiceNo: null, why: "「전기」 메뉴를 찾지 못했습니다" };
+  }
+  await page.waitForTimeout(1000);
+
+  /** 글자 「전기...」를 직접 찾는다. 못 찾으면 묶음을 한 번 더 눌러(토글) 다시 찾는다 */
+  let pressed = false;
+  for (let attempt = 0; attempt < 2 && !pressed; attempt++) {
+    const t = f.getByText("전기...", { exact: true });
+    const nT = await t.count().catch(() => 0);
+    log(`    · 「전기...」 글자 ${nT}개 발견`);
+    for (let i = nT - 1; i >= 0; i--) {
+      if (!(await t.nth(i).isVisible().catch(() => false))) continue;
+      await t.nth(i).click({ timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(1800);
+      pressed = true;
       break;
-    } catch {
-      /* 다음 경로 */
+    }
+    if (!pressed) {
+      const shot = path.resolve(process.cwd(), "..", "tyremore-data", "mars-전기메뉴.png");
+      await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
+      log(`    · 「전기...」가 안 보여 묶음을 다시 누릅니다 (화면: ${shot})`);
+      await clickAny(page, "전기", 5000).catch(() => {});
+      await page.waitForTimeout(1000);
     }
   }
-  if (!clicked) return { ok: false, invoiceNo: null, why: "「전기」 단추를 찾지 못했습니다" };
+  if (!pressed) {
+    return { ok: false, invoiceNo: null, why: "「전기...」 항목이 화면에 나타나지 않았습니다" };
+  }
 
   /**
-   * 전기 방식 고르기 — 「출하 및 송장」이어야 재고 출하와 송장이 한 번에 끝난다.
-   * 라디오 단추라 글자를 누르면 선택된다.
+   * 전기 방식 고르기 — 이 화면의 선택지는 「배송 / 송장 / **배송 및 송장**」이다
+   * (2026-08-04 진단 실행으로 확인 — BC 표준 문서의 「출하」가 여기선 「배송」이다).
+   * 「배송 및 송장」이어야 재고 출하와 송장이 한 번에 끝난다.
+   * 🔴 대화상자 **안에서만** 찾는다 — 화면 전체에서 찾으면 뒤층의 글자를 잡는다.
    */
-  const ship = f.getByText("출하 및 송장", { exact: false }).first();
-  if (await ship.isVisible({ timeout: 5000 }).catch(() => false)) {
+  const postDlg = f.getByRole("dialog").last();
+  if (!(await postDlg.isVisible({ timeout: 5000 }).catch(() => false))) {
+    return { ok: false, invoiceNo: null, why: "전기 대화상자가 뜨지 않았습니다" };
+  }
+  const ship = postDlg.getByText(/배송 및 송장|출하 및 송장/).first();
+  if (await ship.isVisible({ timeout: 3000 }).catch(() => false)) {
     await ship.click().catch(() => {});
     await page.waitForTimeout(400);
+  } else {
+    log("    ⚠️ 「배송 및 송장」 선택지를 못 찾아 기본값으로 진행합니다");
   }
-  await f.getByRole("button", { name: "확인", exact: true }).last().click({ timeout: 8000 }).catch(() => {});
-  await page.waitForTimeout(4000);
+  await postDlg.getByRole("button", { name: "확인", exact: true }).last().click({ timeout: 8000 }).catch(() => {});
+  await page.waitForTimeout(5000);
 
   /** 결과 창들을 하나씩 읽는다 — 오류면 멈추고, 「여시겠습니까」면 연다 */
   for (let i = 0; i < 4; i++) {
@@ -1235,13 +1272,12 @@ async function postOrder(page: Page): Promise<{ ok: boolean; invoiceNo: string |
     return { ok: true, invoiceNo: inv };
   }
   /**
-   * 번호를 못 읽었어도 주문 화면이 사라졌으면(주문이 소멸 = 전기됨) 성공으로 본다.
-   * 둘 다 아니면 실패다 — 확실하지 않은 것을 성공이라 하지 않는다.
+   * 화면만으로는 못 정한다 — **모르겠다**고 답한다.
+   * 🔴 실제로 전기가 성공했는데 「주문 화면이 그대로」라며 실패로 적은 일이 있었다
+   *    (2026-08-04 — 그 바람에 같은 주문을 몇 번이나 다시 만들었다).
+   *    호출한 쪽이 「완료된 매출 송장 목록」에서 번호판·날짜·금액으로 확인한다.
    */
-  const stillOrder = await f.getByText("매출 주문", { exact: false }).first().isVisible({ timeout: 2000 }).catch(() => false);
-  return stillOrder
-    ? { ok: false, invoiceNo: null, why: "전기가 끝났는지 확인하지 못했습니다 (주문 화면이 그대로)" }
-    : { ok: true, invoiceNo: null };
+  return { ok: false, invoiceNo: null, unsure: true, why: "화면으로는 전기 여부를 확정하지 못했습니다" };
 }
 
 /* ================================================================
@@ -1273,22 +1309,35 @@ async function setGrade100(page: Page, rowText: string): Promise<boolean> {
   const row = f.getByRole("row").filter({ hasText: rowText }).first();
   if (!(await row.isVisible().catch(() => false))) return false;
 
-  const has100 = async () => ((await row.innerText().catch(() => "")) || "").includes("100");
+  /**
+   * 🔴 2026-08-04 실전에서 다시 배운 것:
+   *   · 「Value N」 칸을 눌러도 **칸만 선택되고 체크박스는 안 켜진다** —
+   *     칸 안의 체크박스를 직접 눌러야 한다 (타이어의 Replace 체크와 같은 방식).
+   *   · 성공 판정을 줄 글자 「100」에 기대면 안 된다 — **aria-checked** 를 읽는다.
+   *   · 표마다 열 수가 달라도(브레이크 30/70/100 · 기타 0/100)
+   *     **맨 오른쪽 체크박스가 100%** 라는 것은 같다 (화면으로 확인).
+   */
   await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
-  if (await has100()) return true;
+  await page.waitForTimeout(300);
 
-  const cells = row.locator('[controlname^="Value "]');
-  const n = await cells.count().catch(() => 0);
-  // 오른쪽부터 왼쪽으로
+  const boxes = row.locator('input[type="checkbox"], [role="checkbox"]');
+  const n = await boxes.count().catch(() => 0);
   for (let i = n - 1; i >= 0; i--) {
-    const cell = cells.nth(i);
-    if (!(await cell.isVisible().catch(() => false))) continue;
-    await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
-    await cell.click({ timeout: 5000 }).catch(() => {});
+    const box = boxes.nth(i);
+    if (!(await box.isVisible().catch(() => false))) continue;
+    const checked = async () =>
+      (await box.getAttribute("aria-checked").catch(() => null)) === "true" ||
+      (await box.isChecked().catch(() => false));
+    if (await checked()) return true; // 이미 켜져 있다 (다시 돌린 경우)
+    await box.click({ timeout: 5000 }).catch(() => {});
     await page.waitForTimeout(450);
-    if (await has100()) return true;
-    await cell.click({ timeout: 5000 }).catch(() => {}); // 되돌린다
-    await page.waitForTimeout(300);
+    if (await checked()) return true;
+    // 안 켜졌으면 칸을 먼저 활성화하고 한 번 더
+    await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+    await box.click({ timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(450);
+    if (await checked()) return true;
+    return false; // 맨 오른쪽이 안 켜지면 다른 칸(70%…)을 켜면 안 된다 — 실패로 알린다
   }
   return false;
 }
@@ -1461,9 +1510,29 @@ async function fillVehicleCheck(
 
   const missed: string[] = [];
 
+  /**
+   * 🔴 섹션 제목(타이어·브레이크…)은 **토글**이다 (2026-08-04 — 라인 섹션과 같은 함정).
+   *    무조건 누르면 열려 있던 것을 닫는다. 지난 실행이 열어 둔 상태가 남아 있어서
+   *    한 번은 되고 다음 번은 안 되는 널뛰기가 생겼다.
+   *    → **찾는 행이 안 보일 때만** 누른다. 눌러도 안 보이면 한 번 더 (닫힘→열림).
+   */
+  const openSection = async (title: string, probeRow: string) => {
+    for (let k = 0; k < 3; k++) {
+      const visible = await f
+        .getByRole("row")
+        .filter({ hasText: probeRow })
+        .first()
+        .isVisible({ timeout: 1500 })
+        .catch(() => false);
+      if (visible) return true;
+      await clickAny(page, title, 5000).catch(() => {});
+      await page.waitForTimeout(1200);
+    }
+    return false;
+  };
+
   // ① 타이어 — 실제로 간 바퀴만 Replace
-  await clickAny(page, "타이어").catch(() => {});
-  await page.waitForTimeout(1200);
+  await openSection("타이어", "타이어 - 전륜");
   for (const w of wheelsFor(opts.tyreQty)) {
     const row = f.getByRole("row").filter({ hasText: `타이어 - ${w}` }).first();
     if (!(await row.isVisible().catch(() => false))) {
@@ -1490,13 +1559,8 @@ async function fillVehicleCheck(
     ["배터리", "배터리"],
     ["기타", "엔진오일"],
   ];
-  let tab = "";
   for (const [t, rowText] of REST) {
-    if (t !== tab) {
-      await clickAny(page, t).catch(() => {});
-      await page.waitForTimeout(1200);
-      tab = t;
-    }
+    await openSection(t, rowText);
     const done = await setGrade100(page, rowText);
     log(`      ${rowText} — ${done ? "100%" : "⚠️ 못 넣었습니다"}`);
     if (!done) missed.push(rowText);
@@ -1635,6 +1699,22 @@ async function main_() {
             await page.waitForTimeout(2500);
           }
         }
+        /* 전기 메뉴를 펼쳐 항목들을 그대로 찍는다 — 전기 자동화가 무엇을 눌러야 하는지 */
+        await clickAny(page, "전기", 8000).catch(() => {});
+        await page.waitForTimeout(1200);
+        log(`\n── 「전기」 메뉴를 펼친 뒤 보이는 menuitem 들 ──`);
+        const mis = f.getByRole("menuitem");
+        const nMis = await mis.count().catch(() => 0);
+        for (let i = 0; i < Math.min(nMis, 40); i++) {
+          if (!(await mis.nth(i).isVisible().catch(() => false))) continue;
+          const t = ((await mis.nth(i).innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
+          const cn = (await mis.nth(i).getAttribute("controlname").catch(() => null)) ?? "";
+          if (t) log(`   [${i}] «${t}»${cn ? `  controlname=${cn}` : ""}`);
+        }
+        const shotM = path.resolve(process.cwd(), "..", "tyremore-data", "mars-probe-menu.png");
+        await page.screenshot({ path: shotM, fullPage: true }).catch(() => {});
+        log(`  메뉴 화면: ${shotM}`);
+
         const shot0 = path.resolve(process.cwd(), "..", "tyremore-data", "mars-probe.png");
         await page.screenshot({ path: shot0, fullPage: true }).catch(() => {});
         log(`  화면: ${shot0}`);
@@ -1819,7 +1899,34 @@ async function main_() {
           continue;
         }
 
-        const posted = await postOrder(page);
+        let posted = await postOrder(page);
+        /** 화면으로 못 정했으면 **송장 목록에서** 확정한다 — 번호판·작업일·금액으로 */
+        let verifiedRow: Locator | null = null;
+        if (!posted.ok && posted.unsure && q.plateNo) {
+          log("    · 전기 여부를 송장 목록에서 확인합니다");
+          await page.goto(HOME);
+          await waitHome(page, 40000);
+          await clickAny(page, "판매완료");
+          await page.waitForTimeout(700);
+          await clickAny(page, "완료된 매출 송장, 완료된 매출 송장 목록을 엽니다.");
+          await page.waitForTimeout(3000);
+          await passBigSearchDialog(page);
+          const picked = await pickInvoiceRow(page, {
+            plateNo: q.plateNo,
+            workDate: iso,
+            total: q.total,
+            marsRefNo: null,
+          });
+          if (picked.ok) {
+            const flat = picked.label.replace(/\s+/g, "");
+            const si = /\d{6,}-\d{2}SI\+\d+/.exec(flat)?.[0] ?? null;
+            posted = { ok: true, invoiceNo: si };
+            verifiedRow = picked.row;
+            log(`    · 전기 완료 확인 — 송장 ${si ?? "(번호 미확인)"}`);
+          } else {
+            posted = { ok: false, invoiceNo: null, why: `전기 확인 실패: ${picked.why}` };
+          }
+        }
         if (!posted.ok) {
           await markEntered(q.quoteId, orderNo, `자동입력 ${iso} · ${amount.note} · 전기 실패: ${posted.why}`);
           ok++;
@@ -1838,12 +1945,19 @@ async function main_() {
         if (tyreQty > 0 && q.plateNo) {
           try {
             const f2 = main(page);
+            // 송장 목록에서 확정했다면 그 줄을 바로 연다
+            if (verifiedRow) {
+              if (!(await openInvoice(page, verifiedRow))) throw new Error("송장을 열지 못했습니다");
+              await page.waitForTimeout(1500);
+            }
             // 「전기된 송장을 여시겠습니까 → 예」 로 이미 송장 카드에 있으면 바로 점검
-            const onInvoice = await f2
-              .getByRole("menuitem", { name: "탐색" })
-              .first()
-              .isVisible({ timeout: 4000 })
-              .catch(() => false);
+            const onInvoice =
+              verifiedRow !== null ||
+              (await f2
+                .getByRole("menuitem", { name: "탐색" })
+                .first()
+                .isVisible({ timeout: 4000 })
+                .catch(() => false));
             if (!onInvoice) {
               // 송장 카드가 아니면 완료된 매출 송장 목록에서 찾아 들어간다
               await page.goto(HOME);
