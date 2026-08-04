@@ -66,16 +66,56 @@ const ALIASES: [RegExp, string][] = [
   [/\bGRAB\s*AT(\d)\b/gi, "Grabber AT$1"],
   [/\bSIL\b/gi, "ContiSilent"],
 
-  // ── 금호 (모델코드가 곧 라인이다) ──
-  [/\bHP7(\d)\b/gi, "Crugen HP7$1"],
+  // ── 금호 — 패턴코드가 곧 모델이다. 확인된 것만 편다 (아래 KUMHO_MODEL 주석) ──
+  [/\bHP72\b/gi, "Crugen GT Pro HP72"],
+  [/\bHP71\b/gi, "Crugen HP71"],
   [/\bHP5(\d)\b/gi, "Crugen HP5$1"],
-  [/\bKL(\d\d)\b/gi, "Crugen Premium KL$1"],
-  [/\bTA(\d\d)\b/gi, "Solus TA$1"],
+  [/\bKL33\b/gi, "Crugen Premium KL33"],
+  [/\bTA92\b/gi, "Majesty X Solus TA92"],
+  [/\bTA91\b/gi, "Majesty 9 Solus TA91"],
+  [/\bTA([1235]\d)\b/gi, "Solus TA$1"],
   [/\bPS7(\d)\b/gi, "Ecsta PS7$1"],
   [/\bWP(\d\d)\b/gi, "WinterCraft WP$1"],
+  [/\bWS(\d\d)\b/gi, "WinterCraft WS$1"],
   [/\bSW(\d\d)\b/gi, "WinterCraft SW$1"],
   [/\bKC(\d\d)\b/gi, "PorTran KC$1"],
 ];
+
+/* ============================================================
+ * ⭐ 금호 패턴코드 → 모델명 (2026-08-04)
+ *
+ * 금호는 자재명에 모델 이름을 쓰지 않고 **패턴코드**만 적는다 (`TA51`·`HP72`).
+ * 인보이스에도 「패턴」 칸이 따로 있을 만큼 이것이 곧 모델이다.
+ * 사장님이 주신 「자재검색」 목록도 같은 코드를 쓴다.
+ *
+ * ⚠️ **지어내지 않았다.** MARS 카탈로그에서 품번(`KM`+자재코드)으로 확실히 이어진
+ *    상품들의 이름을 세어 다수를 골랐다.
+ *      KL33 → Crugen Premium (6건)    TA21·TA31·TA51 → Solus (35건)
+ *      TA91 → Majesty 9 Solus (15건)  TA92 → Majesty X Solus (3건)
+ *      HP71 → Crugen HP71 (다수)      HP72 → CRUGEN GT Pro (1건)
+ *
+ * 🔴 **모르는 코드는 코드 그대로 둔다.**
+ *    예전에는 `KL\d\d` 를 전부 「Crugen Premium」으로 폈는데, KL71·KL78 은
+ *    Road Venture 계열(오프로드)이라 엉뚱한 이름이 붙었다 (2026-08-04 발견).
+ *    틀린 이름보다 낯선 코드가 낫다 — D-08 과 같은 태도.
+ * ========================================================== */
+export const KUMHO_MODEL: Record<string, string> = {
+  KL33: "Crugen Premium KL33",
+  TA11: "Solus TA11",
+  TA21: "Solus TA21",
+  TA31: "Solus TA31",
+  TA51: "Solus TA51",
+  TA91: "Majesty 9 Solus TA91",
+  TA92: "Majesty X Solus TA92",
+  HP71: "Crugen HP71",
+  HP72: "Crugen GT Pro HP72",
+};
+
+/** 패턴코드로 모델명을 만든다. 모르는 코드는 그대로 돌려준다 */
+export function modelForPattern(patternCode: string): string {
+  const k = patternCode.trim().toUpperCase();
+  return KUMHO_MODEL[k] ?? k;
+}
 
 /**
  * ⭐ 타이어가 아닌 줄 (사장님 확인 2026-08-03 — "타이어 아님으로 표시하고 넘김")

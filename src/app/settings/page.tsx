@@ -17,6 +17,7 @@ export default async function SettingsPage() {
     { href: "/receiving/history", title: "매입 내역", desc: "날짜별로 언제 어디서 얼마에 샀는지" },
     { href: "/stock", title: "재고", desc: "엑셀로 내려받고 고쳐서 올리기" },
     { href: "/product/new", title: "새 상품 등록", desc: "MARS 에 없는 신모델" },
+    { href: "/settings/kumho", title: "금호 상품목록", desc: "자재검색 엑셀 올리기 · 품번 잇기 · 기표가 맞추기" },
     { href: "/status", title: "이관 현황", desc: "들어온 데이터와 보정 대기 목록" },
   ];
 

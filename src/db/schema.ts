@@ -634,6 +634,48 @@ export const supplier = pgTable(
 );
 
 /* ============================================================
+ * supplier_item_code — 거래처가 쓰는 품번 ⭐ (2026-08-04)
+ *
+ * 사장님이 금호 「자재검색」 목록을 주시면서 드러난 문제:
+ *
+ *   같은 타이어인데 **품번이 곳마다 다르다.**
+ *     금호 자재코드   2387392
+ *     우리(MARS) 품번  KM2284552
+ *   인보이스에는 금호 코드가 찍혀 나오니 우리 상품을 못 찾는다.
+ *   → "이미 있는데도 못 알아본다" (사장님 지적 2026-08-03)
+ *
+ * 🔴 **`product.mars_item_no` 를 고치지 않는다.** 그건 MARS 입력의 기준이라
+ *    바꾸면 D-08(원문 보존)이 깨지고 MARS 로 넘길 때 품번이 틀어진다.
+ *    대신 「이 거래처는 이 상품을 이렇게 부른다」를 옆에 적어 둔다.
+ *
+ * ⚠️ 상품이 지워지면 같이 지운다 — 가리키는 곳이 없는 사전은 쓰레기다.
+ *    거래처는 글자로 둔다 (`supplier` 테이블과 같은 이유 — 옛 자료가 묶여 버린다).
+ * ========================================================== */
+export const supplierItemCode = pgTable(
+  "supplier_item_code",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    /** '금호' · '미쉐린' · '콘티넨탈' */
+    supplier: text("supplier").notNull(),
+    /** 그 거래처의 품번 (금호 자재코드 `2387392`) */
+    code: text("code").notNull(),
+    productId: bigint("product_id", { mode: "number" })
+      .notNull()
+      .references(() => product.id, { onDelete: "cascade" }),
+    /** 거래처가 부르는 이름 그대로 — 나중에 사람이 확인할 때 근거가 된다 */
+    supplierName: text("supplier_name"),
+    /** 어떻게 이어졌나 — '품번' | '규격+패턴' | '손으로' */
+    matchedBy: text("matched_by"),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    uniqueIndex("uq_supplier_item_code").on(t.supplier, t.code),
+    index("idx_supplier_item_product").on(t.productId),
+  ],
+);
+
+/* ============================================================
  * purchase_invoice — 매입 인보이스 (2026-08-01)
  *
  * 발주해서 출고된 물건의 명세다. 실물이 오기 전에 미리 등록해 두고,

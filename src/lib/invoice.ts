@@ -48,6 +48,21 @@ type Matched = { id: number; pattern: string | null; excl: number | null; via: "
  *    마진이 통째로 틀어진다. 애매하면 사람이 고르는 편이 낫다.
  */
 async function matchProduct(code: string, description = "", supplier = ""): Promise<Matched | null> {
+  /**
+   * ⓪ ⭐ 거래처 품번 사전 (2026-08-04)
+   *    금호 자재코드 `2387392` ←→ 우리 `KM2284552` 처럼 품번 체계가 아예 다른 경우.
+   *    사장님이 「금호 상품목록」을 올리시면 여기가 채워진다 (`/settings/kumho`).
+   *    사람이 확인해 이어 둔 값이므로 **품번보다 먼저 본다.**
+   */
+  if (supplier) {
+    const [dict] = await db.execute<{ id: number; pattern: string | null; excl: number | null }>(sql`
+      SELECT p.id, COALESCE(p.display_name, p.pattern) pattern, p.list_price_excl excl
+      FROM supplier_item_code s JOIN product p ON p.id = s.product_id
+      WHERE s.supplier = ${supplier} AND s.code = ${code}
+      LIMIT 1`);
+    if (dict) return { ...dict, via: "품번" };
+  }
+
   const [byCode] = await db.execute<{ id: number; pattern: string | null; excl: number | null }>(sql`
     SELECT p.id, COALESCE(p.display_name, p.pattern) pattern, p.list_price_excl excl
     FROM product p
