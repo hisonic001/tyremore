@@ -24,6 +24,17 @@ export function VehicleCard({ v }: { v: VehicleHit }) {
       {v.familyGroupId && (
         <div className="mt-1 text-xs text-slate-400">같은 번호를 쓰는 고객이 더 있습니다</div>
       )}
+      {/*
+        ⭐ 정비 이력으로 바로 (사장님 지적 2026-08-04)
+           "고객 조회를 해도 과거 정비 이력은 확인이 불가한점."
+           손님이 "지난번에 뭐 갈았죠?" 하면 여기서 한 번에 가야 한다.
+      */}
+      <Link
+        href={`/sales?vehicle=${v.vehicleId}`}
+        className="mt-2 block rounded-lg border border-slate-300 py-2 text-center text-sm font-medium text-slate-600 active:bg-slate-50"
+      >
+        이 차의 정비 이력 보기
+      </Link>
     </li>
   );
 }

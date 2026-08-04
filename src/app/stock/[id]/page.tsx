@@ -5,6 +5,7 @@ import { SEASON_STYLE, type Season } from "@/lib/tire-attrs";
 import { BADGE_STYLE } from "@/lib/tire-name";
 import { AttrsEditor } from "./attrs-editor";
 import { CopyLine, HideToggle, NameEditor } from "./editor";
+import { AddDotRow, QtyEditor } from "./qty-editor";
 
 /** 1826 → '26년 18주' */
 function dotLabel(dot: string): string {
@@ -180,32 +181,30 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
       </section>
 
       {/*
-        ⭐ 수량은 여기서 고치지 않는다 (사장님 지시 2026-08-03).
-           한 줄씩 ± 로 맞추는 대신 **엑셀로 한꺼번에** 고친다.
-           여기서는 지금 몇 본인지 보여 주기만 한다.
+        ⭐ 수량을 여기서 바로 고친다 (사장님 지시 2026-08-04).
+           "재고 변경이 엑셀로만 되는 점이 불편함."
+        🔴 2026-08-03 의 「엑셀로만」 지시가 뒤집혔다 — 한두 줄 고치자고 엑셀을
+           내려받아 다시 올리는 것이 더 불편했다. 엑셀은 전수 실사용으로 남는다.
       */}
       <section className="mt-4">
         <h2 className="mb-2 font-semibold">
           {d.isSerialized ? "DOT별 수량" : "수량"}
-          {d.isSerialized && (
-            <span className="ml-2 text-sm font-normal text-slate-500">오래된 것부터 나갑니다</span>
-          )}
+          <span className="ml-2 text-sm font-normal text-slate-500">
+            {d.isSerialized ? "오래된 것부터 나갑니다 · " : ""}숫자를 누르면 고칠 수 있습니다
+          </span>
         </h2>
 
         <ul className="space-y-2">
           {d.groups.map((g) => (
             <li
               key={g.dot ?? "none"}
-              className="flex items-baseline justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3"
+              className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3"
             >
               <span className="tabular text-lg font-semibold">
                 {g.dot ?? <span className="font-normal text-amber-600">DOT 없음</span>}
                 {g.dot && <span className="ml-2 text-xs font-normal text-slate-500">{dotLabel(g.dot)}</span>}
               </span>
-              <span className="tabular text-2xl font-bold">
-                {g.qty}
-                <span className="ml-0.5 text-sm font-medium text-slate-500">{unit}</span>
-              </span>
+              <QtyEditor productId={d.productId} dot={g.dot} qty={g.qty} unit={unit} />
             </li>
           ))}
           {d.groups.length === 0 && (
@@ -215,11 +214,13 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
           )}
         </ul>
 
+        <AddDotRow productId={d.productId} />
+
         <Link
           href="/stock"
-          className="mt-3 block rounded-xl border border-slate-300 py-3 text-center font-medium text-slate-600 active:bg-slate-100"
+          className="mt-3 block py-1 text-center text-sm text-slate-400 underline underline-offset-4"
         >
-          수량 고치기 — 재고 엑셀로
+          여러 상품을 한꺼번에 맞추시려면 재고 엑셀로
         </Link>
       </section>
 

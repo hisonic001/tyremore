@@ -65,6 +65,12 @@ const CHECK = process.argv.includes("--check");
  */
 const LOOK = process.argv.includes("--look");
 /**
+ * ⭐ 대리인 모드 (2026-08-04) — 웹 버튼(`mars-agent.ts`)이 돌릴 때 붙인다.
+ *    끝나면 브라우저를 닫고 스스로 종료한다. 사람이 옆에 없으니
+ *    「Ctrl+C 를 누르세요」 하고 기다리면 안 된다.
+ */
+const AGENT = process.argv.includes("--agent");
+/**
  * 🔴 전기(Posting)는 하지 않는다 — 사장님이 마지막에 검토하고 누르신다 (2026-08-02 지시).
  *    매출 주문을 채워 두기만 하고, 금액이 맞는지 대조해서 보여 준다.
  */
@@ -1361,8 +1367,8 @@ async function main_() {
       log(`\n${"=".repeat(56)}`);
       log(LOOK ? `  전기된 송장을 찾은 것 ${ok}건 · 못 찾은 것 ${skipped}건  (제출 안 함)` : `  점검 제출 ${ok}건 · 넘어간 것 ${skipped}건`);
       log(`${"=".repeat(56)}\n`);
-      /** 보기만 하는 모드는 스스로 닫는다 — 볼 것을 다 봤고, 고칠 것이 없다 */
-      if (LOOK) {
+      /** 보기만·대리인 모드는 스스로 닫는다 — 사람이 옆에 없다 */
+      if (LOOK || AGENT) {
         await ctx.close().catch(() => {});
         process.exit(0);
       }
@@ -1473,6 +1479,11 @@ async function main_() {
     log("  🔴 전기(Posting)는 안 했습니다.");
     log("     MARS 「매출 주문」 목록에서 확인하시고 직접 전기해 주세요.");
     log(`${"=".repeat(56)}\n`);
+    if (AGENT) {
+      // 대리인 모드 — 사람이 옆에 없으니 닫고 끝낸다. 결과는 웹 화면에 남는다
+      await ctx.close().catch(() => {});
+      process.exit(0);
+    }
     log("  확인하시고 이 창에서 Ctrl+C 를 누르시면 브라우저가 닫힙니다.");
     // 사장님이 확인하실 때까지 브라우저를 열어 둔다
     await new Promise(() => {});

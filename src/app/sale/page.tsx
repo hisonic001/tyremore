@@ -14,9 +14,14 @@ export default function SalePage() {
         <Link href="/" className="text-sm text-slate-500 underline underline-offset-4">
           ← 검색으로
         </Link>
-        <Link href="/mars" className="text-sm font-medium text-indigo-700 underline underline-offset-4">
-          MARS 입력 대기열 →
-        </Link>
+        <div className="flex gap-3">
+          <Link href="/sales" className="text-sm font-medium text-slate-600 underline underline-offset-4">
+            정비 내역
+          </Link>
+          <Link href="/mars" className="text-sm font-medium text-indigo-700 underline underline-offset-4">
+            MARS 대기열 →
+          </Link>
+        </div>
       </div>
       <h1 className="mt-3 text-2xl font-bold">판매 등록</h1>
       <p className="mt-1 text-sm text-slate-500">

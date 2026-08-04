@@ -680,6 +680,38 @@ export const supplierItemCode = pgTable(
 );
 
 /* ============================================================
+ * mars_run — MARS 자동 입력 실행 요청 ⭐ (사장님 요청 2026-08-04)
+ *
+ *   "MARS에 자동으로 입력하는 방법이 npm 으로 시작하는 콘솔 명령어라는 점이
+ *    불편함. 웹페이지에 버튼이라도 따로 있었으면 좋겠음."
+ *
+ * 🔴 웹서버(Vercel)는 MARS 를 **직접 조작할 수 없다.** MARS 로그인과 크롬
+ *    프로필이 사장님 PC 에 있고, 자격증명은 PC 밖으로 내보내지 않는다 (D-08).
+ *    그래서 버튼은 여기에 **요청만 남기고**, PC 에서 도는 mars-agent 가
+ *    받아서 mars-fill 을 돌린 뒤 진행 로그를 되쓴다. 화면은 그걸 보여준다.
+ * ========================================================== */
+export const marsRun = pgTable(
+  "mars_run",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    /** '입력' = 매출 주문 자동 입력 · '점검' = 전기 후 차량 점검 */
+    kind: text("kind").notNull().default("입력"),
+    status: text("status").notNull().default("대기"),
+    /** 실행 화면에 그대로 보여주는 진행 로그 */
+    log: text("log"),
+    requestedBy: bigint("requested_by", { mode: "number" }).references(() => appUser.id),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => [
+    check("mars_run_kind", sql`${t.kind} IN ('입력','점검')`),
+    check("mars_run_status", sql`${t.status} IN ('대기','실행중','완료','실패')`),
+    index("idx_mars_run_open").on(t.status).where(sql`${t.status} IN ('대기','실행중')`),
+  ],
+);
+
+/* ============================================================
  * purchase_invoice — 매입 인보이스 (2026-08-01)
  *
  * 발주해서 출고된 물건의 명세다. 실물이 오기 전에 미리 등록해 두고,

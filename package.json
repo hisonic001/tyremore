@@ -16,7 +16,10 @@
     "import:report": "tsx scripts/import/report.ts",
     "collect": "tsx scripts/collect.ts",
     "mars": "tsx scripts/mars-fill.ts",
-    "mars:watch": "tsx scripts/mars-watch.ts"
+    "mars:watch": "tsx scripts/mars-watch.ts",
+    "db:backup": "tsx scripts/backup-db.ts",
+    "db:restore": "tsx scripts/restore-db.ts",
+    "mars:agent": "tsx scripts/mars-agent.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.44.0",

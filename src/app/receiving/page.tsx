@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { pendingInvoices } from "@/lib/invoice";
-import { InvoiceUpload, PendingList } from "./client";
-import { ManualPurchase } from "./manual";
+import { PendingList } from "./client";
+import { RegisterPurchase } from "./register";
 
 export const dynamic = "force-dynamic";
 
@@ -42,13 +42,11 @@ export default async function ReceivingPage() {
         </Link>
       </div>
       <p className="mt-1 text-sm text-slate-500">
-        인보이스를 올려 두면 물건이 도착했을 때 확정만 하면 됩니다.
+        어느 거래처 물건이든 여기서 등록합니다 — 파일이 있으면 올리고, 없으면 담습니다.
       </p>
 
-      <InvoiceUpload />
-
-      {/* ⭐ 인보이스가 없는 사매입 — 바코드 또는 품목 검색으로 목록을 만들어 간다 */}
-      <ManualPurchase open={openManual} />
+      {/* ⭐ 등록 입구는 하나 (2026-08-04 — "중구난방" 지적). 탭으로 갈릴 뿐 결과는 같은 장부다 */}
+      <RegisterPurchase openManual={openManual} />
 
       <section className="mt-8">
         <h2 className="font-semibold">

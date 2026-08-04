@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { marsDone, marsQueue } from "@/lib/mars-queue";
+import { latestMarsRun } from "@/lib/mars-run";
 import { DoneList, QueueList } from "./client";
+import { MarsRunPanel } from "./run-button";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +11,7 @@ export const dynamic = "force-dynamic";
  * 🔴 전기(Posting)는 사람이 누른다. 자동화하지 않는다 (D-08).
  */
 export default async function MarsPage() {
-  const [queue, done] = await Promise.all([marsQueue(), marsDone()]);
+  const [queue, done, run] = await Promise.all([marsQueue(), marsDone(), latestMarsRun()]);
   const total = queue.reduce((s, q) => s + q.total, 0);
 
   return (
@@ -18,9 +20,14 @@ export default async function MarsPage() {
         <Link href="/" className="text-sm text-slate-500 underline underline-offset-4">
           ← 검색으로
         </Link>
-        <Link href="/sale" className="text-sm font-medium text-emerald-700 underline underline-offset-4">
-          판매 등록 →
-        </Link>
+        <div className="flex gap-3">
+          <Link href="/sales" className="text-sm font-medium text-slate-600 underline underline-offset-4">
+            정비 내역
+          </Link>
+          <Link href="/sale" className="text-sm font-medium text-emerald-700 underline underline-offset-4">
+            판매 등록 →
+          </Link>
+        </div>
       </div>
       <h1 className="mt-3 text-2xl font-bold">
         MARS 입력 대기열
@@ -43,22 +50,11 @@ export default async function MarsPage() {
           <p className="tabular mt-3 text-sm text-slate-600">합계 {total.toLocaleString()}원</p>
 
           {/*
-            ⭐ 자동 입력이 있다는 것을 여기서 알려 준다 (2026-08-02).
-               이게 없어서 사장님이 손으로 치지도 않고 「입력 완료」를 누르셨다.
+            ⭐ 콘솔 명령 대신 버튼 (사장님 요청 2026-08-04).
+               "npm 으로 시작하는 콘솔 명령어라는 점이 불편함."
+               실행은 매장 PC 의 대리인(mars-agent)이 한다 — 스키마 mars_run 주석 참조.
           */}
-          <div className="mt-3 rounded-xl border border-indigo-300 bg-indigo-50 p-3">
-            <div className="text-sm font-semibold text-indigo-900">자동으로 넣으시려면</div>
-            <p className="mt-1 text-xs text-indigo-800">
-              PC 에서 아래를 실행하면 MARS 매출 주문까지 대신 채웁니다. 전기는 사장님이 누르십니다.
-            </p>
-            <code className="tabular mt-1.5 block rounded-lg bg-white px-3 py-2 text-sm">
-              npm run mars -- --limit 1
-            </code>
-            <p className="mt-1.5 text-xs text-indigo-700">
-              끝나면 여기 목록에서 저절로 내려갑니다 —{" "}
-              <strong>손으로 치셨을 때만 「입력 완료」를 누르세요.</strong>
-            </p>
-          </div>
+          <MarsRunPanel run={run} queueCount={queue.length} />
 
           <QueueList entries={queue} />
         </>
