@@ -71,6 +71,15 @@ const LOOK = process.argv.includes("--look");
  */
 const AGENT = process.argv.includes("--agent");
 /**
+ * 🔍 기존 매출 주문을 열어 품목표의 **칸 이름(controlname)과 실제 값**을 찍는다.
+ *    단가가 안 들어간 원인을 찾을 때 쓴다 (2026-08-04). 읽기만 하고 저장하지 않는다.
+ *      npx tsx scripts/mars-fill.ts --probe-order 123테4567
+ */
+const PROBE_ORDER = (() => {
+  const i = process.argv.indexOf("--probe-order");
+  return i >= 0 ? process.argv[i + 1] : null;
+})();
+/**
  * 🔴 전기(Posting)는 하지 않는다 — 사장님이 마지막에 검토하고 누르신다 (2026-08-02 지시).
  *    매출 주문을 채워 두기만 하고, 금액이 맞는지 대조해서 보여 준다.
  */
@@ -466,14 +475,22 @@ async function createCustomer(
    *    거기가 사실이고, MARS 는 그 시스템이 요구하는 형식이다.
    *    나중에 불매치 코드를 알게 되면 아래 한 줄만 되돌리면 된다.
    */
+  /**
+   * ⭐ 손님이 고른 **그대로** 넣는다 (사장님 지시 2026-08-04).
+   *
+   *   "고객이 동의 거부할시에는 고객 서명: 거부된 동의,
+   *    불매치 코드: NONEED 로 바꿔야 함 (3가지 모두)."
+   *
+   * 드디어 불매치 코드를 알았다 — **NONEED**. 그동안은 코드를 몰라 거부를 못 넣고
+   * 전부 수락으로 밀어 넣었는데(8/2 임시 결정), 이제 우리 기록과 MARS 가 같아진다.
+   *   비즈니스 목적 · 제3자 제공 ← consent_privacy (필수 동의)
+   *   마케팅 및 광고            ← consent_marketing
+   */
   const PURPOSES: [string, boolean][] = [
     ["비즈니스 목적", c.consentPrivacy],
     ["제3자 제공", c.consentPrivacy],
-    ["마케팅 및 광고", true],
+    ["마케팅 및 광고", c.consentMarketing],
   ];
-  if (!c.consentMarketing) {
-    log("    ⚠️ 마케팅 수신은 동의 안 하셨지만 MARS 에는 수락으로 넣습니다 (불매치 코드 미정)");
-  }
 
   /**
    * ⭐ MARS 기본 상태 (사장님 스크린샷 2026-08-02):
@@ -547,6 +564,44 @@ async function createCustomer(
       }
     }
     if (!signed) log(`    ⚠️ 「${purpose}」의 고객 서명을 못 골랐습니다`);
+
+    /**
+     * ⭐ 거부된 동의에는 **불매치 코드 NONEED** (사장님 확인 2026-08-04).
+     *    이걸 안 넣으면 「거부된 동의의 경우 "불매치 코드"을(를) 제공해야 합니다!」로
+     *    저장이 막힌다. 칸 이름을 몰라 후보를 차례로 시도하고 **줄에 NONEED 가
+     *    생겼는지 읽어서 확인**한다. 끝내 못 넣으면 수락으로 되돌린다 —
+     *    막혀서 고객 등록 전체가 죽는 것보다는 낫다 (로그에 크게 남긴다).
+     */
+    if (!agreed && signed) {
+      const MISMATCH_CELLS = ["Mismatch Code", "KOR Mismatch Code", "Unmatch Code", "Mismatched Code"];
+      let coded = false;
+      for (const cn of MISMATCH_CELLS) {
+        const cell = row.locator(`[controlname="${cn}"]`).first();
+        if ((await cell.count().catch(() => 0)) === 0) continue;
+        await cell.click({ timeout: 4000 }).catch(() => {});
+        await page.waitForTimeout(300);
+        const input = await resolveInput(cell);
+        await input.fill("NONEED").catch(async () => {
+          await input.evaluate(SET_VALUE, "NONEED").catch(() => {});
+        });
+        await input.press("Tab").catch(() => {});
+        await page.waitForTimeout(500);
+        const rowText = ((await row.innerText().catch(() => "")) || "").toUpperCase();
+        if (rowText.includes("NONEED")) {
+          coded = true;
+          log(`      「${purpose}」 거부 + 불매치 코드 NONEED ✓`);
+          break;
+        }
+      }
+      if (!coded) {
+        log(`    ⚠️ 「${purpose}」의 불매치 코드를 못 넣어 수락으로 되돌립니다 — 화면에서 칸 이름 확인 필요`);
+        await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+        await page.waitForTimeout(300);
+        for (const t of targets) {
+          if (await t.selectOption("1").then(() => true).catch(() => false)) break;
+        }
+      }
+    }
     await page.waitForTimeout(300);
   }
 
@@ -610,9 +665,25 @@ async function createCustomer(
     });
   await page.waitForTimeout(2000);
 
-  // ② 뒤따르는 확인 창
+  /**
+   * ② 뒤따르는 창 — 🔴 **내용을 읽고 나서** 누른다 (2026-08-04 실제 실행에서 발견).
+   *
+   * 전에는 뒤따라 뜨는 창을 무조건 「성공 확인 창」으로 알고 확인을 눌렀다.
+   * 그런데 「거부된 동의의 경우 "불매치 코드"을(를) 제공해야 합니다!」 같은
+   * **오류 팝업에도 확인 버튼이 있다.** 그걸 눌러 닫아 버리니 화면은 막힌 채인데
+   * 로그에는 ✅ 가 찍혔다 — 세 번째 거짓 보고다. 오류면 여기서 멈춘다.
+   */
   const second = f.locator('button[controlname="Dialog"]', { hasText: "확인" }).first();
   if (await second.isVisible({ timeout: 6000 }).catch(() => false)) {
+    const saidBefore =
+      (await f.getByRole("dialog").last().innerText().catch(() => "")) ||
+      (await f.locator('[controlname="Dialog"]').last().innerText().catch(() => "")) ||
+      "";
+    const flat = saidBefore.replace(/\s+/g, " ").trim();
+    if (/제공해야|입력해야|않습니다|없습니다|오류|잘못/.test(flat)) {
+      await second.click().catch(() => {}); // 팝업은 닫아 준다 — 다음 건까지 막으면 안 된다
+      throw new Error(`MARS 가 저장을 막았습니다: ${flat.replace(/확인\s*$/, "").slice(0, 120)}`);
+    }
     await second.click().catch(() => {});
     await page.waitForTimeout(2500);
   }
@@ -832,25 +903,84 @@ async function fillLines(
     await no.press("Enter");
     await page.waitForTimeout(2000);
 
+    /**
+     * 🔴 수량도 **넣고 읽어서 확인한다** (2026-08-04).
+     *    단가를 고치고 나니 이번엔 수량 2가 안 먹고 1로 남아 합계가 370,000 이 됐다.
+     *    SET_VALUE(값 대입)는 이 표에서 조용히 실패할 때가 있다 — **fill(실제 타이핑)** 이
+     *    확실하다. 그래도 읽어서 다르면 한 번 더 시도하고, 끝내 다르면 그 줄은 실패다.
+     */
     const qtyCell = row.locator('[controlname="Quantity"]').first();
-    await qtyCell.click({ timeout: 6000 }).catch(() => {});
-    await page.waitForTimeout(300);
-    const qty = await resolveInput(qtyCell);
-    await qty.evaluate(SET_VALUE, String(l.qty)).catch(() => {});
-    await qty.press("Enter");
-    await page.waitForTimeout(700);
+    let qtyOk = false;
+    for (let attempt = 0; attempt < 2 && !qtyOk; attempt++) {
+      await qtyCell.click({ timeout: 6000 }).catch(() => {});
+      await page.waitForTimeout(300);
+      const qty = await resolveInput(qtyCell);
+      await qty.fill(String(l.qty)).catch(async () => {
+        await qty.evaluate(SET_VALUE, String(l.qty)).catch(() => {});
+      });
+      await qty.press("Enter").catch(() => {});
+      await page.waitForTimeout(700);
+      const back = ((await readField(qtyCell)) || "").replace(/[,\s]/g, "");
+      if (back === String(l.qty)) {
+        qtyOk = true;
+        if (l.qty !== 1) log(`      수량 ${l.qty} ✓`);
+      } else if (back) {
+        log(`      수량 시도 → 칸에는 «${back}» (다시)`);
+      }
+    }
+    if (!qtyOk) {
+      throw new Error(`${l.no} 줄의 수량 ${l.qty}을 넣지 못했습니다`);
+    }
 
     /**
      * ⭐ MARS 도 「단가 부가세 포함」으로 받는다 — 우리 판매가와 기준이 같다.
      *    **탭**을 눌러야 「합계 부가세 포함」이 다시 계산된다 (사장님 확인).
+     *
+     * 🔴 **넣었다고 믿지 않는다 — 읽어서 확인한다** (2026-08-04 실제 실행에서 발견).
+     *    `controlname="Unit Price"` 로 넣던 값이 **한 줄도 안 들어가고** MARS 기본단가가
+     *    남아 있었다 (얼라인먼트 88,000 · 배터리 22,000). 클릭·입력이 조용히 실패해도
+     *    로그엔 ✅ 가 찍혔다. 칸 이름 후보를 차례로 시도하고, 읽어서 값이 맞아야 넘어간다.
+     *    끝내 못 넣으면 **그 줄을 실패로 처리한다** — 단가가 틀리면 실적 금액이 틀린다.
      */
-    const priceCell = row.locator('[controlname="Unit Price"]').first();
-    await priceCell.click({ timeout: 6000 }).catch(() => {});
-    await page.waitForTimeout(300);
-    const price = await resolveInput(priceCell);
-    await price.evaluate(SET_VALUE, String(l.unitPrice)).catch(() => {});
-    await price.press("Tab");
-    await page.waitForTimeout(900);
+    const PRICE_CELLS = [
+      "Unit Price Incl. VAT",
+      "KOR Unit Price Incl. VAT",
+      "Unit Price Including VAT",
+      "Unit Price",
+    ];
+    let priceOk = false;
+    for (const cn of PRICE_CELLS) {
+      const cell = row.locator(`[controlname="${cn}"]`).first();
+      if ((await cell.count().catch(() => 0)) === 0) continue;
+      await cell.click({ timeout: 4000 }).catch(() => {});
+      await page.waitForTimeout(300);
+      const price = await resolveInput(cell);
+      await price.fill(String(l.unitPrice)).catch(async () => {
+        await price.evaluate(SET_VALUE, String(l.unitPrice)).catch(() => {});
+      });
+      await price.press("Tab").catch(() => {});
+      await page.waitForTimeout(900);
+      const back = ((await readField(cell)) || "").replace(/[,\s]/g, "");
+      if (back === String(l.unitPrice)) {
+        priceOk = true;
+        log(`      단가 ${l.unitPrice.toLocaleString()} ← ${cn} ✓`);
+        break;
+      }
+      if (back) log(`      단가 시도 ${cn} → 칸에는 «${back}» (계속 시도)`);
+    }
+    if (!priceOk) {
+      // 마지막 수단 — 줄 전체 글자에 우리 단가가 있으면 들어간 것으로 본다
+      const rowText = ((await row.innerText().catch(() => "")) || "").replace(/\s/g, "");
+      if (rowText.includes(l.unitPrice.toLocaleString())) {
+        priceOk = true;
+        log(`      단가 ${l.unitPrice.toLocaleString()} — 줄에서 확인 ✓`);
+      }
+    }
+    if (!priceOk) {
+      throw new Error(
+        `${l.no} 줄의 단가 ${l.unitPrice.toLocaleString()}원을 넣지 못했습니다 — MARS 기본단가가 남아 있습니다`,
+      );
+    }
 
     /**
      * ⭐ 메모는 **「설명 2」 칸을 지우고** 그 안에 넣는다 (사장님 지시).
@@ -1247,7 +1377,7 @@ async function main_() {
     }
   } else {
     log(`MARS 자동 입력\n  대기열 ${queue.length}건\n`);
-    if (queue.length === 0) {
+    if (queue.length === 0 && !PROBE_ORDER) {
       log("칠 것이 없습니다.");
       process.exit(0);
     }
@@ -1308,6 +1438,70 @@ async function main_() {
     if (!(await login(page))) {
       await ctx.close();
       process.exit(1);
+    }
+
+    /* 🔍 품목표 탐침 — 읽기만 한다 */
+    if (PROBE_ORDER) {
+      await clickAny(page, "매출 주문 목록");
+      await page.waitForTimeout(3000);
+      await passBigSearchDialog(page);
+      const f = main(page);
+      // 목록은 검색해야 나온다 — 「번호판 / 이름 / 전화번호」 칸에 치고 엔터
+      const search = f.getByRole("textbox", { name: /번호판|이름|전화/ }).first();
+      if (await search.isVisible({ timeout: 5000 }).catch(() => false)) {
+        await search.fill(PROBE_ORDER).catch(() => {});
+        await search.press("Enter").catch(() => {});
+        await page.waitForTimeout(2500);
+      }
+      const row = f.getByRole("row").filter({ hasText: PROBE_ORDER }).first();
+      if (!(await row.isVisible({ timeout: 10000 }).catch(() => false))) {
+        log(`  ⚠️ ${PROBE_ORDER} 가 든 매출 주문이 없습니다`);
+        const shot = path.resolve(process.cwd(), "..", "tyremore-data", "mars-probe.png");
+        await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
+        log(`     화면: ${shot}`);
+      } else {
+        await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+        await page.waitForTimeout(500);
+        // 번호가 화면에서 「61168583-23…」로 잘려 있다 — 줄 안의 링크(a)를 그대로 누른다
+        await row.locator("a").first().click({ timeout: 8000 }).catch(() => {});
+        await page.waitForTimeout(4500);
+        // 주문 카드의 「라인」 섹션 — 🔴 버튼이 **토글**이라, 접혀 있을 때만 누른다
+        const probeRow = () => f.getByRole("row").filter({ hasText: "S001/" }).last();
+        if (!(await probeRow().isVisible({ timeout: 3000 }).catch(() => false))) {
+          const lines = f.getByRole("button", { name: /^라인/ }).first();
+          if (await lines.isVisible({ timeout: 4000 }).catch(() => false)) {
+            await lines.click().catch(() => {});
+            await page.waitForTimeout(2500);
+          }
+        }
+        const shot0 = path.resolve(process.cwd(), "..", "tyremore-data", "mars-probe.png");
+        await page.screenshot({ path: shot0, fullPage: true }).catch(() => {});
+        log(`  화면: ${shot0}`);
+        log(`\n── 품목표 칸 이름과 값 ──`);
+        for (const key of ["126081", "S001/1190", "S001/1209"]) {
+          // 같은 글자가 알림 배너에도 있어 줄이 여러 개 잡힌다 — 마지막(표 안의 것)을 쓴다
+          const line = f.getByRole("row").filter({ hasText: key }).last();
+          if (!(await line.isVisible().catch(() => false))) {
+            log(`  «${key}» 줄 없음`);
+            continue;
+          }
+          log(`  «${key}» 통짜 글자: ${((await line.innerText().catch(() => "")) || "").replace(/\s+/g, " ").slice(0, 160)}`);
+          // 눌러서 편집 상태로 만들면 controlname 이 생긴다
+          await line.click({ position: { x: 5, y: 5 } }).catch(() => {});
+          await page.waitForTimeout(800);
+          const cells = line.locator("[controlname]");
+          const n = await cells.count().catch(() => 0);
+          for (let i = 0; i < Math.min(n, 30); i++) {
+            const cn = (await cells.nth(i).getAttribute("controlname").catch(() => "")) ?? "";
+            const val =
+              (await cells.nth(i).locator("input, select, textarea").first().inputValue().catch(() => null)) ??
+              ((await cells.nth(i).innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
+            if (cn) log(`     ${cn.padEnd(34)} = «${String(val).slice(0, 40)}»`);
+          }
+        }
+      }
+      await ctx.close().catch(() => {});
+      process.exit(0);
     }
 
     /**
