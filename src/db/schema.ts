@@ -69,7 +69,8 @@ export const brand = pgTable("brand", {
   /**
    * ⭐ MARS 「단가1」이 VAT를 뺀 값인가 (사장님 확인 2026-08-01)
    * 미쉐린은 VAT 미포함이라 화면에 그대로 띄우면 고객에게 낮은 금액을 말하게 된다.
-   * true면 이관·재이관 때 자동으로 1.1을 곱해 `list_price`에 넣는다.
+   * true면 1회 이관 때 자동으로 1.1을 곱해 `list_price`에 넣었다.
+   * ⚠️ 이관은 끝났다 (2026-08-04). 지금은 「안 받는 것 숨기기」 화면에서 사람이 켜고 끈다.
    */
   priceExcludesVat: boolean("price_excludes_vat").notNull().default(false),
 });
@@ -143,9 +144,12 @@ export const product = pgTable(
      *
      * 계절·런플랫·흡음재·SUV·OE마킹은 상품명에서 자동으로 판정한다.
      * 그런데 MARS 이름이 축약·누락투성이라 **틀린 것이 많다**.
-     * 사장님이 고친 값을 여기 남겨 두고, **재이관 뒤에 다시 덮어씌운다.**
-     * 안 그러면 다음 이관 때 애써 고친 것이 전부 날아간다.
+     * 사장님이 고친 값을 여기 남겨 두고, **판정 규칙을 고쳐 다시 돌릴 때 덮어씌운다**
+     * (`scripts/backfill-attrs.ts`). 안 그러면 규칙을 손볼 때마다 애써 고친 것이 날아간다.
      *   { "season": "겨울", "isRunflat": true, "oeMarks": "MO" }
+     *
+     * ⚠️ 원래는 「MARS 재이관 뒤에 다시 씌운다」는 뜻이었다. 재이관은 없다 (2026-08-04) —
+     *    이제는 **자동 판정을 다시 돌릴 때**를 위한 장치다. 쓰임은 같고 이유만 바뀌었다.
      */
     attrsOverride: jsonb("attrs_override"),
 
@@ -164,8 +168,8 @@ export const product = pgTable(
      */
     listPrice: integer("list_price"),
     /**
-     * MARS 「단가1」 원본 (VAT 미포함). 손대지 않는다.
-     * 재이관 때 기준값이 되고, 원가·마진 계산에도 이쪽이 필요하다.
+     * MARS 「단가1」 원본 (VAT 미포함).
+     * 원가·마진 계산에 이쪽이 필요하다. 거래처 상품목록을 올리면 함께 갱신된다.
      */
     listPriceExcl: integer("list_price_excl"),
     purchasePrice: integer("purchase_price"),

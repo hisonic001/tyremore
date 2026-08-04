@@ -1,10 +1,26 @@
 /**
  * 1주차 데이터 이관 — docs/09 5장의 순서를 그대로 따른다.
  *
- *   npx tsx scripts/import/run-all.ts --dry-run   ← DB 없이 변환만 검증
- *   npx tsx scripts/import/run-all.ts             ← 실제 적재
+ * 🔴 **이관은 끝났다 (2026-08-01). 다시 돌리지 않는다.**
  *
- * 여러 번 다시 돌릴 수 있다(멱등). 한 번에 완벽하게 되는 이관은 없다.
+ *    사장님 지시 (2026-08-04): "MARS 는 실적을 위해서 필수적으로 등록해야하지만
+ *    그것뿐이며 MARS 를 그 이상으로 사용할 생각은 없음."
+ *    → MARS 는 **실적을 내보내는 출구**이지 정보를 가져오는 곳이 아니다.
+ *      상품 카탈로그의 주인은 이제 우리다.
+ *
+ *    다시 돌리면 사장님이 손으로 고친 이름·계절·규격과 거래처 상품목록으로 채운 것들이
+ *    **MARS 수출본으로 덮인다.** 실제로 거래처가 직접 주는 목록이 MARS 수출본보다
+ *    정확하고 최신이다 (2026-08-04 금호 자재검색 459건으로 확인 — 233건이 우리에게 없었다).
+ *
+ * 상품이 늘어나는 길은 이제 셋뿐이다
+ *   ① 거래처 상품목록 올리기   `/settings/products` → 목록 채우기
+ *   ② 인보이스에서 새로 만들기  `createProductFromInvoiceItem`
+ *   ③ 손으로 한 건 등록        `/settings/products` → 새 상품
+ *
+ * 이 파일은 **기록으로 남겨 둔다** — 무엇이 어떻게 들어왔는지 되짚을 유일한 단서다.
+ *
+ *   npx tsx scripts/import/run-all.ts --dry-run   ← DB 없이 변환만 검증 (안전)
+ *   npx tsx scripts/import/run-all.ts             ← 🔴 실제 적재. 쓰지 않는다
  */
 import { config } from "dotenv";
 import { BRANDS, VEHICLE_MAKERS, MAKER_ALIASES } from "./seed-data";
@@ -32,6 +48,24 @@ function stat(label: string, value: string | number, note = "") {
 }
 
 async function main() {
+  /**
+   * 🔴 실수로 다시 돌리는 것을 **코드로 막는다** (2026-08-04).
+   *    주석만으로는 언젠가 뚫린다. 이관은 이미 끝났고, 다시 돌리면 사장님이 손으로
+   *    고친 것과 거래처 목록으로 채운 것이 MARS 수출본으로 덮인다.
+   */
+  if (!DRY && !process.argv.includes("--overwrite-everything")) {
+    console.error("\n🔴 이관은 2026-08-01 에 끝났습니다. 다시 돌리지 않습니다.");
+    console.error("   다시 돌리면 손으로 고친 이름·계절·규격과 거래처 목록으로 채운 것이");
+    console.error("   MARS 수출본으로 **덮입니다.**");
+    console.error("\n   상품을 늘리시려면:");
+    console.error("     · 거래처 상품목록 올리기   /settings/products → 목록 채우기");
+    console.error("     · 인보이스 올리기          /receiving");
+    console.error("     · 한 건씩 손으로           /settings/products → 새 상품");
+    console.error("\n   변환만 검증하려면  --dry-run");
+    console.error("   정말 덮어써야 한다면  --overwrite-everything (되돌릴 수 없습니다)\n");
+    process.exit(1);
+  }
+
   console.log(`\n타이어모어 1주차 데이터 이관 ${DRY ? "[검증 모드 — DB에 쓰지 않음]" : "[실제 적재]"}`);
   console.log(`원본 폴더: ${DATA_DIR}`);
 
