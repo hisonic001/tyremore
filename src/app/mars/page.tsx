@@ -8,7 +8,8 @@ export const dynamic = "force-dynamic";
 
 /**
  * MARS 입력 대기열 — 「매출 주문」에 칠 것을 칠 순서대로 보여준다.
- * 🔴 전기(Posting)는 사람이 누른다. 자동화하지 않는다 (D-08).
+ * ⭐ 전기(Posting)까지 자동이다 (사장님 결정 2026-08-04 — "전기까지 원스톱").
+ * 🔴 단, 합계 대조가 일치할 때만 전기한다. 어긋나면 초안으로 남기고 사람이 본다.
  */
 export default async function MarsPage() {
   const [queue, done, run] = await Promise.all([marsQueue(), marsDone(), latestMarsRun()]);
@@ -63,7 +64,7 @@ export default async function MarsPage() {
       <DoneList rows={done} />
 
       <p className="mt-8 rounded-xl bg-amber-50 p-3 text-xs text-amber-900">
-        <strong>전기(Posting)는 사람이 누릅니다.</strong> 이 화면은 무엇을 어떤 순서로 칠지 보여줄 뿐,
+        <strong>금액이 맞을 때만 전기까지 자동입니다.</strong> 합계가 어긋난 건은 초안으로 남기고 알려 드립니다 —
         MARS 를 대신 조작하지 않습니다. 잘못 전기하면 되돌리는 것이 우리 손을 떠나기 때문입니다.
       </p>
     </main>

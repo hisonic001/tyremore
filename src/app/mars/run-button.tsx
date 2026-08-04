@@ -50,7 +50,7 @@ export function MarsRunPanel({ run, queueCount }: { run: MarsRunRow | null; queu
       {!busy && (
         <>
           <p className="mt-1 text-xs text-indigo-800">
-            누르면 매장 PC 가 MARS 매출 주문까지 대신 채웁니다. <strong>전기는 사장님이 누르십니다.</strong>
+            누르면 매장 PC 가 <strong>매출 주문 → 전기 → 차량 점검까지</strong> 한 번에 처리합니다. 금액이 안 맞으면 전기 앞에서 멈추고 알려 드립니다.
           </p>
           <button
             type="button"

@@ -49,6 +49,16 @@ const SIGNIN =
  */
 const HOME = "https://mars.tyremore.co.kr/MARS/?tenant=61168583";
 
+/**
+ * ⭐ MARS 미등록 상품을 대신 넣는 **범용 품번** (사장님 결정 2026-08-04).
+ *
+ * 거래처 목록·손 등록으로 만든 상품(235개)은 MARS 마스터에 없다. 그 줄은 이 품번으로
+ * 넣고 실제 상품명을 「설명 2」에 남긴다 — 금액·수량 실적은 정확하고 브랜드만 뭉개진다.
+ * 상품 마스터 수출본에서 찾은 것: 이름이 비고 단가 0, 범주 10-TIRES 인 자리표시 품목.
+ * 다른 품번을 쓰려면 .env.local 에 MARS_FALLBACK_ITEM 을 넣는다.
+ */
+const FALLBACK_ITEM = process.env.MARS_FALLBACK_ITEM ?? "580/001/00290";
+
 const DRY = process.argv.includes("--dry");
 /** 고객 생성 화면이 실제로 어떻게 생겼는지만 훑고 취소한다 — 아무것도 저장하지 않는다 */
 const INSPECT = process.argv.includes("--inspect");
@@ -907,30 +917,47 @@ async function fillLines(
      * 🔴 **MARS 가 이 품번을 아는지 확인한다** (사장님 질문 2026-08-04 —
      *    "mars에 코드가 없는 상품을 판매할 시에는 어떻게 해야할지").
      *
-     * 거래처 목록·손 등록으로 만든 상품(KM+자재코드, ID-… 등)은 MARS 마스터에 없다.
-     * 엔터를 쳐도 상품이 안 실리는데 모르고 지나가면 **빈 품번에 수량·단가만 든
-     * 깨진 줄**이 생긴다. 오류 창이 떴으면 닫고, 상세 항목이 비었으면 이 줄을 멈춘다.
+     * 거래처 목록·손 등록으로 만든 상품(KM+자재코드, ID-… 등) 235개는 MARS 마스터에
+     * 없다. 엔터를 쳐도 상품이 안 실리는데 모르고 지나가면 **빈 품번에 수량·단가만 든
+     * 깨진 줄**이 생긴다.
+     *
+     * ⭐ 모르는 품번이면 **범용 품번으로 대신 넣는다** (사장님 결정 2026-08-04 —
+     *    "범용으로 타이어던 부품이던 넣을 만한 품번을 … 찾아줘").
+     *    상품 마스터에서 찾은 것: `580/001/00290` — 이름이 비고 단가 0, 범주 10-TIRES.
+     *    실제 상품명은 「설명 2」에 남겨 무엇을 팔았는지 알 수 있게 한다.
+     *    금액·수량 실적은 정확히 잡히고, 브랜드 구분만 뭉개진다.
      */
-    const errDlg = f.locator('[controlname="Dialog"]').last();
-    if (await errDlg.isVisible({ timeout: 1500 }).catch(() => false)) {
-      const said = ((await errDlg.innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
-      await f
-        .locator('button[controlname="Dialog"]', { hasText: "확인" })
-        .first()
-        .click()
-        .catch(() => {});
+    const clearDialog = async (): Promise<string> => {
+      const dlg = f.locator('[controlname="Dialog"]').last();
+      if (!(await dlg.isVisible({ timeout: 1500 }).catch(() => false))) return "";
+      const said = ((await dlg.innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
+      await f.locator('button[controlname="Dialog"]', { hasText: "확인" }).first().click().catch(() => {});
       await page.waitForTimeout(600);
-      if (/없|존재|찾을 수/.test(said)) {
+      return said;
+    };
+    await clearDialog();
+
+    let descBack = ((await readField(row.locator('[controlname="Description"]').first())) || "").trim();
+    let usedFallback = false;
+    if (!descBack) {
+      log(`      ⚠️ MARS 에 없는 품번 ${l.no} — 범용 품번 ${FALLBACK_ITEM} 으로 대신 넣습니다`);
+      await noCell.click({ timeout: 6000 }).catch(() => {});
+      await page.waitForTimeout(300);
+      const no2 = await resolveInput(noCell);
+      await no2.fill(FALLBACK_ITEM).catch(async () => {
+        await no2.evaluate(SET_VALUE, FALLBACK_ITEM).catch(() => {});
+      });
+      await no2.press("Enter");
+      await page.waitForTimeout(2000);
+      await clearDialog();
+      // 범용 품번은 이름이 비어 있을 수 있다 — 품번 칸에 값이 실렸는지로 확인한다
+      const noBack = ((await readField(noCell)) || "").replace(/\s/g, "");
+      if (noBack !== FALLBACK_ITEM.replace(/\s/g, "")) {
         throw new Error(
-          `MARS 에 없는 품번입니다: ${l.no} «${l.marsName}» — 이 줄은 MARS 에서 직접 처리해 주세요`,
+          `범용 품번 ${FALLBACK_ITEM} 도 MARS 가 알아보지 못했습니다 (칸에는 «${noBack}») — «${l.marsName}» 줄 실패`,
         );
       }
-    }
-    const descBack = ((await readField(row.locator('[controlname="Description"]').first())) || "").trim();
-    if (!descBack) {
-      throw new Error(
-        `MARS 가 품번 ${l.no} 을 알아보지 못했습니다 (상세 항목이 비어 있음) — «${l.marsName}» 줄을 넣지 않았습니다`,
-      );
+      usedFallback = true;
     }
 
     /**
@@ -1017,7 +1044,15 @@ async function fillLines(
      *    기본값으로 규격·모델명이 들어와 있는데, 그걸 메모로 갈아 끼운다.
      *    메모가 없으면 손대지 않는다 — 멀쩡한 기본값을 지울 이유가 없다.
      */
-    if (memo?.trim() && i === 0) {
+    /**
+     * ⭐ 범용 품번으로 넣은 줄은 **실제 상품명을 설명 2에** 남긴다 —
+     *    안 남기면 나중에 「이게 뭘 판 줄이지?」를 아무도 모른다.
+     *    메모(첫 줄)와 겹치면 「상품명 · 메모」로 붙인다.
+     */
+    const d2Text = [usedFallback ? l.marsName : null, i === 0 ? memo?.trim() || null : null]
+      .filter(Boolean)
+      .join(" · ");
+    if (d2Text) {
       const d2 = await resolveInput(
         (await row.locator('[controlname="Description 2"]').count().catch(() => 0)) > 0
           ? row.locator('[controlname="Description 2"]')
@@ -1025,13 +1060,13 @@ async function fillLines(
       );
       if (await d2.isVisible().catch(() => false)) {
         await d2.click({ timeout: 6000 }).catch(() => {});
-        const ok = await d2.fill(memo.trim()).then(() => true).catch(() => false);
-        if (!ok) await d2.evaluate(SET_VALUE, memo.trim()).catch(() => {});
+        const ok = await d2.fill(d2Text).then(() => true).catch(() => false);
+        if (!ok) await d2.evaluate(SET_VALUE, d2Text).catch(() => {});
         await d2.press("Tab").catch(() => {});
         await page.waitForTimeout(700);
-        log(`      설명 2 → «${memo.trim().slice(0, 30)}»`);
+        log(`      설명 2 → «${d2Text.slice(0, 40)}»`);
       } else {
-        log("      ⚠️ 「설명 2」 칸을 못 찾아 메모를 못 넣었습니다");
+        log("      ⚠️ 「설명 2」 칸을 못 찾았습니다");
       }
     }
 
@@ -1111,6 +1146,90 @@ async function readOrderNo(page: Page): Promise<string | null> {
     if (/[A-Z]{2}\+?\d{4,}/i.test(v)) return v;
   }
   return null;
+}
+
+/**
+ * ⭐ 전기(Posting) — 이제 자동으로 한다 (사장님 결정 2026-08-04).
+ *
+ *   "사실 전기까지 자동으로 완료가 되어야함. 이유는 전기를 하는 것이 생각보다
+ *    복잡해서 사람 손이 많이 들어감. 전기, 전기 후 차량 점검 완료까지 원스톱으로."
+ *
+ * 🔴 8/2 의 「전기는 사람이 누른다」(D-08) 결정이 **사장님 지시로 뒤집혔다.**
+ *    대신 안전장치 하나를 남긴다: **합계 대조가 일치할 때만** 전기한다.
+ *    전기는 취소가 번거로우니(대변 전표) 금액이 어긋난 채로 넘기지 않는다 —
+ *    그 경우 주문을 초안으로 남기고 사람에게 알린다.
+ *
+ * 매출 주문 카드에서: 「전기」 → 「출하 및 송장」 → 확인.
+ */
+async function postOrder(page: Page): Promise<{ ok: boolean; invoiceNo: string | null; why?: string }> {
+  const f = main(page);
+
+  // 「전기」는 바로 보이기도, 「송장」·「프로세스」 메뉴 안에 있기도 하다
+  let clicked = false;
+  for (const path_ of [["전기"], ["송장", "전기"], ["프로세스", "전기"]]) {
+    try {
+      for (const step of path_) {
+        await clickAny(page, step, 6000);
+        await page.waitForTimeout(700);
+      }
+      clicked = true;
+      break;
+    } catch {
+      /* 다음 경로 */
+    }
+  }
+  if (!clicked) return { ok: false, invoiceNo: null, why: "「전기」 단추를 찾지 못했습니다" };
+
+  /**
+   * 전기 방식 고르기 — 「출하 및 송장」이어야 재고 출하와 송장이 한 번에 끝난다.
+   * 라디오 단추라 글자를 누르면 선택된다.
+   */
+  const ship = f.getByText("출하 및 송장", { exact: false }).first();
+  if (await ship.isVisible({ timeout: 5000 }).catch(() => false)) {
+    await ship.click().catch(() => {});
+    await page.waitForTimeout(400);
+  }
+  await f.getByRole("button", { name: "확인", exact: true }).last().click({ timeout: 8000 }).catch(() => {});
+  await page.waitForTimeout(4000);
+
+  /** 결과 창들을 하나씩 읽는다 — 오류면 멈추고, 「여시겠습니까」면 연다 */
+  for (let i = 0; i < 4; i++) {
+    const dlg = f.locator('[controlname="Dialog"]').last();
+    if (!(await dlg.isVisible({ timeout: 2500 }).catch(() => false))) break;
+    const said = ((await dlg.innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
+
+    if (/여시겠습니까|열겠습니까|open/i.test(said)) {
+      // 「전기된 송장을 여시겠습니까?」 → 예 (점검 화면으로 바로 이어진다)
+      const yes = f.getByRole("button", { name: /^(예|Yes)$/ }).last();
+      if (await yes.isVisible({ timeout: 2000 }).catch(() => false)) await yes.click().catch(() => {});
+      else await f.locator('button[controlname="Dialog"]', { hasText: "확인" }).last().click().catch(() => {});
+      await page.waitForTimeout(4000);
+      continue;
+    }
+    if (/않습니다|없습니다|제공해야|입력해야|오류|잘못|부족/.test(said)) {
+      await f.locator('button[controlname="Dialog"]', { hasText: "확인" }).last().click().catch(() => {});
+      return { ok: false, invoiceNo: null, why: said.replace(/확인\s*$/, "").slice(0, 140) };
+    }
+    // 그 밖의 안내 창은 닫고 계속
+    await f.locator('button[controlname="Dialog"]', { hasText: "확인" }).last().click().catch(() => {});
+    await page.waitForTimeout(1500);
+  }
+
+  /** 전기가 됐다는 증거 — 화면 어딘가의 전기된 송장 번호(…SI+……) */
+  const body = ((await f.locator("body").innerText().catch(() => "")) || "").replace(/\s+/g, "");
+  const inv = /\d{6,}-\d{2}SI\+\d+/.exec(body)?.[0] ?? null;
+  if (inv) {
+    log(`    · 전기 완료 — 송장 ${inv}`);
+    return { ok: true, invoiceNo: inv };
+  }
+  /**
+   * 번호를 못 읽었어도 주문 화면이 사라졌으면(주문이 소멸 = 전기됨) 성공으로 본다.
+   * 둘 다 아니면 실패다 — 확실하지 않은 것을 성공이라 하지 않는다.
+   */
+  const stillOrder = await f.getByText("매출 주문", { exact: false }).first().isVisible({ timeout: 2000 }).catch(() => false);
+  return stillOrder
+    ? { ok: false, invoiceNo: null, why: "전기가 끝났는지 확인하지 못했습니다 (주문 화면이 그대로)" }
+    : { ok: true, invoiceNo: null };
 }
 
 /* ================================================================
@@ -1669,17 +1788,83 @@ async function main_() {
         }
 
         const amount = await checkOrder(page, q.total);
-        /**
-         * 🔴 번호 칸과 메모 칸을 섞지 않는다 (2026-08-04).
-         *    전에는 「자동입력 2026-08-02 (금액 확인 필요)」 라는 **메모**를
-         *    송장번호 칸(`mars_ref_no`)에 넣었다. 그래서 번호로 송장을 찾을 수 없었고
-         *    메모 칸은 비어 있었다.
-         */
+        // 🔴 번호 칸과 메모 칸을 섞지 않는다 (2026-08-04) — 번호는 번호 칸에, 사연은 메모에
         const orderNo = await readOrderNo(page);
         if (orderNo) log(`    · 매출 주문 번호 ${orderNo}`);
-        await markEntered(q.quoteId, orderNo, `자동입력 ${iso} · ${amount.note}`);
+
+        /**
+         * ⭐ 원스톱 — 전기까지, 그리고 차량 점검까지 (사장님 결정 2026-08-04).
+         *
+         * 🔴 안전장치: **합계가 일치할 때만 전기한다.** 전기는 취소가 번거로우니
+         *    금액이 어긋난 주문은 초안으로 남기고 사람에게 넘긴다.
+         */
+        if (!amount.ok) {
+          await markEntered(q.quoteId, orderNo, `자동입력 ${iso} · ${amount.note} · 전기 보류(금액 불일치)`);
+          ok++;
+          log("  ⚠️ 금액이 안 맞아 전기하지 않았습니다 — MARS 에서 확인 후 직접 전기해 주세요");
+          await page.goto(HOME);
+          await waitHome(page, 40000);
+          continue;
+        }
+
+        const posted = await postOrder(page);
+        if (!posted.ok) {
+          await markEntered(q.quoteId, orderNo, `자동입력 ${iso} · ${amount.note} · 전기 실패: ${posted.why}`);
+          ok++;
+          log(`  ⚠️ 전기하지 못했습니다: ${posted.why} — 주문은 채워져 있으니 MARS 에서 전기해 주세요`);
+          const shot = path.resolve(process.cwd(), "..", "tyremore-data", `mars-전기실패-${q.quoteNo}.png`);
+          await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
+          await page.goto(HOME);
+          await waitHome(page, 40000);
+          continue;
+        }
+
+        await markEntered(q.quoteId, posted.invoiceNo ?? orderNo, `자동입력+전기 ${iso} · ${amount.note}`);
+
+        /** 전기 직후 그 자리에서 차량 점검까지 — 타이어를 판 건만 */
+        const tyreQty = q.lines.filter((l) => l.kind === "tire").reduce((s, l) => s + l.qty, 0);
+        if (tyreQty > 0 && q.plateNo) {
+          try {
+            const f2 = main(page);
+            // 「전기된 송장을 여시겠습니까 → 예」 로 이미 송장 카드에 있으면 바로 점검
+            const onInvoice = await f2
+              .getByRole("menuitem", { name: "탐색" })
+              .first()
+              .isVisible({ timeout: 4000 })
+              .catch(() => false);
+            if (!onInvoice) {
+              // 송장 카드가 아니면 완료된 매출 송장 목록에서 찾아 들어간다
+              await page.goto(HOME);
+              await waitHome(page, 40000);
+              await clickAny(page, "판매완료");
+              await page.waitForTimeout(700);
+              await clickAny(page, "완료된 매출 송장, 완료된 매출 송장 목록을 엽니다.");
+              await page.waitForTimeout(3000);
+              await passBigSearchDialog(page);
+              const picked = await pickInvoiceRow(page, {
+                plateNo: q.plateNo,
+                workDate: iso,
+                total: q.total,
+                marsRefNo: posted.invoiceNo,
+              });
+              if (!picked.ok) throw new Error(picked.why);
+              if (!(await openInvoice(page, picked.row))) throw new Error("송장을 열지 못했습니다");
+              await page.waitForTimeout(1500);
+            }
+            const r2 = await fillVehicleCheck(page, { plateNo: q.plateNo, tyreQty });
+            if (!r2.ok) throw new Error(`못 채운 항목: ${r2.missed.join(", ")}`);
+            await markVehicleChecked(q.quoteId);
+            log(r2.already ? "    · 차량 점검 — 이미 제출돼 있었습니다" : "    · 차량 점검 제출 ✅");
+          } catch (e2) {
+            log(`  ⚠️ 차량 점검은 못 끝냈습니다: ${(e2 as Error).message.split("\n")[0]}`);
+            log("     (매출·전기는 끝났습니다. 점검만 다시 돌리면 됩니다 — 웹의 점검 단추)");
+            const shot = path.resolve(process.cwd(), "..", "tyremore-data", `mars-점검오류-${q.quoteNo}.png`);
+            await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
+          }
+        }
+
         ok++;
-        log("  ✅ 매출 주문을 채웠습니다 — 🔴 전기는 사장님이 확인하고 눌러 주세요");
+        log("  ✅ 매출 주문 → 전기 → 차량 점검까지 끝났습니다");
         await page.goto(HOME);
         await waitHome(page, 40000);
       } catch (e) {
@@ -1698,10 +1883,8 @@ async function main_() {
     }
   } finally {
     log(`\n${"=".repeat(56)}`);
-    log(`  채운 것 ${ok}건 · 넘어간 것 ${skipped}건`);
-    log("");
-    log("  🔴 전기(Posting)는 안 했습니다.");
-    log("     MARS 「매출 주문」 목록에서 확인하시고 직접 전기해 주세요.");
+    log(`  처리한 것 ${ok}건 · 넘어간 것 ${skipped}건`);
+    log("  (전기까지 자동입니다 — 금액이 안 맞거나 전기가 막힌 건만 초안으로 남습니다)");
     log(`${"=".repeat(56)}\n`);
     if (AGENT) {
       // 대리인 모드 — 사람이 옆에 없으니 닫고 끝낸다. 결과는 웹 화면에 남는다
