@@ -1052,6 +1052,49 @@ async function pickInvoiceRow(
   };
 }
 
+/**
+ * ⭐ 고른 줄의 송장을 **연다** (2026-08-04).
+ *
+ * 🔴 `row.locator('[controlname="No."]').click()` 이 10초를 기다리다 죽었다.
+ *    `controlname="No."` 는 **감싸는 칸**이고 실제로 눌리는 것은 그 안의 링크다
+ *    (`controlname` 이 상자일 때도 입력칸일 때도 있는 것과 같은 사정 — resolveInput 참조).
+ *    사장님 조작 기록에는 `button "61168583-23SI+003137" controlname=No.` 로 남아 있다.
+ *    → **송장번호를 이름 삼아 버튼을 누른다.**
+ *
+ * 🔴 눌렀다고 믿지 않는다. 송장 카드에서만 보이는 「탐색」이 떴는지 확인한다.
+ */
+async function openInvoice(page: Page, row: Locator): Promise<boolean> {
+  const f = main(page);
+  const flat = ((await row.innerText().catch(() => "")) || "").replace(/\s+/g, "");
+  const no = /\d{6,}-\d{2}SI\+\d+/.exec(flat)?.[0] ?? null;
+
+  await row.scrollIntoViewIfNeeded().catch(() => {});
+  // 줄을 먼저 눌러 활성으로 만든다 — 목록에서 다른 줄이 잡혀 있으면 링크가 안 먹는다
+  await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+  await page.waitForTimeout(600);
+
+  const opened = async () =>
+    await f
+      .getByRole("menuitem", { name: "탐색" })
+      .first()
+      .isVisible({ timeout: 3000 })
+      .catch(() => false);
+  if (await opened()) return true;
+
+  const tries: Locator[] = [];
+  if (no) tries.push(f.getByRole("button", { name: no, exact: false }).first());
+  tries.push(row.locator('[controlname="No."] a, [controlname="No."] button').first());
+  tries.push(row.locator('[controlname="No."]').first());
+
+  for (const t of tries) {
+    if (!(await t.isVisible().catch(() => false))) continue;
+    await t.click({ timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(2500);
+    if (await opened()) return true;
+  }
+  return false;
+}
+
 /** 판매한 타이어 본수로 어느 바퀴를 갈았는지 정한다 */
 function wheelsFor(qty: number): string[] {
   const all = ["전륜 좌측", "전륜 우측", "후륜 좌측", "후륜 우측"];
@@ -1060,15 +1103,56 @@ function wheelsFor(qty: number): string[] {
   return all.slice(0, Math.max(1, qty));
 }
 
+/**
+ * 점검 상태를 읽는다.
+ *
+ * 🔴 `readField`(inputValue) 로만 읽으면 안 된다 — Status 는 입력칸이 아니라
+ *    **읽기 전용 표시**라 빈 문자열이 나온다. 그것 때문에 이미 제출된 점검을
+ *    「빈 것」으로 보고 값을 써 넣었다 (2026-08-04).
+ */
+async function readStatus(f: FrameLocator): Promise<string> {
+  const el = f.locator('[controlname="Status"]').first();
+  const v = ((await readField(el).catch(() => "")) || "").trim();
+  if (v) return v;
+  return ((await el.innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
+}
+
 async function fillVehicleCheck(
   page: Page,
   opts: { plateNo: string; tyreQty: number },
-): Promise<{ ok: boolean; missed: string[] }> {
+): Promise<{ ok: boolean; missed: string[]; already?: boolean }> {
   const f = main(page);
   await clickAny(page, "탐색");
   await page.waitForTimeout(700);
   await clickAny(page, "전기 후 차량 점검");
   await page.waitForTimeout(3500);
+
+  /**
+   * 🔴 **이미 제출된 점검은 건드리지 않는다** (2026-08-04 실제 실행에서 확인).
+   *
+   * `56가6433` 을 열었더니 `Status: Submitted` 였다 — 사장님이 8월 3일에 직접
+   * 제출해 두신 것이다. 제출된 점검은 잠겨 있어 값이 안 들어가는데, 코드는
+   * 「항목을 하나도 못 찾았다」며 실패로 처리했다. 실패가 아니라 **이미 끝난 것**이다.
+   *
+   * ⚠️ 취소하고 다시 열어서 덮어쓰지 않는다. 사장님이 직접 보고 넣으신 값이
+   *    우리가 짐작으로 채운 100% 보다 정확하다.
+   */
+  const status = await readStatus(f);
+  log(`      점검 상태: ${status || "(못 읽음)"}`);
+  if (/submit|제출|released|승인|complete/i.test(status)) {
+    log("      이미 제출된 점검입니다 — 그대로 둡니다");
+    return { ok: true, missed: [], already: true };
+  }
+  /**
+   * 🔴 상태를 **못 읽으면 손대지 않는다** (2026-08-04).
+   *    처음엔 `readField` 로만 읽었는데 Status 는 입력칸이 아니라 빈 문자열이 나왔고,
+   *    그래서 이미 제출된 점검을 「빈 것」으로 보고 값을 써 넣었다.
+   *    모르면 멈추는 편이 낫다 — 손님 점검표는 덮어쓰면 되돌릴 수 없다.
+   */
+  if (!status) return { ok: false, missed: ["점검 상태를 읽지 못해 손대지 않았습니다"] };
+
+  /** 👀 보기만 하는 모드는 여기까지 — 아무것도 쓰지 않는다 */
+  if (LOOK) return { ok: true, missed: [], already: false };
 
   // 방문 이유 — 타이어 교체는 CHANGE
   const reason = f.locator('[controlname="Reason for Visit"]').first();
@@ -1244,27 +1328,26 @@ async function main_() {
           }
           log(`  · 송장 ${picked.label}`);
 
-          /**
-           * ⭐ 「보기만」 모드 — 전기가 됐는지 확인만 하고 아무것도 제출하지 않는다.
-           *      npm run mars -- --check --look
-           */
+          if (!(await openInvoice(page, picked.row))) {
+            throw new Error("송장을 열지 못했습니다 (번호 링크를 누르지 못함)");
+          }
+          await page.waitForTimeout(1500);
+
+          const r = await fillVehicleCheck(page, { plateNo: c.plateNo!, tyreQty: c.tyreQty });
+          if (!r.ok) throw new Error(`못 채운 항목: ${r.missed.join(", ")}`);
+
+          /** 👀 보기만 하는 모드는 우리 기록도 건드리지 않는다 */
           if (LOOK) {
-            log("  👀 보기만 하는 모드라 여기서 멈춥니다 (제출하지 않았습니다)");
+            log("  👀 보기만 했습니다 (아무것도 쓰지 않았습니다)");
             ok++;
             await page.goto(HOME);
             await waitHome(page, 40000);
             continue;
           }
 
-          await picked.row.locator('[controlname="No."]').first().click({ timeout: 10000 });
-          await page.waitForTimeout(3000);
-
-          const r = await fillVehicleCheck(page, { plateNo: c.plateNo!, tyreQty: c.tyreQty });
-          if (!r.ok) throw new Error(`못 채운 항목: ${r.missed.join(", ")}`);
-
           await markVehicleChecked(c.quoteId);
           ok++;
-          log("  ✅ 차량 점검 제출 완료");
+          log(r.already ? "  ✅ 이미 점검이 끝나 있어 기록만 맞췄습니다" : "  ✅ 차량 점검 제출 완료");
         } catch (e) {
           skipped++;
           log(`  ⚠️ 실패: ${(e as Error).message.split("\n")[0]}`);
