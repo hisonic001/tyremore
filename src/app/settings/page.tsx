@@ -5,20 +5,46 @@ export const dynamic = "force-dynamic";
 
 /**
  * 설정 — 자주 안 쓰는 메뉴를 모아 둔다 (사장님 요청 2026-08-01)
- * 메인 화면 상단이 좁아 제목이 밀리던 문제도 함께 해결한다.
+ *
+ * ⭐ 2026-08-04 정리 — "지금 기능이 전반적으로 산만해보이는데"
+ *
+ *   ① **중복을 없앴다.** 매입 입고·매입 내역·재고는 상단 메뉴에 이미 있다.
+ *      같은 곳으로 가는 길이 둘이면 어느 쪽이 진짜인지 매번 생각하게 된다.
+ *      (매입 내역은 매입 화면 안에서 간다)
+ *
+ *   ② **묶었다.** 상품에 관한 일이 「상품 정리」·「새 상품 등록」·「금호 상품목록」
+ *      세 곳에 흩어져 있었다. 한 묶음으로 모은다.
+ *
+ *   ③ 🔴 **브랜드 이름을 메뉴에서 뺐다.** 「금호 상품목록」을 메뉴에 박아 두면
+ *      콘티넨탈·미쉐린이 늘 때마다 메뉴가 늘어난다 — 늘어날수록 무너지는 구조다.
+ *      「상품 목록 채우기」 하나로 두고, 안에서 거래처를 고른다.
  */
 export default async function SettingsPage() {
   const session = await getSession();
 
-  const items = [
-    { href: "/settings/suppliers", title: "거래처", desc: "추가 · 이름 고치기 · 합치기 · 숨기기" },
-    { href: "/settings/catalog", title: "상품 정리", desc: "안 받는 브랜드·단종 상품 숨기기" },
-    { href: "/receiving", title: "매입 입고", desc: "인보이스 올리기 · 바코드 입고 · 직접 매입" },
-    { href: "/receiving/history", title: "매입 내역", desc: "날짜별로 언제 어디서 얼마에 샀는지" },
-    { href: "/stock", title: "재고", desc: "엑셀로 내려받고 고쳐서 올리기" },
-    { href: "/product/new", title: "새 상품 등록", desc: "MARS 에 없는 신모델" },
-    { href: "/settings/kumho", title: "금호 상품목록", desc: "자재검색 엑셀 올리기 · 품번 잇기 · 기표가 맞추기" },
-    { href: "/status", title: "이관 현황", desc: "들어온 데이터와 보정 대기 목록" },
+  const groups: { title: string; items: { href: string; title: string; desc: string }[] }[] = [
+    {
+      title: "상품",
+      items: [
+        {
+          href: "/settings/product-list",
+          title: "목록 채우기",
+          desc: "거래처가 준 상품목록 엑셀 올리기 — 검색·인보이스에 함께 채웁니다",
+        },
+        { href: "/settings/catalog", title: "안 받는 것 숨기기", desc: "미취급 브랜드 · 단종 상품" },
+        { href: "/product/new", title: "새 상품 등록", desc: "한 건씩 손으로 — MARS 에 없는 신모델" },
+      ],
+    },
+    {
+      title: "거래처",
+      items: [
+        { href: "/settings/suppliers", title: "거래처", desc: "추가 · 이름 고치기 · 합치기 · 숨기기" },
+      ],
+    },
+    {
+      title: "그 밖에",
+      items: [{ href: "/status", title: "이관 현황", desc: "들어온 데이터와 보정 대기 목록" }],
+    },
   ];
 
   return (
@@ -27,20 +53,28 @@ export default async function SettingsPage() {
         ← 검색으로
       </Link>
       <h1 className="mt-3 text-2xl font-bold">설정</h1>
+      <p className="mt-1 text-sm text-slate-500">
+        판매 · 매입 · 재고는 <strong>맨 위 메뉴</strong>에 있습니다.
+      </p>
 
-      <ul className="mt-4 space-y-2">
-        {items.map((i) => (
-          <li key={i.href}>
-            <Link
-              href={i.href}
-              className="block rounded-xl border border-slate-200 bg-white p-4 active:bg-slate-50"
-            >
-              <div className="font-semibold">{i.title}</div>
-              <div className="mt-0.5 text-sm text-slate-500">{i.desc}</div>
-            </Link>
-          </li>
-        ))}
-      </ul>
+      {groups.map((g) => (
+        <section key={g.title} className="mt-5">
+          <h2 className="px-1 text-sm font-semibold text-slate-500">{g.title}</h2>
+          <ul className="mt-1.5 space-y-2">
+            {g.items.map((i) => (
+              <li key={i.href}>
+                <Link
+                  href={i.href}
+                  className="block rounded-xl border border-slate-200 bg-white p-4 active:bg-slate-50"
+                >
+                  <div className="font-semibold">{i.title}</div>
+                  <div className="mt-0.5 text-sm text-slate-500">{i.desc}</div>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
 
       {session && (
         <section className="mt-8 rounded-xl border border-slate-200 bg-white p-4">

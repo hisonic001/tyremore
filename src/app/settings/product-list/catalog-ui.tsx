@@ -2,7 +2,7 @@
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { applyKumhoCatalog, previewKumhoCatalog } from "@/lib/kumho-excel";
+import { applyProductList, previewProductList } from "@/lib/product-list";
 import type { CatalogPlan, LinkKind, PlanLine } from "@/lib/kumho-sheet";
 
 const KIND_STYLE: Record<LinkKind, string> = {
@@ -16,17 +16,25 @@ const KIND_STYLE: Record<LinkKind, string> = {
 
 const won = (n: number) => n.toLocaleString("ko-KR");
 
+export interface Reader {
+  supplier: string;
+  where: string;
+  columns: string;
+}
+
 /**
- * 금호 자재검색 목록 올리기.
+ * 거래처 상품목록 올리기 — ① 거래처 고르기 → ② 파일 → ③ 확인 → 반영.
  *
  * 🔴 재고 엑셀과 달리 **이 파일은 정답이 아니다.** 없는 줄을 지우지 않는다.
  *    목록에 있는 것만 이어 주고, 없는 것만 만든다. 그래서 여러 번 나눠 올려도 된다.
  * 🔴 기표가 갱신은 **끄고 시작한다.** 손님에게 말하는 금액이 바뀌는 일이라
  *    사장님이 숫자를 보고 직접 켜셔야 한다.
  */
-export function KumhoCatalog() {
+export function ProductListUpload({ readers }: { readers: Reader[] }) {
   const router = useRouter();
   const [pending, start] = useTransition();
+  // 읽을 줄 아는 거래처가 하나뿐이면 고를 것이 없다 — 미리 골라 둔다
+  const [supplier, setSupplier] = useState(readers.length === 1 ? readers[0].supplier : "");
   const [files, setFiles] = useState<File[]>([]);
   const [plan, setPlan] = useState<CatalogPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -52,9 +60,10 @@ export function KumhoCatalog() {
     setFiles(fs);
     if (fs.length === 0) return;
     const fd = new FormData();
+    fd.set("supplier", supplier);
     for (const f of fs) fd.append("file", f);
     start(async () => {
-      const r = await previewKumhoCatalog(fd);
+      const r = await previewProductList(fd);
       if (!r.ok) return setError(r.error);
       setPlan(r.plan);
     });
@@ -63,11 +72,12 @@ export function KumhoCatalog() {
   function onApply() {
     if (files.length === 0) return;
     const fd = new FormData();
+    fd.set("supplier", supplier);
     for (const f of files) fd.append("file", f);
     if (updatePrices) fd.set("updatePrices", "on");
     if (createMissing) fd.set("createMissing", "on");
     start(async () => {
-      const r = await applyKumhoCatalog(fd);
+      const r = await applyProductList(fd);
       if (!r.ok) return setError(r.error);
       setDone(
         `상품 ${r.created}개를 새로 만들고, 품번 ${r.linked}개를 이었습니다` +
@@ -86,12 +96,42 @@ export function KumhoCatalog() {
 
   return (
     <>
-      {/* ── 1. 올리기 ── */}
+      {/* ── 1. 거래처 고르기 ── */}
       <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-        <h2 className="font-semibold">금호 자재검색 목록 올리기</h2>
+        <h2 className="font-semibold">1. 어느 거래처 목록인가요</h2>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {readers.map((r) => (
+            <button
+              key={r.supplier}
+              type="button"
+              onClick={() => {
+                setSupplier(r.supplier);
+                reset();
+                setDone(null);
+              }}
+              className={`rounded-xl border px-4 py-2.5 font-semibold ${
+                supplier === r.supplier
+                  ? "border-slate-900 bg-slate-900 text-white"
+                  : "border-slate-300 text-slate-600"
+              }`}
+            >
+              {r.supplier}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-sm text-slate-500">
+          {readers.find((r) => r.supplier === supplier)?.where ?? "거래처를 골라 주세요"}
+        </p>
+        <p className="mt-2 text-xs text-slate-400">
+          다른 거래처는 아직 목록 양식을 모릅니다. 파일을 주시면 넣어 두겠습니다 — 화면은 그대로 쓰시면 됩니다.
+        </p>
+      </section>
+
+      {/* ── 2. 올리기 ── */}
+      <section className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
+        <h2 className="font-semibold">2. 파일 올리기</h2>
         <p className="mt-1 text-sm text-slate-500">
-          금호 홈페이지 <strong>자재검색</strong> 화면에서 받은 엑셀입니다. 여러 번 나눠 받으셨다면{" "}
-          <strong>한꺼번에 고르셔도</strong> 됩니다.
+          여러 번 나눠 받으셨다면 <strong>한꺼번에 고르셔도</strong> 됩니다. 이미 들어간 것은 건너뜁니다.
         </p>
         <p className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
           이 목록은 <strong>재고를 건드리지 않습니다.</strong> 목록에 없는 상품도 그대로 둡니다 — 지워지는 것은
@@ -104,7 +144,7 @@ export function KumhoCatalog() {
             type="file"
             accept=".xlsx,.xls"
             multiple
-            disabled={pending}
+            disabled={pending || !supplier}
             onChange={(e) => onPick(e.target.files)}
             className="block w-full rounded-xl border-2 border-dashed border-slate-300 p-4 text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-900 file:px-4 file:py-2.5 file:font-semibold file:text-white"
           />
@@ -117,10 +157,10 @@ export function KumhoCatalog() {
         )}
       </section>
 
-      {/* ── 2. 미리보기 ── */}
+      {/* ── 3. 미리보기 ── */}
       {plan && (
-        <section className="mt-4 rounded-2xl border-2 border-slate-900 bg-white p-4">
-          <h2 className="font-semibold">이렇게 됩니다 — 확인해 주세요</h2>
+        <section className="mt-3 rounded-2xl border-2 border-slate-900 bg-white p-4">
+          <h2 className="font-semibold">3. 이렇게 됩니다 — 확인해 주세요</h2>
           <p className="mt-1 text-sm text-slate-500">
             {plan.read}개를 읽었습니다{plan.skipped > 0 && ` (합계·빈 줄 ${plan.skipped}개 제외)`}
           </p>
