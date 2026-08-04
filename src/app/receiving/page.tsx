@@ -23,7 +23,7 @@ export default async function ReceivingPage() {
       .filter((i) => i.invoiceNo.startsWith("직접-"))
       .sort((a, b) => b.invoiceNo.localeCompare(a.invoiceNo))[0] ?? null;
 
-  /** 위 스캔 화면에 이미 떠 있는 장부는 아래 목록에서 뺀다 (같은 것이 두 번 나오지 않게) */
+  /** 위 직접 매입 화면에 이미 떠 있는 장부는 아래 목록에서 뺀다 (같은 것이 두 번 나오지 않게) */
   const listed = invoices.filter((i) => i.invoiceId !== openManual?.invoiceId);
 
   return (

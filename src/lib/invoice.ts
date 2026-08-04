@@ -6,7 +6,7 @@
  * 흐름
  *   ① 업로드 → 읽기 → **미리보기**(검산 결과 포함) → 사람이 확인
  *   ② 저장   → 입고 대기로 등록 + **매입 할인율·실매입가 자동 반영**
- *   ③ 도착   → 스캔하거나 수량 입력 → 재고 확정
+ *   ③ 도착   → 수량을 넣거나 「전량 입고」 → 재고 확정
  *
  * ⚠️ ①에서 바로 저장하지 않는다. 인보이스는 돈이고, 잘못 읽으면 매입원가가 통째로 틀어진다.
  *    검산이 어긋나면 사람이 봐야 한다.
@@ -67,7 +67,6 @@ async function matchProduct(code: string, description = "", supplier = ""): Prom
     SELECT p.id, COALESCE(p.display_name, p.pattern) pattern, p.list_price_excl excl
     FROM product p
     WHERE p.mars_item_no = ${code}
-       OR p.barcode = ${code}
        OR p.mars_item_no = ${"CO" + code}
        OR p.mars_item_no = ${"KM" + code}
        OR p.mars_item_no LIKE ${"%" + code}
@@ -714,63 +713,14 @@ export async function startManualPurchase(
 }
 
 /**
- * 직접 매입 장부에 스캔한 타이어를 더한다.
- * 같은 상품을 또 찍으면 수량이 1 늘어난다 — 4본이면 네 번 찍으면 된다.
- */
-export async function addScannedToPurchase(
-  invoiceId: number,
-  rawCode: string,
-): Promise<
-  | { ok: true; model: string; qty: number; via: string }
-  | { ok: false; error: string; code?: string; unknown?: boolean }
-> {
-  const { lookupBarcode } = await import("./barcode-lookup");
-  const hit = await lookupBarcode(rawCode);
-  if (!hit) {
-    return {
-      ok: false,
-      code: String(rawCode).trim().toUpperCase(),
-      error: `${rawCode} — 어느 상품인지 모릅니다. 아래에서 이어 주시면 다음부터 자동입니다`,
-      unknown: true,
-    };
-  }
-
-  const [exist] = await db
-    .select()
-    .from(purchaseInvoiceItem)
-    .where(and(eq(purchaseInvoiceItem.invoiceId, invoiceId), eq(purchaseInvoiceItem.productId, hit.productId)))
-    .limit(1);
-
-  if (exist) {
-    await db
-      .update(purchaseInvoiceItem)
-      .set({ qty: exist.qty + 1 })
-      .where(eq(purchaseInvoiceItem.id, exist.id));
-    refresh("/receiving");
-    return { ok: true, model: hit.model ?? hit.marsItemNo ?? "", qty: exist.qty + 1, via: hit.via };
-  }
-
-  await db.insert(purchaseInvoiceItem).values([
-    {
-      invoiceId,
-      cai: hit.marsItemNo ?? rawCode,
-      productId: hit.productId,
-      description: [hit.model, hit.spec].filter(Boolean).join(" ") || rawCode,
-      qty: 1,
-    },
-  ]);
-  refresh("/receiving");
-  return { ok: true, model: hit.model ?? hit.marsItemNo ?? "", qty: 1, via: hit.via };
-}
-
-/**
  * ⭐ 품목을 **찾아서** 매입 장부에 담는다 (사장님 요청 2026-08-03)
  *
  *   "바코드 이외에도 품목 검색을 통해서도 매입 입고가 가능하게 해줬으면 좋겠어.
  *    한 품목이 아니라 여러 품목도 가능했으면 좋겠음."
  *
- * 바코드가 안 찍히는 경우가 흔하다 — 라벨이 떨어졌거나, 처음 보는 바코드거나,
- * 아예 거래처가 라벨을 안 붙여 보내기도 한다. 그럴 때 규격·모델로 찾아 담는다.
+ * 🔴 2026-08-04 — 이제 **이것이 유일한 경로**다. 바코드로 담던 길은 걷어냈다
+ *    (사장님: "써보니 생각보다 불편하다"). 라벨이 떨어졌거나 거래처가 아예 안
+ *    붙여 보내는 경우가 흔해 검색이 어차피 주 경로였다.
  *
  * ⚠️ 인보이스 장부에도 담을 수 있다. 인보이스보다 물건이 더 온 경우다.
  *    같은 상품이 이미 있으면 **수량을 더한다** — 새 줄을 만들면 같은 상품이
@@ -909,73 +859,8 @@ async function recalcInvoiceTotals(invoiceId: number) {
 }
 
 /**
- * ⭐ 바코드 한 번 = 1본 입고 (사장님 확인 2026-08-01)
- *
- * 라벨 바코드 `441358261D590A` → 앞 6자리 CAI 로 입고 예정 품목을 찾아 1본 확정한다.
- * 찍을 때마다 대기 수량이 줄어드니 **찍는 행위가 곧 검수**다.
- * 16본 주문에 14본만 찍히면 2본이 대기로 남아 저절로 드러난다.
- *
- * 뒤 8자리(개별 식별자)는 재고 한 본에 그대로 박아 둔다.
- * 나중에 "이 타이어가 어느 인보이스로 들어온 것인가"를 되짚을 수 있다.
- */
-export async function receiveByScan(
-  rawCode: string,
-  userId?: number,
-): Promise<
-  | { ok: true; line: PendingLine; serial: string | null; remain: number; via: string }
-  | { ok: false; error: string; code?: string; unknown?: boolean }
-> {
-  const { parseTireBarcode } = await import("./barcode");
-  const { lookupBarcode } = await import("./barcode-lookup");
-  const scanned = parseTireBarcode(rawCode);
-
-  /**
-   * 브랜드마다 바코드 체계가 다르다. 등록된 바코드 → 품번 → 앞자리 순으로 찾는다.
-   * 못 찾으면 화면에서 상품을 골라 이어 줄 수 있다 (그다음부터 자동).
-   */
-  const hit = await lookupBarcode(scanned.raw);
-
-  const lines = await pendingLines();
-  const line = hit
-    ? lines.find((l) => l.productId === hit.productId)
-    : (lines.find((l) => l.cai === scanned.code) ??
-      lines.find((l) => scanned.raw.startsWith(l.cai)) ??
-      lines.find((l) => l.cai === scanned.raw));
-
-  if (!line) {
-    // 상품은 찾았는데 입고 예정에 없는 경우 — 인보이스를 안 올렸거나 이미 다 받았다
-    if (hit) {
-      return {
-        ok: false,
-        code: scanned.raw,
-        error: `${hit.model ?? hit.marsItemNo} — 입고 예정 목록에 없습니다 (인보이스를 먼저 올려 주세요)`,
-      };
-    }
-    return {
-      ok: false,
-      code: scanned.raw,
-      error: `${scanned.raw} — 어느 상품인지 모릅니다. 아래에서 이어 주시면 다음부터 자동으로 인식합니다`,
-      unknown: true,
-    };
-  }
-
-  const serial = hit?.serial ?? scanned.serial;
-  const r = await receiveLine({ itemId: line.itemId, qty: 1, dot: null, userId, serial });
-  if (!r.ok) return { ok: false, error: r.error, code: scanned.raw };
-
-  const after = (await pendingLines()).find((l) => l.itemId === line.itemId);
-  return {
-    ok: true,
-    line,
-    serial,
-    remain: after ? after.qty - after.receivedQty : 0,
-    via: hit?.via ?? "앞자리 일치",
-  };
-}
-
-/**
  * ⭐ 남은 수량 전부 입고 (사장님 요청 2026-08-01)
- *   바코드를 찍지 않아도 한 번에 재고로 넘긴다.
+ *   한 번에 재고로 넘긴다. 줄마다 세어 넣는 것은 `receiveLine` 이 한다.
  *   ⚠️ DOT 는 비워 둔다. 나중에 재고 화면에서 채울 수 있다 (D-02).
  */
 export async function receiveAll(
@@ -1102,8 +987,6 @@ export async function receiveLine(input: {
   qty: number;
   dot?: string | null;
   userId?: number;
-  /** 라벨 바코드 뒤 8자리 — 재고 한 본을 물리적으로 특정한다 */
-  serial?: string | null;
 }): Promise<{ ok: true; created: number } | { ok: false; error: string }> {
   const dot = input.dot?.trim() || null;
   if (dot && !isPlausibleDot(dot)) {
@@ -1143,8 +1026,12 @@ export async function receiveLine(input: {
     dot,
     /** ⭐ 실매입가를 재고에 박아 둔다 — 나중에 원가를 정확히 되짚을 수 있다 */
     purchasePrice: line.unitCost,
-    /** 스캔으로 들어왔으면 개별 식별자를 남긴다 */
-    serial: input.serial ?? null,
+    /**
+     * `serial`(개별 식별자)은 라벨 바코드에서만 나오던 값이다.
+     * 바코드를 걷어내면서(2026-08-04) 채울 길이 없어졌다 — 컬럼은 남겨 둔다.
+     * 보관 서비스에서 한 본을 특정하는 방법은 따로 정해야 한다 (D-03).
+     */
+    serial: null,
     verifiedAt: new Date(),
     createdBy: input.userId ?? null,
   }));

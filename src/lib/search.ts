@@ -230,21 +230,18 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
         continue;
       }
       /**
-       * CAI·바코드는 **단독으로 쳤을 때만** 번호로 본다.
+       * 품번은 **단독으로 쳤을 때만** 번호로 본다.
        * 모델명과 섞여 있으면 그냥 단어로 취급해야 한다.
+       *
+       * 🔴 `product.barcode` 는 더 이상 보지 않는다 (2026-08-04).
+       *    그 컬럼은 실제 라벨 바코드가 아니라 **품번을 복사해 둔 값**이라
+       *    (스키마 주석 참조) `mars_item_no` 로 전부 찾힌다. 바코드를 걷어내면서
+       *    같이 정리한다 — 컬럼 자체는 남겨 둔다.
        */
-      if (parts.length === 1 && looksLikeCai(part)) {
+      if (parts.length === 1 && (looksLikeCai(part) || /^\d{7,13}$/.test(part))) {
         conds.push(
-          or(
-            eq(product.marsItemNo, part),
-            sql`${product.marsItemNo} LIKE ${part + "%"}`,
-            eq(product.barcode, part),
-          )!,
+          or(eq(product.marsItemNo, part), sql`${product.marsItemNo} LIKE ${part + "%"}`)!,
         );
-        continue;
-      }
-      if (parts.length === 1 && /^\d{7,13}$/.test(part)) {
-        conds.push(or(eq(product.barcode, part), eq(product.marsItemNo, part))!);
         continue;
       }
       words.push(part);
@@ -272,6 +269,14 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
           sql`${product.fitment} ILIKE ${like}`,
           sql`${product.rawName} ILIKE ${like}`,
           sql`${product.displayName} ILIKE ${like}`,
+          /**
+           * 🔴 **품번도 단어로 찾는다** (2026-08-04).
+           *    위 「단독으로 친 번호」 갈래는 미쉐린 CAI(5~6자리)와 순수 숫자만 받는다.
+           *    그래서 `KM2284552`·`180/001/00024` 처럼 글자가 섞인 우리 품번은
+           *    어느 갈래에도 안 걸려 **0건**이 나왔다.
+           *    바코드를 걷어낸 지금은 품번을 치는 것이 유일한 지름길이라 반드시 걸려야 한다.
+           */
+          sql`${product.marsItemNo} ILIKE ${like}`,
           // 브랜드는 한글로도 친다 — 원문에는 "Michelin" 뿐이라 "미쉐린"이 안 걸린다
           sql`${brand.nameKo} ILIKE ${like}`,
           sql`${brand.nameEn} ILIKE ${like}`,
