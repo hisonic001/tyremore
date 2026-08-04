@@ -124,7 +124,7 @@ export async function applyProductList(
     if (r.ok) {
       revalidatePath("/");
       revalidatePath("/receiving");
-      revalidatePath("/settings/product-list");
+      revalidatePath("/settings/products");
     }
     return r;
   } catch (e) {

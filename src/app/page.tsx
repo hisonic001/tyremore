@@ -136,7 +136,7 @@ export default async function Home({
             <div className="mt-8 text-center">
               <p className="text-slate-500">찾지 못했습니다</p>
               <Link
-                href={`/product/new?q=${encodeURIComponent(q)}`}
+                href={`/settings/products?tab=new&q=${encodeURIComponent(q)}`}
                 className="mt-3 inline-block rounded-xl border-2 border-dashed border-slate-300 px-6 py-3 font-medium text-slate-600"
               >
                 + 새 상품으로 등록
@@ -148,7 +148,7 @@ export default async function Home({
           {products.length > 0 && (
             <div className="mt-4 text-center">
               <Link
-                href={`/product/new?q=${encodeURIComponent(q)}`}
+                href={`/settings/products?tab=new&q=${encodeURIComponent(q)}`}
                 className="text-sm text-slate-500 underline underline-offset-4"
               >
                 찾는 모델이 없나요? 새 상품 등록

@@ -1,49 +1,17 @@
-import Link from "next/link";
-import { db } from "@/db";
-import { brand } from "@/db/schema";
-import { asc } from "drizzle-orm";
-import { NewProductForm } from "./form";
-import { ProductLookup } from "./lookup";
-
-export const dynamic = "force-dynamic";
+import { redirect } from "next/navigation";
 
 /**
- * 새 상품 등록 — MARS 마스터에 없는 신모델용 (사장님 요청 2026-08-01)
+ * 옛 주소 — `/settings/products?tab=new` 로 옮겼다 (2026-08-04).
  *
- * MARS 상품 마스터에 10,691건이 이미 있으므로 대부분은 검색으로 나온다.
- * 여기는 **정말 새로 나온 모델**을 넣는 자리다.
+ * 화면을 접으면서 자리가 바뀌었다. 즐겨찾기·옛 링크가 죽지 않게 넘겨만 준다.
+ * ⚠️ `?q=` 는 홈 검색이 빈손일 때 넘어오는 검색어다. **꼭 함께 넘겨야 한다** —
+ *    안 넘기면 사장님이 방금 친 규격을 다시 쳐야 한다.
  */
-export default async function NewProductPage({
+export default async function OldNewProductPage({
   searchParams,
 }: {
   searchParams: Promise<{ q?: string }>;
 }) {
   const { q } = await searchParams;
-  const brands = await db
-    .select({ code: brand.code, nameKo: brand.nameKo })
-    .from(brand)
-    .orderBy(asc(brand.sortOrder));
-
-  return (
-    <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6">
-      <Link href="/" className="text-sm text-slate-500 underline underline-offset-4">
-        ← 검색으로
-      </Link>
-      <h1 className="mt-3 text-2xl font-bold">새 상품 등록</h1>
-      <p className="mt-1 text-sm text-slate-500">
-        MARS 마스터에 없는 신모델만 여기서 넣습니다.
-      </p>
-
-      {/* ⭐ 만들기 전에 먼저 찾아본다 — 중복으로 만들면 재고가 갈라진다 */}
-      <ProductLookup initial={q ?? ""} />
-
-      <div className="mt-8 flex items-center gap-3">
-        <div className="h-px flex-1 bg-slate-200" />
-        <span className="text-sm text-slate-400">정말 없으면 아래에 등록</span>
-        <div className="h-px flex-1 bg-slate-200" />
-      </div>
-
-      <NewProductForm brands={brands} initialPattern={q ?? ""} />
-    </main>
-  );
+  redirect(`/settings/products?tab=new${q ? `&q=${encodeURIComponent(q)}` : ""}`);
 }

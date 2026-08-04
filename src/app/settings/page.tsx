@@ -13,38 +13,27 @@ export const dynamic = "force-dynamic";
  *      (매입 내역은 매입 화면 안에서 간다)
  *
  *   ② **묶었다.** 상품에 관한 일이 「상품 정리」·「새 상품 등록」·「금호 상품목록」
- *      세 곳에 흩어져 있었다. 한 묶음으로 모은다.
+ *      세 곳에 흩어져 있었다. 처음엔 메뉴만 세 묶음으로 접었는데 그건 반쪽이었다 —
+ *      **화면 수까지 줄여야** 산만함이 실제로 없어진다. 지금은 `/settings/products`
+ *      한 화면 안의 탭 세 개다.
  *
  *   ③ 🔴 **브랜드 이름을 메뉴에서 뺐다.** 「금호 상품목록」을 메뉴에 박아 두면
  *      콘티넨탈·미쉐린이 늘 때마다 메뉴가 늘어난다 — 늘어날수록 무너지는 구조다.
- *      「상품 목록 채우기」 하나로 두고, 안에서 거래처를 고른다.
+ *      거래처는 화면 안에서 고른다.
+ *
+ * 결과: 설정 하위 8개 → **3개**.
  */
 export default async function SettingsPage() {
   const session = await getSession();
 
-  const groups: { title: string; items: { href: string; title: string; desc: string }[] }[] = [
+  const items = [
     {
+      href: "/settings/products",
       title: "상품",
-      items: [
-        {
-          href: "/settings/product-list",
-          title: "목록 채우기",
-          desc: "거래처가 준 상품목록 엑셀 올리기 — 검색·인보이스에 함께 채웁니다",
-        },
-        { href: "/settings/catalog", title: "안 받는 것 숨기기", desc: "미취급 브랜드 · 단종 상품" },
-        { href: "/product/new", title: "새 상품 등록", desc: "한 건씩 손으로 — MARS 에 없는 신모델" },
-      ],
+      desc: "거래처 목록으로 채우기 · 새 상품 등록 · 안 받는 것 숨기기",
     },
-    {
-      title: "거래처",
-      items: [
-        { href: "/settings/suppliers", title: "거래처", desc: "추가 · 이름 고치기 · 합치기 · 숨기기" },
-      ],
-    },
-    {
-      title: "그 밖에",
-      items: [{ href: "/status", title: "이관 현황", desc: "들어온 데이터와 보정 대기 목록" }],
-    },
+    { href: "/settings/suppliers", title: "거래처", desc: "추가 · 이름 고치기 · 합치기 · 숨기기" },
+    { href: "/status", title: "이관 현황", desc: "들어온 데이터와 보정 대기 목록" },
   ];
 
   return (
@@ -57,24 +46,19 @@ export default async function SettingsPage() {
         판매 · 매입 · 재고는 <strong>맨 위 메뉴</strong>에 있습니다.
       </p>
 
-      {groups.map((g) => (
-        <section key={g.title} className="mt-5">
-          <h2 className="px-1 text-sm font-semibold text-slate-500">{g.title}</h2>
-          <ul className="mt-1.5 space-y-2">
-            {g.items.map((i) => (
-              <li key={i.href}>
-                <Link
-                  href={i.href}
-                  className="block rounded-xl border border-slate-200 bg-white p-4 active:bg-slate-50"
-                >
-                  <div className="font-semibold">{i.title}</div>
-                  <div className="mt-0.5 text-sm text-slate-500">{i.desc}</div>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ))}
+      <ul className="mt-4 space-y-2">
+        {items.map((i) => (
+          <li key={i.href}>
+            <Link
+              href={i.href}
+              className="block rounded-xl border border-slate-200 bg-white p-4 active:bg-slate-50"
+            >
+              <div className="font-semibold">{i.title}</div>
+              <div className="mt-0.5 text-sm text-slate-500">{i.desc}</div>
+            </Link>
+          </li>
+        ))}
+      </ul>
 
       {session && (
         <section className="mt-8 rounded-xl border border-slate-200 bg-white p-4">

@@ -51,7 +51,7 @@ async function matchProduct(code: string, description = "", supplier = ""): Prom
   /**
    * ⓪ ⭐ 거래처 품번 사전 (2026-08-04)
    *    금호 자재코드 `2387392` ←→ 우리 `KM2284552` 처럼 품번 체계가 아예 다른 경우.
-   *    사장님이 「금호 상품목록」을 올리시면 여기가 채워진다 (`/settings/product-list`).
+   *    사장님이 「금호 상품목록」을 올리시면 여기가 채워진다 (`/settings/products`).
    *    사람이 확인해 이어 둔 값이므로 **품번보다 먼저 본다.**
    */
   if (supplier) {

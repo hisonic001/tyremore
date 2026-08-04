@@ -463,7 +463,7 @@ function PendingRow({ l }: { l: PendingLine }) {
               {pending ? "만드는 중…" : "인보이스 정보로 상품 만들기"}
             </button>
             <Link
-              href={`/product/new?q=${encodeURIComponent(l.cai)}`}
+              href={`/settings/products?tab=new&q=${encodeURIComponent(l.cai)}`}
               className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm text-slate-600"
             >
               직접 등록

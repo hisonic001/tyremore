@@ -33,7 +33,7 @@ export async function setProductActive(productId: number, active: boolean) {
     .update(product)
     .set({ isActive: active, hiddenReason: active ? null : "manual", updatedAt: new Date() })
     .where(eq(product.id, productId));
-  refresh("/", `/stock/${productId}`, "/settings/catalog");
+  refresh("/", `/stock/${productId}`, "/settings/products");
   return { ok: true as const };
 }
 
@@ -55,7 +55,7 @@ export async function setDisplayName(productId: number, name: string | null) {
 /** 브랜드 통째로 취급/미취급 */
 export async function setBrandHandled(code: string, handled: boolean) {
   await db.update(brand).set({ isHandled: handled }).where(eq(brand.code, code));
-  refresh("/", "/settings/catalog");
+  refresh("/", "/settings/products");
   return { ok: true as const };
 }
 
@@ -76,7 +76,7 @@ export async function setBrandVatExcluded(code: string, excludes: boolean) {
       RETURNING 1
     ) SELECT count(*)::int n FROM u
   `);
-  refresh("/", "/settings/catalog");
+  refresh("/", "/settings/products");
   return { ok: true as const, updated: r[0]?.n ?? 0 };
 }
 
@@ -102,7 +102,7 @@ export async function hideUnpricedTires() {
       RETURNING 1
     ) SELECT count(*)::int n FROM u
   `);
-  refresh("/", "/settings/catalog");
+  refresh("/", "/settings/products");
   return { hidden: r[0]?.n ?? 0 };
 }
 
@@ -119,7 +119,7 @@ export async function restoreProducts(reason: "no_price" | "manual" | "all") {
       RETURNING 1
     ) SELECT count(*)::int n FROM u
   `);
-  refresh("/", "/settings/catalog");
+  refresh("/", "/settings/products");
   return { restored: r[0]?.n ?? 0 };
 }
 
