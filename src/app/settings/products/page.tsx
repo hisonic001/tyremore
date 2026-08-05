@@ -9,6 +9,8 @@ import { BrandToggle, BulkActions } from "./brand-controls";
 import { ProductListUpload } from "./upload-ui";
 import { NewProductForm } from "./new-form";
 import { ProductLookup } from "./lookup";
+import { duplicateGroups } from "@/lib/product-merge";
+import { DupList } from "./dup-list";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +35,7 @@ const TABS = [
   { id: "fill", label: "목록 채우기" },
   { id: "new", label: "새 상품" },
   { id: "hide", label: "안 받는 것 숨기기" },
+  { id: "dup", label: "중복 합치기" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -74,8 +77,25 @@ export default async function ProductsPage({
       {tab === "fill" && <FillTab />}
       {tab === "new" && <NewTab q={q} />}
       {tab === "hide" && <HideTab />}
+      {tab === "dup" && <DupTab />}
     </main>
   );
+}
+
+/* ============================================================
+ * ④ 중복 합치기 ⭐ (사장님 승인 2026-08-05 — 품목 정리 ②)
+ *    같은 타이어가 상품 두세 개로 갈라진 것을 대표 하나로 모은다.
+ * ========================================================== */
+async function DupTab() {
+  if (!(await isOwner())) {
+    return (
+      <p className="mt-4 rounded-xl bg-slate-100 px-4 py-3 text-sm text-slate-600">
+        이력을 옮기는 기능이라 <strong>사장님만</strong> 쓸 수 있습니다.
+      </p>
+    );
+  }
+  const groups = await duplicateGroups();
+  return <DupList groups={groups} />;
 }
 
 /* ============================================================
