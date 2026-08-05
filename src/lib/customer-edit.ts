@@ -71,12 +71,31 @@ export async function updateVehicleInfo(input: {
   `);
   if (dup) return { ok: false, error: `차량번호 ${plate} 는 이미 다른 차량에 있습니다` };
 
+  /**
+   * 🔴 제조사는 **코드까지 같이** 맞춘다 (사장님 버그 제보 2026-08-05).
+   *    검색 카드는 maker_code 의 이름을 우선 보여주기 때문에, 글자만 바꾸면
+   *    낡은 코드가 이겨서 화면이 옛 제조사를 계속 보여준다.
+   *    이름·코드·별칭 표에서 찾아지면 그 코드로, 못 찾으면 코드를 비워 글자가 보이게 한다.
+   */
+  const makerText = input.makerName?.trim() || null;
+  let makerCode: string | null = null;
+  if (makerText) {
+    const [hit] = await db.execute<{ code: string }>(sql`
+      SELECT code FROM vehicle_maker WHERE name_ko = ${makerText} OR code = ${makerText.toUpperCase()}
+      UNION ALL
+      SELECT code FROM vehicle_maker_alias WHERE raw_name = ${makerText}
+      LIMIT 1
+    `);
+    makerCode = hit?.code ?? null;
+  }
+
   await db
     .update(vehicle)
     .set({
       plateNo: plate,
       plateNoNorm: plateNorm,
-      makerName: input.makerName?.trim() || null,
+      makerCode,
+      makerName: makerText,
       model: input.model?.trim() || null,
       year: input.year ?? null,
       mileage: input.mileage ?? null,

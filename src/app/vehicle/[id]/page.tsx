@@ -40,7 +40,9 @@ export default async function VehiclePage({ params }: { params: Promise<{ id: st
     sale_count: number;
     last_visit: string | null;
   }>(sql`
-    SELECT v.id vehicle_id, v.plate_no, v.maker_name, v.model, v.year, v.mileage,
+    SELECT v.id vehicle_id, v.plate_no,
+           COALESCE((SELECT name_ko FROM vehicle_maker m WHERE m.code = v.maker_code), v.maker_name) maker_name,
+           v.model, v.year, v.mileage,
            v.memo v_memo, v.mars_vehicle_no,
            c.id customer_id, c.name, c.phone, c.address, c.mars_contact_no,
            c.consent_privacy, c.consent_marketing, (c.consent_signed_at IS NOT NULL) consent_signed,

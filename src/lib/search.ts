@@ -179,7 +179,8 @@ export async function findVehicles(q: string): Promise<VehicleHit[]> {
     .select({
       vehicleId: vehicle.id,
       plateNo: vehicle.plateNo,
-      makerName: sql<string | null>`(SELECT name_ko FROM vehicle_maker m WHERE m.code = ${vehicle.makerCode})`,
+      // 이관 차량은 maker_code, 새로 만든 차량은 maker_name 글자만 있다 — 둘 다 본다 (2026-08-05)
+      makerName: sql<string | null>`COALESCE((SELECT name_ko FROM vehicle_maker m WHERE m.code = ${vehicle.makerCode}), ${vehicle.makerName})`,
       model: vehicle.model,
       year: vehicle.year,
       mileage: vehicle.mileage,
