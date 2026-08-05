@@ -34,6 +34,8 @@ function refresh(...paths: string[]) {
 }
 
 export interface MarsLine {
+  /** quote_item id — 대기열 화면에서 줄을 바로 고칠 때 쓴다 (사장님 요청 2026-08-05) */
+  itemId: number;
   /** MARS 품번(CAI) 또는 서비스 번호 — 이걸로 찾는 것이 가장 빠르다 */
   no: string | null;
   /** MARS 상품 마스터에 실제로 들어 있는 이름 */
@@ -151,13 +153,14 @@ export async function marsQueue(): Promise<MarsEntry[]> {
   const ids = heads.map((h) => Number(h.id));
   const rows = await db.execute<{
     quote_id: number;
+    item_id: number;
     no: string | null;
     mars_name: string;
     qty: number;
     final_price: number;
     line_type: string;
   }>(sql`
-    SELECT qi.quote_id,
+    SELECT qi.quote_id, qi.id AS item_id,
            COALESCE(p.mars_item_no, s.mars_service_no) AS no,
            -- ⚠️ MARS 원본 이름이 우선이다. 다듬은 이름으로는 MARS 에서 못 찾는다
            COALESCE(p.raw_name, s.name, qi.description) AS mars_name,
@@ -174,6 +177,7 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     const k = Number(r.quote_id);
     if (!byQuote.has(k)) byQuote.set(k, []);
     byQuote.get(k)!.push({
+      itemId: Number(r.item_id),
       no: r.no,
       marsName: r.mars_name,
       qty: r.qty,

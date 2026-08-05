@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { saleHistory } from "@/lib/sale-history";
 import { SaleCard } from "./client";
+import { PeriodFilter } from "./filter";
 
 export const dynamic = "force-dynamic";
 
@@ -17,15 +18,37 @@ const won = (n: number) => n.toLocaleString("ko-KR");
 export default async function SalesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ month?: string; customer?: string; vehicle?: string; canceled?: string }>;
+  searchParams: Promise<{
+    month?: string;
+    range?: string;
+    from?: string;
+    to?: string;
+    customer?: string;
+    vehicle?: string;
+    canceled?: string;
+  }>;
 }) {
   const sp = await searchParams;
   const customerId = sp.customer ? Number(sp.customer) : undefined;
   const vehicleId = sp.vehicle ? Number(sp.vehicle) : undefined;
   const includeCanceled = sp.canceled === "1";
+  const scoped = Number.isFinite(customerId) || Number.isFinite(vehicleId);
+
+  /**
+   * ⭐ 기간 필터 — 기본은 **오늘** (사장님 요청 2026-08-05).
+   *    과거 이력 3,100건이 들어와 「전체」 기본은 무겁고 오늘 일이 묻힌다.
+   *    단, 고객·차량 이력으로 들어왔을 때는 전체가 기본 — 카드에서 온 사람은
+   *    「이 차의 과거」를 보러 온 것이니까.
+   */
+  const today = new Date().toLocaleDateString("sv-SE");
+  const thisMonth = today.slice(0, 7);
+  const explicit = sp.range ?? (sp.month ? "month" : sp.from || sp.to ? "range" : null);
+  const active = explicit ?? (scoped ? "all" : "today");
 
   const h = await saleHistory({
-    month: sp.month,
+    month: active === "month" ? sp.month : active === "thisMonth" ? thisMonth : undefined,
+    from: active === "today" ? today : active === "range" ? sp.from : undefined,
+    to: active === "today" ? today : active === "range" ? sp.to : undefined,
     customerId: Number.isFinite(customerId) ? customerId : undefined,
     vehicleId: Number.isFinite(vehicleId) ? vehicleId : undefined,
     includeCanceled,
@@ -33,7 +56,16 @@ export default async function SalesPage({
 
   const qs = (over: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
-    const merged = { month: sp.month, customer: sp.customer, vehicle: sp.vehicle, canceled: sp.canceled, ...over };
+    const merged = {
+      month: sp.month,
+      range: sp.range,
+      from: sp.from,
+      to: sp.to,
+      customer: sp.customer,
+      vehicle: sp.vehicle,
+      canceled: sp.canceled,
+      ...over,
+    };
     for (const [k, v] of Object.entries(merged)) if (v) p.set(k, v);
     const s = p.toString();
     return s ? `?${s}` : "";
@@ -62,32 +94,19 @@ export default async function SalesPage({
         <p className="mt-1 text-sm text-slate-500">날짜별로 무엇을 정비했는지. 여기서 고치고 취소합니다.</p>
       )}
 
-      {/* 달 고르기 */}
-      {h.months.length > 1 && (
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          <Link
-            href={`/sales${qs({ month: undefined })}`}
-            className={`rounded-lg px-2.5 py-1.5 text-sm font-medium ${
-              !sp.month ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
-            }`}
-          >
-            전체
-          </Link>
-          {h.months.map((m) => (
-            <Link
-              key={m}
-              href={`/sales${qs({ month: m })}`}
-              className={`tabular rounded-lg px-2.5 py-1.5 text-sm font-medium ${
-                sp.month === m ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
-              }`}
-            >
-              {m}
-            </Link>
-          ))}
-        </div>
-      )}
+      {/* ⭐ 기간 필터 — 오늘·이번 달·전체·월·기간 (사장님 요청 2026-08-05) */}
+      <PeriodFilter
+        months={h.months}
+        active={active}
+        month={sp.month ?? null}
+        from={sp.from ?? null}
+        to={sp.to ?? null}
+        keep={{ customer: sp.customer, vehicle: sp.vehicle, canceled: sp.canceled }}
+      />
 
       <p className="tabular mt-3 text-sm text-slate-600">
+        {active === "today" && `오늘(${today}) · `}
+        {active === "thisMonth" && `${thisMonth} · `}
         {h.saleCount}건 · {won(h.totalAmount)}원
       </p>
 

@@ -71,12 +71,18 @@ export interface SaleHistory {
  */
 export async function saleHistory(opts: {
   month?: string;
+  /** 날짜 구간 (YYYY-MM-DD) — 오늘 보기·기간 직접 지정이 쓴다 (사장님 요청 2026-08-05) */
+  from?: string;
+  to?: string;
   customerId?: number;
   vehicleId?: number;
   includeCanceled?: boolean;
 }): Promise<SaleHistory> {
   const { db } = await import("@/db");
   const m = opts.month && /^\d{4}-\d{2}$/.test(opts.month) ? opts.month : null;
+  const okDay = (x?: string) => (x && /^\d{4}-\d{2}-\d{2}$/.test(x) ? x : null);
+  const from = okDay(opts.from);
+  const to = okDay(opts.to);
 
   const monthRows = await db.execute<{ m: string }>(sql`
     SELECT DISTINCT to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM') m
@@ -120,6 +126,8 @@ export async function saleHistory(opts: {
     WHERE 1=1
       ${opts.includeCanceled ? sql`` : sql`AND q.status <> '취소'`}
       ${m ? sql`AND to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM') = ${m}` : sql``}
+      ${from ? sql`AND COALESCE(q.work_date, q.created_at::date) >= ${from}::date` : sql``}
+      ${to ? sql`AND COALESCE(q.work_date, q.created_at::date) <= ${to}::date` : sql``}
       ${opts.customerId ? sql`AND q.customer_id = ${opts.customerId}` : sql``}
       ${opts.vehicleId ? sql`AND q.vehicle_id = ${opts.vehicleId}` : sql``}
     ORDER BY COALESCE(q.work_date, q.created_at::date) DESC, q.id DESC, qi.id

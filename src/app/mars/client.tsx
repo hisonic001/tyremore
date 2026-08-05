@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { markEntered, removeFromQueue, unmarkEntered, type MarsEntry } from "@/lib/mars-queue";
+import { AddLine, EditableLine } from "../sales/line-edit";
 
 const won = (n: number) => n.toLocaleString();
 
@@ -45,6 +46,9 @@ function Entry({ e }: { e: MarsEntry }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [refNo, setRefNo] = useState("");
+  /** ⭐ 대기열에서 바로 품목 고치기 (사장님 요청 2026-08-05) — 정비 내역과 같은 수정 UI */
+  const [editing, setEditing] = useState(false);
+  const [editMsg, setEditMsg] = useState<string | null>(null);
 
   return (
     <li className="rounded-2xl border-2 border-indigo-600 bg-indigo-50 p-3">
@@ -84,27 +88,66 @@ function Entry({ e }: { e: MarsEntry }) {
 
       {/* ② 업무 내용 — MARS 원본 이름으로 보여준다 */}
       <div className="mt-3">
-        <div className="text-xs font-semibold text-indigo-800">② 업무 내용</div>
-        <ul className="mt-1 space-y-1.5">
-          {e.lines.map((l, i) => (
-            <li key={i} className="rounded-lg bg-white p-2">
-              <div className="flex items-start gap-2">
-                <span className="mt-0.5 shrink-0 rounded bg-slate-100 px-1.5 text-[11px] text-slate-600">
-                  {l.kind === "tire" ? "상품" : "서비스"}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium leading-snug">{l.marsName}</div>
+        <div className="flex items-baseline justify-between">
+          <div className="text-xs font-semibold text-indigo-800">② 업무 내용</div>
+          {/* ⭐ MARS 에 넣기 전에 여기서 바로 고친다 (사장님 요청 2026-08-05) */}
+          <button
+            type="button"
+            onClick={() => {
+              setEditing(!editing);
+              setEditMsg(null);
+            }}
+            className="text-xs text-indigo-700 underline underline-offset-2"
+          >
+            {editing ? "고치기 닫기" : "품목 고치기"}
+          </button>
+        </div>
+
+        {editing ? (
+          <div className="mt-1 rounded-xl bg-white p-2">
+            <ul className="space-y-1">
+              {e.lines.map((l) => (
+                <EditableLine
+                  key={l.itemId}
+                  line={{
+                    itemId: l.itemId,
+                    lineType: l.kind === "tire" ? "tire" : "service",
+                    description: l.marsName,
+                    qty: l.qty,
+                    finalPrice: l.unitPrice,
+                  }}
+                  onMessage={setEditMsg}
+                />
+              ))}
+            </ul>
+            <AddLine quoteId={e.quoteId} onMessage={setEditMsg} />
+            {editMsg && <p className="mt-1.5 rounded-lg bg-slate-50 px-2 py-1.5 text-xs text-slate-700">{editMsg}</p>}
+            <p className="mt-1.5 text-[11px] text-indigo-700">
+              고치면 정비 내역·재고·합계가 같이 바뀝니다 — 아직 MARS 에 안 넣은 건이라 안전합니다.
+            </p>
+          </div>
+        ) : (
+          <ul className="mt-1 space-y-1.5">
+            {e.lines.map((l, i) => (
+              <li key={i} className="rounded-lg bg-white p-2">
+                <div className="flex items-start gap-2">
+                  <span className="mt-0.5 shrink-0 rounded bg-slate-100 px-1.5 text-[11px] text-slate-600">
+                    {l.kind === "tire" ? "상품" : "서비스"}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium leading-snug">{l.marsName}</div>
+                  </div>
                 </div>
-              </div>
-              <div className="mt-1.5 grid grid-cols-4 gap-1.5">
-                <Copy label="품번" value={l.no} />
-                <Copy label="수량" value={String(l.qty)} />
-                <Copy label="단가" value={String(l.unitPrice)} />
-                <Copy label="금액" value={String(l.amount)} />
-              </div>
-            </li>
-          ))}
-        </ul>
+                <div className="mt-1.5 grid grid-cols-4 gap-1.5">
+                  <Copy label="품번" value={l.no} />
+                  <Copy label="수량" value={String(l.qty)} />
+                  <Copy label="단가" value={String(l.unitPrice)} />
+                  <Copy label="금액" value={String(l.amount)} />
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       {/* ③ 결제 */}
