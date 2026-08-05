@@ -29,12 +29,21 @@ export function VehicleCard({ v }: { v: VehicleHit }) {
            "고객 조회를 해도 과거 정비 이력은 확인이 불가한점."
            손님이 "지난번에 뭐 갈았죠?" 하면 여기서 한 번에 가야 한다.
       */}
-      <Link
-        href={`/sales?vehicle=${v.vehicleId}`}
-        className="mt-2 block rounded-lg border border-slate-300 py-2 text-center text-sm font-medium text-slate-600 active:bg-slate-50"
-      >
-        이 차의 정비 이력 보기
-      </Link>
+      <div className="mt-2 flex gap-2">
+        <Link
+          href={`/sales?vehicle=${v.vehicleId}`}
+          className="flex-1 rounded-lg border border-slate-300 py-2 text-center text-sm font-medium text-slate-600 active:bg-slate-50"
+        >
+          정비 이력
+        </Link>
+        {/* ⭐ 고객·차량 정보 수정 (사장님 요청 2026-08-05) */}
+        <Link
+          href={`/vehicle/${v.vehicleId}`}
+          className="flex-1 rounded-lg border border-slate-300 py-2 text-center text-sm font-medium text-slate-600 active:bg-slate-50"
+        >
+          정보 보기·수정
+        </Link>
+      </div>
     </li>
   );
 }

@@ -103,7 +103,7 @@ async function nextQuoteNo(): Promise<string> {
  *    새 타이어를 먼저 팔면 오래된 것이 창고에 남아 늙는다.
  *    DOT 이 없는 것은 언제 들어왔는지 모르므로 가장 먼저 내보낸다.
  */
-async function sellFromStock(productId: number, qty: number, quoteId: number, userId?: number) {
+export async function sellFromStock(productId: number, qty: number, quoteId: number, userId?: number) {
   const rows = await db
     .select({ id: stockItem.id, qty: stockItem.qty, dot: stockItem.dot })
     .from(stockItem)

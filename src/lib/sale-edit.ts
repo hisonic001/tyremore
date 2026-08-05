@@ -165,3 +165,193 @@ export async function cancelSale(
   refresh();
   return { ok: true, restored, marsWarning };
 }
+
+/* ============================================================
+ * ⭐ 품목 줄 수정 (사장님 요청 2026-08-05 — "수정도 더 자유롭게")
+ *
+ * 지금까지는 「틀렸으면 취소하고 다시 등록」뿐이었다. 이제 줄 하나를
+ * 고치고·지우고·더할 수 있다. 재고는 그때그때 따라간다:
+ *   수량이 늘면 → 재고에서 더 빼고 (오래된 DOT 부터)
+ *   수량이 줄거나 줄을 지우면 → 이 판매의 출고 이력을 근거로 되돌린다
+ *
+ * 🔴 MARS 전송완료 건을 고치면 MARS 와 금액이 어긋난다 — 경고를 돌려주고
+ *    marsMemo 에도 남긴다. 화면이 그걸 보여 주고 사장님이 판단하신다.
+ * ========================================================== */
+
+/** 취소 아님 + 존재 확인. 자주 쓰여서 한 곳에 모은다 */
+async function editableQuote(
+  quoteId: number,
+): Promise<{ error: string; q?: never } | { error?: never; q: { id: number; status: string; marsStatus: string; quoteNo: string } }> {
+  const [q] = await db
+    .select({ id: quote.id, status: quote.status, marsStatus: quote.marsStatus, quoteNo: quote.quoteNo })
+    .from(quote)
+    .where(eq(quote.id, quoteId))
+    .limit(1);
+  if (!q) return { error: "판매 기록을 찾을 수 없습니다" };
+  if (q.status === "취소") return { error: "취소된 판매는 고칠 수 없습니다" };
+  return { q };
+}
+
+/** 합계를 품목에서 다시 계산해 머리에 쓴다 — 손으로 맞추면 반드시 어긋난다 */
+async function recomputeTotal(quoteId: number) {
+  await db.execute(sql`
+    UPDATE quote SET
+      total_amount = COALESCE((SELECT SUM(qty * final_price) FROM quote_item WHERE quote_id = ${quoteId}), 0),
+      paid_amount  = COALESCE((SELECT SUM(qty * final_price) FROM quote_item WHERE quote_id = ${quoteId}), 0),
+      updated_at = now()
+    WHERE id = ${quoteId}
+  `);
+}
+
+/** MARS 에 이미 들어간 건이면 경고를 만들고 메모에도 한 번만 남긴다 */
+async function marsMismatchNote(quoteId: number, marsStatus: string): Promise<string | null> {
+  if (marsStatus !== "전송완료") return null;
+  await db.execute(sql`
+    UPDATE quote SET mars_memo = COALESCE(mars_memo || ' · ', '') || '수정됨 — MARS 금액 확인 필요'
+    WHERE id = ${quoteId} AND (mars_memo IS NULL OR mars_memo NOT LIKE '%수정됨 — MARS 금액 확인 필요%')
+  `);
+  return "MARS 에 이미 들어간 판매라 금액이 어긋날 수 있습니다 — MARS 쪽도 확인해 주세요";
+}
+
+/**
+ * 이 판매·이 상품의 출고를 `want` 만큼 되돌린다 (부분 복원).
+ * 🔴 근거는 입출고 이력이다 — 행마다 「이 판매로 나간 양 − 이미 되돌린 양」을
+ *    계산해서, 남아 있는 만큼만 되돌린다. 두 번 고쳐도 이중 복원되지 않는다.
+ */
+async function restoreStockFor(
+  quoteId: number,
+  quoteNo: string,
+  productId: number,
+  want: number,
+  userId?: number,
+): Promise<number> {
+  const rows = await db.execute<{ id: number; status: string; qty: number; quote_id: number | null; out: number }>(sql`
+    SELECT s.id, s.status, s.qty, s.quote_id,
+           -(SELECT COALESCE(SUM(m.qty_delta), 0) FROM stock_movement m
+              WHERE m.stock_item_id = s.id AND m.quote_id = ${quoteId})::int AS out
+    FROM stock_item s
+    WHERE s.product_id = ${productId}
+      AND EXISTS (SELECT 1 FROM stock_movement m WHERE m.stock_item_id = s.id AND m.quote_id = ${quoteId})
+    ORDER BY s.id DESC
+  `);
+  let left = want;
+  let restored = 0;
+  for (const r of rows) {
+    if (left <= 0) break;
+    const out = Number(r.out);
+    if (out <= 0) continue;
+    const take = Math.min(out, left);
+    if (r.status === "판매완료" && Number(r.quote_id) === quoteId) {
+      await db.update(stockItem).set({ status: "재고", soldAt: null, quoteId: null }).where(eq(stockItem.id, Number(r.id)));
+    } else {
+      await db.update(stockItem).set({ qty: Number(r.qty) + take }).where(eq(stockItem.id, Number(r.id)));
+    }
+    await db.insert(stockMovement).values({
+      stockItemId: Number(r.id),
+      type: "반품",
+      reason: "판매수정",
+      qtyDelta: take,
+      quoteId,
+      memo: `${quoteNo} 수정`,
+      createdBy: userId ?? null,
+    });
+    left -= take;
+    restored += take;
+  }
+  return restored;
+}
+
+/** 줄 하나 고치기 — 수량·단가 */
+export async function updateSaleLine(input: {
+  itemId: number;
+  qty: number;
+  unitPrice: number;
+}): Promise<{ ok: true; shortage: number; marsWarning: string | null } | { ok: false; error: string }> {
+  if (!Number.isInteger(input.qty) || input.qty <= 0) return { ok: false, error: "수량은 1 이상이어야 합니다" };
+  if (!Number.isFinite(input.unitPrice) || input.unitPrice < 0) return { ok: false, error: "단가가 올바르지 않습니다" };
+
+  const [line] = await db.execute<{ id: number; quote_id: number; product_id: number | null; qty: number }>(
+    sql`SELECT id, quote_id, product_id, qty FROM quote_item WHERE id = ${input.itemId}`,
+  );
+  if (!line) return { ok: false, error: "품목을 찾을 수 없습니다" };
+  const e = await editableQuote(Number(line.quote_id));
+  if (e.error !== undefined) return { ok: false, error: e.error };
+
+  let shortage = 0;
+  const delta = input.qty - Number(line.qty);
+  if (line.product_id && delta > 0) {
+    const { sellFromStock } = await import("./sale");
+    const { short } = await sellFromStock(Number(line.product_id), delta, e.q.id);
+    shortage = short;
+  } else if (line.product_id && delta < 0) {
+    await restoreStockFor(e.q.id, e.q.quoteNo, Number(line.product_id), -delta);
+  }
+
+  await db.execute(sql`UPDATE quote_item SET qty = ${input.qty}, final_price = ${input.unitPrice} WHERE id = ${input.itemId}`);
+  await recomputeTotal(e.q.id);
+  const marsWarning = await marsMismatchNote(e.q.id, e.q.marsStatus);
+  refresh();
+  return { ok: true, shortage, marsWarning };
+}
+
+/** 줄 지우기 — 재고는 되살아난다. 마지막 줄은 못 지운다 (그건 판매 취소다) */
+export async function removeSaleLine(
+  itemId: number,
+): Promise<{ ok: true; restored: number; marsWarning: string | null } | { ok: false; error: string }> {
+  const [line] = await db.execute<{ id: number; quote_id: number; product_id: number | null; qty: number }>(
+    sql`SELECT id, quote_id, product_id, qty FROM quote_item WHERE id = ${itemId}`,
+  );
+  if (!line) return { ok: false, error: "품목을 찾을 수 없습니다" };
+  const e = await editableQuote(Number(line.quote_id));
+  if (e.error !== undefined) return { ok: false, error: e.error };
+
+  const [cnt] = await db.execute<{ n: number }>(
+    sql`SELECT count(*)::int n FROM quote_item WHERE quote_id = ${line.quote_id}`,
+  );
+  if (Number(cnt?.n ?? 0) <= 1) {
+    return { ok: false, error: "마지막 품목은 지울 수 없습니다 — 판매 자체를 취소해 주세요" };
+  }
+
+  let restored = 0;
+  if (line.product_id) {
+    restored = await restoreStockFor(e.q.id, e.q.quoteNo, Number(line.product_id), Number(line.qty));
+  }
+  await db.execute(sql`DELETE FROM quote_item WHERE id = ${itemId}`);
+  await recomputeTotal(e.q.id);
+  const marsWarning = await marsMismatchNote(e.q.id, e.q.marsStatus);
+  refresh();
+  return { ok: true, restored, marsWarning };
+}
+
+/** 줄 더하기 — 상품이면 재고에서 빠진다 */
+export async function addSaleLine(input: {
+  quoteId: number;
+  kind: "tire" | "service" | "custom";
+  productId?: number | null;
+  serviceItemId?: number | null;
+  description: string;
+  qty: number;
+  unitPrice: number;
+}): Promise<{ ok: true; shortage: number; marsWarning: string | null } | { ok: false; error: string }> {
+  if (!input.description.trim()) return { ok: false, error: "품목 이름이 없습니다" };
+  if (!Number.isInteger(input.qty) || input.qty <= 0) return { ok: false, error: "수량은 1 이상이어야 합니다" };
+  const e = await editableQuote(input.quoteId);
+  if (e.error !== undefined) return { ok: false, error: e.error };
+
+  await db.execute(sql`
+    INSERT INTO quote_item (quote_id, line_type, product_id, service_item_id, description, qty, final_price)
+    VALUES (${input.quoteId}, ${input.kind}, ${input.productId ?? null}, ${input.serviceItemId ?? null},
+            ${input.description.trim()}, ${input.qty}, ${input.unitPrice})
+  `);
+
+  let shortage = 0;
+  if (input.productId) {
+    const { sellFromStock } = await import("./sale");
+    const { short } = await sellFromStock(input.productId, input.qty, e.q.id);
+    shortage = short;
+  }
+  await recomputeTotal(e.q.id);
+  const marsWarning = await marsMismatchNote(e.q.id, e.q.marsStatus);
+  refresh();
+  return { ok: true, shortage, marsWarning };
+}

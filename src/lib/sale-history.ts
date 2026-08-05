@@ -40,6 +40,10 @@ export interface SaleRow {
   paymentMemo: string | null;
   marsStatus: string;
   marsRefNo: string | null;
+  /** 갈아 끼운 바퀴 (판매 등록의 체크박스) */
+  tyrePositions: string[];
+  /** 등록한 시각 'HH:MM' — 작업일과 별개다 */
+  createdAt: string | null;
   lines: SaleLine[];
 }
 
@@ -99,12 +103,15 @@ export async function saleHistory(opts: {
     description: string | null;
     qty: number | null;
     final_price: number | null;
+    tyre_positions: string | null;
+    created_hm: string | null;
   }>(sql`
     SELECT q.id quote_id, q.quote_no, q.status,
            to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM-DD') work_date,
            q.customer_id, c.name customer_name, v.plate_no, v.model vehicle_model,
            q.mars_memo, q.total_amount, q.payment_method, q.payment_memo,
-           q.mars_status, q.mars_ref_no,
+           q.mars_status, q.mars_ref_no, q.tyre_positions,
+           to_char(q.created_at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') created_hm,
            qi.id item_id, qi.line_type, qi.description, qi.qty, qi.final_price
     FROM quote q
     LEFT JOIN customer   c  ON c.id = q.customer_id
@@ -139,6 +146,8 @@ export async function saleHistory(opts: {
         paymentMemo: r.payment_memo,
         marsStatus: r.mars_status,
         marsRefNo: r.mars_ref_no,
+        tyrePositions: r.tyre_positions ? r.tyre_positions.split(",").map((x) => x.trim()).filter(Boolean) : [],
+        createdAt: r.created_hm,
         lines: [],
       };
       map.set(id, s);

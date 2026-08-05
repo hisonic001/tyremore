@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { cancelSale, updateSaleHead } from "@/lib/sale-edit";
 import type { SaleRow } from "@/lib/sale-history";
+import { AddLine, EditableLine } from "./line-edit";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
 const PAYS = ["현금", "카드", "계좌이체", "외상", "혼합"] as const;
@@ -11,9 +12,9 @@ const PAYS = ["현금", "카드", "계좌이체", "외상", "혼합"] as const;
 /**
  * 정비 한 건 — 펼치면 품목과 고치기·취소가 나온다.
  *
- * 🔴 금액과 품목은 여기서 못 고친다. 금액이 바뀌면 MARS 에 넣은 것과 어긋나고,
- *    재고 차감도 다시 계산해야 한다. 품목이 틀렸으면 **취소하고 다시 등록**하는 것이
- *    기록도 재고도 깨끗하다 — 취소하면 재고가 그대로 되살아난다.
+ * ⭐ 품목 줄도 고칠 수 있다 (사장님 요청 2026-08-05 — "수정도 더 자유롭게").
+ *    수량·단가 수정, 줄 삭제·추가 — 재고는 서버가 따라 맞춘다 (line-edit.tsx).
+ *    MARS 전송완료 건을 고치면 금액이 어긋난다는 경고가 뜬다.
  */
 export function SaleCard({ sale: s }: { sale: SaleRow }) {
   const router = useRouter();
@@ -94,24 +95,43 @@ export function SaleCard({ sale: s }: { sale: SaleRow }) {
 
       {open && (
         <div className="border-t border-slate-100 p-3">
+          {/* ⭐ 줄 단위 수정·삭제·추가 (사장님 요청 2026-08-05 — "수정도 더 자유롭게") */}
           <ul className="space-y-1">
-            {s.lines.map((l) => (
-              <li key={l.itemId} className="flex items-baseline justify-between gap-2 text-sm">
-                <span className="min-w-0 truncate">
-                  {l.lineType === "service" && <span className="mr-1 text-xs text-slate-400">공임</span>}
-                  {l.description}
-                </span>
-                <span className="tabular shrink-0 text-slate-600">
-                  {l.qty > 1 && `${l.qty} × `}
-                  {won(l.finalPrice)}원
-                </span>
-              </li>
-            ))}
+            {s.lines.map((l) =>
+              canceled ? (
+                <li key={l.itemId} className="flex items-baseline justify-between gap-2 text-sm">
+                  <span className="min-w-0 truncate">
+                    {l.lineType === "service" && <span className="mr-1 text-xs text-slate-400">공임</span>}
+                    {l.description}
+                  </span>
+                  <span className="tabular shrink-0 text-slate-600">
+                    {l.qty > 1 && `${l.qty} × `}
+                    {won(l.finalPrice)}원
+                  </span>
+                </li>
+              ) : (
+                <EditableLine key={l.itemId} line={l} onMessage={setNotice} />
+              ),
+            )}
           </ul>
-          <p className="tabular mt-1.5 text-xs text-slate-400">
-            {s.quoteNo}
-            {s.marsRefNo && ` · MARS ${s.marsRefNo}`}
-          </p>
+          {!canceled && <AddLine quoteId={s.quoteId} onMessage={setNotice} />}
+
+          {/* 상세 — 등록 시각·바퀴·메모·MARS (사장님 요청 2026-08-05 "더 자세하게") */}
+          <div className="mt-2 space-y-0.5 text-xs text-slate-500">
+            <p className="tabular">
+              {s.quoteNo}
+              {s.createdAt && ` · ${s.createdAt} 등록`}
+              {s.paymentMethod && ` · ${s.paymentMethod}`}
+            </p>
+            {s.tyrePositions.length > 0 && <p>갈아 끼운 바퀴: {s.tyrePositions.join(" · ")}</p>}
+            {s.paymentMemo && <p>메모: {s.paymentMemo}</p>}
+            {s.marsStatus !== "미전송" && (
+              <p className="tabular">
+                MARS {s.marsStatus}
+                {s.marsRefNo && ` · ${s.marsRefNo}`}
+              </p>
+            )}
+          </div>
 
           {error && <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
           {notice && (
@@ -219,7 +239,8 @@ export function SaleCard({ sale: s }: { sale: SaleRow }) {
                 </div>
               )}
               <p className="mt-2 text-xs text-slate-400">
-                품목·금액이 틀렸으면 취소하고 다시 등록하세요 — 취소하면 재고가 그대로 되살아납니다.
+                품목마다 「고치기」로 수량·단가를 바꾸거나 지울 수 있습니다 — 재고가 알아서 따라갑니다.
+                통째로 잘못 들어갔으면 판매 취소를 쓰세요.
               </p>
             </>
           )}
