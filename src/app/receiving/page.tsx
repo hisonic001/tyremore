@@ -23,8 +23,16 @@ export default async function ReceivingPage() {
       .filter((i) => i.invoiceNo.startsWith("직접-"))
       .sort((a, b) => b.invoiceNo.localeCompare(a.invoiceNo))[0] ?? null;
 
-  /** 위 직접 매입 화면에 이미 떠 있는 장부는 아래 목록에서 뺀다 (같은 것이 두 번 나오지 않게) */
-  const listed = invoices.filter((i) => i.invoiceId !== openManual?.invoiceId);
+  /**
+   * 🔴 열려 있는 직접 장부도 **입고 예정 목록에 그대로 보여준다** (사장님 버그 제보 2026-08-05).
+   *
+   * 전에는 「같은 것이 두 번 나오지 않게」 위 담기 화면에 뜬 장부를 아래 목록에서 뺐다.
+   * 그런데 「담기 끝」을 알릴 길이 없어서 장부가 영원히 담기 화면에만 갇혔다 —
+   * 본수 배지는 올라가는데 목록은 「기다리는 물건이 없습니다」였고 전량 입고 버튼도 없었다.
+   * 담기와 입고는 같은 장부의 두 얼굴이다: 위에서 담고, 아래에서 입고를 확정한다.
+   * (막 시작해서 아직 빈 장부만 목록에서 뺀다 — 빈 카드는 소음이다.)
+   */
+  const listed = invoices.filter((i) => !(i.invoiceId === openManual?.invoiceId && i.lines.length === 0));
 
   return (
     <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6">
