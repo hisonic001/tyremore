@@ -116,6 +116,24 @@ export function SaleCard({ sale: s }: { sale: SaleRow }) {
           </ul>
           {!canceled && <AddLine quoteId={s.quoteId} onMessage={setNotice} />}
 
+          {/* ⭐ 견적서·거래명세서 인쇄 (사장님 요청 2026-08-05) — 새 탭에서 열려 바로 인쇄 */}
+          <div className="mt-2 flex gap-2">
+            <a
+              href={`/print/${s.quoteId}?doc=estimate`}
+              target="_blank"
+              className="flex-1 rounded-lg border border-slate-300 py-2 text-center text-sm font-medium text-slate-600 active:bg-slate-50"
+            >
+              🖨 견적서
+            </a>
+            <a
+              href={`/print/${s.quoteId}?doc=statement`}
+              target="_blank"
+              className="flex-1 rounded-lg border border-slate-300 py-2 text-center text-sm font-medium text-slate-600 active:bg-slate-50"
+            >
+              🖨 거래명세서
+            </a>
+          </div>
+
           {/* 상세 — 등록 시각·바퀴·메모·MARS (사장님 요청 2026-08-05 "더 자세하게") */}
           <div className="mt-2 space-y-0.5 text-xs text-slate-500">
             <p className="tabular">

@@ -33,6 +33,11 @@ export default async function SettingsPage() {
       desc: "거래처 목록으로 채우기 · 새 상품 등록 · 안 받는 것 숨기기",
     },
     { href: "/settings/suppliers", title: "거래처", desc: "추가 · 이름 고치기 · 합치기 · 숨기기" },
+    {
+      href: "/settings/shop",
+      title: "가게 정보",
+      desc: "견적서·거래명세서에 찍히는 상호·사업자번호·도장",
+    },
     { href: "/status", title: "이관 현황", desc: "들어온 데이터와 보정 대기 목록" },
   ];
 
