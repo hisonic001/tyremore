@@ -49,6 +49,9 @@ const SIGNIN =
  */
 const HOME = "https://mars.tyremore.co.kr/MARS/?tenant=61168583";
 
+/** 진단 스크린샷 저장 폴더 (2026-08-05 정리 — tyremore-data 루트에 어지르지 않는다) */
+const SHOT_DIR = path.resolve(process.cwd(), "..", "tyremore-data", "스크린샷");
+
 /**
  * ⭐ MARS 미등록 상품을 대신 넣는 **범용 품번** (사장님 결정 2026-08-04).
  *
@@ -716,7 +719,7 @@ async function createCustomer(
           if (al) als.push(al);
         }
         if (als.length) log(`      · 입력칸 aria-label 들: ${als.join(" | ").slice(0, 300)}`);
-        const shotC = path.resolve(process.cwd(), "..", "tyremore-data", "mars-consent-fail.png");
+        const shotC = path.resolve(SHOT_DIR, "mars-consent-fail.png");
         await page.screenshot({ path: shotC, fullPage: true }).catch(() => {});
         log(`      · 화면: ${shotC}`);
         throw new Error(`「${purpose}」 거부에 불매치 코드 NONEED 를 넣지 못했습니다 — 고객 등록을 멈춥니다 (수락으로 바꿔 넣지 않습니다)`);
@@ -727,7 +730,7 @@ async function createCustomer(
 
   /** 🔍 동의 표 시험 — 여기까지만 하고 **저장하지 않고** 취소한다 */
   if (TRY_CONSENT) {
-    const shot = path.resolve(process.cwd(), "..", "tyremore-data", "mars-try-consent.png");
+    const shot = path.resolve(SHOT_DIR, "mars-try-consent.png");
     await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
     log(`    화면: ${shot}`);
     await f.getByRole("button", { name: "취소", exact: true }).first().click().catch(() => {});
@@ -974,7 +977,7 @@ async function createVehicleForContact(
     await page.waitForTimeout(400);
   }
   await guard("마무리");
-  const shotV = path.resolve(process.cwd(), "..", "tyremore-data", "mars-vehcard.png");
+  const shotV = path.resolve(SHOT_DIR, "mars-vehcard.png");
   await page.screenshot({ path: shotV, fullPage: true }).catch(() => {});
   log(`    · 카드 화면: ${shotV}`);
 
@@ -1598,7 +1601,7 @@ async function postOrder(
       break;
     }
     if (!pressed) {
-      const shot = path.resolve(process.cwd(), "..", "tyremore-data", "mars-전기메뉴.png");
+      const shot = path.resolve(SHOT_DIR, "mars-전기메뉴.png");
       await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
       log(`    · 「전기...」가 안 보여 묶음을 다시 누릅니다 (화면: ${shot})`);
       await clickAny(page, "전기", 5000).catch(() => {});
@@ -2185,7 +2188,7 @@ async function main_() {
       }
       log(`\n── 범용 품번 시험: ${FALLBACK_ITEM}  (시험 고객 ${TRY_ITEM}) ─────────`);
       const f = main(page);
-      const shotPath = path.resolve(process.cwd(), "..", "tyremore-data", "mars-try-item.png");
+      const shotPath = path.resolve(SHOT_DIR, "mars-try-item.png");
       try {
         const found = await findCustomer(page, TRY_ITEM);
         if (found !== "found") {
@@ -2244,7 +2247,7 @@ async function main_() {
     if (TRY_ATTACH) {
       log(`\n── 연락처에 첨부 탐침: ${TRY_ATTACH} (저장 안 함) ─────────`);
       const f = main(page);
-      const shotA = path.resolve(process.cwd(), "..", "tyremore-data", "mars-try-attach.png");
+      const shotA = path.resolve(SHOT_DIR, "mars-try-attach.png");
       try {
         // ⭐ 지금은: 고객 이력 창(기본 보기 = 완료된 송장)에서 오늘 송장의 번호를 읽는다
         const name = process.argv[process.argv.indexOf("--try-attach") + 2] ?? "렌트카";
@@ -2278,7 +2281,7 @@ async function main_() {
             }
           }
         }
-        const shotA0 = path.resolve(process.cwd(), "..", "tyremore-data", "mars-try-attach.png");
+        const shotA0 = path.resolve(SHOT_DIR, "mars-try-attach.png");
         await page.screenshot({ path: shotA0, fullPage: true }).catch(() => {});
         log(`  화면: ${shotA0}`);
         await ctx.close().catch(() => {});
@@ -2389,7 +2392,7 @@ async function main_() {
             opened = true;
           } else {
             log(`  · 열린 판매 문서에서 ${won}원짜리 주문을 못 찾았습니다`);
-            const shotD = path.resolve(process.cwd(), "..", "tyremore-data", "mars-post-draft.png");
+            const shotD = path.resolve(SHOT_DIR, "mars-post-draft.png");
             await page.screenshot({ path: shotD, fullPage: true }).catch(() => {});
             log(`     화면: ${shotD}`);
           }
@@ -2427,7 +2430,7 @@ async function main_() {
         log(`  ✅ 전기 완료 — 송장 ${posted.invoiceNo ?? "(번호 미확인)"}`);
       } else {
         log(`  ❌ 전기 실패: ${posted.why}`);
-        const shotP = path.resolve(process.cwd(), "..", "tyremore-data", "mars-post-draft.png");
+        const shotP = path.resolve(SHOT_DIR, "mars-post-draft.png");
         await page.screenshot({ path: shotP, fullPage: true }).catch(() => {});
         log(`     화면: ${shotP}`);
       }
@@ -2474,7 +2477,7 @@ async function main_() {
           log("  ⚠️ 송장을 못 열었습니다");
         }
       }
-      const shotP = path.resolve(process.cwd(), "..", "tyremore-data", "mars-peek-inv.png");
+      const shotP = path.resolve(SHOT_DIR, "mars-peek-inv.png");
       await page.screenshot({ path: shotP, fullPage: true }).catch(() => {});
       log(`  화면: ${shotP}`);
       await ctx.close().catch(() => {});
@@ -2497,7 +2500,7 @@ async function main_() {
       const row = f.getByRole("row").filter({ hasText: PROBE_ORDER }).first();
       if (!(await row.isVisible({ timeout: 10000 }).catch(() => false))) {
         log(`  ⚠️ ${PROBE_ORDER} 가 든 매출 주문이 없습니다`);
-        const shot = path.resolve(process.cwd(), "..", "tyremore-data", "mars-probe.png");
+        const shot = path.resolve(SHOT_DIR, "mars-probe.png");
         await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
         log(`     화면: ${shot}`);
       } else {
@@ -2527,11 +2530,11 @@ async function main_() {
           const cn = (await mis.nth(i).getAttribute("controlname").catch(() => null)) ?? "";
           if (t) log(`   [${i}] «${t}»${cn ? `  controlname=${cn}` : ""}`);
         }
-        const shotM = path.resolve(process.cwd(), "..", "tyremore-data", "mars-probe-menu.png");
+        const shotM = path.resolve(SHOT_DIR, "mars-probe-menu.png");
         await page.screenshot({ path: shotM, fullPage: true }).catch(() => {});
         log(`  메뉴 화면: ${shotM}`);
 
-        const shot0 = path.resolve(process.cwd(), "..", "tyremore-data", "mars-probe.png");
+        const shot0 = path.resolve(SHOT_DIR, "mars-probe.png");
         await page.screenshot({ path: shot0, fullPage: true }).catch(() => {});
         log(`  화면: ${shot0}`);
         log(`\n── 품목표 칸 이름과 값 ──`);
@@ -2613,7 +2616,7 @@ async function main_() {
         } catch (e) {
           skipped++;
           log(`  ⚠️ 실패: ${(e as Error).message.split("\n")[0]}`);
-          const shot = path.resolve(process.cwd(), "..", "tyremore-data", `mars-점검오류-${c.quoteNo}.png`);
+          const shot = path.resolve(SHOT_DIR, `mars-점검오류-${c.quoteNo}.png`);
           await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
           log(`     화면을 저장했습니다: ${shot}`);
         }
@@ -2795,7 +2798,7 @@ async function main_() {
           await markEntered(q.quoteId, orderNo, `자동입력 ${iso} · ${amount.note} · 전기 실패: ${posted.why}`);
           ok++;
           log(`  ⚠️ 전기하지 못했습니다: ${posted.why} — 주문은 채워져 있으니 MARS 에서 전기해 주세요`);
-          const shot = path.resolve(process.cwd(), "..", "tyremore-data", `mars-전기실패-${q.quoteNo}.png`);
+          const shot = path.resolve(SHOT_DIR, `mars-전기실패-${q.quoteNo}.png`);
           await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
           await page.goto(HOME);
           await waitHome(page, 40000);
@@ -2855,7 +2858,7 @@ async function main_() {
           } catch (e2) {
             log(`  ⚠️ 차량 점검은 못 끝냈습니다: ${(e2 as Error).message.split("\n")[0]}`);
             log("     (매출·전기는 끝났습니다. 점검만 다시 돌리면 됩니다 — 웹의 점검 단추)");
-            const shot = path.resolve(process.cwd(), "..", "tyremore-data", `mars-점검오류-${q.quoteNo}.png`);
+            const shot = path.resolve(SHOT_DIR, `mars-점검오류-${q.quoteNo}.png`);
             await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
           }
         }
@@ -2871,7 +2874,7 @@ async function main_() {
          * 어디서 막혔는지 나중에 볼 수 있게 남긴다.
          * 화면 조작은 MARS 가 바뀌면 어긋난다 — 그때 이 그림이 유일한 단서다.
          */
-        const shot = path.resolve(process.cwd(), "..", "tyremore-data", `mars-오류-${q.quoteNo}.png`);
+        const shot = path.resolve(SHOT_DIR, `mars-오류-${q.quoteNo}.png`);
         await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
         log(`     화면을 저장했습니다: ${shot}`);
         await page.goto(HOME).catch(() => {});

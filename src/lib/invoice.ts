@@ -555,8 +555,14 @@ export async function createProductFromInvoiceItem(
   const model = readModelName(line.description);
   const attrs = parseTireAttrs(model, line.description);
 
-  // 기표가 — 인보이스에 없으면 매입가로 대신 채워 둔다 (0 보다 낫다)
-  const excl = line.unit_list_price && line.unit_list_price > 0 ? line.unit_list_price : line.unit_cost;
+  /**
+   * 🔴 기표가는 **인보이스에 진짜 기표가가 있을 때만** 넣는다 (사장님 지적 2026-08-05).
+   *    전에는 "0 보다 낫다"며 매입가(공급가액)로 대신 채웠는데, 금호 인보이스에는
+   *    기표가 열이 없어서 금호 상품 176개의 기표가가 매입가로 잘못 잡혔다 —
+   *    기표가는 판매가 계산의 출발점이라 마진이 통째로 틀어진다.
+   *    모르면 비워 둔다. 금호는 자재검색 목록을 올리면 공장도가가 채워진다.
+   */
+  const excl = line.unit_list_price && line.unit_list_price > 0 ? line.unit_list_price : null;
   const [brandRow] = await db.execute<{ vat: boolean }>(
     sql`SELECT price_excludes_vat vat FROM brand WHERE code = ${b.code}`,
   );

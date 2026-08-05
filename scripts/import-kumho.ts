@@ -15,7 +15,7 @@
 import { config } from "dotenv";
 config({ path: ".env.local" });
 
-import { readdirSync } from "fs";
+import { readdirSync, statSync } from "fs";
 import * as XLSX from "xlsx";
 
 const DEFAULT_DIR = "C:/Users/info/OneDrive/문서/통합자동화";
@@ -30,13 +30,23 @@ async function main() {
   const { looksLikeCatalog, planCatalog, applyCatalog } = await import("../src/lib/kumho-sheet");
 
   const rows: Record<string, unknown>[] = [];
-  const files = readdirSync(dir).filter((f) => /자재검색.*\.xlsx?$/i.test(f));
+  /**
+   * ⚭ 폴더 정리(2026-08-05) 뒤에는 자재검색 파일이 「금호 상품목록」 하위폴더에 있다.
+   *    사장님이 새 파일을 폴더 루트에 떨어뜨려도 잃지 않도록 루트와 하위폴더를 같이 본다.
+   */
+  const dirs = [dir, `${dir}/금호 상품목록`].filter((d) => {
+    try { return statSync(d).isDirectory(); } catch { return false; }
+  });
+  const files: string[] = [];
+  for (const d of dirs) {
+    for (const f of readdirSync(d)) if (/자재검색.*\.xlsx?$/i.test(f)) files.push(`${d}/${f}`);
+  }
   if (files.length === 0) {
     console.error(`${dir} 에 「자재검색」 엑셀이 없습니다`);
     process.exit(1);
   }
   for (const f of files) {
-    const wb = XLSX.readFile(`${dir}/${f}`);
+    const wb = XLSX.readFile(f);
     let n = 0;
     for (const s of wb.SheetNames) {
       const r = XLSX.utils.sheet_to_json<Record<string, unknown>>(wb.Sheets[s], { defval: "" });
