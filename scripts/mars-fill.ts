@@ -1870,6 +1870,69 @@ async function openInvoice(page: Page, row: Locator): Promise<boolean> {
   return false;
 }
 
+/**
+ * ⭐ 판매한 **서비스 이름**으로 어떤 항목을 실제로 교환·조정했는지 정한다
+ *    (사장님 지시 2026-08-05):
+ *
+ *   "얼라이먼트 조정, 엔진오일 교환, 브레이크 패드 교환, 배터리 교환 시에도
+ *    여전히 100%에 체크하고 완료함. 교체 혹은 교환시(단순 점검시에는 아님)에는
+ *    100%가 아닌 교체 체크란에 체크하도록."
+ *
+ * 🔴 「점검」이 들어간 서비스(배터리 점검 등)는 교체가 아니다 — 100% 그대로.
+ * ⚠️ 패드는 서비스 이름에 앞/뒤가 없으면 **전륜**으로 표시한다 (가장 흔한 경우) —
+ *    뒤 패드였으면 점검표에서 고쳐 주셔야 한다. 이름에 후륜·리어·뒤·슈가 있으면 후륜.
+ */
+type ReplacedItems = {
+  padFront: boolean;
+  padRear: boolean;
+  alignment: boolean;
+  battery: boolean;
+  engineOil: boolean;
+};
+
+function replacedFromServices(names: (string | null)[]): ReplacedItems {
+  const done: ReplacedItems = { padFront: false, padRear: false, alignment: false, battery: false, engineOil: false };
+  for (const raw of names) {
+    const n = (raw ?? "").replace(/\s+/g, "");
+    if (!n || /점검/.test(n)) continue;
+    if (/엔진오일/.test(n)) done.engineOil = true;
+    if (/배터리/.test(n)) done.battery = true;
+    if (/얼라이|얼라인/.test(n)) done.alignment = true;
+    if (/패드|라이닝|브레이크슈/.test(n)) {
+      // 드럼·라이닝·슈는 후륜이다 — 점검표의 후륜 줄 이름이 「패드/슈」인 것과 같은 이치
+      if (/후륜|리어|뒤|드럼|라이닝|슈/.test(n)) done.padRear = true;
+      else done.padFront = true;
+    }
+  }
+  return done;
+}
+
+/**
+ * 점검표 줄의 **교체(Replace) 체크박스**를 켠다 — 타이어와 같은 칸이다.
+ * setGrade100 과 같은 규칙: aria-checked 로 확인하고, 못 켜면 실패로 알린다
+ * (교체를 못 표시했다고 100% 를 대신 켜지 않는다 — 그건 거짓 기록이다).
+ */
+async function setReplace(page: Page, rowText: string): Promise<boolean> {
+  const f = main(page);
+  const row = f.getByRole("row").filter({ hasText: rowText }).first();
+  if (!(await row.isVisible().catch(() => false))) return false;
+  await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+  await page.waitForTimeout(300);
+  const rep = row.locator('[controlname="Replace"]').first();
+  if ((await rep.count().catch(() => 0)) === 0) return false;
+  const checked = async () =>
+    (await rep.getAttribute("aria-checked").catch(() => null)) === "true" ||
+    (await rep.isChecked().catch(() => false));
+  if (await checked()) return true;
+  await rep.click({ timeout: 6000 }).catch(() => {});
+  await page.waitForTimeout(400);
+  if (await checked()) return true;
+  await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+  await rep.click({ timeout: 6000 }).catch(() => {});
+  await page.waitForTimeout(400);
+  return checked();
+}
+
 /** 판매한 타이어 본수로 어느 바퀴를 갈았는지 정한다 */
 function wheelsFor(qty: number): string[] {
   const all = ["전륜 좌측", "전륜 우측", "후륜 좌측", "후륜 우측"];
@@ -1894,7 +1957,7 @@ async function readStatus(f: FrameLocator): Promise<string> {
 
 async function fillVehicleCheck(
   page: Page,
-  opts: { plateNo: string; tyreQty: number },
+  opts: { plateNo: string; tyreQty: number; replaced?: ReplacedItems },
 ): Promise<{ ok: boolean; missed: string[]; already?: boolean }> {
   const f = main(page);
   await clickAny(page, "탐색");
@@ -1978,21 +2041,31 @@ async function fillVehicleCheck(
   }
 
   /**
-   * ②③④⑤ 나머지 필수 항목은 100%.
+   * ②③④⑤ 나머지 필수 항목.
    *   브레이크는 **패드만** — 디스크는 필수가 아니다 (사장님 확인).
+   *
+   * ⭐ 이번 판매에서 실제로 **교환·조정한 항목은 100% 가 아니라 교체 칸**에 표시한다
+   *    (사장님 지시 2026-08-05 — "단순 점검시에는 아님"). 나머지는 지금처럼 100%.
    */
-  const REST: [string, string][] = [
-    ["브레이크", "패드 - 전륜"],
-    ["브레이크", "패드/슈 - 후륜"],
-    ["얼라인먼트", "얼라이먼트"],
-    ["배터리", "배터리"],
-    ["기타", "엔진오일"],
+  const rep = opts.replaced ?? { padFront: false, padRear: false, alignment: false, battery: false, engineOil: false };
+  const REST: [string, string, boolean][] = [
+    ["브레이크", "패드 - 전륜", rep.padFront],
+    ["브레이크", "패드/슈 - 후륜", rep.padRear],
+    ["얼라인먼트", "얼라이먼트", rep.alignment],
+    ["배터리", "배터리", rep.battery],
+    ["기타", "엔진오일", rep.engineOil],
   ];
-  for (const [t, rowText] of REST) {
+  for (const [t, rowText, wasReplaced] of REST) {
     await openSection(t, rowText);
-    const done = await setGrade100(page, rowText);
-    log(`      ${rowText} — ${done ? "100%" : "⚠️ 못 넣었습니다"}`);
-    if (!done) missed.push(rowText);
+    if (wasReplaced) {
+      const done = await setReplace(page, rowText);
+      log(`      ${rowText} — ${done ? "교체 표시 (이번에 교환함)" : "⚠️ 교체 표시를 못 넣었습니다"}`);
+      if (!done) missed.push(`${rowText} (교체)`);
+    } else {
+      const done = await setGrade100(page, rowText);
+      log(`      ${rowText} — ${done ? "100%" : "⚠️ 못 넣었습니다"}`);
+      if (!done) missed.push(rowText);
+    }
   }
 
   if (missed.length) return { ok: false, missed };
@@ -2514,7 +2587,11 @@ async function main_() {
           }
           await page.waitForTimeout(1500);
 
-          const r = await fillVehicleCheck(page, { plateNo: c.plateNo!, tyreQty: c.tyreQty });
+          const r = await fillVehicleCheck(page, {
+            plateNo: c.plateNo!,
+            tyreQty: c.tyreQty,
+            replaced: replacedFromServices(c.serviceNames),
+          });
           if (!r.ok) throw new Error(`못 채운 항목: ${r.missed.join(", ")}`);
 
           /** 👀 보기만 하는 모드는 우리 기록도 건드리지 않는다 */
@@ -2760,7 +2837,12 @@ async function main_() {
               if (!(await openInvoice(page, picked.row))) throw new Error("송장을 열지 못했습니다");
               await page.waitForTimeout(1500);
             }
-            const r2 = await fillVehicleCheck(page, { plateNo: q.plateNo, tyreQty });
+            const r2 = await fillVehicleCheck(page, {
+              plateNo: q.plateNo,
+              tyreQty,
+              // 이번 판매의 서비스 줄에서 실제 교환한 항목을 읽는다 (사장님 지시 2026-08-05)
+              replaced: replacedFromServices(q.lines.filter((l) => l.kind !== "tire").map((l) => l.marsName)),
+            });
             if (!r2.ok) throw new Error(`못 채운 항목: ${r2.missed.join(", ")}`);
             await markVehicleChecked(q.quoteId);
             log(r2.already ? "    · 차량 점검 — 이미 제출돼 있었습니다" : "    · 차량 점검 제출 ✅");

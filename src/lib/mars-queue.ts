@@ -334,6 +334,12 @@ export interface PendingCheck {
   workDate: string | null;
   /** MARS 매출 주문 번호 — 있으면 가장 확실하다 */
   marsRefNo: string | null;
+  /**
+   * ⭐ 이 판매의 서비스 이름들 (사장님 지시 2026-08-05) —
+   *    점검표에서 실제로 교환한 항목(엔진오일·패드·배터리·얼라이먼트)은
+   *    100% 가 아니라 **교체 칸**에 표시해야 해서 필요하다.
+   */
+  serviceNames: string[];
 }
 
 export async function pendingVehicleChecks(): Promise<PendingCheck[]> {
@@ -346,10 +352,12 @@ export async function pendingVehicleChecks(): Promise<PendingCheck[]> {
     total_amount: number;
     work_date: string | null;
     mars_ref_no: string | null;
+    service_names: string[] | null;
   }>(sql`
     SELECT q.id, q.quote_no, v.plate_no, c.name, q.total_amount, q.mars_ref_no,
            to_char(COALESCE(q.work_date, q.confirmed_at::date, q.created_at::date), 'YYYY-MM-DD') work_date,
-           COALESCE(SUM(qi.qty) FILTER (WHERE qi.line_type = 'tire'), 0)::int AS tyre_qty
+           COALESCE(SUM(qi.qty) FILTER (WHERE qi.line_type = 'tire'), 0)::int AS tyre_qty,
+           array_agg(qi.description) FILTER (WHERE qi.line_type <> 'tire') AS service_names
     FROM quote q
     LEFT JOIN vehicle    v ON v.id = q.vehicle_id
     LEFT JOIN customer   c ON c.id = q.customer_id
@@ -372,6 +380,7 @@ export async function pendingVehicleChecks(): Promise<PendingCheck[]> {
     total: Number(r.total_amount),
     workDate: r.work_date,
     marsRefNo: r.mars_ref_no,
+    serviceNames: r.service_names ?? [],
   }));
 }
 
