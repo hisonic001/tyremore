@@ -29,6 +29,8 @@ export interface ProductFilter {
   inStock?: boolean;
   /** 숨긴 상품·미취급 브랜드까지 본다 (되살리려고 찾을 때) */
   includeHidden?: boolean;
+  /** 취급한 적 없는 마스터 전체까지 본다 (「전체 목록에서 찾기」) */
+  all?: boolean;
 }
 
 export interface VehicleHit {
@@ -206,6 +208,26 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
   if (!f.includeHidden) {
     conds.push(eq(product.isActive, true));
     conds.push(sql`(${brand.isHandled} IS NULL OR ${brand.isHandled} = true)`);
+  }
+
+  /**
+   * ⭐ 기본 검색은 **취급 상품만** (사장님 승인 2026-08-05 — 품목 정리 ①).
+   *
+   * 이관 때 들어온 타이어 마스터 10,553개 중 실제로 사고팔거나 재고로 가진 것은
+   * 770개(7%)뿐이다. 전체를 보여주면 한 규격에 수십 개가 떠서 상담에 방해가 된다
+   * (예: 245/35R20 → 27개, 실제 취급 0~2개).
+   *
+   * 취급 = 재고·판매·매입·거래처 품번 사전 어디든 **한 번이라도 걸린** 상품.
+   * 처음 들이는 상품은 「전체 목록에서 찾기」(all)로 찾고, 매입·연결되는 순간
+   * 저절로 취급이 된다. 관리 화면(includeHidden)은 원래부터 전체를 본다.
+   */
+  if (!f.all && !f.includeHidden) {
+    conds.push(sql`${product.id} IN (
+      SELECT product_id FROM stock_item WHERE product_id IS NOT NULL
+      UNION SELECT product_id FROM quote_item WHERE product_id IS NOT NULL
+      UNION SELECT product_id FROM purchase_invoice_item WHERE product_id IS NOT NULL
+      UNION SELECT product_id FROM supplier_item_code WHERE product_id IS NOT NULL
+    )`);
   }
 
   /**

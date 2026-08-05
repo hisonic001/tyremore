@@ -38,6 +38,20 @@ export default async function Home({
     suv: sp.suv === "1",
     inStock: sp.stock === "1",
   };
+  /** ⭐ 전체 목록 보기 (품목 정리 ① — 기본은 취급 상품 770개만) */
+  const all = sp.all === "1";
+  /** 현재 검색 조건을 유지한 채 all 만 켜고 끈 주소 */
+  const linkWith = (allOn: boolean) => {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(sp)) {
+      if (k === "all" || v === undefined) continue;
+      if (typeof v === "string") p.set(k, v);
+      else for (const x of v) p.append(k, x);
+    }
+    if (allOn) p.set("all", "1");
+    const s = p.toString();
+    return s ? `/?${s}` : "/";
+  };
   const filterCount =
     filter.brands.length +
     filter.seasons.length +
@@ -49,7 +63,7 @@ export default async function Home({
   const session = await getSession();
   const [vehicles, products, brands] = await Promise.all([
     mode === "customer" && q ? findVehicles(q) : Promise.resolve([]),
-    mode === "product" ? findProducts(q, filter) : Promise.resolve([]),
+    mode === "product" ? findProducts(q, { ...filter, all }) : Promise.resolve([]),
     mode === "product" ? tireBrands() : Promise.resolve([]),
   ]);
 
@@ -126,21 +140,48 @@ export default async function Home({
         )
       ) : (
         <>
+          {/* ⭐ 전체 목록 모드 표시 (품목 정리 ①) — 기본은 취급 상품만이다 */}
+          {all && (q || filterCount > 0) && (
+            <div className="mt-3 flex items-center justify-between rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              <span>전체 목록에서 보는 중 — 취급 안 하는 상품도 나옵니다</span>
+              <Link href={linkWith(false)} className="font-semibold underline underline-offset-2">
+                취급 상품만
+              </Link>
+            </div>
+          )}
           {(q || filterCount > 0) && <Count n={products.length} />}
           <ul className="mt-2 space-y-2">
             {products.map((p) => (
               <ProductCard key={p.productId} p={p} />
             ))}
           </ul>
+          {/* 취급 상품에서 찾았어도 전체를 열 수 있게 꼬리에 둔다 */}
+          {!all && (q || filterCount > 0) && products.length > 0 && (
+            <div className="mt-3 text-center">
+              <Link href={linkWith(true)} className="text-sm text-slate-500 underline underline-offset-4">
+                전체 목록에서 찾기 (취급 안 하는 상품 포함)
+              </Link>
+            </div>
+          )}
           {(q || filterCount > 0) && products.length === 0 && (
             <div className="mt-8 text-center">
-              <p className="text-slate-500">찾지 못했습니다</p>
-              <Link
-                href={`/settings/products?tab=new&q=${encodeURIComponent(q)}`}
-                className="mt-3 inline-block rounded-xl border-2 border-dashed border-slate-300 px-6 py-3 font-medium text-slate-600"
-              >
-                + 새 상품으로 등록
-              </Link>
+              <p className="text-slate-500">{all ? "전체 목록에도 없습니다" : "취급 상품에는 없습니다"}</p>
+              {!all && (
+                <Link
+                  href={linkWith(true)}
+                  className="mt-3 inline-block rounded-xl border-2 border-slate-900 px-6 py-3 font-semibold text-slate-900"
+                >
+                  전체 목록에서 찾기
+                </Link>
+              )}
+              <div className="mt-3">
+                <Link
+                  href={`/settings/products?tab=new&q=${encodeURIComponent(q)}`}
+                  className="inline-block rounded-xl border-2 border-dashed border-slate-300 px-6 py-3 font-medium text-slate-600"
+                >
+                  + 새 상품으로 등록
+                </Link>
+              </div>
             </div>
           )}
           {!q && filterCount === 0 && <Hint mode="product" />}

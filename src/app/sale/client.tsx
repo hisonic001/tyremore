@@ -834,19 +834,22 @@ function NewCustomer({
 function TirePick({ onAdd }: { onAdd: (p: ProductHit) => void }) {
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<ProductHit[]>([]);
+  /** ⭐ 기본은 취급 상품만 (품목 정리 ① 2026-08-05) — 없으면 전체 목록을 연다 */
+  const [all, setAll] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (timer.current) clearTimeout(timer.current);
     if (!q.trim()) {
       setHits([]);
+      setAll(false);
       return;
     }
-    timer.current = setTimeout(() => void searchProducts(q).then((r) => setHits(r.slice(0, 8))), 250);
+    timer.current = setTimeout(() => void searchProducts(q, { all }).then((r) => setHits(r.slice(0, 8))), 250);
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [q]);
+  }, [q, all]);
 
   return (
     <section className="rounded-2xl border border-slate-300 bg-white p-3">
@@ -882,6 +885,20 @@ function TirePick({ onAdd }: { onAdd: (p: ProductHit) => void }) {
           </li>
         ))}
       </ul>
+      {q.trim() && !all && (
+        <button
+          type="button"
+          onClick={() => setAll(true)}
+          className="mt-2 w-full py-1.5 text-center text-sm text-slate-500 underline underline-offset-4"
+        >
+          {hits.length === 0 ? "취급 상품에 없습니다 — 전체 목록에서 찾기" : "전체 목록에서 찾기"}
+        </button>
+      )}
+      {q.trim() && all && (
+        <p className="mt-2 rounded-lg bg-amber-50 px-3 py-1.5 text-xs text-amber-900">
+          전체 목록에서 보는 중 — 취급 안 하는 상품도 나옵니다
+        </p>
+      )}
     </section>
   );
 }
