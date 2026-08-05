@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { ProductHit, VehicleHit } from "@/lib/search";
 import { searchProducts, searchVehicles } from "@/lib/search-actions";
 import { createCustomerAndVehicle, findServices, saveSale, type SaleLine } from "@/lib/sale";
+import { listSuppliers } from "@/lib/supplier";
 import { BODY_TYPES, FUEL_TYPES, type NewCustomerInput } from "@/lib/sale-types";
 
 const won = (n: number) => n.toLocaleString();
@@ -23,6 +24,8 @@ export function SaleForm() {
   const [pending, start] = useTransition();
 
   const [vehicle, setVehicle] = useState<VehicleHit | null>(null);
+  /** ⭐ 거래처 판매 (사장님 요청 2026-08-05) — MARS 에 등록하지 않는다 */
+  const [supplierSale, setSupplierSale] = useState<string | null>(null);
   const [walkIn, setWalkIn] = useState({ name: "", phone: "", plateNo: "" });
   const [mileage, setMileage] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
@@ -97,15 +100,17 @@ export function SaleForm() {
     start(async () => {
       setError(null);
       const res = await saveSale({
-        vehicleId: vehicle?.vehicleId ?? null,
-        customerId: vehicle?.customerId ?? null,
-        walkIn: vehicle ? null : walkIn.name || walkIn.phone || walkIn.plateNo ? walkIn : null,
+        vehicleId: supplierSale ? null : (vehicle?.vehicleId ?? null),
+        customerId: supplierSale ? null : (vehicle?.customerId ?? null),
+        walkIn: supplierSale || vehicle ? null : walkIn.name || walkIn.phone || walkIn.plateNo ? walkIn : null,
+        supplierName: supplierSale,
         lines: rows.map(({ key, rimInch, ...l }) => l),
         paymentMethod: payment,
         workDate,
         memo: memo.trim() || null,
         mileage: mileage ? Number(mileage.replace(/\D/g, "")) : null,
-        tyrePositions: tyreQty > 0 && wheels.length > 0 ? wheels : null,
+        // 거래처 판매는 차량 점검이 없다 — 바퀴 정보도 안 넘긴다
+        tyrePositions: !supplierSale && tyreQty > 0 && wheels.length > 0 ? wheels : null,
       });
       if (!res.ok) {
         setError(res.error);
@@ -114,6 +119,7 @@ export function SaleForm() {
       setDone({ quoteNo: res.quoteNo, shortages: res.shortages });
       setRows([]);
       setVehicle(null);
+      setSupplierSale(null);
       setWalkIn({ name: "", phone: "", plateNo: "" });
       setMileage("");
       setMemo("");
@@ -155,9 +161,16 @@ export function SaleForm() {
 
   return (
     <div className="mt-5 space-y-4 pb-40">
-      <CustomerPick vehicle={vehicle} onPick={setVehicle} walkIn={walkIn} onWalkIn={setWalkIn} />
+      <CustomerPick
+        vehicle={vehicle}
+        onPick={setVehicle}
+        walkIn={walkIn}
+        onWalkIn={setWalkIn}
+        supplier={supplierSale}
+        onSupplier={setSupplierSale}
+      />
 
-      {vehicle && (
+      {vehicle && !supplierSale && (
         <label className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2">
           <span className="text-sm text-slate-500">주행거리</span>
           <input
@@ -185,7 +198,7 @@ export function SaleForm() {
       )}
 
       {/* ⭐ 어느 바퀴를 갈았는지 (사장님 요청 2026-08-05) — MARS 점검표에 그대로 반영 */}
-      {tyreQty > 0 && (
+      {tyreQty > 0 && !supplierSale && (
         <section className="rounded-2xl border border-slate-300 bg-white p-3">
           <h2 className="font-bold">
             갈아 끼운 바퀴
@@ -363,16 +376,30 @@ function CustomerPick({
   onPick,
   walkIn,
   onWalkIn,
+  supplier,
+  onSupplier,
 }: {
   vehicle: VehicleHit | null;
   onPick: (v: VehicleHit | null) => void;
   walkIn: { name: string; phone: string; plateNo: string };
   onWalkIn: (w: { name: string; phone: string; plateNo: string }) => void;
+  supplier: string | null;
+  onSupplier: (s: string | null) => void;
 }) {
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<VehicleHit[]>([]);
   const [manual, setManual] = useState(false);
+  /** ⭐ 거래처 판매 고르기 (사장님 요청 2026-08-05) — MARS 에 등록하지 않는다 */
+  const [pickingSupplier, setPickingSupplier] = useState(false);
+  const [supplierList, setSupplierList] = useState<{ id: number; name: string }[] | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!pickingSupplier || supplierList !== null) return;
+    void listSuppliers().then((rows) =>
+      setSupplierList(rows.filter((r) => r.isActive).map((r) => ({ id: r.id, name: r.name }))),
+    );
+  }, [pickingSupplier, supplierList]);
 
   useEffect(() => {
     if (timer.current) clearTimeout(timer.current);
@@ -385,6 +412,26 @@ function CustomerPick({
       if (timer.current) clearTimeout(timer.current);
     };
   }, [q]);
+
+  if (supplier) {
+    return (
+      <section className="rounded-2xl border-2 border-violet-700 bg-violet-50 p-3">
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="font-bold text-violet-900">거래처 판매 · {supplier}</div>
+            <div className="text-sm text-violet-700">MARS 에는 등록하지 않습니다 — 재고와 판매 기록만 남습니다</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => onSupplier(null)}
+            className="shrink-0 text-sm text-violet-700 underline"
+          >
+            바꾸기
+          </button>
+        </div>
+      </section>
+    );
+  }
 
   if (vehicle) {
     return (
@@ -445,6 +492,44 @@ function CustomerPick({
           >
             등록 안 된 손님입니다
           </button>
+
+          {/* ⭐ 거래처 판매 (사장님 요청 2026-08-05) — MARS 에 등록하지 않는다 */}
+          {!pickingSupplier ? (
+            <button
+              type="button"
+              onClick={() => setPickingSupplier(true)}
+              className="w-full py-2 text-sm text-violet-700 underline underline-offset-4"
+            >
+              거래처에 판매 (MARS 등록 없음)
+            </button>
+          ) : (
+            <div className="mt-1 rounded-xl border border-violet-300 bg-violet-50 p-3">
+              <div className="text-sm font-semibold text-violet-900">어느 거래처인가요?</div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {supplierList === null && <span className="text-sm text-violet-700">불러오는 중…</span>}
+                {supplierList?.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => {
+                      onSupplier(s.name);
+                      setPickingSupplier(false);
+                    }}
+                    className="rounded-lg border border-violet-300 bg-white px-3 py-2 text-sm active:bg-violet-100"
+                  >
+                    {s.name}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => setPickingSupplier(false)}
+                className="mt-2 text-xs text-violet-700 underline"
+              >
+                취소
+              </button>
+            </div>
+          )}
         </>
       ) : (
         <NewCustomer

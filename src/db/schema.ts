@@ -558,7 +558,9 @@ export const quote = pgTable(
     check("quote_status", sql`${t.status} IN ('작성중','제시','성사','취소')`),
     check(
       "quote_mars_status",
-      sql`${t.marsStatus} IN ('미전송','전송완료','보류','해당없음')`,
+      // 수동처리 = 대기열에서 빼고 MARS 에 직접 넣는 것 (2026-08-05)
+      // 해당없음 = MARS 에 아예 안 가는 판매 — 거래처 판매 (2026-08-05)
+      sql`${t.marsStatus} IN ('미전송','전송완료','보류','해당없음','수동처리')`,
     ),
     check(
       "quote_payment_method",

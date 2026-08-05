@@ -132,7 +132,8 @@ export async function saleHistory(opts: {
         customerName: r.customer_name,
         plateNo: r.plate_no,
         vehicleModel: r.vehicle_model,
-        walkIn: r.mars_memo?.startsWith("비회원") ? r.mars_memo : null,
+        // 「비회원 …」·「거래처 …」 판매는 marsMemo 가 이름 역할을 한다 (2026-08-05 거래처 판매 추가)
+        walkIn: r.mars_memo?.startsWith("비회원") || r.mars_memo?.startsWith("거래처") ? r.mars_memo : null,
         totalAmount: Number(r.total_amount),
         paymentMethod: r.payment_method,
         paymentMemo: r.payment_memo,

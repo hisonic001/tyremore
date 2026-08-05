@@ -71,6 +71,12 @@ export interface SaleInput {
    * MARS 점검표의 타이어 교체 표시가 이걸 그대로 따른다. 비면 본수로 짐작한다.
    */
   tyrePositions?: string[] | null;
+  /**
+   * ⭐ 거래처 판매 (사장님 요청 2026-08-05) — "거래처 판매는 따로 MARS 에는
+   *    등록하지 않아도 되게". 거래처 이름이 있으면 mars_status 를 「해당없음」으로
+   *    저장해 MARS 대기열에 아예 올라가지 않는다. 재고 차감은 똑같이 된다.
+   */
+  supplierName?: string | null;
 }
 
 /** 오늘 (YYYY-MM-DD) */
@@ -182,13 +188,16 @@ export async function saveSale(
       paymentMethod: input.paymentMethod ?? null,
       paidAmount: total,
       paymentMemo: input.memo ?? null,
-      marsStatus: "미전송",
+      // 거래처 판매는 MARS 에 안 간다 (사장님 요청 2026-08-05) — 대기열은 '미전송'만 본다
+      marsStatus: input.supplierName ? "해당없음" : "미전송",
       tyrePositions: input.tyrePositions?.length ? input.tyrePositions.join(",") : null,
-      marsMemo: input.walkIn?.name
-        ? `비회원 ${input.walkIn.name}${input.walkIn.phone ? ` ${input.walkIn.phone}` : ""}${
-            input.walkIn.plateNo ? ` ${input.walkIn.plateNo}` : ""
-          }`
-        : null,
+      marsMemo: input.supplierName
+        ? `거래처 ${input.supplierName.trim()}`
+        : input.walkIn?.name
+          ? `비회원 ${input.walkIn.name}${input.walkIn.phone ? ` ${input.walkIn.phone}` : ""}${
+              input.walkIn.plateNo ? ` ${input.walkIn.plateNo}` : ""
+            }`
+          : null,
     })
     .returning({ id: quote.id });
 
