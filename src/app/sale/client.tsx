@@ -34,6 +34,22 @@ export function SaleForm() {
   const [done, setDone] = useState<{ quoteNo: string; shortages: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * ⭐ 어느 바퀴를 갈았는지 (사장님 요청 2026-08-05) — MARS 점검표에 그대로 반영된다.
+   *    본수를 바꾸면 짐작값(1본=앞왼쪽, 2본=앞, 4본=전부)을 미리 채워 주되,
+   *    한 번이라도 직접 고치면 그 선택을 존중한다.
+   */
+  const WHEELS = ["전륜 좌측", "전륜 우측", "후륜 좌측", "후륜 우측"] as const;
+  const [wheels, setWheels] = useState<string[]>([]);
+  const wheelsTouched = useRef(false);
+  const tyreQty = rows.filter((r) => r.kind === "tire").reduce((s, r) => s + r.qty, 0);
+  useEffect(() => {
+    if (wheelsTouched.current) return;
+    const guess = tyreQty >= 4 ? [...WHEELS] : tyreQty === 2 ? [WHEELS[0], WHEELS[1]] : tyreQty === 1 ? [WHEELS[0]] : [];
+    setWheels(tyreQty >= 3 && tyreQty < 4 ? [WHEELS[0], WHEELS[1], WHEELS[2]] : guess);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tyreQty]);
+
   const total = rows.reduce((s, r) => s + r.unitPrice * r.qty, 0);
 
   /**
@@ -89,6 +105,7 @@ export function SaleForm() {
         workDate,
         memo: memo.trim() || null,
         mileage: mileage ? Number(mileage.replace(/\D/g, "")) : null,
+        tyrePositions: tyreQty > 0 && wheels.length > 0 ? wheels : null,
       });
       if (!res.ok) {
         setError(res.error);
@@ -100,6 +117,8 @@ export function SaleForm() {
       setWalkIn({ name: "", phone: "", plateNo: "" });
       setMileage("");
       setMemo("");
+      setWheels([]);
+      wheelsTouched.current = false;
       router.refresh();
     });
 
@@ -162,6 +181,40 @@ export function SaleForm() {
               <LineRow key={r.key} row={r} onChange={(p) => setRow(r.key, p)} onRemove={() => removeRow(r)} />
             ))}
           </ul>
+        </section>
+      )}
+
+      {/* ⭐ 어느 바퀴를 갈았는지 (사장님 요청 2026-08-05) — MARS 점검표에 그대로 반영 */}
+      {tyreQty > 0 && (
+        <section className="rounded-2xl border border-slate-300 bg-white p-3">
+          <h2 className="font-bold">
+            갈아 끼운 바퀴
+            <span className="ml-2 text-sm font-normal text-slate-500">타이어 {tyreQty}본</span>
+          </h2>
+          <div className="mt-2 grid grid-cols-2 gap-1.5">
+            {WHEELS.map((w) => (
+              <label
+                key={w}
+                className={`flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm ${
+                  wheels.includes(w) ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={wheels.includes(w)}
+                  onChange={(e) => {
+                    wheelsTouched.current = true;
+                    setWheels((ws) => (e.target.checked ? [...ws, w] : ws.filter((x) => x !== w)));
+                  }}
+                  className="h-5 w-5"
+                />
+                {w}
+              </label>
+            ))}
+          </div>
+          <p className="mt-1.5 text-xs text-slate-500">
+            MARS 차량 점검표의 타이어 교체 표시가 이 선택을 그대로 따릅니다.
+          </p>
         </section>
       )}
 

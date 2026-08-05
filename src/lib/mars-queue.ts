@@ -71,6 +71,8 @@ export interface MarsEntry {
   fuelType: string | null;
   /** MARS 차량 번호(V583-…) — 있으면 차량 카드를 **다시 만들지 않는다** (중복 방지) */
   marsVehicleNo: string | null;
+  /** 어느 바퀴를 갈았는지 (판매 등록의 체크박스, 사장님 요청 2026-08-05) — 비면 본수로 짐작 */
+  tyrePositions: string[];
 
   /**
    * ⭐ MARS 에 고객·차량이 없을 때 새로 만들 재료 (2026-08-02).
@@ -129,9 +131,10 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     fuel_type: string | null;
     mileage: number | null;
     mars_vehicle_no: string | null;
+    tyre_positions: string | null;
   }>(sql`
     SELECT q.id, q.quote_no, q.confirmed_at, q.payment_method, q.work_date::text AS work_date,
-           q.total_amount, q.mars_memo, q.payment_memo,
+           q.total_amount, q.mars_memo, q.payment_memo, q.tyre_positions,
            c.mars_contact_no AS contact_no, c.name AS customer_name, c.phone,
            c.address, c.consent_privacy, c.consent_marketing, c.consent_signed_at,
            v.plate_no, v.model AS vehicle_model, v.maker_name, v.year, v.fuel_type, v.mileage,
@@ -194,6 +197,7 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     year: h.year,
     fuelType: h.fuel_type,
     marsVehicleNo: h.mars_vehicle_no,
+    tyrePositions: h.tyre_positions ? h.tyre_positions.split(",").map((s) => s.trim()).filter(Boolean) : [],
     paymentMethod: h.payment_method,
     workDate: h.work_date,
     total: h.total_amount,
@@ -340,6 +344,8 @@ export interface PendingCheck {
    *    100% 가 아니라 **교체 칸**에 표시해야 해서 필요하다.
    */
   serviceNames: string[];
+  /** 어느 바퀴를 갈았는지 — 판매 등록의 체크박스 (비면 본수로 짐작) */
+  tyrePositions: string[];
 }
 
 export async function pendingVehicleChecks(): Promise<PendingCheck[]> {
@@ -353,8 +359,9 @@ export async function pendingVehicleChecks(): Promise<PendingCheck[]> {
     work_date: string | null;
     mars_ref_no: string | null;
     service_names: string[] | null;
+    tyre_positions: string | null;
   }>(sql`
-    SELECT q.id, q.quote_no, v.plate_no, c.name, q.total_amount, q.mars_ref_no,
+    SELECT q.id, q.quote_no, v.plate_no, c.name, q.total_amount, q.mars_ref_no, q.tyre_positions,
            to_char(COALESCE(q.work_date, q.confirmed_at::date, q.created_at::date), 'YYYY-MM-DD') work_date,
            COALESCE(SUM(qi.qty) FILTER (WHERE qi.line_type = 'tire'), 0)::int AS tyre_qty,
            array_agg(qi.description) FILTER (WHERE qi.line_type <> 'tire') AS service_names
@@ -381,6 +388,7 @@ export async function pendingVehicleChecks(): Promise<PendingCheck[]> {
     workDate: r.work_date,
     marsRefNo: r.mars_ref_no,
     serviceNames: r.service_names ?? [],
+    tyrePositions: r.tyre_positions ? r.tyre_positions.split(",").map((s) => s.trim()).filter(Boolean) : [],
   }));
 }
 

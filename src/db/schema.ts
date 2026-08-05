@@ -543,6 +543,13 @@ export const quote = pgTable(
      */
     vehicleCheckAt: timestamp("vehicle_check_at", { withTimezone: true }),
 
+    /**
+     * ⭐ 어느 바퀴를 갈았는지 (사장님 요청 2026-08-05) — 판매 등록의 체크박스로 받는다.
+     *    「전륜 좌측,전륜 우측」처럼 쉼표로 잇는다. 비어 있으면 점검표는
+     *    본수로 짐작한다(1본=앞왼쪽, 2본=앞, 4본=전부 — wheelsFor).
+     */
+    tyrePositions: text("tyre_positions"),
+
     createdBy: bigint("created_by", { mode: "number" }).references(() => appUser.id),
     createdAt,
     updatedAt,

@@ -1957,7 +1957,7 @@ async function readStatus(f: FrameLocator): Promise<string> {
 
 async function fillVehicleCheck(
   page: Page,
-  opts: { plateNo: string; tyreQty: number; replaced?: ReplacedItems },
+  opts: { plateNo: string; tyreQty: number; replaced?: ReplacedItems; wheels?: string[] },
 ): Promise<{ ok: boolean; missed: string[]; already?: boolean }> {
   const f = main(page);
   await clickAny(page, "탐색");
@@ -2024,8 +2024,11 @@ async function fillVehicleCheck(
   };
 
   // ① 타이어 — 실제로 간 바퀴만 Replace
+  //    ⭐ 판매 등록에서 바퀴를 골라 주셨으면 **그 선택 그대로** (사장님 요청 2026-08-05).
+  //       안 골랐으면 지금처럼 본수로 짐작한다.
   await openSection("타이어", "타이어 - 전륜");
-  for (const w of wheelsFor(opts.tyreQty)) {
+  const wheels = opts.wheels?.length ? opts.wheels : wheelsFor(opts.tyreQty);
+  for (const w of wheels) {
     const row = f.getByRole("row").filter({ hasText: `타이어 - ${w}` }).first();
     if (!(await row.isVisible().catch(() => false))) {
       missed.push(`타이어 ${w}`);
@@ -2591,6 +2594,7 @@ async function main_() {
             plateNo: c.plateNo!,
             tyreQty: c.tyreQty,
             replaced: replacedFromServices(c.serviceNames),
+            wheels: c.tyrePositions,
           });
           if (!r.ok) throw new Error(`못 채운 항목: ${r.missed.join(", ")}`);
 
@@ -2842,6 +2846,8 @@ async function main_() {
               tyreQty,
               // 이번 판매의 서비스 줄에서 실제 교환한 항목을 읽는다 (사장님 지시 2026-08-05)
               replaced: replacedFromServices(q.lines.filter((l) => l.kind !== "tire").map((l) => l.marsName)),
+              // 판매 등록에서 고른 바퀴 그대로 (사장님 요청 2026-08-05)
+              wheels: q.tyrePositions,
             });
             if (!r2.ok) throw new Error(`못 채운 항목: ${r2.missed.join(", ")}`);
             await markVehicleChecked(q.quoteId);

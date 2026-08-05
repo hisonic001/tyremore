@@ -66,6 +66,11 @@ export interface SaleInput {
    * 안 적으면 오늘. MARS 매출 주문의 문서 날짜·완료 일자로 들어간다.
    */
   workDate?: string | null;
+  /**
+   * ⭐ 어느 바퀴를 갈았는지 (사장님 요청 2026-08-05) — 「전륜 좌측」 같은 라벨 배열.
+   * MARS 점검표의 타이어 교체 표시가 이걸 그대로 따른다. 비면 본수로 짐작한다.
+   */
+  tyrePositions?: string[] | null;
 }
 
 /** 오늘 (YYYY-MM-DD) */
@@ -178,6 +183,7 @@ export async function saveSale(
       paidAmount: total,
       paymentMemo: input.memo ?? null,
       marsStatus: "미전송",
+      tyrePositions: input.tyrePositions?.length ? input.tyrePositions.join(",") : null,
       marsMemo: input.walkIn?.name
         ? `비회원 ${input.walkIn.name}${input.walkIn.phone ? ` ${input.walkIn.phone}` : ""}${
             input.walkIn.plateNo ? ` ${input.walkIn.plateNo}` : ""
