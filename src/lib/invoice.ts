@@ -470,6 +470,108 @@ export async function removeInvoice(invoiceId: number): Promise<{ ok: boolean; e
 }
 
 /**
+ * ⭐ 새로 만들기 전에 **이을 수 있는 기존 상품**을 보여준다 (품목 정리 ③, 2026-08-05).
+ *
+ * 중복의 뿌리가 여기다: 같은 타이어가 이미 있는데도 「상품 만들기」부터 눌러서
+ * 갈라졌다. 인보이스 줄의 규격을 읽어 같은 브랜드·규격의 기존 상품을 후보로
+ * 내밀고, 연결이 기본 동작이 되게 한다. 취급(사고판 적 있는 것)이 위로 온다.
+ */
+export interface LinkCandidate {
+  id: number;
+  name: string;
+  marsItemNo: string | null;
+  loadSpeed: string;
+  listPrice: number | null;
+  stockQty: number;
+  /** 사고판·재고 이력이 있는 상품 — 이게 붙을 확률이 높다 */
+  used: boolean;
+}
+
+export async function linkCandidates(itemId: number): Promise<LinkCandidate[]> {
+  const [line] = await db.execute<{ description: string; supplier: string }>(sql`
+    SELECT ii.description, i.supplier
+    FROM purchase_invoice_item ii JOIN purchase_invoice i ON i.id = ii.invoice_id
+    WHERE ii.id = ${itemId}
+  `);
+  if (!line) return [];
+  const { parseTireSpec } = await import("./tire-spec");
+  const spec = parseTireSpec(line.description);
+  if (!spec.parsed || spec.width === null || spec.rimInch === null) return [];
+
+  const BRAND_OF: Record<string, string> = { 미쉐린: "MI", 콘티넨탈: "CO", 금호: "KM" };
+  const brandCode = BRAND_OF[line.supplier] ?? null;
+
+  const rows = await db.execute<{
+    id: number;
+    name: string;
+    mars_item_no: string | null;
+    load_index: string | null;
+    speed_rating: string | null;
+    list_price: number | null;
+    stock_qty: number;
+    used: boolean;
+  }>(sql`
+    WITH used AS (
+      SELECT DISTINCT product_id AS id FROM stock_item WHERE product_id IS NOT NULL
+      UNION SELECT DISTINCT product_id FROM quote_item WHERE product_id IS NOT NULL
+      UNION SELECT DISTINCT product_id FROM purchase_invoice_item WHERE product_id IS NOT NULL
+      UNION SELECT DISTINCT product_id FROM supplier_item_code WHERE product_id IS NOT NULL
+    )
+    SELECT p.id, COALESCE(p.display_name, p.pattern, p.raw_name, '') AS name,
+           p.mars_item_no, p.load_index, p.speed_rating, p.list_price,
+           (SELECT COALESCE(SUM(s.qty),0) FROM stock_item s WHERE s.product_id = p.id AND s.status='재고')::int AS stock_qty,
+           EXISTS (SELECT 1 FROM used u WHERE u.id = p.id) AS used
+    FROM product p
+    WHERE p.item_type = 'tire'
+      AND p.width = ${spec.width}
+      AND p.rim_inch = ${String(spec.rimInch)}
+      AND p.aspect_ratio IS NOT DISTINCT FROM ${spec.aspectRatio}
+      ${brandCode ? sql`AND p.brand_code = ${brandCode}` : sql``}
+    ORDER BY EXISTS (SELECT 1 FROM used u WHERE u.id = p.id) DESC, p.id
+    LIMIT 8
+  `);
+  return rows.map((r) => ({
+    id: Number(r.id),
+    name: r.name,
+    marsItemNo: r.mars_item_no,
+    loadSpeed: `${r.load_index ?? ""}${r.speed_rating ?? ""}`,
+    listPrice: r.list_price === null ? null : Number(r.list_price),
+    stockQty: Number(r.stock_qty),
+    used: r.used,
+  }));
+}
+
+/**
+ * 후보를 골라 **이 상품에 잇는다** — 그리고 거래처 사전에 남겨 다음부터는
+ * 자동으로 붙게 한다 (품목 정리 ③의 핵심: 사람이 한 번 이으면 끝).
+ */
+export async function linkInvoiceItemTo(
+  itemId: number,
+  productId: number,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const [line] = await db.execute<{ cai: string; description: string; supplier: string; product_id: number | null }>(sql`
+    SELECT ii.cai, ii.description, i.supplier, ii.product_id
+    FROM purchase_invoice_item ii JOIN purchase_invoice i ON i.id = ii.invoice_id
+    WHERE ii.id = ${itemId}
+  `);
+  if (!line) return { ok: false, error: "품목을 찾을 수 없습니다" };
+  if (line.product_id) return { ok: false, error: "이미 상품이 연결돼 있습니다" };
+  const [p] = await db.select({ id: product.id }).from(product).where(eq(product.id, productId)).limit(1);
+  if (!p) return { ok: false, error: "상품을 찾을 수 없습니다" };
+
+  await db.update(purchaseInvoiceItem).set({ productId }).where(eq(purchaseInvoiceItem.id, itemId));
+  if (line.cai?.trim()) {
+    await db.execute(sql`
+      INSERT INTO supplier_item_code (supplier, code, product_id, supplier_name, matched_by)
+      VALUES (${line.supplier}, ${line.cai.trim()}, ${productId}, ${line.description}, '손으로')
+      ON CONFLICT (supplier, code) DO NOTHING
+    `);
+  }
+  refresh("/receiving", "/");
+  return { ok: true };
+}
+
+/**
  * ⭐ 인보이스 정보로 상품 바로 만들기 (사장님 요청 2026-08-01)
  *
  * 신모델은 MARS 마스터에 아직 없다 (금호 HP72 등). 그런데 인보이스에는

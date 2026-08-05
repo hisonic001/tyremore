@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { createProduct } from "@/lib/stock";
+import { searchProducts } from "@/lib/search-actions";
+import type { ProductHit } from "@/lib/search";
 
 const FIELD = "w-full rounded-xl border border-slate-300 px-4 py-3 text-lg outline-none focus:border-slate-900";
 
@@ -27,6 +29,25 @@ export function NewProductForm({
   const [price, setPrice] = useState("");
 
   const spec = width && aspect && rim ? `${width}/${aspect}R${rim}` : null;
+
+  /**
+   * ⭐ 품목 정리 ③ (2026-08-05) — 규격을 다 치면 **같은 규격의 기존 상품**을 보여준다.
+   *    중복의 뿌리가 「이미 있는데 또 만드는 것」이라, 만들기 전에 눈으로 확인시킨다.
+   *    막지는 않는다 — 진짜 새 모델일 수 있다.
+   */
+  const [similar, setSimilar] = useState<ProductHit[]>([]);
+  useEffect(() => {
+    if (!width || !aspect || !rim) {
+      setSimilar([]);
+      return;
+    }
+    const t = setTimeout(() => {
+      void searchProducts(`${width}${aspect}${rim}`, { all: true, brands: [brandCode] }).then((r) =>
+        setSimilar(r.slice(0, 6)),
+      );
+    }, 350);
+    return () => clearTimeout(t);
+  }, [width, aspect, rim, brandCode]);
 
   return (
     <div className="mt-5 space-y-4">
@@ -63,6 +84,27 @@ export function NewProductForm({
         </div>
         {spec && <p className="tabular mt-1 text-sm text-slate-600">→ {spec}</p>}
       </div>
+
+      {similar.length > 0 && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-3">
+          <p className="text-sm font-semibold text-amber-900">
+            이 브랜드에 같은 규격 상품이 이미 {similar.length}개 있습니다
+          </p>
+          <p className="mt-0.5 text-xs text-amber-800">
+            아래에 있는 것이면 새로 만들지 마세요 — 상품이 갈라지면 재고·이력이 나뉩니다.
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {similar.map((p) => (
+              <li key={p.productId} className="rounded-lg bg-white px-2.5 py-1.5">
+                <div className="truncate text-sm font-medium">{p.model}</div>
+                <div className="tabular text-xs text-slate-500">
+                  {[p.cai, p.loadSpeed, p.stockQty > 0 ? `재고 ${p.stockQty}본` : null].filter(Boolean).join(" · ")}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="flex gap-3">
         <div className="flex-1">

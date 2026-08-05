@@ -1,11 +1,13 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ProductPicker } from "./product-picker";
 import {
   createProductFromInvoiceItem,
+  linkCandidates,
+  linkInvoiceItemTo,
   previewInvoice,
   receiveAll,
   receiveLine,
@@ -13,6 +15,7 @@ import {
   removeInvoiceItem,
   saveInvoice,
   type InvoicePreview,
+  type LinkCandidate,
   type PendingInvoice,
   type PendingLine,
   type PreviewResult,
@@ -445,8 +448,15 @@ function PendingRow({ l }: { l: PendingLine }) {
         <div className="mt-2 rounded-lg bg-red-50 px-3 py-2">
           <p className="text-sm text-red-700">상품 목록에 없어 입고할 수 없습니다</p>
           <p className="tabular mt-0.5 text-xs text-red-600">{l.description}</p>
+
+          {/*
+            ⭐ 품목 정리 ③ (사장님 승인 2026-08-05) — 만들기 전에 **이을 수 있는
+               기존 상품**을 먼저 보여준다. 중복의 뿌리가 「만들기부터 누르는 것」이었다.
+               한 번 이으면 거래처 사전에 남아 다음부터는 저절로 붙는다.
+          */}
+          <LinkFirst itemId={l.itemId} onDone={() => router.refresh()} />
+
           <div className="mt-2 flex flex-wrap gap-2">
-            {/* ⭐ 인보이스에 규격·모델명·기표가가 다 있다. 그대로 만든다 */}
             <button
               type="button"
               disabled={pending}
@@ -458,9 +468,9 @@ function PendingRow({ l }: { l: PendingLine }) {
                   else router.refresh();
                 })
               }
-              className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              className="rounded-lg border border-slate-400 bg-white px-4 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50"
             >
-              {pending ? "만드는 중…" : "인보이스 정보로 상품 만들기"}
+              {pending ? "만드는 중…" : "새 상품으로 만들기 (이을 것이 없을 때)"}
             </button>
             <Link
               href={`/settings/products?tab=new&q=${encodeURIComponent(l.cai)}`}
@@ -520,5 +530,71 @@ function PendingRow({ l }: { l: PendingLine }) {
         </>
       )}
     </li>
+  );
+}
+
+/**
+ * ⭐ 품목 정리 ③ — 미연결 인보이스 줄에 「이 상품에 연결」 후보를 내민다 (2026-08-05).
+ *    같은 브랜드·규격의 기존 상품을 보여주고, 고르면 잇고 거래처 사전에도 남긴다.
+ *    취급(사고판 적 있는 것)이 위에 온다 — 그게 맞을 확률이 높다.
+ */
+function LinkFirst({ itemId, onDone }: { itemId: number; onDone: () => void }) {
+  const [cands, setCands] = useState<LinkCandidate[] | null>(null);
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void linkCandidates(itemId).then((r) => {
+      if (alive) setCands(r);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [itemId]);
+
+  if (cands === null || cands.length === 0) return null;
+
+  return (
+    <div className="mt-2 rounded-lg border border-emerald-300 bg-emerald-50 p-2">
+      <p className="text-xs font-semibold text-emerald-900">
+        같은 규격의 기존 상품이 있습니다 — 새로 만들기 전에 확인하세요
+      </p>
+      <ul className="mt-1.5 space-y-1">
+        {cands.map((c) => (
+          <li key={c.id} className="flex items-center gap-2 rounded-lg bg-white px-2.5 py-1.5">
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-medium">
+                {c.name}
+                {c.used && <span className="ml-1.5 rounded bg-emerald-100 px-1 text-[11px] text-emerald-800">취급</span>}
+              </div>
+              <div className="tabular text-xs text-slate-500">
+                {[c.marsItemNo, c.loadSpeed, c.stockQty > 0 ? `재고 ${c.stockQty}본` : null,
+                  c.listPrice !== null ? `기표가 ${c.listPrice.toLocaleString()}` : null]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() =>
+                start(async () => {
+                  setError(null);
+                  const r = await linkInvoiceItemTo(itemId, c.id);
+                  if (!r.ok) setError(r.error);
+                  else onDone();
+                })
+              }
+              className="shrink-0 rounded-lg bg-emerald-700 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              이 상품에 연결
+            </button>
+          </li>
+        ))}
+      </ul>
+      {error && <p className="mt-1.5 text-xs text-red-700">{error}</p>}
+      <p className="mt-1.5 text-[11px] text-emerald-800">한 번 이으면 다음 인보이스부터는 저절로 붙습니다.</p>
+    </div>
   );
 }
