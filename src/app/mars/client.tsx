@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { markEntered, unmarkEntered, type MarsEntry } from "@/lib/mars-queue";
+import { markEntered, removeFromQueue, unmarkEntered, type MarsEntry } from "@/lib/mars-queue";
 
 const won = (n: number) => n.toLocaleString();
 
@@ -138,6 +138,31 @@ function Entry({ e }: { e: MarsEntry }) {
           입력 완료
         </button>
       </div>
+
+      {/*
+        ⭐ 대기열에서 빼기 (사장님 요청 2026-08-05).
+           판매를 지우는 것이 아니다 — 「MARS 자동 입력 대상에서 제외」만 한다.
+           판매 자체 취소(재고 복원)는 /sales 의 판매 취소가 한다.
+      */}
+      <div className="mt-2 flex items-center justify-between">
+        <a href="/sales" className="text-xs text-indigo-700 underline underline-offset-2">
+          판매 자체를 취소하려면 → 정비 내역
+        </a>
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => {
+            if (!confirm(`${e.quoteNo} 을(를) MARS 대기열에서 뺄까요?\n(MARS 에 자동으로 넣지 않습니다 — 판매 기록은 그대로 남습니다)`)) return;
+            start(async () => {
+              await removeFromQueue(e.quoteId);
+              router.refresh();
+            });
+          }}
+          className="text-xs text-slate-500 underline underline-offset-2"
+        >
+          대기열에서 빼기 (MARS 직접 처리)
+        </button>
+      </div>
     </li>
   );
 }
@@ -145,7 +170,7 @@ function Entry({ e }: { e: MarsEntry }) {
 export function DoneList({
   rows,
 }: {
-  rows: { quoteId: number; quoteNo: string; customerName: string | null; total: number; refNo: string | null }[];
+  rows: { quoteId: number; quoteNo: string; customerName: string | null; total: number; refNo: string | null; status: string }[];
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -169,6 +194,9 @@ export function DoneList({
               <div className="min-w-0 flex-1">
                 <div className="text-sm">
                   {r.quoteNo} {r.customerName && `· ${r.customerName}`}
+                  {r.status === "수동처리" && (
+                    <span className="ml-1.5 rounded bg-slate-200 px-1.5 py-0.5 text-[11px] text-slate-600">직접 처리</span>
+                  )}
                 </div>
                 {r.refNo && <div className="tabular text-xs text-slate-500">MARS {r.refNo}</div>}
               </div>

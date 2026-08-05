@@ -75,6 +75,37 @@ const INSPECT = process.argv.includes("--inspect");
  */
 const TRY_CONSENT = process.argv.includes("--try-consent");
 /**
+ * 🔍 기존 연락처에 차량 붙이기 탐침 (2026-08-05) — 렌트카처럼 **고객은 MARS 에 있는데
+ *    차량만 없는** 경우를 위해, 생성 창의 「연락처에 첨부」에 기존 번호를 넣으면
+ *    화면이 어떻게 변하는지 본다. **저장하지 않고 취소한다.**
+ *      npx tsx scripts/mars-fill.ts --try-attach C583-016890
+ */
+const TRY_ATTACH = (() => {
+  const i = process.argv.indexOf("--try-attach");
+  return i >= 0 ? process.argv[i + 1] : null;
+})();
+/**
+ * ⭐ 채워진 초안을 열어 **전기만 이어서** 한다 (2026-08-05).
+ *    전기 오판/실패로 「주문은 채워졌는데 전기만 남은」 초안이 생길 때 쓴다.
+ *      npx tsx scripts/mars-fill.ts --post-draft 165하4306 30000 [렌트카]
+ *    끝나면 송장 번호를 보고한다 — 우리 DB 는 건드리지 않는다 (따로 맞춘다).
+ */
+const POST_DRAFT = (() => {
+  const i = process.argv.indexOf("--post-draft");
+  if (i < 0) return null;
+  const pick = (k: number) => {
+    const v = process.argv[i + k];
+    return v && !v.startsWith("--") ? v : null;
+  };
+  return {
+    plate: process.argv[i + 1],
+    total: Number(process.argv[i + 2] ?? "0") || 0,
+    /** 번호판 검색 색인이 늦을 때 쓸 고객 이름·전화 (고객 이력의 「열린 판매 문서」 경유) */
+    name: pick(3),
+    phone: pick(4),
+  };
+})();
+/**
  * ⭐ 전기 후 차량 점검 모드 (사장님 지시 2026-08-02 — "이것도 꼭 해야 하는 작업이야")
  *    전기가 끝나야 들어갈 수 있는 화면이라 매출 주문 입력과 따로 돌린다.
  *      npm run mars -- --check
@@ -817,6 +848,182 @@ async function createCustomer(
   }
 }
 
+/**
+ * ⭐ 기존 연락처에 **차량만** 새로 단다 (사장님 버그 제보 2026-08-05 — 렌트카).
+ *
+ * 「고객은 MARS 에 있는데 차량만 없다」는 경우가 실제로 있다: 차를 바꾼 손님,
+ * 렌터카 회사처럼 차가 여러 대인 손님. 전에는 이 경우 「MARS 에 없는 차량입니다」로
+ * 그냥 멈췄다 — 고객 생성 경로(연락 고객 차량 생성)는 **새 연락처 전용**이라서다
+ * (「연락처에 첨부」는 회사 연락처만 받는다 — 탐침으로 확인, 2026-08-05).
+ *
+ * 길은 따로 있다: **마스터 데이터 → 차량 → 신규** 카드.
+ * 「Contact No.」에 기존 연락처(C583-…)를 넣으면 고객 이름이 따라온다.
+ */
+async function createVehicleForContact(
+  page: Page,
+  contactNo: string,
+  v: {
+    plateNo: string;
+    makerName: string | null;
+    model: string | null;
+    year: number | null;
+    fuelType: string | null;
+    mileage: number | null;
+  },
+) {
+  const f = main(page);
+  await page.goto(HOME);
+  await waitHome(page, 40000);
+  await clickAny(page, "마스터 데이터");
+  await page.waitForTimeout(1200);
+  await clickAny(page, "차량", 8000);
+  await page.waitForTimeout(4000);
+  await passBigSearchDialog(page);
+  await clickAny(page, "신규", 8000);
+  await page.waitForTimeout(4000);
+
+  // 카드가 뜰 때까지 기다린다 — 「차량 카드」 제목의 빈 번호판 칸이 증거
+  await f
+    .getByRole("textbox", { name: "번호판 번호" })
+    .first()
+    .waitFor({ state: "visible", timeout: 25000 })
+    .catch(() => {
+      throw new Error("신규 차량 카드가 뜨지 않았습니다");
+    });
+
+  /** 오류 창이 뜨면 내용을 갖고 멈춘다 — 조용히 넘어가면 깨진 차량이 남는다 */
+  const guard = async (what: string) => {
+    const dlg = f.locator('[controlname="Dialog"]').last();
+    if (!(await dlg.isVisible({ timeout: 1200 }).catch(() => false))) return;
+    const said = ((await dlg.innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
+    if (/않습니다|없습니다|제공해야|입력해야|오류|잘못/.test(said)) {
+      await f.locator('button[controlname="Dialog"]', { hasText: "확인" }).last().click().catch(() => {});
+      throw new Error(`차량 카드에서 MARS 가 막았습니다 (${what}): ${said.slice(0, 100)}`);
+    }
+    await f.locator('button[controlname="Dialog"]', { hasText: "확인" }).last().click().catch(() => {});
+    await page.waitForTimeout(500);
+  };
+
+  /**
+   * 🔴 controlname 은 여기서 못 쓴다 (2026-08-05 두 번 실패로 배움) —
+   *    같은 이름이 목록 화면의 표(td)와 팩트박스에도 있어서 계속 헛짚었다.
+   *    카드의 **화면 라벨**(번호판 번호·년도·주행거리…)로 잡는다. 라벨도 여러 개면
+   *    뒤에서부터 보이는 것을 쓴다.
+   */
+  const one = async (l: Locator): Promise<Locator> => {
+    const n = await l.count().catch(() => 0);
+    for (let i = n - 1; i >= 0; i--) {
+      if (await l.nth(i).isVisible().catch(() => false)) return l.nth(i);
+    }
+    return l.first();
+  };
+
+  // ① 연락처 (아래 「고객」 묶음에 있다) — 이걸 넣어야 차량이 그 손님에게 붙는다
+  const contactCell = await one(f.getByRole("combobox", { name: "연락처", exact: true }));
+  await contactCell.scrollIntoViewIfNeeded().catch(() => {});
+  await fillField(page, "연락처", contactCell, contactNo);
+  await page.waitForTimeout(2000);
+  await guard("연락처");
+  const owner =
+    ((await readField(await one(f.getByRole("textbox", { name: "고객 이름" }))).catch(() => "")) || "").trim();
+  log(`    · 연락처 ${contactNo} → 고객 이름 «${owner || "(못 읽음)"}»`);
+
+  // ② 번호판
+  await fillField(page, "번호판 번호", await one(f.getByRole("textbox", { name: "번호판 번호" })), v.plateNo);
+  await page.waitForTimeout(800);
+  await guard("번호판 번호");
+
+  // ③ Vehicle Type (Fuel · Hybird · BEV · Diesel — MARS 표기 그대로. 라벨이 영문이다)
+  if (v.fuelType) {
+    const fuel = await resolveInput(await one(f.getByRole("combobox", { name: "Vehicle Type" })));
+    const picked = await fuel.selectOption({ label: v.fuelType }).then(() => true).catch(() => false);
+    if (!picked) log(`    ⚠️ Vehicle Type 「${v.fuelType}」를 못 골랐습니다`);
+    await page.waitForTimeout(400);
+  }
+
+  // ④ 제조사·모델 — 고객 생성 창과 같은 값 형식
+  if (v.makerName) {
+    await fillField(page, "차량 제조사", await one(f.getByRole("combobox", { name: "차량 제조사" })), v.makerName);
+    await page.waitForTimeout(600);
+    await guard("차량 제조사");
+  }
+  if (v.model) {
+    await fillField(page, "차량 모델", await one(f.getByRole("combobox", { name: "차량 모델" })), v.model);
+    await page.waitForTimeout(600);
+    await guard("차량 모델");
+  }
+
+  // ⑤ 년도 + 등록 날짜 (사장님 방식: 오늘 날짜에서 연도만 그 해로)
+  if (v.year) {
+    await fillField(page, "년도", await one(f.getByRole("textbox", { name: "년도" })), String(v.year));
+    await page.waitForTimeout(400);
+    const t = new Date();
+    const md = `-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+    const regCell = await one(f.getByRole("combobox", { name: "등록 날짜" }));
+    const okReg =
+      (await fillField(page, "등록 날짜", regCell, `${v.year}${md}`)) ||
+      (await fillField(page, "등록 날짜", await one(f.getByRole("textbox", { name: "등록 날짜" })), `${v.year}${md}`));
+    if (!okReg) log("    ⚠️ 등록 날짜를 못 넣었습니다");
+    await page.waitForTimeout(400);
+    await guard("등록 날짜");
+  }
+
+  // ⑥ 주행거리
+  if (v.mileage) {
+    await fillField(page, "주행거리", await one(f.getByRole("textbox", { name: "주행거리" })), String(v.mileage));
+    await page.waitForTimeout(400);
+  }
+  await guard("마무리");
+  const shotV = path.resolve(process.cwd(), "..", "tyremore-data", "mars-vehcard.png");
+  await page.screenshot({ path: shotV, fullPage: true }).catch(() => {});
+  log(`    · 카드 화면: ${shotV}`);
+
+  // 카드 머리글에서 차량 번호(V583-…)를 읽는다 — 저장 증거이자 중복 방지 열쇠
+  let vehNo: string | null = null;
+  const heads = f.getByRole("heading");
+  const nh = await heads.count().catch(() => 0);
+  for (let i = nh - 1; i >= 0 && !vehNo; i--) {
+    if (!(await heads.nth(i).isVisible().catch(() => false))) continue;
+    const m = /V\d{3}-\d{6}/.exec((await heads.nth(i).innerText().catch(() => "")) || "");
+    if (m) vehNo = m[0];
+  }
+  log(`    · 차량 번호: «${vehNo ?? "(못 읽음)"}»`);
+
+  // 카드는 자동 저장이다 — 홈으로 돌아가면 된다 (Escape 는 절대 누르지 않는다)
+  await page.goto(HOME);
+  await waitHome(page, 40000);
+  return vehNo;
+}
+
+/**
+ * ⭐ 번호판이 아니라 **이름(+전화)** 으로 고객을 찾아 줄을 선택해 둔다 (2026-08-05).
+ *    갓 만든 차량은 번호판 검색 색인에 늦게 잡힌다 — 이름 검색은 바로 된다.
+ *    줄을 클릭해 두면 「판매 내역」이 그 손님 기준으로 열린다.
+ */
+async function findCustomerByName(page: Page, name: string, phone: string | null): Promise<boolean> {
+  const f = main(page);
+  const box = f.getByRole("textbox", { name: "이름/번호판 번호" });
+  // 직전에 번호판 검색을 하고 왔으면 이미 검색 화면이다 — 링크를 또 누르면 실패한다
+  if (!(await box.isVisible({ timeout: 1500 }).catch(() => false))) {
+    await clickAny(page, "고객 정보 검색");
+    await passBigSearchDialog(page);
+  }
+  await box.waitFor({ timeout: 15000 });
+  await box.fill(name);
+  await box.press("Enter");
+  await page.waitForTimeout(3000);
+  // 같은 이름이 여럿일 수 있다(렌트카·AJ렌트카…) — 전화번호로 좁힌다
+  let rows = f.locator("tr").filter({ hasText: name });
+  const digits = phone?.replace(/\D/g, "") ?? "";
+  if (digits) rows = rows.filter({ hasText: digits });
+  const row = rows.first();
+  if (!(await row.isVisible({ timeout: 10000 }).catch(() => false))) return false;
+  log(`    · 이름 검색: ${(((await row.innerText().catch(() => "")) || "").replace(/\s+/g, " ")).slice(0, 100)}`);
+  await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+  await page.waitForTimeout(800);
+  return true;
+}
+
 /** 우리 결제 방법 → MARS 결제 수단 코드 */
 const PAY_CODE: Record<string, string> = {
   카드: "CREDITCARD",
@@ -1351,6 +1558,18 @@ async function postOrder(
   const f = main(page);
 
   /**
+   * 🔴 화면의 송장 번호는 **전기 전에도 있다** (2026-08-05 실제 사고 — 렌트카).
+   *    주문 화면 뒤층의 고객/차량 이력에 그 손님의 **옛 송장 번호**가 깔려 있어서,
+   *    전기가 실패했는데 옛 번호(…SI+001742)를 주워 「전기 완료」로 기록했다.
+   *    → 전기 **전**의 번호들을 적어 두고, 끝난 뒤 **새로 나타난 번호만** 증거로 인정한다.
+   */
+  const scanSIs = async (): Promise<Set<string>> => {
+    const body = ((await f.locator("body").innerText().catch(() => "")) || "").replace(/\s+/g, "");
+    return new Set(body.match(/\d{8}-\d{2}SI\+\d{6}/g) ?? []);
+  };
+  const beforeSIs = await scanSIs();
+
+  /**
    * 🔴 다섯 번째 시도 끝에 배운 것 (2026-08-04):
    *   · 주문 화면은 홈 **위에 겹쳐진 층**이다. 앞에서부터 세면 뒤에 깔린 홈 메뉴
    *     수십 개가 먼저 잡혀 위층의 「전기...」에 못 닿는다.
@@ -1396,17 +1615,50 @@ async function postOrder(
    * 「배송 및 송장」이어야 재고 출하와 송장이 한 번에 끝난다.
    * 🔴 대화상자 **안에서만** 찾는다 — 화면 전체에서 찾으면 뒤층의 글자를 잡는다.
    */
-  const postDlg = f.getByRole("dialog").last();
-  if (!(await postDlg.isVisible({ timeout: 5000 }).catch(() => false))) {
+  /**
+   * 🔴 .last() dialog 는 **안 보이는 복제 노드**를 잡을 수 있다 (매치 창에서 배운 것).
+   *    보이는 dialog 들을 훑어 「배송 및 송장」 선택지가 든 것을 찾는다.
+   *
+   * 🔴 선택지를 못 찾으면 **기본값으로 진행하지 않는다** (2026-08-05, Q26-0805-003).
+   *    기본값은 「배송」이라 재고만 출하되고 송장이 안 만들어진다 — 어중간하게
+   *    전기된 주문이 남아 사람이 수습해야 했다. 못 찾으면 취소하고 실패로 알린다.
+   */
+  let postDlg: Locator | null = null;
+  let ship: Locator | null = null;
+  {
+    const until = Date.now() + 8000;
+    while (Date.now() < until && !ship) {
+      const dlgs = f.getByRole("dialog");
+      const nd = await dlgs.count().catch(() => 0);
+      for (let i = nd - 1; i >= 0 && !ship; i--) {
+        const d = dlgs.nth(i);
+        if (!(await d.isVisible().catch(() => false))) continue;
+        const opt = d.getByText(/배송 및 송장|출하 및 송장/).first();
+        if (await opt.isVisible().catch(() => false)) {
+          postDlg = d;
+          ship = opt;
+        } else if (!postDlg) {
+          postDlg = d; // 선택지 없는 대화상자라도 기억해 둔다 — 취소할 때 쓴다
+        }
+      }
+      if (!ship) await page.waitForTimeout(500);
+    }
+  }
+  if (!postDlg) {
     return { ok: false, invoiceNo: null, why: "전기 대화상자가 뜨지 않았습니다" };
   }
-  const ship = postDlg.getByText(/배송 및 송장|출하 및 송장/).first();
-  if (await ship.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await ship.click().catch(() => {});
-    await page.waitForTimeout(400);
-  } else {
-    log("    ⚠️ 「배송 및 송장」 선택지를 못 찾아 기본값으로 진행합니다");
+  if (!ship) {
+    const said = ((await postDlg.innerText().catch(() => "")) || "").replace(/\s+/g, " ").slice(0, 120);
+    await postDlg.getByRole("button", { name: "취소", exact: true }).last().click({ timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(800);
+    return {
+      ok: false,
+      invoiceNo: null,
+      why: `「배송 및 송장」 선택지를 못 찾아 전기를 취소했습니다 (창 내용: ${said})`,
+    };
   }
+  await ship.click().catch(() => {});
+  await page.waitForTimeout(400);
   await postDlg.getByRole("button", { name: "확인", exact: true }).last().click({ timeout: 8000 }).catch(() => {});
   await page.waitForTimeout(5000);
 
@@ -1433,12 +1685,20 @@ async function postOrder(
     await page.waitForTimeout(1500);
   }
 
-  /** 전기가 됐다는 증거 — 화면 어딘가의 전기된 송장 번호(…SI+……) */
-  const body = ((await f.locator("body").innerText().catch(() => "")) || "").replace(/\s+/g, "");
-  const inv = /\d{6,}-\d{2}SI\+\d+/.exec(body)?.[0] ?? null;
-  if (inv) {
-    log(`    · 전기 완료 — 송장 ${inv}`);
-    return { ok: true, invoiceNo: inv };
+  /**
+   * 전기가 됐다는 증거 — **전기 후 새로 나타난** 송장 번호만 인정한다.
+   * 🔴 자릿수를 못박는다 (8-2SI+6): 공백을 지우고 찾기 때문에 느슨한 패턴은
+   *    옆 숫자와 붙어 «0461168583-23SI+00317610000» 같은 오염 번호를 만든다
+   *    (2026-08-04 Q26-0804-006, 2026-08-05 run#22 두 번 실제로 그랬다).
+   */
+  const afterSIs = await scanSIs();
+  const fresh = [...afterSIs].filter((x) => !beforeSIs.has(x));
+  if (fresh.length === 1) {
+    log(`    · 전기 완료 — 송장 ${fresh[0]}`);
+    return { ok: true, invoiceNo: fresh[0] };
+  }
+  if (fresh.length > 1) {
+    log(`    · 새 송장 번호가 여러 개 보입니다 (${fresh.join(", ")}) — 송장 목록에서 확정합니다`);
   }
   /**
    * 화면만으로는 못 정한다 — **모르겠다**고 답한다.
@@ -1581,7 +1841,7 @@ async function pickInvoiceRow(
 async function openInvoice(page: Page, row: Locator): Promise<boolean> {
   const f = main(page);
   const flat = ((await row.innerText().catch(() => "")) || "").replace(/\s+/g, "");
-  const no = /\d{6,}-\d{2}SI\+\d+/.exec(flat)?.[0] ?? null;
+  const no = /\d{8}-\d{2}SI\+\d{6}/.exec(flat)?.[0] ?? null;
 
   await row.scrollIntoViewIfNeeded().catch(() => {});
   // 줄을 먼저 눌러 활성으로 만든다 — 목록에서 다른 줄이 잡혀 있으면 링크가 안 먹는다
@@ -1751,7 +2011,7 @@ async function fillVehicleCheck(
 }
 
 async function main_() {
-  const { marsQueue, markEntered, pendingVehicleChecks, markVehicleChecked } = await import(
+  const { marsQueue, markEntered, pendingVehicleChecks, markVehicleChecked, saveVehicleMarsNo } = await import(
     "../src/lib/mars-queue"
   );
 
@@ -1771,7 +2031,7 @@ async function main_() {
     }
   } else {
     log(`MARS 자동 입력\n  대기열 ${queue.length}건\n`);
-    if (queue.length === 0 && !PROBE_ORDER && !TRY_ITEM && !PEEK_INV && !TRY_CONSENT) {
+    if (queue.length === 0 && !PROBE_ORDER && !TRY_ITEM && !PEEK_INV && !TRY_CONSENT && !TRY_ATTACH && !POST_DRAFT) {
       log("칠 것이 없습니다.");
       process.exit(0);
     }
@@ -1904,6 +2164,60 @@ async function main_() {
       }
     }
 
+    /* 🔍 기존 연락처에 차량 붙이기 탐침 — 저장하지 않는다 */
+    if (TRY_ATTACH) {
+      log(`\n── 연락처에 첨부 탐침: ${TRY_ATTACH} (저장 안 함) ─────────`);
+      const f = main(page);
+      const shotA = path.resolve(process.cwd(), "..", "tyremore-data", "mars-try-attach.png");
+      try {
+        // ⭐ 지금은: 고객 이력 창(기본 보기 = 완료된 송장)에서 오늘 송장의 번호를 읽는다
+        const name = process.argv[process.argv.indexOf("--try-attach") + 2] ?? "렌트카";
+        const phone = process.argv[process.argv.indexOf("--try-attach") + 3] ?? null;
+        if (!(await findCustomerByName(page, name, phone))) throw new Error("고객을 못 찾았습니다");
+        await clickAny(page, "판매 내역");
+        await page.waitForTimeout(3500);
+        await passBigSearchDialog(page);
+        const today = "2026-08-05";
+        const rows = f.getByRole("row").filter({ hasText: "-23SI+" }).filter({ hasText: today });
+        const nr = await rows.count().catch(() => 0);
+        log(`  · 오늘(${today}) 완료된 송장 줄 ${nr}개`);
+        for (let i = 0; i < nr; i++) {
+          log(`    [${i}] ${(((await rows.nth(i).innerText().catch(() => "")) || "").replace(/\s+/g, " ")).slice(0, 160)}`);
+        }
+        if (nr > 0) {
+          const row = rows.first();
+          await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+          await page.waitForTimeout(500);
+          await row.locator("a").first().click({ timeout: 8000 }).catch(() => {});
+          await page.waitForTimeout(4500);
+          const heads = f.getByRole("heading");
+          const nh = await heads.count().catch(() => 0);
+          for (let i = nh - 1; i >= 0; i--) {
+            if (!(await heads.nth(i).isVisible().catch(() => false))) continue;
+            const t = ((await heads.nth(i).innerText().catch(() => "")) || "").replace(/\s+/g, " ");
+            const m = /\d{8}-\d{2}SI\+\d{6}/.exec(t);
+            if (m) {
+              log(`  · 송장 번호: ${m[0]}  (머리글: ${t.slice(0, 80)})`);
+              break;
+            }
+          }
+        }
+        const shotA0 = path.resolve(process.cwd(), "..", "tyremore-data", "mars-try-attach.png");
+        await page.screenshot({ path: shotA0, fullPage: true }).catch(() => {});
+        log(`  화면: ${shotA0}`);
+        await ctx.close().catch(() => {});
+        process.exit(0);
+      } catch (e) {
+        log(`  ⚠️ ${(e as Error).message.split("\n")[0]}`);
+        await page.screenshot({ path: shotA, fullPage: true }).catch(() => {});
+        log(`  화면: ${shotA}`);
+      }
+      await f.getByRole("button", { name: "취소", exact: true }).first().click().catch(() => {});
+      await page.waitForTimeout(800);
+      await ctx.close().catch(() => {});
+      process.exit(0);
+    }
+
     /* 🔍 동의 표 시험 — 고객 생성 창을 열어 동의만 채워 보고 저장 없이 취소한다 */
     if (TRY_CONSENT) {
       log(`\n── 동의 표 시험 (저장 안 함) ─────────`);
@@ -1934,6 +2248,115 @@ async function main_() {
       }
       await ctx.close().catch(() => {});
       process.exit(0);
+    }
+
+    /* ⭐ 채워진 초안을 열어 전기만 이어서 한다 */
+    if (POST_DRAFT) {
+      const f = main(page);
+      log(`\n── 초안 전기: ${POST_DRAFT.plate} (${POST_DRAFT.total.toLocaleString()}원) ─────────`);
+      await clickAny(page, "매출 주문 목록");
+      await page.waitForTimeout(3000);
+      await passBigSearchDialog(page);
+      const search = f.getByRole("textbox", { name: /번호판|이름|전화/ }).first();
+      let opened = false;
+      for (const key of [POST_DRAFT.plate, POST_DRAFT.name].filter(Boolean) as string[]) {
+        if (await search.isVisible({ timeout: 5000 }).catch(() => false)) {
+          await search.fill(key).catch(() => {});
+          await search.press("Enter").catch(() => {});
+          await page.waitForTimeout(2500);
+        }
+        const row = f.getByRole("row").filter({ hasText: POST_DRAFT.plate }).first();
+        if (!(await row.isVisible({ timeout: 8000 }).catch(() => false))) {
+          log(`  · «${key}» 검색으로는 초안이 안 보입니다`);
+          continue;
+        }
+        await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+        await page.waitForTimeout(500);
+        await row.locator("a").first().click({ timeout: 8000 }).catch(() => {});
+        await page.waitForTimeout(4500);
+        opened = true;
+        break;
+      }
+
+      /**
+       * 🔴 갓 만든 차량의 초안은 주문 목록 검색에도 안 잡힌다 (색인 지연 — 2026-08-05).
+       *    고객 이력 창의 「열린 판매 문서」로 돌아 들어간다.
+       */
+      if (!opened && POST_DRAFT.name) {
+        log("  · 고객 이력의 「열린 판매 문서」로 찾아봅니다");
+        await page.goto(HOME);
+        await waitHome(page, 40000);
+        if (await findCustomerByName(page, POST_DRAFT.name, POST_DRAFT.phone)) {
+          await clickAny(page, "판매 내역");
+          await page.waitForTimeout(3000);
+          await passBigSearchDialog(page);
+          const openDocs = f.getByRole("menuitem", { name: "열린 판매 문서" }).first();
+          if (!(await openDocs.isVisible({ timeout: 3000 }).catch(() => false))) {
+            await clickAny(page, "프로세스", 6000).catch(() => {});
+            await page.waitForTimeout(1200);
+          }
+          await openDocs.click({ timeout: 8000 }).catch(() => {});
+          await page.waitForTimeout(3500);
+          // 금액(합계)으로 줄을 찾는다 — 초안 줄에는 번호판이 없을 수 있다
+          const won = POST_DRAFT.total.toLocaleString();
+          const row2 = f
+            .getByRole("row")
+            .filter({ hasText: /-23SO[-+]/ })
+            .filter({ hasText: won })
+            .last();
+          if (await row2.isVisible({ timeout: 8000 }).catch(() => false)) {
+            log(`  · 열린 문서 줄: ${(((await row2.innerText().catch(() => "")) || "").replace(/\s+/g, " ")).slice(0, 140)}`);
+            await row2.click({ position: { x: 5, y: 5 } }).catch(() => {});
+            await page.waitForTimeout(500);
+            await row2.locator("a").first().click({ timeout: 8000 }).catch(() => {});
+            await page.waitForTimeout(4500);
+            opened = true;
+          } else {
+            log(`  · 열린 판매 문서에서 ${won}원짜리 주문을 못 찾았습니다`);
+            const shotD = path.resolve(process.cwd(), "..", "tyremore-data", "mars-post-draft.png");
+            await page.screenshot({ path: shotD, fullPage: true }).catch(() => {});
+            log(`     화면: ${shotD}`);
+          }
+        }
+      }
+      if (!opened) {
+        log("  ⚠️ 초안을 찾지 못했습니다");
+        await ctx.close().catch(() => {});
+        process.exit(1);
+      }
+      let posted = await postOrder(page);
+      if (!posted.ok && posted.unsure) {
+        log("    · 전기 여부를 송장 목록에서 확인합니다");
+        await page.goto(HOME);
+        await waitHome(page, 40000);
+        await clickAny(page, "판매완료");
+        await page.waitForTimeout(700);
+        await clickAny(page, "완료된 매출 송장, 완료된 매출 송장 목록을 엽니다.");
+        await page.waitForTimeout(3000);
+        await passBigSearchDialog(page);
+        const picked = await pickInvoiceRow(page, {
+          plateNo: POST_DRAFT.plate,
+          workDate: null,
+          total: POST_DRAFT.total,
+          marsRefNo: null,
+        });
+        if (picked.ok) {
+          const si = /\d{8}-\d{2}SI\+\d{6}/.exec(picked.label.replace(/\s+/g, ""))?.[0] ?? null;
+          posted = { ok: true, invoiceNo: si };
+        } else {
+          posted = { ok: false, invoiceNo: null, why: picked.why };
+        }
+      }
+      if (posted.ok) {
+        log(`  ✅ 전기 완료 — 송장 ${posted.invoiceNo ?? "(번호 미확인)"}`);
+      } else {
+        log(`  ❌ 전기 실패: ${posted.why}`);
+        const shotP = path.resolve(process.cwd(), "..", "tyremore-data", "mars-post-draft.png");
+        await page.screenshot({ path: shotP, fullPage: true }).catch(() => {});
+        log(`     화면: ${shotP}`);
+      }
+      await ctx.close().catch(() => {});
+      process.exit(posted.ok ? 0 : 1);
     }
 
     /* 🔍 전기된 송장 확인 — 읽기만 한다 */
@@ -2159,23 +2582,53 @@ async function main_() {
         if (found === "none") {
           const c = q.newCustomer;
           /**
-           * 🔴 서명을 안 받은 손님은 만들지 않는다.
-           *    MARS 고객 등록 화면에는 「고객 서명」 칸이 있다.
-           *    받지도 않은 서명을 「수락된 동의」로 넣을 수는 없다.
+           * ⭐ 고객은 MARS 에 있는데(연락처 번호 보유) **차량만 없는** 경우 —
+           *    차량 카드만 새로 만든다 (사장님 버그 제보 2026-08-05, 렌트카 165하4306).
+           *    전에는 「MARS 에 없는 차량입니다」로 그냥 멈췄다.
            */
-          if (!c || !c.consentSigned) {
+          if (!c && q.contactNo && q.customerName) {
+            /**
+             * 🔴 이미 만들어 둔 차량이면 **다시 만들지 않는다** (2026-08-05 실제 사고 —
+             *    갓 만든 차량이 번호판 검색 색인에 안 잡혀 같은 차가 두 번 만들어졌다).
+             */
+            if (q.marsVehicleNo) {
+              log(`  → 차량은 이미 MARS 에 있습니다 (${q.marsVehicleNo}) — 이름으로 이어서 진행합니다`);
+            } else {
+              log(`  → 고객(${q.contactNo})은 MARS 에 있습니다 — 차량 ${q.plateNo} 만 새로 답니다`);
+              const vehNo = await createVehicleForContact(page, q.contactNo, {
+                plateNo: q.plateNo,
+                makerName: q.makerName,
+                model: q.vehicleModel,
+                year: q.year,
+                fuelType: q.fuelType,
+                mileage: q.mileage,
+              });
+              if (vehNo) await saveVehicleMarsNo(q.quoteId, vehNo);
+              log(`    ✅ 차량 등록 완료${vehNo ? ` (${vehNo})` : ""}`);
+            }
+            // 번호판 검색은 색인이 늦어 못 믿는다 — 이름+전화로 고객 줄을 잡는다
+            if (!(await findCustomerByName(page, q.customerName, q.phone))) {
+              throw new Error("이름으로도 고객을 찾지 못했습니다 — MARS 에서 확인해 주세요");
+            }
+          } else if (!c || !c.consentSigned) {
+            /**
+             * 🔴 서명을 안 받은 손님은 만들지 않는다.
+             *    MARS 고객 등록 화면에는 「고객 서명」 칸이 있다.
+             *    받지도 않은 서명을 「수락된 동의」로 넣을 수는 없다.
+             */
             log(
               c
                 ? "  ⚠️ 개인정보 동의 서명이 없어 고객 등록을 하지 않습니다 — 판매 등록에서 서명 확인을 체크해 주세요"
-                : "  ⚠️ MARS 에 없는 차량입니다 — 고객·차량 등록은 직접 해 주세요",
+                : "  ⚠️ MARS 에 없는 차량·고객입니다 — 고객 등록은 직접 해 주세요",
             );
             skipped++;
             await page.goto(HOME);
             continue;
+          } else {
+            log(`  → MARS 에 없는 손님입니다. 새로 만듭니다 (${c.name} ${c.plateNo})`);
+            await createCustomer(page, c);
+            log("    ✅ 고객·차량 등록 완료");
           }
-          log(`  → MARS 에 없는 손님입니다. 새로 만듭니다 (${c.name} ${c.plateNo})`);
-          await createCustomer(page, c);
-          log("    ✅ 고객·차량 등록 완료");
         }
 
         /** ⭐ 실제로 정비한 날. 사장님이 판매 등록에서 고치실 수 있다 (기본은 오늘) */
@@ -2184,7 +2637,19 @@ async function main_() {
           q.workDate ??
           `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
         log(`    · 작업일자 ${iso} · 결제 ${q.paymentMethod ?? "-"}`);
-        await openSalesOrder(page, q.plateNo, q.newCustomer?.mileage ?? null, iso, PAY_CODE[q.paymentMethod ?? ""] ?? null);
+        /**
+         * ⭐ 주행거리는 **차량의 최근 값**을 쓴다 (사장님 버그 제보 2026-08-05).
+         *    전에는 newCustomer(신규 고객)에만 있어서 기존 고객은 주행거리가
+         *    아예 안 들어갔다. 판매 등록에서 고치면 vehicle.mileage 가 갱신되어
+         *    최신 값이, 안 고치면 마지막으로 알던 값이 들어간다.
+         */
+        await openSalesOrder(
+          page,
+          q.plateNo,
+          q.mileage ?? q.newCustomer?.mileage ?? null,
+          iso,
+          PAY_CODE[q.paymentMethod ?? ""] ?? null,
+        );
         const put = await fillLines(page, q.lines, q.saleMemo);
 
         /**
@@ -2236,7 +2701,8 @@ async function main_() {
           });
           if (picked.ok) {
             const flat = picked.label.replace(/\s+/g, "");
-            const si = /\d{6,}-\d{2}SI\+\d+/.exec(flat)?.[0] ?? null;
+            // 🔴 자릿수 고정 — 느슨한 패턴은 옆 숫자(날짜 등)와 붙어 오염 번호가 된다
+            const si = /\d{8}-\d{2}SI\+\d{6}/.exec(flat)?.[0] ?? null;
             posted = { ok: true, invoiceNo: si };
             verifiedRow = picked.row;
             log(`    · 전기 완료 확인 — 송장 ${si ?? "(번호 미확인)"}`);

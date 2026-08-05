@@ -55,6 +55,22 @@ export interface MarsEntry {
   phone: string | null;
   plateNo: string | null;
   vehicleModel: string | null;
+  /**
+   * ⭐ 차량의 최근 주행거리 (사장님 버그 제보 2026-08-05).
+   *    기존 고객은 newCustomer 가 없어서 주행거리가 MARS 에 안 들어가고 있었다.
+   *    판매 등록에서 고치면 vehicle.mileage 가 갱신되고(saveSale), 여기로 실린다 —
+   *    안 고치면 마지막으로 알던 값이 그대로 들어간다.
+   */
+  mileage: number | null;
+  /**
+   * ⭐ 차량 정보 — 고객은 MARS 에 있는데 **차량만 없는** 경우 차량 카드를 만들 재료
+   *    (사장님 버그 제보 2026-08-05 — 렌트카처럼 차가 여러 대인 손님, 차를 바꾼 손님).
+   */
+  makerName: string | null;
+  year: number | null;
+  fuelType: string | null;
+  /** MARS 차량 번호(V583-…) — 있으면 차량 카드를 **다시 만들지 않는다** (중복 방지) */
+  marsVehicleNo: string | null;
 
   /**
    * ⭐ MARS 에 고객·차량이 없을 때 새로 만들 재료 (2026-08-02).
@@ -112,12 +128,14 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     year: number | null;
     fuel_type: string | null;
     mileage: number | null;
+    mars_vehicle_no: string | null;
   }>(sql`
     SELECT q.id, q.quote_no, q.confirmed_at, q.payment_method, q.work_date::text AS work_date,
            q.total_amount, q.mars_memo, q.payment_memo,
            c.mars_contact_no AS contact_no, c.name AS customer_name, c.phone,
            c.address, c.consent_privacy, c.consent_marketing, c.consent_signed_at,
-           v.plate_no, v.model AS vehicle_model, v.maker_name, v.year, v.fuel_type, v.mileage
+           v.plate_no, v.model AS vehicle_model, v.maker_name, v.year, v.fuel_type, v.mileage,
+           v.mars_vehicle_no
     FROM quote q
     LEFT JOIN customer c ON c.id = q.customer_id
     LEFT JOIN vehicle  v ON v.id = q.vehicle_id
@@ -171,6 +189,11 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     phone: h.phone,
     plateNo: h.plate_no,
     vehicleModel: h.vehicle_model,
+    mileage: h.mileage,
+    makerName: h.maker_name,
+    year: h.year,
+    fuelType: h.fuel_type,
+    marsVehicleNo: h.mars_vehicle_no,
     paymentMethod: h.payment_method,
     workDate: h.work_date,
     total: h.total_amount,
@@ -228,6 +251,48 @@ export async function markEntered(
     })
     .where(eq(quote.id, quoteId));
 
+  refresh("/mars");
+  return { ok: true };
+}
+
+/**
+ * ⭐ 자동으로 만든 MARS 차량 번호를 기억한다 (2026-08-05).
+ *    번호판 검색 색인이 늦어서 「만들었는데 검색에 안 잡히는」 시간이 있다 —
+ *    그 사이에 다시 돌리면 같은 차량이 **또** 만들어진다 (실제로 한 번 그랬다,
+ *    V583-002652/002653). 번호가 남아 있으면 다시 만들지 않는다.
+ */
+export async function saveVehicleMarsNo(quoteId: number, marsNo: string): Promise<void> {
+  await db.execute(sql`
+    UPDATE vehicle SET mars_vehicle_no = ${marsNo}
+    WHERE id = (SELECT vehicle_id FROM quote WHERE id = ${quoteId})
+      AND mars_vehicle_no IS NULL
+  `);
+}
+
+/**
+ * ⭐ 대기열에서 뺀다 — MARS 에 자동으로 보내지 않고 직접 처리하는 것으로 표시
+ *    (사장님 요청 2026-08-05: "대기중인 내역들도 취소나 삭제가 가능했으면 좋겠음").
+ *
+ * 판매 자체를 지우는 것이 아니다 — 판매 취소는 /sales 의 「판매 취소」가 한다
+ * (재고 복원까지). 여기서는 「MARS 자동 입력 대상에서 제외」만 한다.
+ * 잘못 뺐으면 최근 목록의 「되돌리기」로 다시 대기열에 올릴 수 있다.
+ */
+export async function removeFromQueue(
+  quoteId: number,
+  note?: string | null,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const [q] = await db.select({ id: quote.id }).from(quote).where(eq(quote.id, quoteId)).limit(1);
+  if (!q) return { ok: false, error: "판매 기록을 찾을 수 없습니다" };
+  await db
+    .update(quote)
+    .set({
+      marsStatus: "수동처리",
+      marsSyncedAt: new Date(),
+      marsRefNo: null,
+      marsMemo: note?.trim() || "대기열에서 뺌 — MARS 직접 처리",
+      updatedAt: new Date(),
+    })
+    .where(eq(quote.id, quoteId));
   refresh("/mars");
   return { ok: true };
 }
@@ -319,9 +384,9 @@ export async function markVehicleChecked(quoteId: number): Promise<void> {
   refresh("/mars");
 }
 
-/** 오늘 친 것 — 되돌릴 때 쓴다 */
+/** 오늘 친 것 — 되돌릴 때 쓴다. 「수동처리」로 뺀 것도 같이 보여 되돌릴 수 있게 한다 */
 export async function marsDone(): Promise<
-  { quoteId: number; quoteNo: string; customerName: string | null; total: number; refNo: string | null }[]
+  { quoteId: number; quoteNo: string; customerName: string | null; total: number; refNo: string | null; status: string }[]
 > {
   const rows = await db
     .select({
@@ -329,10 +394,11 @@ export async function marsDone(): Promise<
       quoteNo: quote.quoteNo,
       total: quote.totalAmount,
       refNo: quote.marsRefNo,
+      status: quote.marsStatus,
       customerName: sql<string | null>`(SELECT name FROM customer c WHERE c.id = ${quote.customerId})`,
     })
     .from(quote)
-    .where(sql`${quote.marsStatus} = '전송완료' AND ${quote.marsSyncedAt} > now() - interval '2 days'`)
+    .where(sql`${quote.marsStatus} IN ('전송완료', '수동처리') AND ${quote.marsSyncedAt} > now() - interval '2 days'`)
     .orderBy(desc(quote.marsSyncedAt))
     .limit(20);
   return rows;
