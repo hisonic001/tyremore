@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { sql } from "drizzle-orm";
+import { db } from "@/db";
 import { getSession, logout } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +28,19 @@ export const dynamic = "force-dynamic";
 export default async function SettingsPage() {
   const session = await getSession();
 
+  /**
+   * ⭐ 마지막 백업 확인 (2026-08-05 자동 백업).
+   *    백업은 매장 PC 작업 스케줄러가 매일 13:30 에 돌고, 성공하면 backup_log 에
+   *    기록을 남긴다. 이틀 넘게 기록이 없으면 여기서 경고한다 —
+   *    PC 가 꺼져 있었거나 스케줄러가 죽은 것이다.
+   */
+  const [bk] = await db.execute<{ ago_h: number; at_s: string }>(sql`
+    SELECT EXTRACT(EPOCH FROM (now() - at)) / 3600 AS ago_h,
+           to_char(at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') AS at_s
+    FROM backup_log ORDER BY id DESC LIMIT 1
+  `);
+  const backupStale = !bk || Number(bk.ago_h) > 48;
+
   const items = [
     {
       href: "/settings/products",
@@ -50,6 +65,18 @@ export default async function SettingsPage() {
       <p className="mt-1 text-sm text-slate-500">
         판매 · 매입 · 재고는 <strong>맨 위 메뉴</strong>에 있습니다.
       </p>
+
+      {backupStale ? (
+        <p className="mt-3 rounded-xl border border-amber-400 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          ⚠️ <strong>백업이 이틀 넘게 없습니다</strong>
+          {bk && ` (마지막: ${bk.at_s})`}. 매장 PC 가 꺼져 있었는지 확인해 주세요 — PC 를 켜면
+          자동으로 보충 실행됩니다.
+        </p>
+      ) : (
+        <p className="mt-3 text-xs text-slate-400">
+          ✅ 마지막 자동 백업: {bk!.at_s} (매일 13:30, 매장 PC · 최근 14개 보관)
+        </p>
+      )}
 
       <ul className="mt-4 space-y-2">
         {items.map((i) => (

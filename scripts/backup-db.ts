@@ -69,6 +69,15 @@ async function main() {
       console.error("⚠️ product 표가 백업에 없습니다 — 무언가 잘못됐습니다");
       process.exit(1);
     }
+
+    /**
+     * ⭐ 성공 기록을 DB 에 남긴다 (2026-08-05 자동 백업).
+     *    백업 파일은 매장 PC 에만 있어서 웹(설정 화면)이 볼 수 없다 —
+     *    이 로그를 보고 「마지막 백업이 이틀 넘게 없다」는 경고를 띄운다.
+     */
+    await sql`INSERT INTO backup_log (table_count, row_count, note)
+              VALUES (${tables.length}, ${total}, ${stamp})`;
+    await sql`DELETE FROM backup_log WHERE id NOT IN (SELECT id FROM backup_log ORDER BY id DESC LIMIT 60)`;
   } finally {
     await sql.end();
   }
