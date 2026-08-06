@@ -80,6 +80,22 @@ async function runOne(id: number, kind: string): Promise<void> {
 }
 
 async function main() {
+  /**
+   * 🔴 한 번에 하나만 (2026-08-06, 시작 프로그램 자동 실행 도입과 함께).
+   * 자동 실행 + 손으로 또 켜기가 겹치면 MARS 창 두 개가 같은 크롬 프로필을
+   * 잡아 둘 다 죽는다. DB 자문 잠금은 이 프로세스의 연결이 살아 있는 동안만
+   * 유지되므로, 창을 닫으면(비정상 종료 포함) 자리가 저절로 비워진다.
+   * ⚠️ 세션 풀러(5432) 전용 — 트랜잭션 풀러(6543)에서는 잠금이 유지되지 않는다.
+   *    이 스크립트는 매장 PC 의 .env.local(5432)로만 돌므로 지금은 문제없다.
+   */
+  const [got] = await sql<{ ok: boolean }[]>`SELECT pg_try_advisory_lock(748291) AS ok`;
+  if (!got.ok) {
+    log("이미 다른 대리인 창이 켜져 있습니다 — 두 개를 켜면 안 되므로 이 창은 물러납니다.");
+    log("(원래 켜져 있던 창을 그대로 쓰시면 됩니다. 이 창은 닫으셔도 됩니다.)");
+    await sql.end();
+    return;
+  }
+
   log("MARS 실행 대리인이 켜졌습니다 — 웹의 「자동으로 넣기」 버튼을 기다립니다");
   log("끄려면 이 창에서 Ctrl+C");
 
