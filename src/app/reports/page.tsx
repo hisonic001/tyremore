@@ -71,7 +71,7 @@ export default async function ReportsPage({
       GROUP BY 1
     `),
     db.execute<{ day: number; n: number; amt: string }>(sql`
-      SELECT EXTRACT(DAY FROM ${D})::int day, count(*)::int n, COALESCE(SUM(total_amount),0)::bigint amt
+      SELECT EXTRACT(DAY FROM ${D})::int AS day, count(*)::int n, COALESCE(SUM(total_amount),0)::bigint amt
       FROM quote
       WHERE status = '성사' AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
       GROUP BY 1
