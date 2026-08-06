@@ -42,6 +42,16 @@ export default async function SettingsPage() {
   const backupStale = !bk || Number(bk.ago_h) > 48;
 
   const items = [
+    /* ⭐ 매출 리포트는 사장님 계정에만 보인다 (2026-08-06) — 화면 자체도 owner 만 연다 */
+    ...(session?.role === "owner"
+      ? [
+          {
+            href: "/reports",
+            title: "매출 리포트",
+            desc: "월별 매출 · 일별 흐름 · 결제수단 · 많이 판 품목 (사장님 전용)",
+          },
+        ]
+      : []),
     {
       href: "/settings/products",
       title: "상품",
