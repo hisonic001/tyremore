@@ -63,3 +63,6 @@ test-results/
 Thumbs.db
 desktop.ini
 ~$*
+
+.vercel
+.env*
