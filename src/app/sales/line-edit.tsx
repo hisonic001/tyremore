@@ -24,10 +24,12 @@ export function EditableLine({ line: l, onMessage }: { line: SaleLine; onMessage
   const [editing, setEditing] = useState(false);
   const [qty, setQty] = useState(l.qty);
   const [price, setPrice] = useState(String(l.finalPrice));
+  /** ⭐ 품명도 키보드로 고친다 (사장님 요청 2026-08-06) */
+  const [desc, setDesc] = useState(l.description);
 
   const save = () =>
     start(async () => {
-      const r = await updateSaleLine({ itemId: l.itemId, qty, unitPrice: Number(price) || 0 });
+      const r = await updateSaleLine({ itemId: l.itemId, qty, unitPrice: Number(price) || 0, description: desc });
       if (!r.ok) return onMessage(`⚠️ ${r.error}`);
       onMessage(
         `고쳤습니다.${r.shortage > 0 ? ` ⚠️ 재고가 ${r.shortage}본 모자랍니다.` : ""}${r.marsWarning ? ` ⚠️ ${r.marsWarning}` : ""}`,
@@ -69,7 +71,13 @@ export function EditableLine({ line: l, onMessage }: { line: SaleLine; onMessage
 
   return (
     <li className="rounded-lg bg-slate-50 p-2">
-      <div className="truncate text-sm font-medium">{l.description}</div>
+      {/* 품명 — 자유롭게 타이핑해 바꿀 수 있다 */}
+      <input
+        value={desc}
+        onChange={(e) => setDesc(e.target.value)}
+        placeholder="품목 이름"
+        className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm font-medium"
+      />
       <div className="mt-1.5 flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-1">
           <button
@@ -79,7 +87,12 @@ export function EditableLine({ line: l, onMessage }: { line: SaleLine; onMessage
           >
             −
           </button>
-          <span className="tabular w-9 text-center font-bold">{qty}</span>
+          <input
+            value={qty}
+            onChange={(e) => setQty(Math.max(1, Number(e.target.value.replace(/\D/g, "")) || 1))}
+            inputMode="numeric"
+            className="tabular h-9 w-12 rounded-lg border border-slate-300 bg-white text-center font-bold"
+          />
           <button
             type="button"
             onClick={() => setQty((q) => q + 1)}
@@ -117,7 +130,7 @@ export function EditableLine({ line: l, onMessage }: { line: SaleLine; onMessage
         </button>
         <button
           type="button"
-          disabled={pending}
+          disabled={pending || !desc.trim()}
           onClick={save}
           className="rounded-lg bg-slate-900 px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
         >
@@ -132,14 +145,18 @@ export function EditableLine({ line: l, onMessage }: { line: SaleLine; onMessage
 export function AddLine({ quoteId, onMessage }: { quoteId: number; onMessage: (m: string) => void }) {
   const router = useRouter();
   const [pending, start] = useTransition();
-  const [open, setOpen] = useState<null | "tire" | "service">(null);
+  const [open, setOpen] = useState<null | "tire" | "service" | "custom">(null);
   const [q, setQ] = useState("");
   const [tires, setTires] = useState<ProductHit[]>([]);
   const [svcs, setSvcs] = useState<Awaited<ReturnType<typeof findServices>>>([]);
+  /** ⭐ 직접 입력 (사장님 요청 2026-08-06) — 목록에 없는 내용도 자유롭게 적는다 */
+  const [cDesc, setCDesc] = useState("");
+  const [cQty, setCQty] = useState(1);
+  const [cPrice, setCPrice] = useState("");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || open === "custom") return;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
       if (open === "tire") {
@@ -183,6 +200,67 @@ export function AddLine({ quoteId, onMessage }: { quoteId: number; onMessage: (m
         >
           + 공임·정비 추가
         </button>
+        <button
+          type="button"
+          onClick={() => setOpen("custom")}
+          className="flex-1 rounded-lg border border-dashed border-slate-300 py-1.5 text-xs text-slate-500"
+        >
+          + 직접 입력
+        </button>
+      </div>
+    );
+  }
+
+  /* ⭐ 직접 입력 — 검색 없이 품명·수량·단가를 타이핑한다. 재고와는 무관하다 */
+  if (open === "custom") {
+    return (
+      <div className="mt-2 rounded-xl bg-slate-50 p-2">
+        <input
+          value={cDesc}
+          onChange={(e) => setCDesc(e.target.value)}
+          placeholder="내용  예: 얼라이먼트 조정, 폐타이어 수거…"
+          autoFocus
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+        />
+        <div className="mt-1.5 flex items-center gap-2">
+          <label className="flex items-center gap-1">
+            <input
+              value={cQty}
+              onChange={(e) => setCQty(Math.max(1, Number(e.target.value.replace(/\D/g, "")) || 1))}
+              inputMode="numeric"
+              className="tabular h-9 w-12 rounded-lg border border-slate-300 bg-white text-center text-sm font-bold"
+            />
+            <span className="text-xs text-slate-500">개</span>
+          </label>
+          <label className="ml-auto flex items-center gap-1">
+            <input
+              value={cPrice === "" ? "" : Number(cPrice).toLocaleString()}
+              onChange={(e) => setCPrice(e.target.value.replace(/\D/g, ""))}
+              inputMode="numeric"
+              placeholder="단가"
+              className="tabular h-9 w-28 rounded-lg border border-slate-300 px-2 text-right text-sm"
+            />
+            <span className="text-xs text-slate-500">원</span>
+          </label>
+        </div>
+        <div className="mt-2 flex gap-2">
+          <button type="button" onClick={() => setOpen(null)} className="text-xs text-slate-500 underline">
+            닫기
+          </button>
+          <button
+            type="button"
+            disabled={pending || !cDesc.trim()}
+            onClick={() => {
+              add({ quoteId, kind: "custom", description: cDesc.trim(), qty: cQty, unitPrice: Number(cPrice) || 0 });
+              setCDesc("");
+              setCQty(1);
+              setCPrice("");
+            }}
+            className="ml-auto rounded-lg bg-slate-900 px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+          >
+            추가
+          </button>
+        </div>
       </div>
     );
   }

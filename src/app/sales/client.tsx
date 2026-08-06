@@ -91,6 +91,8 @@ export function SaleCard({ sale: s }: { sale: SaleRow }) {
             {s.marsStatus === "전송완료" && <span className="ml-1.5 text-indigo-500">MARS ✓</span>}
           </span>
         </div>
+        {/* ⭐ 판매 등록 때 적은 비고 — 펼치지 않아도 보인다 (사장님 요청 2026-08-06) */}
+        {s.paymentMemo && <p className="mt-0.5 truncate text-xs text-amber-700">📝 {s.paymentMemo}</p>}
       </button>
 
       {open && (

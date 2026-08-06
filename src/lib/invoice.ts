@@ -13,6 +13,7 @@
  */
 import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
 import { db } from "@/db";
 import { product, purchaseInvoice, purchaseInvoiceItem, stockItem, stockMovement } from "@/db/schema";
 import type { LineKind } from "./invoice-desc";
@@ -465,6 +466,9 @@ export async function removeInvoice(invoiceId: number): Promise<{ ok: boolean; e
     return { ok: false, error: "이미 입고된 품목이 있어 지울 수 없습니다" };
   }
   await db.delete(purchaseInvoice).where(eq(purchaseInvoice.id, invoiceId));
+  // 이 기기가 담던 장부였으면 담기 화면도 닫는다 (tm_draft — 기기별 직접 담기)
+  const jar = await cookies();
+  if (jar.get("tm_draft")?.value === String(invoiceId)) jar.delete("tm_draft");
   refresh("/receiving");
   return { ok: true };
 }
@@ -790,6 +794,7 @@ export async function startManualPurchase(
     ORDER BY i.created_at DESC LIMIT 1
   `);
   if (dup) {
+    await claimDraft(Number(dup.id));
     refresh("/receiving");
     return { ok: true, invoiceId: Number(dup.id) };
   }
@@ -816,8 +821,38 @@ export async function startManualPurchase(
     ])
     .returning({ id: purchaseInvoice.id });
 
+  await claimDraft(inv.id);
   refresh("/receiving");
   return { ok: true, invoiceId: inv.id };
+}
+
+/**
+ * ⭐ 직접 담기 장부는 **기기(브라우저)마다 따로** 다 (사장님 지적 2026-08-06).
+ *
+ *   "다른 유저가 직접담기를 진행하는 도중에는 다른 유저도 똑같은 화면을 봐야
+ *    한다는 것이 문제점. 유저마다 … 따로따로 할 수 있되 입고 예정에는 동시에
+ *    반영되어 같이 공유할 수 있도록."
+ *
+ * 전에는 「가장 최근에 열린 직접 장부」를 모두에게 보여줬다 — 한 사람이 담는 동안
+ * 다른 사람도 그 장부에 갇혔다. 이제 어느 장부를 담는 중인지는 **쿠키**(tm_draft)로
+ * 기기마다 기억한다. 장부 자체는 DB 하나이므로 입고 예정 목록에는 모두에게 보인다.
+ */
+async function claimDraft(invoiceId: number) {
+  (await cookies()).set("tm_draft", String(invoiceId), { path: "/", maxAge: 60 * 60 * 24 * 30 });
+}
+
+/** 다른 기기에서 담던 직접 장부를 이 기기로 가져와 이어 담는다 */
+export async function resumeManualPurchase(
+  invoiceId: number,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const [inv] = await db.execute<{ id: number; invoice_no: string; status: string }>(
+    sql`SELECT id, invoice_no, status FROM purchase_invoice WHERE id = ${invoiceId}`,
+  );
+  if (!inv) return { ok: false, error: "장부를 찾을 수 없습니다" };
+  if (!String(inv.invoice_no).startsWith("직접-")) return { ok: false, error: "직접 매입 장부가 아닙니다" };
+  await claimDraft(Number(inv.id));
+  refresh("/receiving");
+  return { ok: true };
 }
 
 /**

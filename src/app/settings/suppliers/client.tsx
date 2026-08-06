@@ -28,9 +28,16 @@ export function SupplierManager({ rows }: { rows: SupplierRow[] }) {
   const [memo, setMemo] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [showHidden, setShowHidden] = useState(false);
+  /** ⭐ 검색 형식 (사장님 요청 2026-08-06) — 거래처가 늘어도 찾을 수 있게 */
+  const [q, setQ] = useState("");
 
-  const shown = showHidden ? rows : rows.filter((r) => r.isActive);
-  const hiddenCount = rows.length - rows.filter((r) => r.isActive).length;
+  const norm = (s: string | null | undefined) => (s ?? "").replace(/\s/g, "").toLowerCase();
+  const needle = norm(q);
+  const matched = needle
+    ? rows.filter((r) => norm(r.name).includes(needle) || norm(r.phone).includes(needle) || norm(r.memo).includes(needle))
+    : rows;
+  const shown = showHidden ? matched : matched.filter((r) => r.isActive);
+  const hiddenCount = matched.length - matched.filter((r) => r.isActive).length;
 
   function submit() {
     setError(null);
@@ -104,13 +111,21 @@ export function SupplierManager({ rows }: { rows: SupplierRow[] }) {
         </button>
       )}
 
-      <ul className="mt-4 space-y-2">
+      {/* ⭐ 이름·연락처·메모 어디에 걸려도 찾힌다 */}
+      <input
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder="거래처 검색  예: 금호, 쌍성, 010…"
+        className="mt-4 w-full rounded-xl border border-slate-300 px-4 py-3 text-base outline-none focus:border-slate-900"
+      />
+
+      <ul className="mt-3 space-y-2">
         {shown.map((s) => (
           <SupplierCard key={s.id} s={s} />
         ))}
         {shown.length === 0 && (
           <li className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-slate-500">
-            등록된 거래처가 없습니다
+            {needle ? `「${q.trim()}」 에 맞는 거래처가 없습니다` : "등록된 거래처가 없습니다"}
           </li>
         )}
       </ul>

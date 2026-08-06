@@ -261,17 +261,24 @@ async function restoreStockFor(
   return restored;
 }
 
-/** 줄 하나 고치기 — 수량·단가 */
+/**
+ * 줄 하나 고치기 — 수량·단가·품명.
+ * ⭐ 품명도 키보드로 고칠 수 있다 (사장님 요청 2026-08-06 — "내용도 키보드로 수정").
+ *    품명만 바꾼 것은 금액이 안 변하므로 MARS 어긋남 경고를 남기지 않는다.
+ */
 export async function updateSaleLine(input: {
   itemId: number;
   qty: number;
   unitPrice: number;
+  description?: string;
 }): Promise<{ ok: true; shortage: number; marsWarning: string | null } | { ok: false; error: string }> {
   if (!Number.isInteger(input.qty) || input.qty <= 0) return { ok: false, error: "수량은 1 이상이어야 합니다" };
   if (!Number.isFinite(input.unitPrice) || input.unitPrice < 0) return { ok: false, error: "단가가 올바르지 않습니다" };
+  const desc = input.description?.trim();
+  if (input.description !== undefined && !desc) return { ok: false, error: "품목 이름은 비울 수 없습니다" };
 
-  const [line] = await db.execute<{ id: number; quote_id: number; product_id: number | null; qty: number }>(
-    sql`SELECT id, quote_id, product_id, qty FROM quote_item WHERE id = ${input.itemId}`,
+  const [line] = await db.execute<{ id: number; quote_id: number; product_id: number | null; qty: number; final_price: number }>(
+    sql`SELECT id, quote_id, product_id, qty, final_price FROM quote_item WHERE id = ${input.itemId}`,
   );
   if (!line) return { ok: false, error: "품목을 찾을 수 없습니다" };
   const e = await editableQuote(Number(line.quote_id));
@@ -287,9 +294,14 @@ export async function updateSaleLine(input: {
     await restoreStockFor(e.q.id, e.q.quoteNo, Number(line.product_id), -delta);
   }
 
-  await db.execute(sql`UPDATE quote_item SET qty = ${input.qty}, final_price = ${input.unitPrice} WHERE id = ${input.itemId}`);
+  await db.execute(sql`
+    UPDATE quote_item SET qty = ${input.qty}, final_price = ${input.unitPrice}
+      ${desc !== undefined ? sql`, description = ${desc}` : sql``}
+    WHERE id = ${input.itemId}
+  `);
   await recomputeTotal(e.q.id);
-  const marsWarning = await marsMismatchNote(e.q.id, e.q.marsStatus);
+  const amountChanged = delta !== 0 || input.unitPrice !== Number(line.final_price);
+  const marsWarning = amountChanged ? await marsMismatchNote(e.q.id, e.q.marsStatus) : null;
   refresh();
   return { ok: true, shortage, marsWarning };
 }

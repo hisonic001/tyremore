@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { cookies } from "next/headers";
 import { pendingInvoices } from "@/lib/invoice";
 import { PendingList } from "./client";
 import { RegisterPurchase } from "./register";
@@ -15,13 +16,16 @@ export default async function ReceivingPage() {
   const totalPending = invoices.reduce((s, i) => s + i.remain, 0);
 
   /**
-   * 진행 중인 직접 매입 장부 (아직 입고 안 한 것).
-   * 여럿이면 **가장 최근 것**을 연다 — 장부 번호에 날짜와 순번이 들어 있다.
+   * ⭐ 이 기기가 담는 중인 직접 매입 장부 (사장님 지적 2026-08-06).
+   *
+   * 전에는 「가장 최근에 열린 직접 장부」를 열었다 — 두 사람이 같이 쓰면 한 사람이
+   * 담는 동안 다른 사람도 그 장부를 봐야 했다. 이제 어느 장부를 담는 중인지는
+   * 쿠키(tm_draft)로 **기기마다** 기억한다. 남의 장부는 아래 입고 예정 목록에만
+   * 보이고, 「이어서 담기」를 누르면 이 기기로 가져올 수 있다.
    */
+  const draftId = Number((await cookies()).get("tm_draft")?.value);
   const openManual =
-    invoices
-      .filter((i) => i.invoiceNo.startsWith("직접-"))
-      .sort((a, b) => b.invoiceNo.localeCompare(a.invoiceNo))[0] ?? null;
+    invoices.find((i) => i.invoiceId === draftId && i.invoiceNo.startsWith("직접-")) ?? null;
 
   /**
    * 🔴 열려 있는 직접 장부도 **입고 예정 목록에 그대로 보여준다** (사장님 버그 제보 2026-08-05).
@@ -30,7 +34,8 @@ export default async function ReceivingPage() {
    * 그런데 「담기 끝」을 알릴 길이 없어서 장부가 영원히 담기 화면에만 갇혔다 —
    * 본수 배지는 올라가는데 목록은 「기다리는 물건이 없습니다」였고 전량 입고 버튼도 없었다.
    * 담기와 입고는 같은 장부의 두 얼굴이다: 위에서 담고, 아래에서 입고를 확정한다.
-   * (막 시작해서 아직 빈 장부만 목록에서 뺀다 — 빈 카드는 소음이다.)
+   * (이 기기가 막 시작한 빈 장부만 목록에서 뺀다 — 다른 기기의 장부는 빈 것이라도
+   *  보여야 「이어서 담기」로 넘겨받거나 지울 수 있다.)
    */
   const listed = invoices.filter((i) => !(i.invoiceId === openManual?.invoiceId && i.lines.length === 0));
 
@@ -70,7 +75,7 @@ export default async function ReceivingPage() {
             기다리는 물건이 없습니다
           </p>
         ) : (
-          <PendingList invoices={listed} />
+          <PendingList invoices={listed} draftId={Number.isFinite(draftId) ? draftId : undefined} />
         )}
       </section>
     </main>

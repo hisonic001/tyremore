@@ -40,15 +40,18 @@ export default async function SalesPage({
    *    단, 고객·차량 이력으로 들어왔을 때는 전체가 기본 — 카드에서 온 사람은
    *    「이 차의 과거」를 보러 온 것이니까.
    */
-  const today = new Date().toLocaleDateString("sv-SE");
+  // Vercel 서버는 UTC — 한국 아침 9시 전에는 하루 어긋나므로 KST 로 못박는다
+  const kst = (d: Date) => d.toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
+  const today = kst(new Date());
+  const yesterday = kst(new Date(Date.now() - 86400_000));
   const thisMonth = today.slice(0, 7);
   const explicit = sp.range ?? (sp.month ? "month" : sp.from || sp.to ? "range" : null);
   const active = explicit ?? (scoped ? "all" : "today");
 
   const h = await saleHistory({
     month: active === "month" ? sp.month : active === "thisMonth" ? thisMonth : undefined,
-    from: active === "today" ? today : active === "range" ? sp.from : undefined,
-    to: active === "today" ? today : active === "range" ? sp.to : undefined,
+    from: active === "today" ? today : active === "yesterday" ? yesterday : active === "range" ? sp.from : undefined,
+    to: active === "today" ? today : active === "yesterday" ? yesterday : active === "range" ? sp.to : undefined,
     customerId: Number.isFinite(customerId) ? customerId : undefined,
     vehicleId: Number.isFinite(vehicleId) ? vehicleId : undefined,
     includeCanceled,
@@ -106,6 +109,7 @@ export default async function SalesPage({
 
       <p className="tabular mt-3 text-sm text-slate-600">
         {active === "today" && `오늘(${today}) · `}
+        {active === "yesterday" && `어제(${yesterday}) · `}
         {active === "thisMonth" && `${thisMonth} · `}
         {h.saleCount}건 · {won(h.totalAmount)}원
       </p>

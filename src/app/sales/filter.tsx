@@ -22,7 +22,7 @@ export function PeriodFilter({
   keep,
 }: {
   months: string[];
-  /** 'today' | 'thisMonth' | 'all' | 'month' | 'range' */
+  /** 'today' | 'yesterday' | 'thisMonth' | 'all' | 'month' | 'range' */
   active: string;
   month: string | null;
   from: string | null;
@@ -48,6 +48,10 @@ export function PeriodFilter({
       <div className="flex flex-wrap items-center gap-1.5">
         <button type="button" onClick={() => go({ range: "today", month: undefined, from: undefined, to: undefined })} className={chip(active === "today")}>
           오늘
+        </button>
+        {/* ⭐ 어제 (사장님 요청 2026-08-06) — 마감 뒤 전날 것을 되짚을 때 */}
+        <button type="button" onClick={() => go({ range: "yesterday", month: undefined, from: undefined, to: undefined })} className={chip(active === "yesterday")}>
+          어제
         </button>
         <button type="button" onClick={() => go({ range: "thisMonth", month: undefined, from: undefined, to: undefined })} className={chip(active === "thisMonth")}>
           이번 달
