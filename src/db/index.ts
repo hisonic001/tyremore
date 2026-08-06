@@ -25,6 +25,13 @@ const client = postgres(url, {
   max: 3,
   idle_timeout: 20,
   connect_timeout: 15,
+  /**
+   * ⭐ 트랜잭션 풀러(6543) 대비 (2026-08-06 안정성 작업).
+   * 트랜잭션 모드는 준비된 문장(prepared statement)을 지원하지 않는다 —
+   * 이 줄 없이 포트만 6543 으로 바꾸면 모든 쿼리가 죽는다.
+   * 세션 풀러(5432)에서도 그대로 동작하므로 어느 포트든 안전하다.
+   */
+  prepare: false,
   // 한글 정렬·검색을 위해 클라이언트도 UTF-8 고정
   connection: { application_name: "tyremore" },
 });
