@@ -90,12 +90,18 @@ export default async function Home({
           >
             매입
           </Link>
-          {/* 창고에서 세는 화면 — 자주는 아니지만 찾을 때 바로 보여야 한다 */}
+          {/*
+            ⭐ 재고 대신 정비 내역 (사장님 지시 2026-08-06).
+               "홈 화면에 판매내역으로 바로 갈 수 있는 버튼을 재고버튼 대신 넣어줘.
+                재고 기능은 /settings 으로 이동."
+               재고 조회는 어차피 검색 결과 카드에 나온다 — 창고 세기 화면(/stock)은
+               자주 안 쓰니 설정으로 내렸다.
+          */}
           <Link
-            href="/stock"
+            href="/sales"
             className="rounded-lg px-2.5 py-2 text-sm font-medium text-slate-600 active:bg-slate-200"
           >
-            재고
+            정비 내역
           </Link>
           <Link
             href="/settings"

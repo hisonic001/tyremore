@@ -47,6 +47,11 @@ export default async function SettingsPage() {
       title: "상품",
       desc: "거래처 목록으로 채우기 · 새 상품 등록 · 안 받는 것 숨기기",
     },
+    /*
+     * ⭐ 재고는 홈 메뉴에서 여기로 내려왔다 (사장님 지시 2026-08-06) —
+     *    홈 자리는 정비 내역이 가져갔다. 재고 수량은 어차피 검색 카드에 보인다.
+     */
+    { href: "/stock", title: "재고", desc: "창고에서 세는 화면 · 재고 목록 · DOT·수량 맞추기" },
     { href: "/settings/suppliers", title: "거래처", desc: "추가 · 이름 고치기 · 합치기 · 숨기기" },
     {
       href: "/settings/shop",
@@ -63,7 +68,7 @@ export default async function SettingsPage() {
       </Link>
       <h1 className="mt-3 text-2xl font-bold">설정</h1>
       <p className="mt-1 text-sm text-slate-500">
-        판매 · 매입 · 재고는 <strong>맨 위 메뉴</strong>에 있습니다.
+        판매 · 매입 · 정비 내역은 <strong>홈 맨 위 메뉴</strong>에 있습니다.
       </p>
 
       {backupStale ? (
