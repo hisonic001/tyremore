@@ -282,18 +282,21 @@ export default async function ReportsPage({
       {/* ---- ⑤ 많이 판 품목 ---- */}
       <Section title="많이 판 품목 톱10" sub="금액 순 · 막대는 1위 대비 크기">
         {top.length ? (
-          <ol className="space-y-1.5">
+          /* 🔴 막대를 글자 뒤에 깔지 않는다 (2026-08-07 재고 리포트에서 같은 문제 제보) */
+          <ol className="space-y-2">
             {top.map((t) => {
               const amt = Number(t.amt);
               const w = topMax > 0 ? Math.max(2, Math.round((amt / topMax) * 100)) : 0;
               return (
-                <li key={t.name} className="relative overflow-hidden rounded-lg border border-slate-100">
-                  <div className="absolute inset-y-0 left-0 bg-[#cde2fb]" style={{ width: `${w}%` }} />
-                  <div className="relative flex items-baseline justify-between gap-3 px-3 py-2 text-sm">
-                    <span className="truncate">{t.name}</span>
+                <li key={t.name}>
+                  <div className="flex items-baseline justify-between gap-3 text-sm">
+                    <span className="min-w-0 truncate">{t.name}</span>
                     <span className="shrink-0 tabular-nums text-slate-600">
                       {t.q}개 · <strong className="text-slate-900">{fmtShort(amt)}</strong>
                     </span>
+                  </div>
+                  <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-100">
+                    <div className="h-2 rounded-full bg-[#2a78d6]" style={{ width: `${w}%` }} />
                   </div>
                 </li>
               );

@@ -261,22 +261,29 @@ function Tile({ label, value, sub, warn }: { label: string; value: string; sub?:
   );
 }
 
+/**
+ * 🔴 막대를 글자 **뒤에 깔지 않는다** (사장님 제보 2026-08-07 — "그래프가 글씨를 가려서 안보임").
+ *    겹치면 폰 브라우저의 다크 모드 강제 변환에서 글자색만 뒤집혀 막대에 묻힌다.
+ *    글자 줄 따로, 그 아래 가는 막대 따로 — 어떤 화면에서도 안 겹친다.
+ */
 function BarList({ rows, max, unit }: { rows: { label: string; qty: number }[]; max: number; unit: string }) {
   if (rows.length === 0) return <p className="text-sm text-slate-400">없습니다</p>;
   return (
-    <ol className="space-y-1.5">
+    <ol className="space-y-2">
       {rows.map((r) => (
-        <li key={r.label} className="relative overflow-hidden rounded-lg border border-slate-100">
-          <div
-            className="absolute inset-y-0 left-0 bg-[#cde2fb]"
-            style={{ width: `${max > 0 ? Math.max(2, Math.round((r.qty / max) * 100)) : 0}%` }}
-          />
-          <div className="relative flex items-baseline justify-between gap-3 px-3 py-1.5 text-sm">
-            <span className="truncate">{r.label}</span>
+        <li key={r.label}>
+          <div className="flex items-baseline justify-between gap-3 text-sm">
+            <span className="min-w-0 truncate">{r.label}</span>
             <span className="tabular shrink-0 font-semibold">
               {r.qty}
               {unit}
             </span>
+          </div>
+          <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-100">
+            <div
+              className="h-2 rounded-full bg-[#2a78d6]"
+              style={{ width: `${max > 0 ? Math.max(2, Math.round((r.qty / max) * 100)) : 0}%` }}
+            />
           </div>
         </li>
       ))}
