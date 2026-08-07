@@ -1727,7 +1727,10 @@ async function postOrder(
  * ============================================================== */
 
 /**
- * 그 줄을 100%(매우 양호)로 만든다.
+ * 그 줄의 **맨 오른쪽 등급 칸**을 켠다 — 100%(매우 양호) 또는 타이어의 8mm.
+ *
+ * ⭐ 타이어 트레드 표(교체·2mm~8mm)에도 그대로 쓴다 (사장님 지시 2026-08-07) —
+ *    8mm 가 맨 오른쪽이라 규칙이 같다. 교체 안 한 바퀴가 이 함수로 8mm 를 받는다.
  *
  * ⭐ 사장님 확인 (2026-08-02): **맨 오른쪽 칸이 100%**, 맨 왼쪽 체크란이 교체.
  *    표마다 열 개수가 달라서 이름이 다르다 —
@@ -2027,24 +2030,35 @@ async function fillVehicleCheck(
     return false;
   };
 
-  // ① 타이어 — 실제로 간 바퀴만 Replace
+  // ① 타이어 — 간 바퀴는 「교체」, 안 간 바퀴는 「8mm」 (사장님 지시 2026-08-07).
   //    ⭐ 판매 등록에서 바퀴를 골라 주셨으면 **그 선택 그대로** (사장님 요청 2026-08-05).
   //       안 골랐으면 지금처럼 본수로 짐작한다.
+  //    ⭐ 교체 안 한 바퀴도 비워 두지 않는다 — 트레드 표의 8mm 칸에 체크한다.
+  //       타이어 표 열은 「교체 · 2mm · 3mm · … · 8mm」 순서라 **8mm 가 맨 오른쪽**이다.
+  //       그래서 다른 항목의 100%(맨 오른쪽 체크박스)와 같은 setGrade100 을 그대로 쓴다 —
+  //       맨 오른쪽이 안 켜져도 7mm 로 물러서지 않는 안전장치까지 동일하게 받는다.
   await openSection("타이어", "타이어 - 전륜");
   const wheels = opts.wheels?.length ? opts.wheels : wheelsFor(opts.tyreQty);
-  for (const w of wheels) {
-    const row = f.getByRole("row").filter({ hasText: `타이어 - ${w}` }).first();
-    if (!(await row.isVisible().catch(() => false))) {
-      missed.push(`타이어 ${w}`);
-      continue;
+  const ALL_WHEELS = ["전륜 좌측", "전륜 우측", "후륜 좌측", "후륜 우측"];
+  for (const w of ALL_WHEELS) {
+    if (wheels.includes(w)) {
+      const row = f.getByRole("row").filter({ hasText: `타이어 - ${w}` }).first();
+      if (!(await row.isVisible().catch(() => false))) {
+        missed.push(`타이어 ${w}`);
+        continue;
+      }
+      await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+      const rep = row.locator('[controlname="Replace"]').first();
+      if ((await rep.getAttribute("aria-checked").catch(() => null)) !== "true") {
+        await rep.click({ timeout: 6000 }).catch(() => {});
+        await page.waitForTimeout(350);
+      }
+      log(`      타이어 ${w} — 교체 표시`);
+    } else {
+      const done = await setGrade100(page, `타이어 - ${w}`);
+      log(`      타이어 ${w} — ${done ? "8mm 표시 (교체 안 함)" : "⚠️ 8mm 표시를 못 넣었습니다"}`);
+      if (!done) missed.push(`타이어 ${w} (8mm)`);
     }
-    await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
-    const rep = row.locator('[controlname="Replace"]').first();
-    if ((await rep.getAttribute("aria-checked").catch(() => null)) !== "true") {
-      await rep.click({ timeout: 6000 }).catch(() => {});
-      await page.waitForTimeout(350);
-    }
-    log(`      타이어 ${w} — 교체 표시`);
   }
 
   /**
