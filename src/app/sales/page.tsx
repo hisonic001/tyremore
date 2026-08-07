@@ -57,6 +57,25 @@ export default async function SalesPage({
     includeCanceled,
   });
 
+  /**
+   * 🔴 화면 과부하 방지 (2026-08-07 「계속 로딩중」 사건).
+   *    전체 기간은 3,100건이 넘는다 — 서버·DB는 0.2초면 만들어 보내지만(실측),
+   *    카드 3천 장을 받은 **폰 브라우저가 그리다 얼어붙는다** (client-side exception).
+   *    서버가 아무리 빨라도 화면에 다 쏟으면 소용없다 — 최근 200건까지만 그리고
+   *    나머지는 숫자로 알린 뒤 범위를 좁히게 안내한다. 합계·건수는 전체 기준 그대로다.
+   */
+  const CAP = 200;
+  const totalEntries = h.days.reduce((s, d) => s + d.sales.length, 0);
+  let shown = 0;
+  const days: typeof h.days = [];
+  for (const d of h.days) {
+    if (shown >= CAP) break;
+    const take = d.sales.slice(0, CAP - shown);
+    shown += take.length;
+    days.push(take.length === d.sales.length ? d : { ...d, sales: take });
+  }
+  const hiddenCount = totalEntries - shown;
+
   const qs = (over: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
     const merged = {
@@ -120,7 +139,7 @@ export default async function SalesPage({
         </p>
       ) : (
         <div className="mt-4 space-y-5">
-          {h.days.map((d) => (
+          {days.map((d) => (
             <section key={d.date}>
               <div className="flex items-baseline justify-between px-1">
                 <h2 className="tabular font-semibold">{d.date}</h2>
@@ -136,6 +155,13 @@ export default async function SalesPage({
               </ul>
             </section>
           ))}
+          {hiddenCount > 0 && (
+            <p className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-center text-sm text-amber-900">
+              화면이 얼지 않도록 <strong>최근 {shown}건까지만</strong> 보여드렸습니다.
+              <br />
+              나머지 {hiddenCount.toLocaleString()}건은 위에서 <strong>달이나 기간을 좁히면</strong> 다 보입니다.
+            </p>
+          )}
         </div>
       )}
 
