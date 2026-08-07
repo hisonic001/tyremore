@@ -35,51 +35,72 @@ export default async function StockReportPage() {
   if (!session) redirect("/login");
   if (session.role !== "owner") redirect("/");
 
-  const [kpiRows, odd, years, seasons, brands, specs, notSelling] = await Promise.all([
-    db.execute<{ total: number; products: number; nodot: number; list_sum: string }>(sql`
+  /**
+   * 🔴 쿼리는 **하나씩 차례로** 실행한다 (2026-08-07 — 이 페이지만 Vercel 에서
+   *    응답이 끝나지 않는 문제. 같은 7개를 동시에 돌리면 로컬에선 190ms 에 끝나는데
+   *    Vercel 렌더는 로그도 없이 멈췄다). 차례로 돌리면 서울 리전에서 왕복을 더해도
+   *    0.1초 차이가 안 난다 — 동시성 하나를 의심 목록에서 지우고, 단계 로그로
+   *    어디서 멈추는지 서버 로그에 남긴다.
+   */
+  const step = (n: string) => console.log(`[재고리포트] ${n} ${Date.now()}`);
+  step("시작");
+
+  const kpiRows = await db.execute<{ total: number; products: number; nodot: number; list_sum: string }>(sql`
       SELECT COALESCE(SUM(s.qty),0)::int total, COUNT(DISTINCT s.product_id)::int products,
              COALESCE(SUM(s.qty) FILTER (WHERE s.dot IS NULL),0)::int nodot,
              COALESCE(SUM(s.qty * p.list_price) FILTER (WHERE p.list_price IS NOT NULL),0)::bigint list_sum
       FROM stock_item s JOIN product p ON p.id = s.product_id
       WHERE s.status = '재고' AND p.item_type = 'tire'
-    `),
-    // ⭐ 홀수 재고 — 타이어는 짝(2·4본)으로 나가니 홀수로 남은 모델이 주문·판매 결정 지점이다
-    db.execute<{ spec: string | null; name: string; qty: number }>(sql`
+    `);
+  step("① 총괄");
+
+  // ⭐ 홀수 재고 — 타이어는 짝(2·4본)으로 나가니 홀수로 남은 모델이 주문·판매 결정 지점이다
+  const odd = await db.execute<{ spec: string | null; name: string; qty: number }>(sql`
       SELECT ${SPEC} AS spec, ${NAME} AS name, SUM(s.qty)::int qty
       FROM stock_item s JOIN product p ON p.id = s.product_id
       WHERE s.status = '재고' AND p.item_type = 'tire'
       GROUP BY p.id, 1, 2
       HAVING SUM(s.qty) % 2 = 1
       ORDER BY 1 NULLS LAST, 2
-    `),
-    db.execute<{ y: string; n: number }>(sql`
+    `);
+  step("② 홀수");
+
+  const years = await db.execute<{ y: string; n: number }>(sql`
       SELECT ('20' || substr(s.dot, 3, 2)) y, SUM(s.qty)::int n
       FROM stock_item s JOIN product p ON p.id = s.product_id
       WHERE s.status = '재고' AND p.item_type = 'tire' AND s.dot IS NOT NULL
       GROUP BY 1 ORDER BY 1
-    `),
-    db.execute<{ se: string; n: number }>(sql`
+    `);
+  step("③ 연식");
+
+  const seasons = await db.execute<{ se: string; n: number }>(sql`
       SELECT COALESCE(p.season, '미상') se, SUM(s.qty)::int n
       FROM stock_item s JOIN product p ON p.id = s.product_id
       WHERE s.status = '재고' AND p.item_type = 'tire'
       GROUP BY 1
-    `),
-    db.execute<{ bn: string; n: number }>(sql`
+    `);
+  step("④ 계절");
+
+  const brands = await db.execute<{ bn: string; n: number }>(sql`
       SELECT COALESCE(b.name_ko, p.brand_code, '기타') bn, SUM(s.qty)::int n
       FROM stock_item s JOIN product p ON p.id = s.product_id
       LEFT JOIN brand b ON b.code = p.brand_code
       WHERE s.status = '재고' AND p.item_type = 'tire'
       GROUP BY 1 ORDER BY n DESC
-    `),
-    db.execute<{ spec: string; n: number }>(sql`
+    `);
+  step("⑤ 브랜드");
+
+  const specs = await db.execute<{ spec: string; n: number }>(sql`
       SELECT ${SPEC} AS spec, SUM(s.qty)::int n
       FROM stock_item s JOIN product p ON p.id = s.product_id
       WHERE s.status = '재고' AND p.item_type = 'tire'
       GROUP BY 1 HAVING ${SPEC} IS NOT NULL
       ORDER BY n DESC LIMIT 10
-    `),
-    // ⭐ 안 나가는 재고 — 재고는 있는데 최근 180일 판매가 없는 모델 (판매 이력은 2025년부터 있다)
-    db.execute<{ spec: string | null; name: string; qty: number; last_sold: string | null }>(sql`
+    `);
+  step("⑥ 규격");
+
+  // ⭐ 안 나가는 재고 — 재고는 있는데 최근 180일 판매가 없는 모델 (판매 이력은 2025년부터 있다)
+  const notSelling = await db.execute<{ spec: string | null; name: string; qty: number; last_sold: string | null }>(sql`
       WITH last_sale AS (
         SELECT qi.product_id, MAX(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)) d
         FROM quote_item qi JOIN quote q ON q.id = qi.quote_id AND q.status = '성사'
@@ -93,8 +114,8 @@ export default async function StockReportPage() {
       GROUP BY p.id, 1, 2, ls.d
       HAVING COALESCE(ls.d, '2000-01-01'::date) < (now() AT TIME ZONE 'Asia/Seoul')::date - 180
       ORDER BY SUM(s.qty) DESC, 1 LIMIT 10
-    `),
-  ]);
+    `);
+  step("⑦ 안 나가는 재고 — 쿼리 전부 끝");
 
   const kpi = kpiRows[0] ?? { total: 0, products: 0, nodot: 0, list_sum: "0" };
   const oddQty = odd.reduce((s, r) => s + r.qty, 0);
