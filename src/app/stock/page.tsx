@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/lib/link";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { StockExcel } from "./excel-ui";

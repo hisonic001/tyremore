@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/lib/link";
 import { marsDone, marsQueue } from "@/lib/mars-queue";
 import { latestMarsRun } from "@/lib/mars-run";
 import { DoneList, QueueList } from "./client";

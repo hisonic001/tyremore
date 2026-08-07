@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/lib/link";
 import { saleHistory } from "@/lib/sale-history";
 import { SaleCard } from "./client";
 import { PeriodFilter } from "./filter";

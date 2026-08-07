@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/lib/link";
 import { notFound } from "next/navigation";
 import { getStockDetail } from "@/lib/stock";
 import { SEASON_STYLE, type Season } from "@/lib/tire-attrs";

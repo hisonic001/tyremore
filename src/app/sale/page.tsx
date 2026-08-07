@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/lib/link";
 import { SaleForm } from "./client";
 
 export const dynamic = "force-dynamic";

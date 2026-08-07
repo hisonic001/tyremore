@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/lib/link";
 import { useEffect, useRef, useState } from "react";
 import { searchProducts } from "@/lib/search-actions";
 import type { ProductHit } from "@/lib/search";

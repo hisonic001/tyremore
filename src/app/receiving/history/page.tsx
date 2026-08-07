@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/lib/link";
 import { isOwner } from "@/lib/auth";
 import { purchaseHistory } from "@/lib/purchase-history";
 import { HistoryList } from "./client";

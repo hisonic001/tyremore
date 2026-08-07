@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/lib/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { Mode } from "@/lib/search";

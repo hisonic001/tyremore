@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/lib/link";
 import { listSuppliers } from "@/lib/supplier";
 import { SupplierManager } from "./client";
 

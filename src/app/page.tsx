@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/lib/link";
 import { getSession } from "@/lib/auth";
 import { findProducts, findVehicles, guessMode, tireBrands, type Mode } from "@/lib/search";
 import type { Season } from "@/lib/tire-attrs";
