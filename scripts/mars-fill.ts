@@ -840,8 +840,19 @@ async function createCustomer(
    * 그래서 **창이 닫혔는지**만 본다. 그게 저장됐다는 유일한 증거다.
    * 안 닫혔으면 화면에 떠 있는 말을 그대로 옮겨 알린다.
    */
-  const stillOpen = f.getByRole("textbox", { name: "번호판 번호" });
-  if (await stillOpen.isVisible({ timeout: 3000 }).catch(() => false)) {
+  /**
+   * 🔴 「창이 닫혔는가」는 **생성 창에만 있는 확인 버튼**으로 판정한다 (2026-08-07 Q26-0807-008).
+   *    전에는 「번호판 번호」 입력칸이 보이면 열린 것으로 봤는데, Playwright 의 이름
+   *    검색이 **부분 일치**라 저장 성공 후 돌아온 검색 화면의 「이름/번호판 번호」
+   *    칸까지 같은 것으로 봤다 — 실제로는 손님이 만들어졌는데 실패라고 보고한
+   *    **네 번째 거짓 보고**(방향만 반대)다. 생성 창의 controlname
+   *    `KOR Cust Contact Veh. Creation` 은 다른 화면에 없다.
+   */
+  const creationBtn = f.locator('button[controlname="KOR Cust Contact Veh. Creation"]');
+  const stillOpen =
+    (await creationBtn.count().catch(() => 0)) > 0 &&
+    (await creationBtn.last().isVisible({ timeout: 3000 }).catch(() => false));
+  if (stillOpen) {
     const said =
       (await f.getByRole("dialog").last().innerText().catch(() => "")) ||
       (await f.locator('[controlname="Dialog"]').last().innerText().catch(() => "")) ||
@@ -1354,6 +1365,35 @@ async function fillLines(
     }
 
     /**
+     * ⭐ 설명 2(줄 메모·범용 품번의 실제 상품명)는 **수량·단가보다 먼저** 쓴다
+     *    (2026-08-07 Q26-0807-006 사고 — 단가 검증까지 끝난 뒤 설명 2를 고쳤더니
+     *    MARS 가 그 줄을 다시 계산하며 수량·단가를 기본값으로 되돌렸다.
+     *    타이어 줄이 88,000원 기본가로 남아 합계가 어긋났고 전기가 보류됐다).
+     *    먼저 써 두면 재계산이 지나간 뒤에 수량·단가가 들어간다.
+     *    메모가 없으면 손대지 않는다 — 멀쩡한 기본값(규격·모델명)을 지울 이유가 없다.
+     */
+    const d2Text = [usedFallback ? l.marsName : null, l.memo?.trim() || null]
+      .filter(Boolean)
+      .join(" · ");
+    if (d2Text) {
+      const d2 = await resolveInput(
+        (await row.locator('[controlname="Description 2"]').count().catch(() => 0)) > 0
+          ? row.locator('[controlname="Description 2"]')
+          : row.getByRole("textbox", { name: "설명 2" }),
+      );
+      if (await d2.isVisible().catch(() => false)) {
+        await d2.click({ timeout: 6000 }).catch(() => {});
+        const ok = await d2.fill(d2Text).then(() => true).catch(() => false);
+        if (!ok) await d2.evaluate(SET_VALUE, d2Text).catch(() => {});
+        await d2.press("Tab").catch(() => {});
+        await page.waitForTimeout(700);
+        log(`      설명 2 → «${d2Text.slice(0, 40)}»`);
+      } else {
+        log("      ⚠️ 「설명 2」 칸을 못 찾았습니다");
+      }
+    }
+
+    /**
      * 🔴 수량도 **넣고 읽어서 확인한다** (2026-08-04).
      *    단가를 고치고 나니 이번엔 수량 2가 안 먹고 1로 남아 합계가 370,000 이 됐다.
      *    SET_VALUE(값 대입)는 이 표에서 조용히 실패할 때가 있다 — **fill(실제 타이핑)** 이
@@ -1430,39 +1470,6 @@ async function fillLines(
       throw new Error(
         `${l.no} 줄의 단가 ${l.unitPrice.toLocaleString()}원을 넣지 못했습니다 — MARS 기본단가가 남아 있습니다`,
       );
-    }
-
-    /**
-     * ⭐ 메모는 **그 줄의 「설명 2」 칸을 지우고** 그 안에 넣는다 (사장님 지시 2026-08-07).
-     *    전에는 판매 전체 메모 하나를 첫 줄에만 넣었는데, 이제 판매 등록에서
-     *    **줄마다** 메모를 받아 각자 자기 줄 설명 2 로 들어간다.
-     *    결제 메모(quote.payment_memo)는 우리 기록용 — MARS 에 넣지 않는다.
-     *    메모가 없으면 손대지 않는다 — 멀쩡한 기본값(규격·모델명)을 지울 이유가 없다.
-     */
-    /**
-     * ⭐ 범용 품번으로 넣은 줄은 **실제 상품명을 설명 2에** 남긴다 —
-     *    안 남기면 나중에 「이게 뭘 판 줄이지?」를 아무도 모른다.
-     *    줄 메모와 겹치면 「상품명 · 메모」로 붙인다.
-     */
-    const d2Text = [usedFallback ? l.marsName : null, l.memo?.trim() || null]
-      .filter(Boolean)
-      .join(" · ");
-    if (d2Text) {
-      const d2 = await resolveInput(
-        (await row.locator('[controlname="Description 2"]').count().catch(() => 0)) > 0
-          ? row.locator('[controlname="Description 2"]')
-          : row.getByRole("textbox", { name: "설명 2" }),
-      );
-      if (await d2.isVisible().catch(() => false)) {
-        await d2.click({ timeout: 6000 }).catch(() => {});
-        const ok = await d2.fill(d2Text).then(() => true).catch(() => false);
-        if (!ok) await d2.evaluate(SET_VALUE, d2Text).catch(() => {});
-        await d2.press("Tab").catch(() => {});
-        await page.waitForTimeout(700);
-        log(`      설명 2 → «${d2Text.slice(0, 40)}»`);
-      } else {
-        log("      ⚠️ 「설명 2」 칸을 못 찾았습니다");
-      }
     }
 
     log(`    ✅ ${l.no}  ${l.marsName.slice(0, 34)}  ×${l.qty}  ${l.unitPrice.toLocaleString()}원`);
