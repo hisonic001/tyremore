@@ -7,7 +7,7 @@ import type { SaleRow } from "@/lib/sale-history";
 import { AddLine, EditableLine } from "./line-edit";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
-const PAYS = ["현금", "카드", "계좌이체", "외상", "혼합"] as const;
+const PAYS = ["현금", "카드", "계좌이체", "외상", "혼합", "서비스"] as const;
 
 /**
  * 정비 한 건 — 펼치면 품목과 고치기·취소가 나온다.
@@ -84,7 +84,10 @@ export function SaleCard({ sale: s }: { sale: SaleRow }) {
         </div>
         <div className="mt-0.5 flex items-baseline justify-between gap-2 text-xs text-slate-500">
           <span className="truncate">
-            {s.lines.map((l) => `${l.description}${l.qty > 1 ? ` ×${l.qty}` : ""}`).join(" · ") || "품목 없음"}
+            {/* ⭐ 타이어 규격도 같이 (사장님 요청 2026-08-07) */}
+            {s.lines
+              .map((l) => `${l.description}${l.spec ? ` ${l.spec}` : ""}${l.qty > 1 ? ` ×${l.qty}` : ""}`)
+              .join(" · ") || "품목 없음"}
           </span>
           <span className="tabular shrink-0">
             {s.paymentMethod ?? ""}
@@ -106,6 +109,7 @@ export function SaleCard({ sale: s }: { sale: SaleRow }) {
                     <span className="min-w-0 truncate">
                       {l.lineType === "service" && <span className="mr-1 text-xs text-slate-400">공임</span>}
                       {l.description}
+                      {l.spec && <span className="tabular ml-1 text-xs text-slate-500">{l.spec}</span>}
                     </span>
                     <span className="tabular shrink-0 text-slate-600">
                       {l.qty > 1 && `${l.qty} × `}

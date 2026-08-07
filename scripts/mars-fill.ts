@@ -2667,6 +2667,13 @@ async function main_() {
         skipped++;
         continue;
       }
+      // 서비스(무상)는 저장할 때 '해당없음'이 되어 애초에 대기열에 안 올라온다.
+      // 그래도 수정으로 결제 방법이 바뀌어 들어올 수 있으니 한 번 더 거른다 (2026-08-07)
+      if (q.paymentMethod === "서비스") {
+        log("  ⏸️ 서비스(무상)라 MARS 에 넣지 않습니다 — 우리 기록에만 남습니다");
+        skipped++;
+        continue;
+      }
       try {
         const found = await findCustomer(page, q.plateNo);
 

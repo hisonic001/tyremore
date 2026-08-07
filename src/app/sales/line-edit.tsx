@@ -63,6 +63,8 @@ export function EditableLine({ line: l, onMessage }: { line: SaleLine; onMessage
           <span className="min-w-0 truncate">
             {l.lineType === "service" && <span className="mr-1 text-xs text-slate-400">공임</span>}
             {l.description}
+            {/* ⭐ 타이어 규격 (사장님 요청 2026-08-07) */}
+            {l.spec && <span className="tabular ml-1 text-xs text-slate-500">{l.spec}</span>}
           </span>
           <span className="flex shrink-0 items-baseline gap-2">
             <span className="tabular text-slate-600">

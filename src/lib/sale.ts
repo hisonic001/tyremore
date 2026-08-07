@@ -191,7 +191,8 @@ export async function saveSale(
       paidAmount: total,
       paymentMemo: input.memo ?? null,
       // 거래처 판매는 MARS 에 안 간다 (사장님 요청 2026-08-05) — 대기열은 '미전송'만 본다
-      marsStatus: input.supplierName ? "해당없음" : "미전송",
+      // 서비스(무상)도 MARS 에 안 간다 (2026-08-07) — 0원 매출 주문을 자동 전기하는 것은 위험하다
+      marsStatus: input.supplierName || input.paymentMethod === "서비스" ? "해당없음" : "미전송",
       tyrePositions: input.tyrePositions?.length ? input.tyrePositions.join(",") : null,
       marsMemo: input.supplierName
         ? `거래처 ${input.supplierName.trim()}`

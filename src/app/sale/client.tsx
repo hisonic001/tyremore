@@ -17,7 +17,8 @@ interface Row extends SaleLine {
   rimInch?: number | null;
 }
 
-const PAYMENTS = ["카드", "현금", "계좌이체", "외상"] as const;
+/** 서비스 = 무상 (사장님 요청 2026-08-07 — 단골 무상 점검·가벼운 서비스) */
+const PAYMENTS = ["카드", "현금", "계좌이체", "외상", "서비스"] as const;
 
 export function SaleForm() {
   const router = useRouter();
@@ -292,6 +293,12 @@ export function SaleForm() {
         {payment === "외상" && (
           <p className="mt-1.5 rounded-lg bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
             외상은 <strong>MARS 자동 입력에서 빠집니다.</strong> 여기 기록만 남고, MARS 는 직접 처리해 주세요.
+          </p>
+        )}
+        {payment === "서비스" && (
+          <p className="mt-1.5 rounded-lg bg-emerald-50 px-2 py-1.5 text-xs text-emerald-900">
+            서비스(무상)는 <strong>MARS 에 등록하지 않습니다</strong> — 우리 기록에만 남습니다.
+            단가를 0원으로 바꿔서 등록하세요.
           </p>
         )}
         {/*

@@ -19,6 +19,8 @@ export function PeriodFilter({
   month,
   from,
   to,
+  pay,
+  payOptions,
   keep,
 }: {
   months: string[];
@@ -27,7 +29,10 @@ export function PeriodFilter({
   month: string | null;
   from: string | null;
   to: string | null;
-  /** 유지할 쿼리 (customer·vehicle·canceled) */
+  /** ⭐ 결제 방법 필터 (사장님 요청 2026-08-07) — null 이면 전체 */
+  pay: string | null;
+  payOptions: string[];
+  /** 유지할 쿼리 (customer·vehicle·canceled + 현재 기간·결제) */
   keep: Record<string, string | undefined>;
 }) {
   const router = useRouter();
@@ -73,6 +78,19 @@ export function PeriodFilter({
             </option>
           ))}
         </select>
+      </div>
+
+      {/* ⭐ 결제 방법으로 좁히기 (사장님 요청 2026-08-07) — 기간과 독립이라 겹쳐 쓸 수 있다 */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-xs text-slate-400">결제</span>
+        <button type="button" onClick={() => go({ pay: undefined })} className={chip(!pay)}>
+          전체
+        </button>
+        {payOptions.map((p) => (
+          <button key={p} type="button" onClick={() => go({ pay: p })} className={chip(pay === p)}>
+            {p}
+          </button>
+        ))}
       </div>
 
       {/* 기간 직접 지정 */}

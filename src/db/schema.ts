@@ -521,7 +521,7 @@ export const quote = pgTable(
      * MARS 입력 항목은 ①고객 ②업무내용 ③결제정보다 (D-08).
      * 우리가 갖고 있지 않으면 4주차 대기열이 결제 부분을 복사해 줄 수 없다.
      */
-    paymentMethod: text("payment_method"), // '현금','카드','계좌이체','외상','혼합'
+    paymentMethod: text("payment_method"), // '현금','카드','계좌이체','외상','혼합','서비스'(무상)
     paidAmount: integer("paid_amount"),
     paymentMemo: text("payment_memo"),
 
@@ -564,7 +564,8 @@ export const quote = pgTable(
     ),
     check(
       "quote_payment_method",
-      sql`${t.paymentMethod} IS NULL OR ${t.paymentMethod} IN ('현금','카드','계좌이체','외상','혼합')`,
+      // 서비스 = 무상 (사장님 요청 2026-08-07 — 단골 무상 점검·가벼운 서비스). MARS 에 안 간다
+      sql`${t.paymentMethod} IS NULL OR ${t.paymentMethod} IN ('현금','카드','계좌이체','외상','혼합','서비스')`,
     ),
     /** ⭐ 이 인덱스가 MARS 입력 대기열 화면 그 자체다 */
     index("idx_quote_mars")

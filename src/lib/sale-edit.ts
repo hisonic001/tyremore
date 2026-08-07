@@ -52,7 +52,7 @@ export async function updateSaleHead(input: {
     return { ok: false, error: "날짜는 2026-08-04 형식입니다" };
   }
   const pay = input.paymentMethod?.trim() || null;
-  if (pay && !["현금", "카드", "계좌이체", "외상", "혼합"].includes(pay)) {
+  if (pay && !["현금", "카드", "계좌이체", "외상", "혼합", "서비스"].includes(pay)) {
     return { ok: false, error: "결제수단이 올바르지 않습니다" };
   }
 

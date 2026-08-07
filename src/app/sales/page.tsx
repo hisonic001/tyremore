@@ -26,12 +26,16 @@ export default async function SalesPage({
     customer?: string;
     vehicle?: string;
     canceled?: string;
+    pay?: string;
   }>;
 }) {
   const sp = await searchParams;
   const customerId = sp.customer ? Number(sp.customer) : undefined;
   const vehicleId = sp.vehicle ? Number(sp.vehicle) : undefined;
   const includeCanceled = sp.canceled === "1";
+  /** ⭐ 결제 방법 필터 (사장님 요청 2026-08-07) */
+  const PAY_OPTIONS = ["현금", "카드", "계좌이체", "외상", "혼합", "서비스"];
+  const pay = sp.pay && PAY_OPTIONS.includes(sp.pay) ? sp.pay : undefined;
   const scoped = Number.isFinite(customerId) || Number.isFinite(vehicleId);
 
   /**
@@ -55,6 +59,7 @@ export default async function SalesPage({
     customerId: Number.isFinite(customerId) ? customerId : undefined,
     vehicleId: Number.isFinite(vehicleId) ? vehicleId : undefined,
     includeCanceled,
+    paymentMethod: pay,
   });
 
   /**
@@ -86,6 +91,7 @@ export default async function SalesPage({
       customer: sp.customer,
       vehicle: sp.vehicle,
       canceled: sp.canceled,
+      pay: sp.pay,
       ...over,
     };
     for (const [k, v] of Object.entries(merged)) if (v) p.set(k, v);
@@ -123,13 +129,26 @@ export default async function SalesPage({
         month={sp.month ?? null}
         from={sp.from ?? null}
         to={sp.to ?? null}
-        keep={{ customer: sp.customer, vehicle: sp.vehicle, canceled: sp.canceled }}
+        pay={pay ?? null}
+        payOptions={PAY_OPTIONS}
+        keep={{
+          customer: sp.customer,
+          vehicle: sp.vehicle,
+          canceled: sp.canceled,
+          // 결제 필터를 바꿔도 기간이 풀리지 않게, 기간을 바꿔도 결제가 풀리지 않게
+          month: sp.month,
+          range: sp.range,
+          from: sp.from,
+          to: sp.to,
+          pay: sp.pay,
+        }}
       />
 
       <p className="tabular mt-3 text-sm text-slate-600">
         {active === "today" && `오늘(${today}) · `}
         {active === "yesterday" && `어제(${yesterday}) · `}
         {active === "thisMonth" && `${thisMonth} · `}
+        {pay && `${pay}만 · `}
         {h.saleCount}건 · {won(h.totalAmount)}원
       </p>
 

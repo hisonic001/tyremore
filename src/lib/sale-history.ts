@@ -23,6 +23,8 @@ export interface SaleLine {
   finalPrice: number;
   /** ⭐ 줄별 메모 (사장님 지시 2026-08-07) — MARS 이 줄의 「설명 2」에 들어간 내용 */
   memo: string | null;
+  /** ⭐ 타이어 규격 (사장님 요청 2026-08-07 — "바꾼 타이어의 사이즈도 카드에 명기") */
+  spec: string | null;
 }
 
 export interface SaleRow {
@@ -79,6 +81,8 @@ export async function saleHistory(opts: {
   customerId?: number;
   vehicleId?: number;
   includeCanceled?: boolean;
+  /** ⭐ 결제 방법으로 좁히기 (사장님 요청 2026-08-07) */
+  paymentMethod?: string;
 }): Promise<SaleHistory> {
   const { db } = await import("@/db");
   const m = opts.month && /^\d{4}-\d{2}$/.test(opts.month) ? opts.month : null;
@@ -112,6 +116,7 @@ export async function saleHistory(opts: {
     qty: number | null;
     final_price: number | null;
     line_memo: string | null;
+    spec: string | null;
     tyre_positions: string | null;
     created_hm: string | null;
   }>(sql`
@@ -121,11 +126,17 @@ export async function saleHistory(opts: {
            q.mars_memo, q.total_amount, q.payment_method, q.payment_memo,
            q.mars_status, q.mars_ref_no, q.tyre_positions,
            to_char(q.created_at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') created_hm,
-           qi.id item_id, qi.line_type, qi.description, qi.qty, qi.final_price, qi.memo line_memo
+           qi.id item_id, qi.line_type, qi.description, qi.qty, qi.final_price, qi.memo line_memo,
+           -- ⭐ 규격은 저장된 폭/편평비/인치로 조립한다 (225/45R17 · 12.5R17 처럼 편평비 없는 것도)
+           CASE WHEN p.width IS NOT NULL AND p.rim_inch IS NOT NULL THEN
+             p.width::text || COALESCE('/' || p.aspect_ratio::text, '')
+               || 'R' || regexp_replace(p.rim_inch::text, '\.0$', '')
+           END AS spec
     FROM quote q
     LEFT JOIN customer   c  ON c.id = q.customer_id
     LEFT JOIN vehicle    v  ON v.id = q.vehicle_id
     LEFT JOIN quote_item qi ON qi.quote_id = q.id
+    LEFT JOIN product    p  ON p.id = qi.product_id
     WHERE 1=1
       ${opts.includeCanceled ? sql`` : sql`AND q.status <> '취소'`}
       ${m ? sql`AND to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM') = ${m}` : sql``}
@@ -133,6 +144,7 @@ export async function saleHistory(opts: {
       ${to ? sql`AND COALESCE(q.work_date, q.created_at::date) <= ${to}::date` : sql``}
       ${opts.customerId ? sql`AND q.customer_id = ${opts.customerId}` : sql``}
       ${opts.vehicleId ? sql`AND q.vehicle_id = ${opts.vehicleId}` : sql``}
+      ${opts.paymentMethod ? sql`AND q.payment_method = ${opts.paymentMethod}` : sql``}
     ORDER BY COALESCE(q.work_date, q.created_at::date) DESC, q.id DESC, qi.id
   `);
 
@@ -171,6 +183,8 @@ export async function saleHistory(opts: {
         qty: Number(r.qty ?? 0),
         finalPrice: Number(r.final_price ?? 0),
         memo: r.line_memo,
+        // 규격이 이름에 이미 적혀 있으면(백필 원본명 등) 겹쳐 쓰지 않는다
+        spec: r.spec && !(r.description ?? "").includes(r.spec) ? r.spec : null,
       });
     }
   }
