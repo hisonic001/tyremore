@@ -358,8 +358,9 @@ export function parseTireName(
     if (ply !== null && ply <= 20) {
       if (!seen.has("PLY#")) {
         seen.add("PLY#");
-        // 화면에는 `4P` 로 짧게 (사장님 지시 2026-08-02 — 「겹」보다 P 가 편하다)
-        badges.push({ code: `${ply}P`, label: `${ply}겹 (ply)`, kind: "structure" });
+        // 화면에는 `4P` 로만 (사장님 지시 2026-08-07 — 「4P 4겹 (ply)」는 길다, 간단하게 4P)
+        // code === label 이면 화면이 코드만 그린다 (cards.tsx · stock/[id])
+        badges.push({ code: `${ply}P`, label: `${ply}P`, kind: "structure" });
       }
       continue;
     }
