@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { cancelMarsRun, requestMarsRun, type MarsRunRow } from "@/lib/mars-run";
 
@@ -19,10 +19,25 @@ export function MarsRunPanel({ run, queueCount }: { run: MarsRunRow | null; queu
 
   const busy = run !== null && (run.status === "대기" || run.status === "실행중");
 
-  // 대기·실행중이면 5초마다 다시 불러온다 — 로그가 자라는 것이 보인다
+  /**
+   * 대기·실행중이면 5초마다 다시 불러온다 — 로그가 자라는 것이 보인다.
+   *
+   * 🔴 앞선 새로고침이 **끝나기 전에는 다음 것을 쏘지 않는다** (2026-08-07 마비 사건).
+   *    겹쳐 쏘면 진행 중이던 렌더가 중단되고, 그 렌더의 DB 질의가 좀비로 남아
+   *    트랜잭션 풀러(자리 3개)를 채워 사이트 전체가 마비됐다.
+   *    탭이 안 보일 때(다른 창 보는 중)도 쉰다 — 몰래 쌓일 이유가 없다.
+   */
+  const [refreshing, startRefresh] = useTransition();
+  const refreshingRef = useRef(false);
+  useEffect(() => {
+    refreshingRef.current = refreshing;
+  }, [refreshing]);
   useEffect(() => {
     if (!busy) return;
-    const t = setInterval(() => router.refresh(), 5000);
+    const t = setInterval(() => {
+      if (document.hidden || refreshingRef.current) return;
+      startRefresh(() => router.refresh());
+    }, 5000);
     return () => clearInterval(t);
   }, [busy, router]);
 
@@ -31,7 +46,7 @@ export function MarsRunPanel({ run, queueCount }: { run: MarsRunRow | null; queu
       setError(null);
       const r = await requestMarsRun("입력");
       if (!r.ok) return setError(r.error);
-      router.refresh();
+      // requestMarsRun 이 revalidatePath("/mars") 로 화면을 새로 실어 보낸다 — 중복 refresh 금지
     });
   }
 
@@ -82,7 +97,6 @@ export function MarsRunPanel({ run, queueCount }: { run: MarsRunRow | null; queu
                   start(async () => {
                     const r = await cancelMarsRun(run.id);
                     if (!r.ok) setError(r.error);
-                    router.refresh();
                   })
                 }
                 className="underline underline-offset-2"

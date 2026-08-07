@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { markEntered, removeFromQueue, unmarkEntered, type MarsEntry } from "@/lib/mars-queue";
 import { AddLine, EditableLine } from "../sales/line-edit";
 
@@ -42,8 +41,14 @@ export function QueueList({ entries }: { entries: MarsEntry[] }) {
   );
 }
 
+/*
+ * 🔴 이 화면의 액션 뒤에는 router.refresh() 를 부르지 않는다 (2026-08-07 마비 사건).
+ *    서버 액션이 revalidatePath("/mars") 로 이미 새 화면을 실어 보낸다 — 클라이언트가
+ *    또 refresh 하면 같은 화면을 **두 번** 그리고, 연달아 누르면 앞선 렌더가 중단되며
+ *    진행 중이던 DB 질의가 좀비로 남는다. 좀비 3개면 트랜잭션 풀러(자리 3개)가
+ *    만석이 되어 사이트 전체가 「계속 로딩중」으로 마비됐다.
+ */
 function Entry({ e }: { e: MarsEntry }) {
-  const router = useRouter();
   const [pending, start] = useTransition();
   const [refNo, setRefNo] = useState("");
   /** ⭐ 대기열에서 바로 품목 고치기 (사장님 요청 2026-08-05) — 정비 내역과 같은 수정 UI */
@@ -180,7 +185,6 @@ function Entry({ e }: { e: MarsEntry }) {
             start(async () => {
               // 자동 입력과 구분해 둔다 — 나중에 「어떻게 들어갔나」를 되짚을 수 있게
               await markEntered(e.quoteId, refNo, "손으로 입력");
-              router.refresh();
             })
           }
           className="shrink-0 rounded-lg bg-indigo-700 px-5 py-2.5 font-semibold text-white disabled:opacity-50"
@@ -205,7 +209,6 @@ function Entry({ e }: { e: MarsEntry }) {
             if (!confirm(`${e.quoteNo} 을(를) MARS 대기열에서 뺄까요?\n(MARS 에 자동으로 넣지 않습니다 — 판매 기록은 그대로 남습니다)`)) return;
             start(async () => {
               await removeFromQueue(e.quoteId);
-              router.refresh();
             });
           }}
           className="text-xs text-slate-500 underline underline-offset-2"
@@ -222,7 +225,6 @@ export function DoneList({
 }: {
   rows: { quoteId: number; quoteNo: string; customerName: string | null; total: number; refNo: string | null; status: string }[];
 }) {
-  const router = useRouter();
   const [pending, start] = useTransition();
   const [open, setOpen] = useState(false);
   if (rows.length === 0) return null;
@@ -257,7 +259,6 @@ export function DoneList({
                 onClick={() =>
                   start(async () => {
                     await unmarkEntered(r.quoteId);
-                    router.refresh();
                   })
                 }
                 className="shrink-0 text-xs text-slate-500 underline"
