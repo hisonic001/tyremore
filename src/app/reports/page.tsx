@@ -176,6 +176,14 @@ export default async function ReportsPage({
         <span className="text-xs text-slate-400">사장님 전용</span>
       </header>
 
+      {/* 매출 ↔ 재고 오가기 (재고 리포트: 사장님 요청 2026-08-07) */}
+      <div className="mt-3 flex gap-1.5">
+        <span className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white">매출</span>
+        <Link href="/reports/stock" className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-600">
+          재고
+        </Link>
+      </div>
+
       {/* 달 넘기기 */}
       <div className="mt-3 flex items-center justify-between rounded-xl border border-slate-200 bg-white px-2 py-2">
         <Link href={`/reports?ym=${prevYm}`} className="rounded-lg px-3 py-2 text-sm font-medium text-slate-600 active:bg-slate-100">

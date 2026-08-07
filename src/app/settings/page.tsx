@@ -47,8 +47,8 @@ export default async function SettingsPage() {
       ? [
           {
             href: "/reports",
-            title: "매출 리포트",
-            desc: "월별 매출 · 일별 흐름 · 결제수단 · 많이 판 품목 (사장님 전용)",
+            title: "매출·재고 리포트",
+            desc: "월별 매출 · 결제수단 · 짝 안 맞는 타이어 · 안 나가는 재고 (사장님 전용)",
           },
         ]
       : []),
