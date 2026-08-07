@@ -101,15 +101,18 @@ export function SaleCard({ sale: s }: { sale: SaleRow }) {
           <ul className="space-y-1">
             {s.lines.map((l) =>
               canceled ? (
-                <li key={l.itemId} className="flex items-baseline justify-between gap-2 text-sm">
-                  <span className="min-w-0 truncate">
-                    {l.lineType === "service" && <span className="mr-1 text-xs text-slate-400">공임</span>}
-                    {l.description}
-                  </span>
-                  <span className="tabular shrink-0 text-slate-600">
-                    {l.qty > 1 && `${l.qty} × `}
-                    {won(l.finalPrice)}원
-                  </span>
+                <li key={l.itemId} className="text-sm">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="min-w-0 truncate">
+                      {l.lineType === "service" && <span className="mr-1 text-xs text-slate-400">공임</span>}
+                      {l.description}
+                    </span>
+                    <span className="tabular shrink-0 text-slate-600">
+                      {l.qty > 1 && `${l.qty} × `}
+                      {won(l.finalPrice)}원
+                    </span>
+                  </div>
+                  {l.memo && <p className="mt-0.5 pl-1 text-xs text-amber-700">└ 📝 {l.memo}</p>}
                 </li>
               ) : (
                 <EditableLine key={l.itemId} line={l} onMessage={setNotice} />

@@ -271,6 +271,8 @@ export async function updateSaleLine(input: {
   qty: number;
   unitPrice: number;
   description?: string;
+  /** ⭐ 줄별 메모 (2026-08-07) — null 이면 지운다, undefined 면 안 건드린다 */
+  memo?: string | null;
 }): Promise<{ ok: true; shortage: number; marsWarning: string | null } | { ok: false; error: string }> {
   if (!Number.isInteger(input.qty) || input.qty <= 0) return { ok: false, error: "수량은 1 이상이어야 합니다" };
   if (!Number.isFinite(input.unitPrice) || input.unitPrice < 0) return { ok: false, error: "단가가 올바르지 않습니다" };
@@ -297,6 +299,7 @@ export async function updateSaleLine(input: {
   await db.execute(sql`
     UPDATE quote_item SET qty = ${input.qty}, final_price = ${input.unitPrice}
       ${desc !== undefined ? sql`, description = ${desc}` : sql``}
+      ${input.memo !== undefined ? sql`, memo = ${input.memo?.trim() || null}` : sql``}
     WHERE id = ${input.itemId}
   `);
   await recomputeTotal(e.q.id);

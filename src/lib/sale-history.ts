@@ -21,6 +21,8 @@ export interface SaleLine {
   description: string;
   qty: number;
   finalPrice: number;
+  /** ⭐ 줄별 메모 (사장님 지시 2026-08-07) — MARS 이 줄의 「설명 2」에 들어간 내용 */
+  memo: string | null;
 }
 
 export interface SaleRow {
@@ -109,6 +111,7 @@ export async function saleHistory(opts: {
     description: string | null;
     qty: number | null;
     final_price: number | null;
+    line_memo: string | null;
     tyre_positions: string | null;
     created_hm: string | null;
   }>(sql`
@@ -118,7 +121,7 @@ export async function saleHistory(opts: {
            q.mars_memo, q.total_amount, q.payment_method, q.payment_memo,
            q.mars_status, q.mars_ref_no, q.tyre_positions,
            to_char(q.created_at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') created_hm,
-           qi.id item_id, qi.line_type, qi.description, qi.qty, qi.final_price
+           qi.id item_id, qi.line_type, qi.description, qi.qty, qi.final_price, qi.memo line_memo
     FROM quote q
     LEFT JOIN customer   c  ON c.id = q.customer_id
     LEFT JOIN vehicle    v  ON v.id = q.vehicle_id
@@ -167,6 +170,7 @@ export async function saleHistory(opts: {
         description: r.description ?? "",
         qty: Number(r.qty ?? 0),
         finalPrice: Number(r.final_price ?? 0),
+        memo: r.line_memo,
       });
     }
   }

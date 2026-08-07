@@ -1156,8 +1156,7 @@ async function openSalesOrder(
  */
 async function fillLines(
   page: Page,
-  lines: { kind: string; no: string | null; qty: number; unitPrice: number; marsName: string }[],
-  memo?: string | null,
+  lines: { kind: string; no: string | null; qty: number; unitPrice: number; marsName: string; memo?: string | null }[],
 ) {
   const f = main(page);
   const grid = f.locator("div[controlname='Sales Order Subform']");
@@ -1434,16 +1433,18 @@ async function fillLines(
     }
 
     /**
-     * ⭐ 메모는 **「설명 2」 칸을 지우고** 그 안에 넣는다 (사장님 지시).
-     *    기본값으로 규격·모델명이 들어와 있는데, 그걸 메모로 갈아 끼운다.
-     *    메모가 없으면 손대지 않는다 — 멀쩡한 기본값을 지울 이유가 없다.
+     * ⭐ 메모는 **그 줄의 「설명 2」 칸을 지우고** 그 안에 넣는다 (사장님 지시 2026-08-07).
+     *    전에는 판매 전체 메모 하나를 첫 줄에만 넣었는데, 이제 판매 등록에서
+     *    **줄마다** 메모를 받아 각자 자기 줄 설명 2 로 들어간다.
+     *    결제 메모(quote.payment_memo)는 우리 기록용 — MARS 에 넣지 않는다.
+     *    메모가 없으면 손대지 않는다 — 멀쩡한 기본값(규격·모델명)을 지울 이유가 없다.
      */
     /**
      * ⭐ 범용 품번으로 넣은 줄은 **실제 상품명을 설명 2에** 남긴다 —
      *    안 남기면 나중에 「이게 뭘 판 줄이지?」를 아무도 모른다.
-     *    메모(첫 줄)와 겹치면 「상품명 · 메모」로 붙인다.
+     *    줄 메모와 겹치면 「상품명 · 메모」로 붙인다.
      */
-    const d2Text = [usedFallback ? l.marsName : null, i === 0 ? memo?.trim() || null : null]
+    const d2Text = [usedFallback ? l.marsName : null, l.memo?.trim() || null]
       .filter(Boolean)
       .join(" · ");
     if (d2Text) {
@@ -2734,7 +2735,7 @@ async function main_() {
           iso,
           PAY_CODE[q.paymentMethod ?? ""] ?? null,
         );
-        const put = await fillLines(page, q.lines, q.saleMemo);
+        const put = await fillLines(page, q.lines);
 
         /**
          * 🔴 줄이 다 안 들어갔으면 「입력 완료」로 넘기지 않는다.

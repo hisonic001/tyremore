@@ -26,10 +26,18 @@ export function EditableLine({ line: l, onMessage }: { line: SaleLine; onMessage
   const [price, setPrice] = useState(String(l.finalPrice));
   /** ⭐ 품명도 키보드로 고친다 (사장님 요청 2026-08-06) */
   const [desc, setDesc] = useState(l.description);
+  /** ⭐ 줄별 메모 (사장님 지시 2026-08-07) — MARS 이 줄의 「설명 2」에 들어간다 */
+  const [memo, setMemo] = useState(l.memo ?? "");
 
   const save = () =>
     start(async () => {
-      const r = await updateSaleLine({ itemId: l.itemId, qty, unitPrice: Number(price) || 0, description: desc });
+      const r = await updateSaleLine({
+        itemId: l.itemId,
+        qty,
+        unitPrice: Number(price) || 0,
+        description: desc,
+        memo: memo.trim() || null,
+      });
       if (!r.ok) return onMessage(`⚠️ ${r.error}`);
       onMessage(
         `고쳤습니다.${r.shortage > 0 ? ` ⚠️ 재고가 ${r.shortage}본 모자랍니다.` : ""}${r.marsWarning ? ` ⚠️ ${r.marsWarning}` : ""}`,
@@ -50,21 +58,25 @@ export function EditableLine({ line: l, onMessage }: { line: SaleLine; onMessage
 
   if (!editing) {
     return (
-      <li className="flex items-baseline justify-between gap-2 text-sm">
-        <span className="min-w-0 truncate">
-          {l.lineType === "service" && <span className="mr-1 text-xs text-slate-400">공임</span>}
-          {l.description}
-        </span>
-        <span className="flex shrink-0 items-baseline gap-2">
-          <span className="tabular text-slate-600">
-            {l.qty > 1 && `${l.qty} × `}
-            {won(l.finalPrice)}원
+      <li className="text-sm">
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="min-w-0 truncate">
+            {l.lineType === "service" && <span className="mr-1 text-xs text-slate-400">공임</span>}
+            {l.description}
           </span>
-          {l.qty > 1 && <span className="tabular text-xs text-slate-400">= {won(l.qty * l.finalPrice)}원</span>}
-          <button type="button" onClick={() => setEditing(true)} className="text-xs text-slate-400 underline">
-            고치기
-          </button>
-        </span>
+          <span className="flex shrink-0 items-baseline gap-2">
+            <span className="tabular text-slate-600">
+              {l.qty > 1 && `${l.qty} × `}
+              {won(l.finalPrice)}원
+            </span>
+            {l.qty > 1 && <span className="tabular text-xs text-slate-400">= {won(l.qty * l.finalPrice)}원</span>}
+            <button type="button" onClick={() => setEditing(true)} className="text-xs text-slate-400 underline">
+              고치기
+            </button>
+          </span>
+        </div>
+        {/* ⭐ 줄별 메모 (사장님 지시 2026-08-07) — 펼치면 품목 아래에 보인다 */}
+        {l.memo && <p className="mt-0.5 pl-1 text-xs text-amber-700">└ 📝 {l.memo}</p>}
       </li>
     );
   }
@@ -111,6 +123,13 @@ export function EditableLine({ line: l, onMessage }: { line: SaleLine; onMessage
           <span className="text-xs text-slate-500">원</span>
         </label>
       </div>
+      {/* ⭐ 줄별 메모 (사장님 지시 2026-08-07) — MARS 이 줄의 「설명 2」로 들어간다 */}
+      <input
+        value={memo}
+        onChange={(e) => setMemo(e.target.value)}
+        placeholder="이 줄 메모 (선택) — MARS 설명 2"
+        className="mt-1.5 w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm"
+      />
       <div className="mt-2 flex gap-2">
         <button
           type="button"

@@ -49,6 +49,8 @@ export interface SaleLine {
   salesRate?: number | null;
   /** 실제 판매 단가 (VAT 포함) */
   unitPrice: number;
+  /** ⭐ 줄별 메모 (사장님 지시 2026-08-07) — MARS 이 줄의 「설명 2」로 들어간다 */
+  memo?: string | null;
 }
 
 export interface SaleInput {
@@ -208,6 +210,7 @@ export async function saveSale(
       productId: l.productId ?? null,
       serviceItemId: l.serviceItemId ?? null,
       description: l.description,
+      memo: l.memo?.trim() || null,
       qty: l.qty,
       listPrice: l.listPrice ?? null,
       salesDiscountRate: l.salesRate !== null && l.salesRate !== undefined ? String(l.salesRate) : null,

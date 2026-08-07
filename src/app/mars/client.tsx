@@ -115,6 +115,7 @@ function Entry({ e }: { e: MarsEntry }) {
                     description: l.marsName,
                     qty: l.qty,
                     finalPrice: l.unitPrice,
+                    memo: l.memo,
                   }}
                   onMessage={setEditMsg}
                 />
@@ -144,6 +145,12 @@ function Entry({ e }: { e: MarsEntry }) {
                   <Copy label="단가" value={String(l.unitPrice)} />
                   <Copy label="금액" value={String(l.amount)} />
                 </div>
+                {/* ⭐ 줄별 메모 (사장님 지시 2026-08-07) — 이 줄의 「설명 2」에 들어간다 */}
+                {l.memo && (
+                  <div className="mt-1.5">
+                    <Copy label="설명 2" value={l.memo} />
+                  </div>
+                )}
               </li>
             ))}
           </ul>

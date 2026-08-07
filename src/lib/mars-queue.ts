@@ -45,6 +45,8 @@ export interface MarsLine {
   unitPrice: number;
   amount: number;
   kind: string;
+  /** ⭐ 줄별 메모 (사장님 지시 2026-08-07) — **이 줄의 「설명 2」**에 들어간다 */
+  memo: string | null;
 }
 
 export interface MarsEntry {
@@ -103,8 +105,6 @@ export interface MarsEntry {
   workDate: string | null;
   total: number;
   memo: string | null;
-  /** 판매 등록에서 적으신 메모 — MARS 품목 줄의 「설명 2」에 들어간다 */
-  saleMemo: string | null;
   lines: MarsLine[];
 }
 
@@ -123,7 +123,6 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     work_date: string | null;
     total_amount: number;
     mars_memo: string | null;
-    payment_memo: string | null;
     address: string | null;
     consent_privacy: boolean | null;
     consent_marketing: boolean | null;
@@ -136,7 +135,7 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     tyre_positions: string | null;
   }>(sql`
     SELECT q.id, q.quote_no, q.confirmed_at, q.payment_method, q.work_date::text AS work_date,
-           q.total_amount, q.mars_memo, q.payment_memo, q.tyre_positions,
+           q.total_amount, q.mars_memo, q.tyre_positions,
            c.mars_contact_no AS contact_no, c.name AS customer_name, c.phone,
            c.address, c.consent_privacy, c.consent_marketing, c.consent_signed_at,
            v.plate_no, v.model AS vehicle_model, v.maker_name, v.year, v.fuel_type, v.mileage,
@@ -159,12 +158,13 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     qty: number;
     final_price: number;
     line_type: string;
+    memo: string | null;
   }>(sql`
     SELECT qi.quote_id, qi.id AS item_id,
            COALESCE(p.mars_item_no, s.mars_service_no) AS no,
            -- ⚠️ MARS 원본 이름이 우선이다. 다듬은 이름으로는 MARS 에서 못 찾는다
            COALESCE(p.raw_name, s.name, qi.description) AS mars_name,
-           qi.qty, qi.final_price, qi.line_type
+           qi.qty, qi.final_price, qi.line_type, qi.memo
     FROM quote_item qi
     LEFT JOIN product      p ON p.id = qi.product_id
     LEFT JOIN service_item s ON s.id = qi.service_item_id
@@ -184,6 +184,7 @@ export async function marsQueue(): Promise<MarsEntry[]> {
       unitPrice: r.final_price,
       amount: r.final_price * r.qty,
       kind: r.line_type,
+      memo: r.memo,
     });
   }
 
@@ -206,7 +207,6 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     workDate: h.work_date,
     total: h.total_amount,
     memo: h.mars_memo,
-    saleMemo: h.payment_memo,
     lines: byQuote.get(Number(h.id)) ?? [],
     // MARS 연락처 번호가 없으면 = 아직 MARS 에 없는 손님이다
     newCustomer:

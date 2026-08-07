@@ -294,10 +294,15 @@ export function SaleForm() {
             외상은 <strong>MARS 자동 입력에서 빠집니다.</strong> 여기 기록만 남고, MARS 는 직접 처리해 주세요.
           </p>
         )}
+        {/*
+          ⭐ 이 메모는 이제 MARS 에 안 들어간다 (사장님 지시 2026-08-07).
+             MARS 설명 2 는 위 품목 줄마다 있는 메모 칸이 맡는다.
+             여기는 우리 기록용 — 정비 내역 카드에 노랗게 보인다.
+        */}
         <input
           value={memo}
           onChange={(e) => setMemo(e.target.value)}
-          placeholder="메모 (선택)"
+          placeholder="메모 (선택 · 우리 기록용, MARS 미반영)"
           className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
         />
       </section>
@@ -367,6 +372,13 @@ function LineRow({
         </label>
         <span className="tabular w-24 text-right text-sm font-semibold">{won(row.unitPrice * row.qty)}</span>
       </div>
+      {/* ⭐ 줄별 메모 (사장님 지시 2026-08-07) — MARS 이 줄의 「설명 2」로 들어간다 */}
+      <input
+        value={row.memo ?? ""}
+        onChange={(e) => onChange({ memo: e.target.value })}
+        placeholder="이 줄 메모 (선택) — MARS 설명 2"
+        className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
+      />
     </li>
   );
 }

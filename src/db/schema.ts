@@ -590,6 +590,12 @@ export const quoteItem = pgTable(
     ),
     /** 화면 표시용 스냅샷 — 나중에 상품명이 바뀌어도 그때 판 이름이 남는다 */
     description: text("description").notNull(),
+    /**
+     * ⭐ 줄별 메모 (사장님 지시 2026-08-07) — MARS 자동 입력이 **이 줄의 「설명 2」**에 넣는다.
+     *    전에는 판매 전체 메모(quote.payment_memo) 하나를 첫 줄 설명 2 에 넣었는데,
+     *    이제 결제 메모는 우리 기록용으로만 남고 MARS 에는 안 들어간다.
+     */
+    memo: text("memo"),
     qty: integer("qty").notNull().default(1),
 
     // --- 계산 과정 전부 보존. 최종가만 남기면 마진 분석을 못 한다 ---
