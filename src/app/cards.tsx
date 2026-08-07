@@ -1,5 +1,13 @@
 import Link from "next/link";
 import type { ProductHit, VehicleHit } from "@/lib/search";
+
+/*
+ * 🔴 이 파일의 카드 링크는 전부 prefetch={false} 다 (2026-08-07 마비 사건 최종 원흉).
+ *    검색 결과 카드가 수십 장 뜨는데, Next 는 화면에 보이는 링크를 전부 미리 읽는다 —
+ *    카드마다 상세 페이지 서버 렌더가 동시에 돌고(로그에 /stock/[id] 10건 동시 목격),
+ *    화면을 이동하면 그 렌더들이 중단되며 DB 질의가 좀비로 남아 풀러를 채웠다.
+ *    누르면 그때 열리는 것으로 충분하다 — 서울 리전이라 이제 어차피 빠르다.
+ */
 import { SEASON_STYLE } from "@/lib/tire-attrs";
 import { BADGE_STYLE } from "@/lib/tire-name";
 import { PriceTool } from "./price-tool";
@@ -31,6 +39,7 @@ export function VehicleCard({ v }: { v: VehicleHit }) {
       */}
       <div className="mt-2 flex gap-2">
         <Link
+          prefetch={false}
           href={`/sales?vehicle=${v.vehicleId}`}
           className="flex-1 rounded-lg border border-slate-300 py-2 text-center text-sm font-medium text-slate-600 active:bg-slate-50"
         >
@@ -38,6 +47,7 @@ export function VehicleCard({ v }: { v: VehicleHit }) {
         </Link>
         {/* ⭐ 고객·차량 정보 수정 (사장님 요청 2026-08-05) */}
         <Link
+          prefetch={false}
           href={`/vehicle/${v.vehicleId}`}
           className="flex-1 rounded-lg border border-slate-300 py-2 text-center text-sm font-medium text-slate-600 active:bg-slate-50"
         >
@@ -64,7 +74,7 @@ export function ProductCard({ p }: { p: ProductHit }) {
   return (
     <li className="rounded-xl border border-slate-200 bg-white p-4">
       {/* 정보 부분만 링크. 아래 가격 툴은 눌러도 화면이 넘어가면 안 된다 */}
-      <Link href={`/stock/${p.productId}`} className="block active:opacity-60">
+      <Link prefetch={false} href={`/stock/${p.productId}`} className="block active:opacity-60">
         {/* 1줄: 브랜드 · 계절 */}
         <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
           {p.brandName && (

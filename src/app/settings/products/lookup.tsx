@@ -72,7 +72,8 @@ export function ProductLookup({ initial }: { initial: string }) {
         <ul className="mt-2 max-h-96 divide-y divide-slate-100 overflow-y-auto">
           {hits.map((p) => (
             <li key={p.productId}>
-              <Link href={`/stock/${p.productId}`} className="block py-2.5 active:bg-slate-50">
+              {/* prefetch 금지 — 목록형 링크의 미리 읽기가 풀러를 채운다 (2026-08-07) */}
+              <Link prefetch={false} href={`/stock/${p.productId}`} className="block py-2.5 active:bg-slate-50">
                 {/* 미쉐린 주문 사이트와 같은 순서로 적는다 */}
                 <div className="text-sm font-semibold leading-snug">
                   {[p.spec, p.loadSpeed, p.model].filter(Boolean).join(" ")}
