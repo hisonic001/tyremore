@@ -37,7 +37,13 @@ async function main() {
     FROM product WHERE item_type = 'tire' ORDER BY id`;
 
   // 되돌리기용 백업 — 지금의 display_name 상태 전부
-  const backupPath = path.resolve(process.cwd(), "..", "tyremore-data", `display-name-백업-${new Date().toISOString().slice(0, 10)}.json`);
+  // 파일명에 시각까지 — 같은 날 재실행해도 앞선 백업을 덮지 않는다
+  const backupPath = path.resolve(
+    process.cwd(),
+    "..",
+    "tyremore-data",
+    `display-name-백업-${new Date().toISOString().slice(0, 16).replace(/:/g, "")}.json`,
+  );
   if (APPLY) {
     writeFileSync(backupPath, JSON.stringify(rows.map((r) => ({ id: r.id, display_name: r.disp })), null, 1), "utf8");
     console.log(`백업 저장: ${backupPath}`);
@@ -54,9 +60,9 @@ async function main() {
     const n = parseTireName(r.raw, r.pattern, { width: r.w, aspectRatio: r.ar, rimInch: r.rim, brandCode: r.bc });
     const base = cleanTireName(n);
     if (!base) continue;
-    // 겹칠 때 덧붙일 구분 표기 — XL·런플랫·흡음재·저연비 등 (OE 는 이미 이름에 있다)
+    // 겹칠 때 덧붙일 구분 표기 — XL·런플랫·흡음재·저연비 등 (OE·겹수는 이미 이름에 있다)
     const extra = n.badges
-      .filter((b) => b.kind !== "oe")
+      .filter((b) => b.kind !== "oe" && !/^\d+P$/.test(b.code))
       .map((b) => b.code)
       .join(" ");
     targets.push({ id: r.id, name: base, extra, loadSpeed: n.loadSpeed });
