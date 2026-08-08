@@ -162,7 +162,14 @@ export function SaleForm() {
   }
 
   return (
-    <div className="mt-5 space-y-4 pb-40">
+    /**
+     * ⭐ PC 는 좌우 2단 (사장님 승인 2026-08-08 — 2단계).
+     *    왼쪽: 누구에게 파는가 + 타이어 검색 / 오른쪽: 작업 내역·바퀴·공임·결제.
+     *    폰(1024px 미만)은 지금까지의 세로 순서 그대로다 — 두 묶음을 이어 붙인
+     *    순서가 기존 순서와 동일하게 나눴다.
+     */
+    <div className="mt-5 pb-40 lg:grid lg:grid-cols-2 lg:items-start lg:gap-4">
+    <div className="space-y-4">
       <CustomerPick
         vehicle={vehicle}
         onPick={setVehicle}
@@ -187,7 +194,9 @@ export function SaleForm() {
       )}
 
       <TirePick onAdd={addTire} />
+    </div>
 
+    <div className="mt-4 space-y-4 lg:mt-0">
       {rows.length > 0 && (
         <section className="rounded-2xl border border-slate-300 bg-white p-3">
           <h2 className="font-bold">작업 내역</h2>
@@ -316,10 +325,11 @@ export function SaleForm() {
       </section>
 
       {error && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+    </div>
 
       {/* 합계는 늘 보여야 한다 — 손님 앞에서 금액을 말해야 하므로 */}
       <div className="fixed inset-x-0 bottom-0 border-t border-slate-300 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-2xl items-center gap-3 px-4 py-3">
+        <div className="mx-auto flex max-w-2xl items-center gap-3 px-4 py-3 lg:max-w-6xl">
           <div className="min-w-0 flex-1">
             <div className="text-xs text-slate-500">합계 (VAT 포함)</div>
             <div className="tabular text-2xl font-bold">{won(total)}원</div>

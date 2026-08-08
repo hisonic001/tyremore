@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
  */
 export default function SalePage() {
   return (
-    <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6">
+    <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6 lg:max-w-6xl">
       <div className="flex items-center justify-between">
         <Link href="/" className="text-sm text-slate-500 underline underline-offset-4">
           ← 검색으로

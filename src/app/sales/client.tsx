@@ -71,31 +71,51 @@ export function SaleCard({ sale: s }: { sale: SaleRow }) {
         canceled ? "border-slate-200 opacity-60" : "border-slate-200"
       }`}
     >
-      <button type="button" onClick={() => setOpen(!open)} className="w-full p-3 text-left">
+      {/* ⭐ PC 는 카드가 세로로 크고 내용이 더 드러난다 (사장님 요청 2026-08-08) — 폰은 그대로 */}
+      <button type="button" onClick={() => setOpen(!open)} className="w-full p-3 text-left lg:p-5">
         <div className="flex items-baseline justify-between gap-2">
-          <span className="min-w-0 truncate font-semibold">
+          <span className="min-w-0 truncate font-semibold lg:text-lg">
             {canceled && <span className="mr-1.5 rounded bg-slate-200 px-1.5 py-0.5 text-xs">취소</span>}
             {who}
             {s.plateNo && <span className="ml-2 text-sm font-normal text-slate-500">{s.plateNo}</span>}
           </span>
-          <span className={`tabular shrink-0 font-bold ${canceled ? "line-through" : ""}`}>
+          <span className={`tabular shrink-0 font-bold lg:text-xl ${canceled ? "line-through" : ""}`}>
             {won(s.totalAmount)}원
           </span>
         </div>
-        <div className="mt-0.5 flex items-baseline justify-between gap-2 text-xs text-slate-500">
-          <span className="truncate">
+        <div className="mt-0.5 flex items-baseline justify-between gap-2 text-xs text-slate-500 lg:mt-1 lg:text-sm">
+          {/* 폰: 한 줄 요약 (지금까지 그대로) */}
+          <span className="truncate lg:hidden">
             {/* ⭐ 타이어 규격도 같이 (사장님 요청 2026-08-07) */}
             {s.lines
               .map((l) => `${l.description}${l.spec ? ` ${l.spec}` : ""}${l.qty > 1 ? ` ×${l.qty}` : ""}`)
               .join(" · ") || "품목 없음"}
           </span>
+          <span className="hidden lg:block" />
           <span className="tabular shrink-0">
             {s.paymentMethod ?? ""}
             {s.marsStatus === "전송완료" && <span className="ml-1.5 text-indigo-500">MARS ✓</span>}
           </span>
         </div>
+        {/* PC: 품목을 줄별로 펼쳐서 — 펼치지 않아도 무엇을 얼마에 했는지 보인다 */}
+        <div className="mt-2 hidden space-y-1 lg:block">
+          {s.lines.map((l) => (
+            <div key={l.itemId} className="flex items-baseline justify-between gap-3 text-sm text-slate-600">
+              <span className="min-w-0 truncate">
+                {l.lineType === "service" && <span className="mr-1 text-xs text-slate-400">공임</span>}
+                {l.description}
+                {l.spec && <span className="tabular ml-1 text-slate-500">{l.spec}</span>}
+              </span>
+              <span className="tabular shrink-0">
+                {l.qty > 1 && `${l.qty} × `}
+                {won(l.finalPrice)}원
+              </span>
+            </div>
+          ))}
+          {s.lines.length === 0 && <div className="text-sm text-slate-400">품목 없음</div>}
+        </div>
         {/* ⭐ 판매 등록 때 적은 비고 — 펼치지 않아도 보인다 (사장님 요청 2026-08-06) */}
-        {s.paymentMemo && <p className="mt-0.5 truncate text-xs text-amber-700">📝 {s.paymentMemo}</p>}
+        {s.paymentMemo && <p className="mt-0.5 truncate text-xs text-amber-700 lg:mt-1.5 lg:text-sm">📝 {s.paymentMemo}</p>}
       </button>
 
       {open && (
