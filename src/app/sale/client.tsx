@@ -98,7 +98,21 @@ export function SaleForm() {
     setRows((rs) => rs.filter((x) => x.key !== r.key));
   };
 
-  const submit = () =>
+  const submit = () => {
+    /**
+     * ⭐ 고객 미등록 경고 (사장님 요청 2026-08-08).
+     *    "고객 등록을 안하고 판매 확정을 누르면 한번 경고를 하며 고객등록을 하도록 유도"
+     *    거래처 판매가 아닌데 차량을 고르지 않았으면 — 한 번 묻는다.
+     */
+    if (!supplierSale && !vehicle) {
+      const ok = confirm(
+        "고객·차량을 등록하지 않았습니다.\n" +
+          "이대로 저장하면 비회원 판매로 남아 MARS 자동 입력이 안 되고, 다음 방문 때 이력이 이어지지 않습니다.\n\n" +
+          "「취소」를 누르고 고객·차량 탭에서 「등록 안 된 손님입니다」로 등록하는 것을 권합니다.\n" +
+          "그래도 이대로 저장할까요?",
+      );
+      if (!ok) return;
+    }
     start(async () => {
       setError(null);
       const res = await saveSale({
@@ -129,6 +143,7 @@ export function SaleForm() {
       wheelsTouched.current = false;
       router.refresh();
     });
+  };
 
   if (done) {
     return (
@@ -163,13 +178,14 @@ export function SaleForm() {
 
   return (
     /**
-     * ⭐ PC 는 좌우 2단 (사장님 승인 2026-08-08 — 2단계).
-     *    왼쪽: 누구에게 파는가 + 타이어 검색 / 오른쪽: 작업 내역·바퀴·공임·결제.
-     *    폰(1024px 미만)은 지금까지의 세로 순서 그대로다 — 두 묶음을 이어 붙인
-     *    순서가 기존 순서와 동일하게 나눴다.
+     * ⭐ PC 배치 2차 수정 (사장님 피드백 2026-08-08 — "배치가 조금 별로").
+     *    반반 나누니 시선이 좌우로 튀었다. 이제 **작업 흐름은 폰과 같은 한 줄기**
+     *    (왼쪽 2/3: 고객 → 검색 → 작업 내역 → 바퀴 → 공임)로 두고,
+     *    오른쪽 1/3 에 **결제만 고정(sticky)** — 스크롤해도 결제·메모가 늘 보인다.
+     *    폰(1024px 미만)은 세로 순서 그대로다.
      */
-    <div className="mt-5 pb-40 lg:grid lg:grid-cols-2 lg:items-start lg:gap-4">
-    <div className="space-y-4">
+    <div className="mt-5 pb-40 lg:grid lg:grid-cols-3 lg:items-start lg:gap-4">
+    <div className="space-y-4 lg:col-span-2">
       <CustomerPick
         vehicle={vehicle}
         onPick={setVehicle}
@@ -194,9 +210,7 @@ export function SaleForm() {
       )}
 
       <TirePick onAdd={addTire} />
-    </div>
 
-    <div className="mt-4 space-y-4 lg:mt-0">
       {rows.length > 0 && (
         <section className="rounded-2xl border border-slate-300 bg-white p-3">
           <h2 className="font-bold">작업 내역</h2>
@@ -258,7 +272,10 @@ export function SaleForm() {
           ])
         }
       />
+    </div>
 
+    {/* 오른쪽 — 결제만 고정(sticky). 스크롤해도 결제·메모가 늘 보인다 */}
+    <div className="mt-4 space-y-4 lg:sticky lg:top-4 lg:mt-0">
       <section className="rounded-2xl border border-slate-300 bg-white p-3">
         <h2 className="font-bold">결제</h2>
 
