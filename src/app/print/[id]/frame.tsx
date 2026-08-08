@@ -1,10 +1,18 @@
 "use client";
 
+import { useState } from "react";
+
 /**
  * 견적서·거래명세서 A4 양식 (사장님 요청 2026-08-05)
  *
  * 원칙: 보기 좋고 쉬울 것. 공급자·구매자·품목·단가·합계가 분명할 것.
  * 금액은 공급가액·세액 분리 (사장님 선택). 도장 이미지가 있으면 이름 위에 찍는다.
+ *
+ * ⭐ 그 자리 수정 (사장님 요청 2026-08-08):
+ *    품명·규격·수량·단가를 화면에서 바로 고치고, 줄을 더하거나 뺄 수 있다.
+ *    🔴 **인쇄를 위한 수정일 뿐이다** — 저장되지 않고 정비 내역·재고·MARS 에
+ *    아무 영향이 없다. 새로고침하면 원래대로 돌아온다.
+ *    비고란 하나를 표 아래 둔다 — 적은 내용은 인쇄에 그대로 나온다.
  */
 
 const won = (n: number) => n.toLocaleString("ko-KR");
@@ -65,7 +73,16 @@ export function PrintFrame({
   lines: PrintLine[];
 }) {
   const title = doc === "estimate" ? "견 적 서" : "거 래 명 세 서";
-  const rows = lines.map((l) => {
+
+  /** ⭐ 인쇄용 편집 상태 — 저장되지 않는다 (사장님 요청 2026-08-08) */
+  const [edit, setEdit] = useState<(PrintLine & { key: number })[]>(() =>
+    lines.map((l, i) => ({ ...l, key: i })),
+  );
+  const [note, setNote] = useState("");
+  const patch = (key: number, p: Partial<PrintLine>) =>
+    setEdit((rs) => rs.map((r) => (r.key === key ? { ...r, ...p } : r)));
+
+  const rows = edit.map((l) => {
     const total = l.qty * l.unitPrice;
     const supply = Math.round(total / 1.1);
     return { ...l, total, supply, vat: total - supply };
@@ -74,13 +91,21 @@ export function PrintFrame({
   const sumSupply = rows.reduce((s, r) => s + r.supply, 0);
   const sumVat = sumTotal - sumSupply;
 
+  /** 표 안에서 글자처럼 보이는 입력칸 — 인쇄하면 일반 글자와 똑같이 나온다 */
+  const CELL_IN =
+    "w-full bg-transparent outline-none focus:bg-amber-50 print:bg-transparent";
+
   return (
     <div className="min-h-dvh bg-slate-200 print:bg-white">
       {/* 화면에서만 보이는 도구 막대 */}
-      <div className="mx-auto flex max-w-[210mm] items-center justify-between px-4 py-3 print:hidden">
+      <div className="mx-auto flex max-w-[210mm] flex-wrap items-center justify-between gap-2 px-4 py-3 print:hidden">
         <button onClick={() => history.back()} className="text-sm text-slate-600 underline underline-offset-4">
           ← 돌아가기
         </button>
+        <span className="text-xs text-amber-700">
+          ✏️ 표 안의 품명·수량·단가를 눌러 바로 고칠 수 있습니다 — <strong>인쇄에만 반영</strong>되고 정비 내역은 안
+          바뀝니다
+        </span>
         <div className="flex gap-2">
           <a
             href={`?doc=${doc === "estimate" ? "statement" : "estimate"}`}
@@ -184,17 +209,58 @@ export function PrintFrame({
           </thead>
           <tbody>
             {rows.map((r, i) => (
-              <tr key={i}>
+              <tr key={r.key}>
                 <td className="tabular border border-black p-1.5 text-center">{i + 1}</td>
                 <td className="border border-black p-1.5">
-                  {r.isService && <span className="mr-1 text-[11px] text-slate-500">[공임]</span>}
-                  {r.description}
+                  <span className="flex items-center">
+                    {r.isService && <span className="mr-1 shrink-0 text-[11px] text-slate-500">[공임]</span>}
+                    <input
+                      value={r.description}
+                      onChange={(e) => patch(r.key, { description: e.target.value })}
+                      className={CELL_IN}
+                      aria-label="품명"
+                    />
+                  </span>
                 </td>
-                <td className="tabular border border-black p-1.5 text-center">{r.spec ?? ""}</td>
-                <td className="tabular border border-black p-1.5 text-center">{r.qty}</td>
-                <td className="tabular border border-black p-1.5 text-right">{won(r.unitPrice)}</td>
+                <td className="tabular border border-black p-1.5 text-center">
+                  <input
+                    value={r.spec ?? ""}
+                    onChange={(e) => patch(r.key, { spec: e.target.value || null })}
+                    className={`${CELL_IN} text-center`}
+                    aria-label="규격"
+                  />
+                </td>
+                <td className="tabular border border-black p-1.5 text-center">
+                  <input
+                    value={r.qty === 0 ? "" : String(r.qty)}
+                    onChange={(e) => patch(r.key, { qty: Number(e.target.value.replace(/\D/g, "")) || 0 })}
+                    inputMode="numeric"
+                    className={`${CELL_IN} text-center`}
+                    aria-label="수량"
+                  />
+                </td>
+                <td className="tabular border border-black p-1.5 text-right">
+                  <input
+                    value={r.unitPrice === 0 ? "" : won(r.unitPrice)}
+                    onChange={(e) => patch(r.key, { unitPrice: Number(e.target.value.replace(/\D/g, "")) || 0 })}
+                    inputMode="numeric"
+                    className={`${CELL_IN} text-right`}
+                    aria-label="단가"
+                  />
+                </td>
                 <td className="tabular border border-black p-1.5 text-right">{won(r.supply)}</td>
-                <td className="tabular border border-black p-1.5 text-right">{won(r.vat)}</td>
+                <td className="tabular relative border border-black p-1.5 text-right">
+                  {won(r.vat)}
+                  {/* 줄 빼기 — 화면에서만, 종이 밖에 떠 있다 */}
+                  <button
+                    type="button"
+                    onClick={() => setEdit((rs) => rs.filter((x) => x.key !== r.key))}
+                    className="absolute -right-8 top-1/2 -translate-y-1/2 rounded px-1.5 text-slate-400 hover:text-red-600 print:hidden"
+                    aria-label="이 줄 빼기"
+                  >
+                    ✕
+                  </button>
+                </td>
               </tr>
             ))}
             {/* 빈 줄을 몇 개 두면 손으로 덧쓸 수 있다 */}
@@ -218,6 +284,40 @@ export function PrintFrame({
               <td colSpan={2} className="tabular border border-black p-1.5 text-right text-[15px]">₩{won(sumTotal)}</td>
             </tr>
           </tfoot>
+        </table>
+
+        {/* 줄 추가 — 화면에서만 */}
+        <button
+          type="button"
+          onClick={() =>
+            setEdit((rs) => [
+              ...rs,
+              { key: Date.now(), description: "", spec: null, isService: false, qty: 1, unitPrice: 0 },
+            ])
+          }
+          className="mt-2 w-full rounded-lg border border-dashed border-slate-300 py-1.5 text-sm text-slate-500 print:hidden"
+        >
+          + 줄 추가 (인쇄에만 반영)
+        </button>
+
+        {/* ⭐ 비고란 (사장님 요청 2026-08-08) — 적은 내용이 인쇄에 그대로 나온다 */}
+        <table className="mt-3 w-full border-collapse border border-black">
+          <tbody>
+            <tr>
+              <th className="w-16 border border-black bg-slate-100 p-1.5 text-center text-[12px] font-medium">
+                비 고
+              </th>
+              <td className="border border-black p-1.5">
+                <textarea
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  rows={2}
+                  className="w-full resize-none bg-transparent outline-none focus:bg-amber-50 print:bg-transparent"
+                  aria-label="비고"
+                />
+              </td>
+            </tr>
+          </tbody>
         </table>
 
         {/* 아래 안내 */}
