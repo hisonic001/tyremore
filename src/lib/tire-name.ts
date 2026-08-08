@@ -430,6 +430,27 @@ export function parseTireName(
   };
 }
 
+/**
+ * ⭐ 표준 표시 이름 (사장님 승인 2026-08-08 — 품목명 통일 1·2단계)
+ *
+ *   모델명 + 사전에 없는 표기 + **OE 마킹**
+ *
+ * 🔴 OE 마킹은 이름에 반드시 남긴다 — "같은 모델이더라도 OE 마킹에 따라서
+ *    구분되는 경우도 가끔 있음" (사장님 2026-08-08). PRIMACY 4 MO 와
+ *    PRIMACY 4 ★ 는 다른 상품이다. 배지로만 빼면 이름만 보이는 화면
+ *    (리포트·정비 내역 줄)에서 두 상품이 같은 이름이 된다.
+ * 규격·하중속도는 이름에 넣지 않는다 — 화면이 따로 칸을 갖고 있다.
+ * 그래도 겹치는 상품은 backfill-display-names.ts 가 XL·런플랫 등을 덧붙인다.
+ */
+export function cleanTireName(n: TireName): string {
+  const oe = n.badges.filter((b) => b.kind === "oe").map((b) => (b.code === "★" ? "★" : b.code));
+  return [n.model, ...n.unknown, ...oe]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 /** 배지 색 — 종류별로 눈에 다르게 걸리게 */
 export const BADGE_STYLE: Record<BadgeKind, string> = {
   runflat: "bg-violet-100 text-violet-800",
