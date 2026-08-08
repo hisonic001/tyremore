@@ -82,18 +82,21 @@ export interface SaleInput {
 }
 
 /** 오늘 (YYYY-MM-DD) */
+/** DB 또는 트랜잭션 — 판매 저장은 트랜잭션 안에서 돈다 (코드 리뷰 2026-08-08) */
+type Dbc = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+// 🔴 서버는 UTC 다 — 한국 아침 9시 전에 하루 어긋나지 않게 KST 로 못박는다 (코드 리뷰 2026-08-08)
+const kstDay = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
+
 function todayISO(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  return kstDay();
 }
 
-/** Q26-0802-001 */
-async function nextQuoteNo(): Promise<string> {
-  const now = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  const day = `${String(now.getFullYear()).slice(2)}-${p(now.getMonth() + 1)}${p(now.getDate())}`;
-  const [r] = await db.execute<{ n: number }>(sql`
+/** Q26-0802-001 — 날짜는 KST. 채번 충돌은 saveSale 이 재시도로 흡수한다 */
+async function nextQuoteNo(dbc: Dbc): Promise<string> {
+  const [y, m, d] = kstDay().split("-");
+  const day = `${y.slice(2)}-${m}${d}`;
+  const [r] = await dbc.execute<{ n: number }>(sql`
     SELECT COALESCE(MAX(right(quote_no, 3)::int), 0) + 1 AS n
     FROM quote WHERE quote_no LIKE ${`Q${day}-%`}
   `);
@@ -105,12 +108,25 @@ async function nextQuoteNo(): Promise<string> {
  *    새 타이어를 먼저 팔면 오래된 것이 창고에 남아 늙는다.
  *    DOT 이 없는 것은 언제 들어왔는지 모르므로 가장 먼저 내보낸다.
  */
-export async function sellFromStock(productId: number, qty: number, quoteId: number, userId?: number) {
-  const rows = await db
+export async function sellFromStock(
+  productId: number,
+  qty: number,
+  quoteId: number,
+  userId?: number,
+  dbc: Dbc = db,
+) {
+  /**
+   * 🔴 읽은 행을 잠근다 — FOR UPDATE (코드 리뷰 2026-08-08).
+   *    잠그지 않으면 두 기기가 같은 마지막 1본을 동시에 읽어 둘 다 팔고,
+   *    출고 이력은 -2 가 되는데 부족 경고는 어디에도 안 남았다.
+   *    트랜잭션(saveSale) 안에서 돌면 두 번째 판매는 여기서 줄을 서게 된다.
+   */
+  const rows = await dbc
     .select({ id: stockItem.id, qty: stockItem.qty, dot: stockItem.dot })
     .from(stockItem)
     .where(and(eq(stockItem.productId, productId), eq(stockItem.status, "재고")))
-    .orderBy(sql`${stockItem.dot} ASC NULLS FIRST`, asc(stockItem.receivedAt));
+    .orderBy(sql`${stockItem.dot} ASC NULLS FIRST`, asc(stockItem.receivedAt))
+    .for("update");
 
   let left = qty;
   const now = new Date();
@@ -121,7 +137,7 @@ export async function sellFromStock(productId: number, qty: number, quoteId: num
     const take = Math.min(r.qty, left);
     left -= take;
 
-    await db.insert(stockMovement).values({
+    await dbc.insert(stockMovement).values({
       stockItemId: r.id,
       type: "출고",
       reason: "판매",
@@ -134,12 +150,12 @@ export async function sellFromStock(productId: number, qty: number, quoteId: num
       soldIds.push(r.id);
     } else {
       // 부품은 한 행에 여러 개가 들어 있다 — 수량만 줄인다
-      await db.update(stockItem).set({ qty: r.qty - take }).where(eq(stockItem.id, r.id));
+      await dbc.update(stockItem).set({ qty: r.qty - take }).where(eq(stockItem.id, r.id));
     }
   }
 
   if (soldIds.length) {
-    await db
+    await dbc
       .update(stockItem)
       .set({ status: "판매완료", soldAt: now, quoteId })
       .where(inArray(stockItem.id, soldIds));
@@ -174,69 +190,94 @@ export async function saveSale(
     customerId = found?.id ?? null;
   }
 
-  const quoteNo = await nextQuoteNo();
+  /**
+   * 🔴 저장 전체를 **한 트랜잭션**으로 (코드 리뷰 2026-08-08).
+   *    전에는 판매 머리 → 품목 → 재고 차감 → 차량이 낱개 문장이라, 중간에 죽으면
+   *    재고가 안 빠진 성사 판매가 남았고, 동시 저장이면 같은 재고를 두 번 팔았다.
+   *    이제 다 되거나 아무 일도 없거나 둘 중 하나다.
+   *
+   * 🔴 견적번호 충돌은 재시도로 흡수한다 — MAX+1 채번이라 두 명이 동시에 저장하면
+   *    같은 번호를 계산하는데, unique 제약에 걸리면 처음부터 다시 계산해 저장한다.
+   *    실패해도 알 수 없는 에러 화면 대신 한국어 안내가 나간다.
+   */
   const now = new Date();
+  let lastErr = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const done = await db.transaction(async (tx) => {
+        const quoteNo = await nextQuoteNo(tx);
 
-  const [q] = await db
-    .insert(quote)
-    .values({
-      quoteNo,
-      customerId,
-      vehicleId: input.vehicleId ?? null,
-      status: "성사",
-      confirmedAt: now,
-      workDate: input.workDate?.trim() || todayISO(),
-      totalAmount: total,
-      paymentMethod: input.paymentMethod ?? null,
-      paidAmount: total,
-      paymentMemo: input.memo ?? null,
-      // 거래처 판매는 MARS 에 안 간다 (사장님 요청 2026-08-05) — 대기열은 '미전송'만 본다
-      // 서비스(무상)도 MARS 에 안 간다 (2026-08-07) — 0원 매출 주문을 자동 전기하는 것은 위험하다
-      marsStatus: input.supplierName || input.paymentMethod === "서비스" ? "해당없음" : "미전송",
-      tyrePositions: input.tyrePositions?.length ? input.tyrePositions.join(",") : null,
-      marsMemo: input.supplierName
-        ? `거래처 ${input.supplierName.trim()}`
-        : input.walkIn?.name
-          ? `비회원 ${input.walkIn.name}${input.walkIn.phone ? ` ${input.walkIn.phone}` : ""}${
-              input.walkIn.plateNo ? ` ${input.walkIn.plateNo}` : ""
-            }`
-          : null,
-    })
-    .returning({ id: quote.id });
+        const [q] = await tx
+          .insert(quote)
+          .values({
+            quoteNo,
+            customerId,
+            vehicleId: input.vehicleId ?? null,
+            status: "성사",
+            confirmedAt: now,
+            workDate: input.workDate?.trim() || todayISO(),
+            totalAmount: total,
+            paymentMethod: input.paymentMethod ?? null,
+            paidAmount: total,
+            paymentMemo: input.memo ?? null,
+            // 거래처 판매는 MARS 에 안 간다 (사장님 요청 2026-08-05) — 대기열은 '미전송'만 본다
+            // 서비스(무상)도 MARS 에 안 간다 (2026-08-07) — 0원 매출 주문을 자동 전기하는 것은 위험하다
+            marsStatus: input.supplierName || input.paymentMethod === "서비스" ? "해당없음" : "미전송",
+            tyrePositions: input.tyrePositions?.length ? input.tyrePositions.join(",") : null,
+            marsMemo: input.supplierName
+              ? `거래처 ${input.supplierName.trim()}`
+              : input.walkIn?.name
+                ? `비회원 ${input.walkIn.name}${input.walkIn.phone ? ` ${input.walkIn.phone}` : ""}${
+                    input.walkIn.plateNo ? ` ${input.walkIn.plateNo}` : ""
+                  }`
+                : null,
+          })
+          .returning({ id: quote.id });
 
-  await db.insert(quoteItem).values(
-    lines.map((l) => ({
-      quoteId: q.id,
-      lineType: l.kind,
-      productId: l.productId ?? null,
-      serviceItemId: l.serviceItemId ?? null,
-      description: l.description,
-      memo: l.memo?.trim() || null,
-      qty: l.qty,
-      listPrice: l.listPrice ?? null,
-      salesDiscountRate: l.salesRate !== null && l.salesRate !== undefined ? String(l.salesRate) : null,
-      finalPrice: l.unitPrice,
-    })),
-  );
+        await tx.insert(quoteItem).values(
+          lines.map((l) => ({
+            quoteId: q.id,
+            lineType: l.kind,
+            productId: l.productId ?? null,
+            serviceItemId: l.serviceItemId ?? null,
+            description: l.description,
+            memo: l.memo?.trim() || null,
+            qty: l.qty,
+            listPrice: l.listPrice ?? null,
+            salesDiscountRate: l.salesRate !== null && l.salesRate !== undefined ? String(l.salesRate) : null,
+            finalPrice: l.unitPrice,
+          })),
+        );
 
-  // 재고 차감 — 타이어·부품만
-  const shortages: string[] = [];
-  for (const l of lines) {
-    if (!l.productId) continue;
-    const { short } = await sellFromStock(l.productId, l.qty, q.id);
-    if (short > 0) shortages.push(`${l.description} ${short}본`);
+        // 재고 차감 — 타이어·부품만
+        const shortages: string[] = [];
+        for (const l of lines) {
+          if (!l.productId) continue;
+          const { short } = await sellFromStock(l.productId, l.qty, q.id, undefined, tx);
+          if (short > 0) shortages.push(`${l.description} ${short}본`);
+        }
+
+        // 주행거리를 적어 주셨으면 차량 기록을 갱신한다
+        if (input.vehicleId && input.mileage && input.mileage > 0) {
+          await tx
+            .update(vehicle)
+            .set({ mileage: input.mileage, lastVisitAt: now })
+            .where(eq(vehicle.id, input.vehicleId));
+        }
+
+        return { quoteId: q.id, quoteNo, shortages };
+      });
+
+      refresh("/sale", "/mars", "/");
+      return { ok: true, ...done };
+    } catch (e) {
+      lastErr = (e as Error).message.split("\n")[0];
+      // 견적번호 충돌이면 번호를 다시 계산해 재시도 — 그 외에는 바로 알린다
+      if (/quote_no|duplicate key|23505/i.test(lastErr) && attempt < 2) continue;
+      break;
+    }
   }
-
-  // 주행거리를 적어 주셨으면 차량 기록을 갱신한다
-  if (input.vehicleId && input.mileage && input.mileage > 0) {
-    await db
-      .update(vehicle)
-      .set({ mileage: input.mileage, lastVisitAt: now })
-      .where(eq(vehicle.id, input.vehicleId));
-  }
-
-  refresh("/sale", "/mars", "/");
-  return { ok: true, quoteId: q.id, quoteNo, shortages };
+  return { ok: false, error: `저장하지 못했습니다 — 다시 한 번 눌러 주세요 (${lastErr.slice(0, 120)})` };
 }
 
 /* ------------------------------------------------------------------ */

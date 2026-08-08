@@ -104,31 +104,41 @@ export async function cancelSale(
   }
 
   /**
-   * 재고 복원 — 이 판매의 출고 이력을 하나씩 되감는다.
-   *   타이어(1본 1행): 판매완료 행을 재고로 되돌린다
-   *   부품(수량 행):   줄었던 수량을 다시 더한다
+   * 재고 복원 — 이 판매의 **순변동(출고 − 이미 되돌린 반품)** 만큼만 되감는다.
+   *
+   * 🔴 출고 이력만 보면 안 된다 (코드 리뷰 2026-08-08).
+   *    줄 수정(updateSaleLine)이 이미 일부를 반품으로 되돌려 놓았는데 취소가
+   *    출고 전량을 또 되감아, 4본 판 것에 6본이 살아나는 유령 재고가 생겼다.
+   *    행마다 이 판매의 모든 이력을 합산하면 두 번 눌러도 이중 복원이 없다.
    */
-  const moves = await db
-    .select({ id: stockMovement.id, stockItemId: stockMovement.stockItemId, qtyDelta: stockMovement.qtyDelta })
-    .from(stockMovement)
-    .where(and(eq(stockMovement.quoteId, quoteId), eq(stockMovement.type, "출고")));
+  const moves = await db.execute<{ stock_item_id: number; net: number }>(sql`
+    SELECT stock_item_id, -SUM(qty_delta)::int AS net
+    FROM stock_movement
+    WHERE quote_id = ${quoteId}
+    GROUP BY stock_item_id
+    HAVING SUM(qty_delta) < 0
+  `);
 
   let restored = 0;
-  const now = new Date();
   for (const m of moves) {
-    const take = -m.qtyDelta; // 출고는 음수로 남는다
+    const take = Number(m.net);
     if (take <= 0) continue;
     const [item] = await db
       .select({ id: stockItem.id, status: stockItem.status, qty: stockItem.qty, quoteId: stockItem.quoteId })
       .from(stockItem)
-      .where(eq(stockItem.id, m.stockItemId))
+      .where(eq(stockItem.id, Number(m.stock_item_id)))
       .limit(1);
     if (!item) continue;
 
     if (item.status === "판매완료" && item.quoteId === quoteId) {
+      /**
+       * 🔴 부품 행은 판매완료 때 qty 가 그대로 남아 있다 — 상태만 되돌리면
+       *    원래 수량 전체가 살아난다. 복원 수량을 qty 로 **명시**한다
+       *    (타이어 1본 1행은 take=1 이라 결과가 같다). (코드 리뷰 2026-08-08)
+       */
       await db
         .update(stockItem)
-        .set({ status: "재고", soldAt: null, quoteId: null })
+        .set({ status: "재고", soldAt: null, quoteId: null, qty: take })
         .where(eq(stockItem.id, item.id));
     } else {
       // 부품 — 행은 그대로 있고 수량만 줄어 있었다
@@ -242,7 +252,11 @@ async function restoreStockFor(
     if (out <= 0) continue;
     const take = Math.min(out, left);
     if (r.status === "판매완료" && Number(r.quote_id) === quoteId) {
-      await db.update(stockItem).set({ status: "재고", soldAt: null, quoteId: null }).where(eq(stockItem.id, Number(r.id)));
+      // 🔴 부품 행은 판매완료 때 qty 가 남아 있다 — 복원 수량을 명시해야 과복원이 없다 (2026-08-08)
+      await db
+        .update(stockItem)
+        .set({ status: "재고", soldAt: null, quoteId: null, qty: take })
+        .where(eq(stockItem.id, Number(r.id)));
     } else {
       await db.update(stockItem).set({ qty: Number(r.qty) + take }).where(eq(stockItem.id, Number(r.id)));
     }
