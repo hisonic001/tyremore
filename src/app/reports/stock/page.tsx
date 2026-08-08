@@ -146,7 +146,7 @@ export default async function StockReportPage() {
   const specMax = specs.length ? specs[0].n : 0;
 
   return (
-    <main className="mx-auto min-h-dvh max-w-3xl px-4 py-5 pb-24">
+    <main className="mx-auto min-h-dvh max-w-3xl px-4 py-5 pb-24 lg:max-w-6xl">
       <Link href="/settings" className="text-sm text-slate-500 underline underline-offset-4">
         ← 설정으로
       </Link>
@@ -171,20 +171,23 @@ export default async function StockReportPage() {
       </div>
 
       {/* ---- ① 핵심 숫자 ---- */}
-      <section className="mt-4 grid grid-cols-2 gap-2">
+      <section className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
         <Tile label="타이어 재고" value={`${kpi.total}본`} sub={`${kpi.products}개 모델`} />
         <Tile label="정가 기준 평가액" value={`${fmtShort(Number(kpi.list_sum))}원`} sub="매입가 기록이 쌓이면 원가 기준 추가" />
         <Tile label="짝 안 맞는 모델" value={`${odd.length}개`} sub={`홀수로 남은 ${oddQty}본`} warn={odd.length > 0} />
         <Tile label="DOT 미입력" value={`${kpi.nodot}본`} sub="창고 세기 화면에서 채우기" warn={kpi.nodot > 0} />
       </section>
 
+      {/* PC 에서 섹션 2열 — 홀수·안 나가는 재고는 전체 폭 (사장님 승인 2026-08-08) */}
+      <div className="mt-4 grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
       {/* ---- ② 홀수 재고 — 이 리포트의 주인공 ---- */}
       <Section
+        wide
         title={`짝이 안 맞는 타이어 ${odd.length}모델`}
         sub="타이어는 2·4본씩 나갑니다 — 1본을 채워 주문하거나, 홀수 것부터 파세요"
       >
         {odd.length ? (
-          <ul className="space-y-1">
+          <ul className="grid grid-cols-1 gap-1 lg:grid-cols-2">
             {odd.map((r, i) => (
               <li
                 key={i}
@@ -244,9 +247,9 @@ export default async function StockReportPage() {
       </Section>
 
       {/* ---- ⑦ 안 나가는 재고 ---- */}
-      <Section title="안 나가는 재고" sub="재고는 있는데 최근 6개월 판매가 없는 모델 — 처분·행사 후보">
+      <Section wide title="안 나가는 재고" sub="재고는 있는데 최근 6개월 판매가 없는 모델 — 처분·행사 후보">
         {notSelling.length ? (
-          <ul className="space-y-1">
+          <ul className="grid grid-cols-1 gap-1 lg:grid-cols-2">
             {notSelling.map((r, i) => (
               <li key={i} className="flex items-baseline justify-between gap-3 rounded-lg border border-slate-100 px-3 py-2 text-sm">
                 <span className="min-w-0 truncate">
@@ -264,6 +267,7 @@ export default async function StockReportPage() {
           <p className="text-sm text-slate-400">최근 6개월 안에 다 한 번씩은 팔렸습니다 👍</p>
         )}
       </Section>
+      </div>
 
       <p className="mt-4 text-xs text-slate-400">
         타이어(재고 상태)만 집계 · 부품 수량은 미확인이 많아 뺐습니다 · 평가액은 정가 기준 {fmtWon(Number(kpi.list_sum))}
@@ -312,9 +316,21 @@ function BarList({ rows, max, unit }: { rows: { label: string; qty: number }[]; 
   );
 }
 
-function Section({ title, sub, children }: { title: string; sub?: string; children: React.ReactNode }) {
+function Section({
+  title,
+  sub,
+  wide,
+  children,
+}: {
+  title: string;
+  sub?: string;
+  /** PC 2열 배치에서 전체 폭을 쓰는 섹션 (긴 목록용) */
+  wide?: boolean;
+  children: React.ReactNode;
+}) {
+  // 간격은 부모 grid 의 gap 이 준다 — PC 2열·폰 1열 모두에서 맞는다 (2026-08-08)
   return (
-    <section className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+    <section className={`rounded-xl border border-slate-200 bg-white p-4 ${wide ? "lg:col-span-2" : ""}`}>
       <h2 className="font-semibold">{title}</h2>
       {sub && <p className="mt-0.5 text-xs text-slate-400">{sub}</p>}
       <div className="mt-3">{children}</div>

@@ -166,7 +166,7 @@ export default async function ReportsPage({
   const yearDelta = isCurrent ? null : pct(cur.amt, lastYear.amt);
 
   return (
-    <main className="mx-auto min-h-dvh max-w-3xl px-4 py-5 pb-24">
+    <main className="mx-auto min-h-dvh max-w-3xl px-4 py-5 pb-24 lg:max-w-6xl">
       <Link href="/settings" className="text-sm text-slate-500 underline underline-offset-4">
         ← 설정으로
       </Link>
@@ -205,8 +205,8 @@ export default async function ReportsPage({
       </div>
 
       {/* ---- ① 핵심 숫자 ---- */}
-      <section className="mt-4 grid grid-cols-2 gap-2">
-        <div className="col-span-2 rounded-xl border border-slate-200 bg-white p-4">
+      <section className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <div className="col-span-2 rounded-xl border border-slate-200 bg-white p-4 lg:col-span-4">
           <div className="text-sm text-slate-500">매출</div>
           <div className="mt-1 text-3xl font-bold">{fmtWon(cur.amt)}</div>
           <div className="mt-1 space-x-3 text-sm">
@@ -228,6 +228,8 @@ export default async function ReportsPage({
         </p>
       )}
 
+      {/* PC 에서 그래프·목록을 나란히 (사장님 승인 2026-08-08) */}
+      <div className="mt-4 grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
       {/* ---- ② 일별 흐름 ---- */}
       <Section title="일별 매출" sub="막대에 손을 대면 그날의 건수·금액이 뜹니다">
         <ColumnChart data={days} height={170} />
@@ -306,6 +308,7 @@ export default async function ReportsPage({
           <p className="text-sm text-slate-400">아직 없습니다</p>
         )}
       </Section>
+      </div>
 
       <p className="mt-4 text-xs text-slate-400">
         정비한 날(work_date) 기준 · 성사된 판매만 집계 · 마진(매입원가) 각도는 원가 기록이 쌓이면 추가됩니다
@@ -334,8 +337,9 @@ function Delta({ v, label }: { v: number; label: string }) {
 }
 
 function Section({ title, sub, children }: { title: string; sub?: string; children: React.ReactNode }) {
+  // 간격은 부모 grid 의 gap 이 준다 — PC 2열 배치와 폰 1열 모두에서 맞는다 (2026-08-08)
   return (
-    <section className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+    <section className="rounded-xl border border-slate-200 bg-white p-4">
       <h2 className="font-semibold">{title}</h2>
       {sub && <p className="mt-0.5 text-xs text-slate-400">{sub}</p>}
       <div className="mt-3">{children}</div>

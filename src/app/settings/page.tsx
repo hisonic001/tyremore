@@ -72,7 +72,7 @@ export default async function SettingsPage() {
   ];
 
   return (
-    <main className="mx-auto min-h-dvh max-w-2xl px-4 py-5">
+    <main className="mx-auto min-h-dvh max-w-2xl px-4 py-5 lg:max-w-3xl">
       <Link href="/" className="text-sm text-slate-500 underline underline-offset-4">
         ← 검색으로
       </Link>

@@ -16,6 +16,16 @@ html {
   -webkit-text-size-adjust: 100%;
 }
 
+/*
+ * ⭐ PC 에서만 기본 글씨를 한 단계 키운다 (사장님 승인 2026-08-08).
+ *    rem 기반이라 대부분의 글씨·여백이 함께 커진다. 폰·태블릿(1024px 미만)은 그대로.
+ */
+@media (min-width: 1024px) {
+  html {
+    font-size: 17px;
+  }
+}
+
 body {
   @apply bg-slate-50 text-slate-900 antialiased;
   /*

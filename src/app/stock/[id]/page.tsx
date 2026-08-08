@@ -32,7 +32,7 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
   const unit = d.itemType === "tire" ? "본" : "개";
 
   return (
-    <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6">
+    <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6 lg:max-w-4xl">
       <Link href="/" className="text-sm text-slate-500 underline underline-offset-4">
         ← 검색으로
       </Link>

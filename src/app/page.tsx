@@ -68,7 +68,7 @@ export default async function Home({
   ]);
 
   return (
-    <main className="mx-auto min-h-dvh max-w-3xl px-4 py-5 pb-24 xl:pb-5">
+    <main className="mx-auto min-h-dvh max-w-3xl px-4 py-5 pb-24 lg:max-w-6xl xl:pb-5">
       {/*
         ⚠️ 좁은 화면에서 제목이 「타이어모 / 어」로 줄바꿈되던 문제 (2026-08-01).
            제목은 절대 줄이지 않고(shrink-0 · whitespace-nowrap),
@@ -134,7 +134,8 @@ export default async function Home({
         q ? (
           <>
             <Count n={vehicles.length} />
-            <ul className="mt-2 space-y-2">
+            {/* PC 는 2열 — 한 화면에 두 배 (사장님 승인 2026-08-08) */}
+            <ul className="mt-2 grid grid-cols-1 items-start gap-2 lg:grid-cols-2">
               {vehicles.map((v) => (
                 <VehicleCard key={v.vehicleId} v={v} />
               ))}
@@ -156,7 +157,8 @@ export default async function Home({
             </div>
           )}
           {(q || filterCount > 0) && <Count n={products.length} />}
-          <ul className="mt-2 space-y-2">
+          {/* PC 는 2열 — 한 화면에 두 배 (사장님 승인 2026-08-08) */}
+          <ul className="mt-2 grid grid-cols-1 items-start gap-2 lg:grid-cols-2">
             {products.map((p) => (
               <ProductCard key={p.productId} p={p} />
             ))}

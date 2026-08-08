@@ -100,7 +100,7 @@ export default async function SalesPage({
   };
 
   return (
-    <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6">
+    <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6 lg:max-w-6xl">
       <div className="flex items-center justify-between">
         <Link href="/" className="text-sm text-slate-500 underline underline-offset-4">
           ← 검색으로
@@ -167,7 +167,7 @@ export default async function SalesPage({
                   {won(d.amount)}원
                 </span>
               </div>
-              <ul className="mt-1.5 space-y-2">
+              <ul className="mt-1.5 grid grid-cols-1 items-start gap-2 lg:grid-cols-2">
                 {d.sales.map((s) => (
                   <SaleCard key={s.quoteId} sale={s} />
                 ))}
