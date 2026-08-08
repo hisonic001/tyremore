@@ -289,9 +289,31 @@ export async function diffStock(buf: Buffer): Promise<StockDiff> {
   /**
    * ⭐ 엑셀에 없는 재고는 **0본이 된다** (「엑셀이 정답」).
    *    이게 가장 위험한 부분이라 미리보기에 반드시 줄로 띄운다.
+   *
+   * 🔴 단, **오류 난 품번의 재고는 0본 처리를 보류한다** (코드 리뷰 2026-08-08).
+   *    DOT 를 잘못 친 줄은 오류로 건너뛰는데, 그 바람에 원래 DOT 로트가
+   *    「파일에 없음 → 0본」으로 잡혀 실물이 폐기됐다. 그 품번의 어느 줄에든
+   *    오류가 있으면 이 파일이 그 품번을 제대로 세었다고 믿을 수 없다 —
+   *    보류로 띄우고 사람이 파일을 고쳐 다시 올리게 한다.
    */
+  const errorNos = new Set(lines.filter((l) => l.error).map((l) => l.itemNo));
   for (const [key, r] of cur) {
     if (wanted.has(key)) continue;
+    if (errorNos.has(r[COL.itemNo])) {
+      errors++;
+      lines.push({
+        productId: null,
+        itemNo: r[COL.itemNo],
+        dot: r[COL.dot] || null,
+        model: r[COL.model],
+        spec: r[COL.spec],
+        before: r[COL.qty],
+        after: r[COL.qty],
+        kind: "오류",
+        error: "이 품번의 다른 줄에 오류가 있어 0본 처리를 보류합니다 — 파일을 고쳐 다시 올려 주세요",
+      });
+      continue;
+    }
     lines.push({
       productId: null,
       itemNo: r[COL.itemNo],

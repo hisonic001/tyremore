@@ -34,7 +34,19 @@ export function QtyEditor({
   const [error, setError] = useState<string | null>(null);
 
   function save() {
+    /**
+     * 🔴 빈 칸은 0 이 아니다 (코드 리뷰 2026-08-08).
+     *    Number("") === 0 이라, 칸을 지운 채 Enter 를 치면 그 DOT 전량이
+     *    확인 없이 폐기 처리됐다. 빈 칸은 막고, 진짜 0 은 한 번 물어본다.
+     */
+    if (value.trim() === "") {
+      setError("수량을 입력해 주세요");
+      return;
+    }
     const n = Number(value);
+    if (n === 0 && qty > 0) {
+      if (!confirm(`이 DOT 의 ${qty}${unit}을 전부 폐기 처리할까요?\n(0으로 저장하면 재고에서 사라집니다)`)) return;
+    }
     start(async () => {
       setError(null);
       const r = await setDotQty({ productId, dot, qty: n, reason: "실사조정" });
