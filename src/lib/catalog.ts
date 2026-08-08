@@ -52,6 +52,31 @@ export async function setDisplayName(productId: number, name: string | null) {
   return { ok: true as const };
 }
 
+/**
+ * ⭐ 기표가(공장도가) 직접 조정 (사장님 요청 2026-08-08)
+ *
+ *   "판매사에서 기표가(공장도가)를 인상할 때도 있거든."
+ *
+ * 입력은 화면에 보이는 그대로 **VAT 포함** 값이다. VAT 제외값도 같이 맞춘다.
+ * 기표가는 판매가 계산의 출발점(기표가 × (1−할인율))이라, 바꾸면 검색 카드의
+ * 판매가가 바로 따라 바뀐다. 비우면 「기표가 모름」으로 돌아간다.
+ */
+export async function setListPrice(
+  productId: number,
+  inclVat: number | null,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (inclVat !== null && (!Number.isFinite(inclVat) || inclVat < 0 || inclVat > 100_000_000)) {
+    return { ok: false, error: "기표가가 올바르지 않습니다" };
+  }
+  const v = inclVat && inclVat > 0 ? Math.round(inclVat) : null;
+  await db
+    .update(product)
+    .set({ listPrice: v, listPriceExcl: v ? Math.round(v / 1.1) : null, updatedAt: new Date() })
+    .where(eq(product.id, productId));
+  refresh("/", `/stock/${productId}`);
+  return { ok: true };
+}
+
 /** 브랜드 통째로 취급/미취급 */
 export async function setBrandHandled(code: string, handled: boolean) {
   await db.update(brand).set({ isHandled: handled }).where(eq(brand.code, code));

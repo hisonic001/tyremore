@@ -4,7 +4,7 @@ import { getStockDetail } from "@/lib/stock";
 import { SEASON_STYLE, type Season } from "@/lib/tire-attrs";
 import { BADGE_STYLE } from "@/lib/tire-name";
 import { AttrsEditor } from "./attrs-editor";
-import { CopyLine, HideToggle, NameEditor } from "./editor";
+import { CopyLine, HideToggle, NameEditor, PriceEditor } from "./editor";
 import { AddDotRow, QtyEditor } from "./qty-editor";
 
 /** 1826 → '26년 18주' */
@@ -108,12 +108,8 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
               CAI <span className="font-semibold text-slate-700">{d.cai}</span>
             </span>
           )}
-          {d.listPrice && (
-            <span>
-              기표가 <span className="font-semibold text-slate-700">{d.listPrice.toLocaleString()}원</span>
-              <span className="ml-1 text-xs text-slate-400">VAT 포함</span>
-            </span>
-          )}
+          {/* ⭐ 기표가를 눌러서 바로 고친다 (사장님 요청 2026-08-08 — 판매사 기표가 인상 대응) */}
+          <PriceEditor productId={d.productId} listPrice={d.listPrice} />
         </div>
 
         {/* ⭐ 틀린 세부사항을 여기서 고친다. 고친 값은 재이관해도 유지된다 */}

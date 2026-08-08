@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { setDisplayName, setProductActive } from "@/lib/catalog";
+import { setDisplayName, setListPrice, setProductActive } from "@/lib/catalog";
 
 /**
  * 🔴 수량·DOT 를 여기서 고치던 화면(DotRow · NewDotRow)은 걷어냈다 (사장님 지시 2026-08-03).
@@ -115,6 +115,78 @@ export function NameEditor({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * ⭐ 기표가(공장도가) 직접 조정 (사장님 요청 2026-08-08)
+ *
+ *   "판매사에서 기표가(공장도가)를 인상할 때도 있거든."
+ *
+ * 기표가 숫자를 누르면 입력칸이 열린다. VAT 포함 값으로 넣는다 —
+ * 검색 카드의 판매가(기표가 × (1−할인율))가 바로 따라 바뀐다.
+ */
+export function PriceEditor({ productId, listPrice }: { productId: number; listPrice: number | null }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(listPrice ? String(listPrice) : "");
+  const [error, setError] = useState<string | null>(null);
+
+  const save = () =>
+    start(async () => {
+      setError(null);
+      const n = value.trim() === "" ? null : Number(value.replace(/\D/g, ""));
+      const r = await setListPrice(productId, n);
+      if (!r.ok) return setError(r.error);
+      setEditing(false);
+      router.refresh();
+    });
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setValue(listPrice ? String(listPrice) : "");
+          setEditing(true);
+        }}
+        className="text-left"
+      >
+        기표가{" "}
+        <span className="font-semibold text-slate-700">
+          {listPrice ? `${listPrice.toLocaleString()}원` : "미입력"}
+        </span>
+        <span className="ml-1 text-xs text-slate-400">VAT 포함 ✏️</span>
+      </button>
+    );
+  }
+
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1.5">
+      <span className="text-slate-500">기표가</span>
+      <input
+        value={value === "" ? "" : Number(value).toLocaleString()}
+        onChange={(e) => setValue(e.target.value.replace(/\D/g, ""))}
+        inputMode="numeric"
+        autoFocus
+        placeholder="VAT 포함"
+        className="tabular h-9 w-32 rounded-lg border-2 border-slate-900 px-2 text-right text-sm font-semibold outline-none"
+      />
+      <span className="text-xs text-slate-400">원</span>
+      <button
+        type="button"
+        disabled={pending}
+        onClick={save}
+        className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+      >
+        저장
+      </button>
+      <button type="button" onClick={() => setEditing(false)} className="px-2 py-1.5 text-sm text-slate-500">
+        취소
+      </button>
+      {error && <span className="text-xs text-red-600">{error}</span>}
+    </span>
   );
 }
 
