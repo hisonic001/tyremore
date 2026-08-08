@@ -431,17 +431,36 @@ function CustomerPick({
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<VehicleHit[]>([]);
   const [manual, setManual] = useState(false);
-  /** ⭐ 거래처 판매 고르기 (사장님 요청 2026-08-05) — MARS 에 등록하지 않는다 */
-  const [pickingSupplier, setPickingSupplier] = useState(false);
-  const [supplierList, setSupplierList] = useState<{ id: number; name: string }[] | null>(null);
+  /**
+   * ⭐ 고객·차량 ↔ 거래처 — 동등한 탭 전환 (사장님 요청 2026-08-08).
+   *    "거래처에 판매의 경우 좀 더 직관적으로 … 동등한 위치에서 버튼을 통해서
+   *     스위칭이 가능하게. 거래처를 고를때도 검색을 통해서."
+   *    전에는 고객 검색 밑의 작은 밑줄 링크라 눈에 안 띄었다.
+   */
+  const [mode, setMode] = useState<"customer" | "supplier">("customer");
+  const [sq, setSq] = useState("");
+  const [supplierList, setSupplierList] = useState<
+    { id: number; name: string; phone: string | null; memo: string | null }[] | null
+  >(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (!pickingSupplier || supplierList !== null) return;
+    if (mode !== "supplier" || supplierList !== null) return;
     void listSuppliers().then((rows) =>
-      setSupplierList(rows.filter((r) => r.isActive).map((r) => ({ id: r.id, name: r.name }))),
+      setSupplierList(
+        rows
+          .filter((r) => r.isActive)
+          .map((r) => ({ id: r.id, name: r.name, phone: r.phone ?? null, memo: r.memo ?? null })),
+      ),
     );
-  }, [pickingSupplier, supplierList]);
+  }, [mode, supplierList]);
+
+  // 거래처 검색 — 설정 > 거래처와 같은 방식 (이름·전화·메모, 공백 무시)
+  const norm = (s: string | null | undefined) => (s ?? "").replace(/\s/g, "").toLowerCase();
+  const needle = norm(sq);
+  const supplierHits = (supplierList ?? []).filter(
+    (r) => !needle || norm(r.name).includes(needle) || norm(r.phone).includes(needle) || norm(r.memo).includes(needle),
+  );
 
   useEffect(() => {
     if (timer.current) clearTimeout(timer.current);
@@ -497,8 +516,69 @@ function CustomerPick({
 
   return (
     <section className="rounded-2xl border border-slate-300 bg-white p-3">
-      <h2 className="font-bold">고객·차량</h2>
-      {!manual ? (
+      {/* ⭐ 누구에게 파는가 — 고객·차량과 거래처가 동등한 탭 (사장님 요청 2026-08-08) */}
+      <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+        {(
+          [
+            ["customer", "고객·차량"],
+            ["supplier", "거래처"],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setMode(id)}
+            className={`flex-1 rounded-lg py-2.5 text-sm font-semibold ${
+              mode === id
+                ? id === "supplier"
+                  ? "bg-white text-violet-800 shadow-sm"
+                  : "bg-white text-slate-900 shadow-sm"
+                : "text-slate-500 active:bg-slate-200"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {mode === "supplier" ? (
+        <>
+          <p className="mt-2 px-1 text-xs text-violet-700">
+            거래처 판매는 MARS 에 등록하지 않습니다 — 재고와 판매 기록만 남습니다.
+          </p>
+          <input
+            value={sq}
+            onChange={(e) => setSq(e.target.value)}
+            placeholder="거래처 검색  예: 금호, 쌍성, 010…"
+            className="mt-2 w-full rounded-lg border border-violet-300 px-3 py-3 text-lg outline-none focus:border-violet-700"
+          />
+          <ul className="mt-2 space-y-1">
+            {supplierList === null && <li className="py-2 text-sm text-slate-500">불러오는 중…</li>}
+            {supplierHits.map((s) => (
+              <li key={s.id}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSupplier(s.name);
+                    setSq("");
+                  }}
+                  className="w-full rounded-lg border border-violet-200 px-3 py-2 text-left active:bg-violet-50"
+                >
+                  <div className="text-sm font-medium">{s.name}</div>
+                  {(s.phone || s.memo) && (
+                    <div className="text-xs text-slate-500">{[s.phone, s.memo].filter(Boolean).join(" · ")}</div>
+                  )}
+                </button>
+              </li>
+            ))}
+            {supplierList !== null && supplierHits.length === 0 && (
+              <li className="py-2 text-sm text-slate-500">
+                「{sq}」에 맞는 거래처가 없습니다 — 설정 &gt; 거래처에서 먼저 추가해 주세요
+              </li>
+            )}
+          </ul>
+        </>
+      ) : !manual ? (
         <>
           <input
             value={q}
@@ -534,44 +614,6 @@ function CustomerPick({
           >
             등록 안 된 손님입니다
           </button>
-
-          {/* ⭐ 거래처 판매 (사장님 요청 2026-08-05) — MARS 에 등록하지 않는다 */}
-          {!pickingSupplier ? (
-            <button
-              type="button"
-              onClick={() => setPickingSupplier(true)}
-              className="w-full py-2 text-sm text-violet-700 underline underline-offset-4"
-            >
-              거래처에 판매 (MARS 등록 없음)
-            </button>
-          ) : (
-            <div className="mt-1 rounded-xl border border-violet-300 bg-violet-50 p-3">
-              <div className="text-sm font-semibold text-violet-900">어느 거래처인가요?</div>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {supplierList === null && <span className="text-sm text-violet-700">불러오는 중…</span>}
-                {supplierList?.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => {
-                      onSupplier(s.name);
-                      setPickingSupplier(false);
-                    }}
-                    className="rounded-lg border border-violet-300 bg-white px-3 py-2 text-sm active:bg-violet-100"
-                  >
-                    {s.name}
-                  </button>
-                ))}
-              </div>
-              <button
-                type="button"
-                onClick={() => setPickingSupplier(false)}
-                className="mt-2 text-xs text-violet-700 underline"
-              >
-                취소
-              </button>
-            </div>
-          )}
         </>
       ) : (
         <NewCustomer
