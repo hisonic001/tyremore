@@ -435,6 +435,8 @@ export async function createProduct(input: {
       isSerialized: itemType === "tire",
       brandCode: input.brandCode || null,
       pattern: input.pattern.trim(),
+      // 손 등록은 사장님이 친 이름 그대로가 표시 이름이다 (2026-08-08 품목명 통일)
+      displayName: input.pattern.trim(),
       rawName,
       width: input.width,
       aspectRatio: input.aspectRatio,

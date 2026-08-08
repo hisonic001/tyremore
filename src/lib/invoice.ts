@@ -662,6 +662,22 @@ export async function createProductFromInvoiceItem(
   const attrs = parseTireAttrs(model, line.description);
 
   /**
+   * ⭐ 표시 이름도 표준 규칙으로 짓는다 (사장님 요청 2026-08-08 —
+   *    "이러한 규칙이 매입받을때 인보이스를 엑셀로 올릴때 반영되게").
+   *    일괄 정리(backfill-display-names)와 같은 조립: 모델명 + 겹수 + OE 마킹.
+   */
+  const { parseTireName, cleanTireName } = await import("./tire-name");
+  const displayName =
+    cleanTireName(
+      parseTireName(line.description, model, {
+        width: spec.width,
+        aspectRatio: spec.aspectRatio,
+        rimInch: spec.rimInch !== null ? String(spec.rimInch) : null,
+        brandCode: b.code,
+      }),
+    ) || null;
+
+  /**
    * 🔴 기표가는 **인보이스에 진짜 기표가가 있을 때만** 넣는다 (사장님 지적 2026-08-05).
    *    전에는 "0 보다 낫다"며 매입가(공급가액)로 대신 채웠는데, 금호 인보이스에는
    *    기표가 열이 없어서 금호 상품 176개의 기표가가 매입가로 잘못 잡혔다 —
@@ -683,6 +699,7 @@ export async function createProductFromInvoiceItem(
         isSerialized: true,
         brandCode: b.code,
         pattern: model,
+        displayName,
         // 원문은 손대지 않은 것을 남긴다 — 나중에 다시 읽을 수 있어야 한다
         rawName: line.description,
         width: spec.width,

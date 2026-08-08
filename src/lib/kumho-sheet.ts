@@ -394,14 +394,28 @@ export async function applyCatalog(
         .filter(Boolean)
         .join(" ")
         .trim();
+      /**
+       * ⭐ 표시 이름도 표준 규칙으로 (사장님 요청 2026-08-08) —
+       *    모델명 + 겹수 + OE 마킹. 일괄 정리·인보이스 등록과 같은 조립이다.
+       */
+      const { parseTireName, cleanTireName } = await import("./tire-name");
+      const displayName =
+        cleanTireName(
+          parseTireName(`Kumho ${r.name}`, r.model, {
+            width: r.width,
+            aspectRatio: r.aspectRatio,
+            rimInch: r.rimInch,
+            brandCode: "KM",
+          }),
+        ) || null;
       const [ins] = await db.execute<{ id: number }>(sql`
         INSERT INTO product (
-          mars_item_no, item_type, is_serialized, brand_code, pattern, raw_name,
+          mars_item_no, item_type, is_serialized, brand_code, pattern, display_name, raw_name,
           width, aspect_ratio, rim_inch, load_index, speed_rating, season,
           is_runflat, is_acoustic, is_suv, list_price, list_price_excl,
           spec_parsed, is_active, created_at, updated_at
         ) VALUES (
-          ${"KM" + r.code}, 'tire', true, 'KM', ${label},
+          ${"KM" + r.code}, 'tire', true, 'KM', ${label}, ${displayName},
           ${`Kumho ${r.name}`},
           ${r.width}, ${r.aspectRatio}, ${r.rimInch}, ${r.loadIndex}, ${r.speedRating}, ${season},
           ${attrs.isRunflat}, ${attrs.isAcoustic}, ${attrs.isSuv},
