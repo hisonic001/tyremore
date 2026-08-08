@@ -167,7 +167,16 @@ export default async function SalesPage({
                   {won(d.amount)}원
                 </span>
               </div>
-              <ul className="mt-1.5 grid grid-cols-1 items-start gap-2 lg:grid-cols-2">
+              {/*
+                🔴 그날 판매가 1건이면 2열을 쓰지 않는다 (사장님 버그 제보 2026-08-08).
+                   차량별 이력은 하루 1건이 보통이라, 2열 격자에서 카드가 왼쪽 반칸만
+                   차지하고 오른쪽이 비어 날짜 줄의 합계 금액만 허공에 떠 보였다.
+              */}
+              <ul
+                className={`mt-1.5 grid grid-cols-1 items-start gap-2 ${
+                  d.sales.length > 1 ? "lg:grid-cols-2" : ""
+                }`}
+              >
                 {d.sales.map((s) => (
                   <SaleCard key={s.quoteId} sale={s} />
                 ))}
