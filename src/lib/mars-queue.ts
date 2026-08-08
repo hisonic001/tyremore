@@ -140,7 +140,9 @@ export async function marsQueue(): Promise<MarsEntry[]> {
            q.total_amount, q.mars_memo, q.tyre_positions,
            c.mars_contact_no AS contact_no, c.name AS customer_name, c.phone,
            c.address, c.consent_privacy, c.consent_marketing, c.consent_signed_at,
-           v.plate_no, v.model AS vehicle_model, v.maker_name, v.year, v.fuel_type, v.mileage,
+           v.plate_no, v.model AS vehicle_model, v.maker_name, v.year, v.fuel_type,
+           -- 판매 등록 때 입력한 주행거리가 우선 — 그 판매의 값이다 (2026-08-08)
+           COALESCE(q.mileage, v.mileage) AS mileage,
            v.mars_vehicle_no
     FROM quote q
     LEFT JOIN customer c ON c.id = q.customer_id

@@ -512,6 +512,11 @@ export const quote = pgTable(
      * 등록한 날(created_at)과 다를 수 있으므로 따로 둔다.
      */
     workDate: date("work_date"),
+    /**
+     * ⭐ 판매 등록 때 입력한 주행거리 (사장님 요청 2026-08-08 — "정비내역 카드에서 차량 키로수도").
+     *    차량 카드의 최신값과 달리 「그때 몇 km 였나」가 남는다. 과거 건은 NULL.
+     */
+    mileage: integer("mileage"),
     confirmedBy: bigint("confirmed_by", { mode: "number" }).references(() => appUser.id),
 
     totalAmount: integer("total_amount").notNull().default(0),

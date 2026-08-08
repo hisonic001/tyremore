@@ -552,31 +552,39 @@ function CustomerPick({
             placeholder="거래처 검색  예: 금호, 쌍성, 010…"
             className="mt-2 w-full rounded-lg border border-violet-300 px-3 py-3 text-lg outline-none focus:border-violet-700"
           />
-          <ul className="mt-2 space-y-1">
-            {supplierList === null && <li className="py-2 text-sm text-slate-500">불러오는 중…</li>}
-            {supplierHits.map((s) => (
-              <li key={s.id}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onSupplier(s.name);
-                    setSq("");
-                  }}
-                  className="w-full rounded-lg border border-violet-200 px-3 py-2 text-left active:bg-violet-50"
-                >
-                  <div className="text-sm font-medium">{s.name}</div>
-                  {(s.phone || s.memo) && (
-                    <div className="text-xs text-slate-500">{[s.phone, s.memo].filter(Boolean).join(" · ")}</div>
-                  )}
-                </button>
-              </li>
-            ))}
-            {supplierList !== null && supplierHits.length === 0 && (
-              <li className="py-2 text-sm text-slate-500">
-                「{sq}」에 맞는 거래처가 없습니다 — 설정 &gt; 거래처에서 먼저 추가해 주세요
-              </li>
-            )}
-          </ul>
+          {/*
+            ⭐ 미리 깔리는 목록 없음 (사장님 지시 2026-08-08) —
+               "어차피 거래처가 수십개가 될수도 있기에 사전에 미리 없애고
+                그냥 검색창만 놔두고 검색시에 실시간으로 확인 가능하게."
+               고객·차량 검색과 같은 방식: 치는 글자대로 그때그때만 보여준다.
+          */}
+          {needle !== "" && (
+            <ul className="mt-2 space-y-1">
+              {supplierList === null && <li className="py-2 text-sm text-slate-500">불러오는 중…</li>}
+              {supplierHits.slice(0, 8).map((s) => (
+                <li key={s.id}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSupplier(s.name);
+                      setSq("");
+                    }}
+                    className="w-full rounded-lg border border-violet-200 px-3 py-2 text-left active:bg-violet-50"
+                  >
+                    <div className="text-sm font-medium">{s.name}</div>
+                    {(s.phone || s.memo) && (
+                      <div className="text-xs text-slate-500">{[s.phone, s.memo].filter(Boolean).join(" · ")}</div>
+                    )}
+                  </button>
+                </li>
+              ))}
+              {supplierList !== null && supplierHits.length === 0 && (
+                <li className="py-2 text-sm text-slate-500">
+                  「{sq}」에 맞는 거래처가 없습니다 — 설정 &gt; 거래처에서 먼저 추가해 주세요
+                </li>
+              )}
+            </ul>
+          )}
         </>
       ) : !manual ? (
         <>

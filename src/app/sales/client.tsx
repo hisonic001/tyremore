@@ -150,6 +150,12 @@ export function SaleCard({ sale: s }: { sale: SaleRow }) {
               {s.createdAt && ` · ${s.createdAt} 등록`}
               {s.paymentMethod && ` · ${s.paymentMethod}`}
             </p>
+            {/* ⭐ 주행거리 (사장님 요청 2026-08-08) — 그때 입력값이 우선, 없으면 차량 최근값 */}
+            {s.mileage !== null ? (
+              <p className="tabular">주행거리: {s.mileage.toLocaleString()} km (등록 당시)</p>
+            ) : s.vehicleMileage !== null ? (
+              <p className="tabular">주행거리: {s.vehicleMileage.toLocaleString()} km (차량 최근 기록)</p>
+            ) : null}
             {s.tyrePositions.length > 0 && <p>갈아 끼운 바퀴: {s.tyrePositions.join(" · ")}</p>}
             {s.paymentMemo && <p>메모: {s.paymentMemo}</p>}
             {s.marsStatus !== "미전송" && (

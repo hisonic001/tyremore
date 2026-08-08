@@ -216,6 +216,8 @@ export async function saveSale(
             status: "성사",
             confirmedAt: now,
             workDate: input.workDate?.trim() || todayISO(),
+            // 그때의 주행거리를 판매에 박아 둔다 (사장님 요청 2026-08-08)
+            mileage: input.mileage && input.mileage > 0 ? input.mileage : null,
             totalAmount: total,
             paymentMethod: input.paymentMethod ?? null,
             paidAmount: total,

@@ -39,6 +39,10 @@ export interface SaleRow {
   customerName: string | null;
   plateNo: string | null;
   vehicleModel: string | null;
+  /** ⭐ 그때 입력한 주행거리 (사장님 요청 2026-08-08). 없으면 차량 최근값으로 대신 보여준다 */
+  mileage: number | null;
+  /** 차량 카드의 최근 주행거리 — 과거 건의 대체 표시용 */
+  vehicleMileage: number | null;
   /** 비회원이면 marsMemo 의 「비회원 이름 전화」가 이름 역할을 한다 */
   walkIn: string | null;
   totalAmount: number;
@@ -106,6 +110,8 @@ export async function saleHistory(opts: {
     customer_name: string | null;
     plate_no: string | null;
     vehicle_model: string | null;
+    mileage: number | null;
+    veh_mileage: number | null;
     mars_memo: string | null;
     total_amount: number;
     payment_method: string | null;
@@ -126,6 +132,7 @@ export async function saleHistory(opts: {
     SELECT q.id quote_id, q.quote_no, q.status,
            to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM-DD') work_date,
            q.customer_id, c.name customer_name, v.plate_no, v.model vehicle_model,
+           q.mileage, v.mileage veh_mileage,
            q.mars_memo, q.total_amount, q.payment_method, q.payment_memo,
            q.mars_status, q.mars_ref_no, q.tyre_positions,
            to_char(q.created_at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') created_hm,
@@ -167,6 +174,8 @@ export async function saleHistory(opts: {
         customerName: r.customer_name,
         plateNo: r.plate_no,
         vehicleModel: r.vehicle_model,
+        mileage: r.mileage === null ? null : Number(r.mileage),
+        vehicleMileage: r.veh_mileage === null ? null : Number(r.veh_mileage),
         // 「비회원 …」·「거래처 …」 판매는 marsMemo 가 이름 역할을 한다 (2026-08-05 거래처 판매 추가)
         walkIn: r.mars_memo?.startsWith("비회원") || r.mars_memo?.startsWith("거래처") ? r.mars_memo : null,
         totalAmount: Number(r.total_amount),
