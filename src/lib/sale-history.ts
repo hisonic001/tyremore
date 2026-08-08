@@ -130,9 +130,10 @@ export async function saleHistory(opts: {
            q.mars_status, q.mars_ref_no, q.tyre_positions,
            to_char(q.created_at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') created_hm,
            qi.id item_id, qi.line_type, qi.description, qi.qty, qi.final_price, qi.memo line_memo,
-           -- ⭐ 규격은 저장된 폭/편평비/인치로 조립한다 (225/45R17 · 12.5R17 처럼 편평비 없는 것도)
+           -- ⭐ 규격은 저장된 폭/편평비/인치로 조립한다 (225/45R17 · 145R13)
+           --    편평비 80 은 생략 (사장님 지시 2026-08-08 — 145R13·195R15 가 익숙하다)
            CASE WHEN p.width IS NOT NULL AND p.rim_inch IS NOT NULL THEN
-             p.width::text || COALESCE('/' || p.aspect_ratio::text, '')
+             p.width::text || COALESCE('/' || NULLIF(p.aspect_ratio, 80)::text, '')
                || 'R' || regexp_replace(p.rim_inch::text, '\.0$', '')
            END AS spec,
            p.list_price

@@ -310,9 +310,11 @@ export function parseTireName(
 
   // ── 규격 · 하중/속도 ──
   // 편평비 없는 밴 규격(145R13)은 편평비 자리를 비우고 적는다 (2026-08-03)
+  // ⭐ 편평비 80 도 생략한다 (사장님 지시 2026-08-08) — MARS 의 145/80R13 은
+  //    우리 화면에선 145R13 으로. 그 표기 자체가 80 을 뜻한다.
   const displaySpec =
     spec && spec.width && spec.rimInch !== null
-      ? spec.aspectRatio
+      ? spec.aspectRatio && spec.aspectRatio !== 80
         ? `${spec.width}/${spec.aspectRatio}R${Number(spec.rimInch)}`
         : `${spec.width}R${Number(spec.rimInch)}`
       : null;

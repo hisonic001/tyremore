@@ -131,12 +131,15 @@ export function parseTireSpec(rawName: string): TireSpec {
 
 /**
  * '225/45R17' 형태의 표시용 문자열.
- * 편평비가 없는 밴 규격은 '145R13' 으로 적는다 (MARS 표기와 같다).
+ * 편평비가 없는 밴 규격은 '145R13' 으로 적는다.
+ * ⭐ 편평비 80 도 생략한다 (사장님 지시 2026-08-08) —
+ *    MARS 는 145R13 을 145/80R13 으로 적지만 우리 가게는 145R13·195R15 가 익숙하다.
+ *    (145R13 표기 자체가 편평비 80 을 뜻한다 — 정보가 사라지는 것이 아니다)
  */
 export function formatSpec(s: Pick<TireSpec, "width" | "aspectRatio" | "rimInch">): string | null {
   if (!s.width || s.rimInch === null) return null;
   const rim = String(s.rimInch);
-  return s.aspectRatio ? `${s.width}/${s.aspectRatio}R${rim}` : `${s.width}R${rim}`;
+  return s.aspectRatio && s.aspectRatio !== 80 ? `${s.width}/${s.aspectRatio}R${rim}` : `${s.width}R${rim}`;
 }
 
 /**
@@ -144,13 +147,29 @@ export function formatSpec(s: Pick<TireSpec, "width" | "aspectRatio" | "rimInch"
  * '2254517' · '225/45/17' · '225 45 17' · '225/45R17' 을 전부 같은 것으로 본다.
  * 통합 검색창(D-11 1번)이 "이건 규격이다" 라고 판단하는 근거.
  */
-export function parseSpecQuery(q: string): { width: number; aspectRatio: number; rimInch: number } | null {
+export function parseSpecQuery(
+  q: string,
+): { width: number; aspectRatio: number | null; rimInch: number } | null {
   const t = q.trim().toUpperCase();
 
   // 구분자가 있는 경우
   const sep = /^(\d{3})\s*[\/\-\s]\s*(\d{2})\s*(?:[\/\-\sR]\s*)?(\d{2}(?:\.\d)?)$/.exec(t);
   if (sep) {
     return { width: +sep[1], aspectRatio: +sep[2], rimInch: +sep[3] };
+  }
+
+  /**
+   * ⭐ 편평비 없는 밴 표기 — '145R13' · '195R15C' (사장님 지시 2026-08-08).
+   *    MARS 는 같은 타이어를 145/80R13 으로 적어 두어서, 검색 쪽에서 80 과
+   *    「없음」을 같은 것으로 봐야 이 표기로도 찾힌다 (search.ts 가 처리).
+   */
+  const van = /^(\d{3})\s*R\s*(\d{2})C?$/.exec(t);
+  if (van) {
+    const w = +van[1],
+      r = +van[2];
+    if (w >= 125 && w <= 405 && r >= 10 && r <= 30) {
+      return { width: w, aspectRatio: null, rimInch: r };
+    }
   }
 
   // 구분자 없이 7자리 — 2254517

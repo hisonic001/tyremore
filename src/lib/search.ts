@@ -245,11 +245,18 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
     for (const part of parts) {
       const spec = parseSpecQuery(part);
       if (spec) {
-        conds.push(
-          eq(product.width, spec.width),
-          eq(product.aspectRatio, spec.aspectRatio),
-          sql`${product.rimInch} = ${String(spec.rimInch)}`,
-        );
+        conds.push(eq(product.width, spec.width), sql`${product.rimInch} = ${String(spec.rimInch)}`);
+        /**
+         * ⭐ 편평비 80 ↔ 「없음」은 같은 규격이다 (사장님 지시 2026-08-08).
+         *    145R13 표기 자체가 편평비 80 을 뜻하는데, MARS 는 145/80R13 으로,
+         *    금호 자재검색은 145R13 으로 넣어 같은 타이어가 두 모양으로 저장돼 있다.
+         *    145R13 을 쳐도, 145/80R13 을 쳐도 양쪽 다 나와야 한다.
+         */
+        if (spec.aspectRatio === null || spec.aspectRatio === 80) {
+          conds.push(sql`(${product.aspectRatio} IS NULL OR ${product.aspectRatio} = 80)`);
+        } else {
+          conds.push(eq(product.aspectRatio, spec.aspectRatio));
+        }
         continue;
       }
       /**

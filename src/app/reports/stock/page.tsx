@@ -22,10 +22,10 @@ export const dynamic = "force-dynamic";
  *    4본뿐이라(2026-08-07 실측) 매입가 기준 평가는 아직 거짓말이 된다.
  */
 
-/** 규격 조립 — sale-history 와 같은 식 (225/45R17 · 12.5R17) */
+/** 규격 조립 — sale-history 와 같은 식. 편평비 80 은 생략(145R13, 사장님 지시 2026-08-08) */
 const SPEC = sql`
   CASE WHEN p.width IS NOT NULL AND p.rim_inch IS NOT NULL THEN
-    p.width::text || COALESCE('/' || p.aspect_ratio::text, '')
+    p.width::text || COALESCE('/' || NULLIF(p.aspect_ratio, 80)::text, '')
       || 'R' || regexp_replace(p.rim_inch::text, '\.0$', '')
   END`;
 const NAME = sql`COALESCE(NULLIF(p.display_name, ''), p.pattern, p.raw_name)`;
