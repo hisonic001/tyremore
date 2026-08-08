@@ -782,8 +782,15 @@ export const purchaseInvoiceItem = pgTable(
     /** 인보이스에 적힌 그대로 — 상품을 못 찾아도 무엇인지는 남는다 */
     description: text("description").notNull(),
     qty: integer("qty").notNull(),
-    /** ⭐ 실제로 도착해 스캔한 수량 */
+    /** ⭐ 실제로 도착해 확정한 수량 */
     receivedQty: integer("received_qty").notNull().default(0),
+    /**
+     * ⭐ 입고 확정을 누른 순간 (사장님 지시 2026-08-08).
+     *    "전량입고 혹은 입고확정 버튼을 누르는 때가 입고가 되는 순간이며 …
+     *     입고 되는 순간을 기점으로 입고 날짜와 입고 내역을 기록해줘."
+     *    매입 내역은 이 시각 기준으로 묶인다 — 발행일·업로드일이 아니라.
+     */
+    receivedAt: timestamp("received_at", { withTimezone: true }),
     unitListPrice: integer("unit_list_price"), // 기준단가 (VAT 미포함)
     discountRate: numeric("discount_rate", { precision: 5, scale: 4 }), // 0.3800
     supplyAmount: integer("supply_amount"), // 공급가액

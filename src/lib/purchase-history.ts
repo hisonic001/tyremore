@@ -34,6 +34,7 @@ export interface PurchaseInvoiceRow {
   invoiceId: number;
   invoiceNo: string;
   supplier: string;
+  /** 🔴 마지막 **입고 확정일**(KST) — 발행일이 아니다 (사장님 지시 2026-08-08) */
   issuedAt: string | null;
   status: string;
   /** 직접 매입인가 (인보이스 파일 없이 손으로 만든 장부) */
@@ -46,7 +47,7 @@ export interface PurchaseInvoiceRow {
 }
 
 export interface PurchaseDay {
-  /** '2026-08-03' — 발행일이 없으면 '날짜 없음' */
+  /** '2026-08-03' — **입고 확정일** 기준 (사장님 지시 2026-08-08) */
   date: string;
   qty: number;
   amount: number | null;
@@ -81,14 +82,16 @@ export async function purchaseHistory(
   const sup = supplier?.trim() || null;
 
   /**
-   * 고를 수 있는 달 — 발행일이 없는 장부는 만든 날로 본다.
-   * 품목이 하나도 없는 빈 장부는 세지 않는다 (아래 목록에서도 뺀다).
+   * 🔴 매입 내역의 날짜 기준은 **입고 확정 시각**이다 (사장님 지시 2026-08-08).
+   *    "전량입고 혹은 입고확정 버튼을 누르는 때가 입고가 되는 순간이며, 매입내역에도
+   *     입고되기 전까지는 목록에 포함하지 않고 입고 되는 순간을 기점으로 기록해줘."
+   *    → 입고된 줄이 하나도 없는 장부는 여기 안 나온다 (입고 예정 화면에는 그대로 있다).
+   *      날짜는 발행일이 아니라 마지막 입고 확정 시각(KST)이다.
    */
   const monthRows = await db.execute<{ m: string }>(sql`
-    SELECT DISTINCT to_char(COALESCE(i.issued_at::date, i.created_at::date), 'YYYY-MM') m
-    FROM purchase_invoice i
-    WHERE i.status <> '취소'
-      AND EXISTS (SELECT 1 FROM purchase_invoice_item x WHERE x.invoice_id = i.id)
+    SELECT DISTINCT to_char(x.received_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM') m
+    FROM purchase_invoice_item x JOIN purchase_invoice i ON i.id = x.invoice_id
+    WHERE i.status <> '취소' AND x.received_qty > 0 AND x.received_at IS NOT NULL
     ORDER BY 1 DESC
   `);
 
@@ -115,17 +118,24 @@ export async function purchaseHistory(
     supply_amount: number | null;
   }>(sql`
     SELECT i.id invoice_id, i.invoice_no, i.supplier,
-           COALESCE(i.issued_at, to_char(i.created_at, 'YYYY-MM-DD')) issued_at, i.status,
+           d.recv_date AS issued_at, i.status,
            x.id item_id, x.cai, x.product_id, x.description,
            p.display_name, p.raw_name, p.pattern, p.brand_code, p.width, p.aspect_ratio, p.rim_inch,
            x.qty, x.received_qty, x.unit_cost, x.supply_amount
     FROM purchase_invoice i
+    JOIN LATERAL (
+      -- 이 장부의 마지막 입고 확정일 — 입고된 줄이 없으면 NULL 이라 아래에서 걸러진다
+      SELECT to_char(MAX(r.received_at) AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') AS recv_date
+      FROM purchase_invoice_item r
+      WHERE r.invoice_id = i.id AND r.received_qty > 0
+    ) d ON TRUE
     LEFT JOIN purchase_invoice_item x ON x.invoice_id = i.id
     LEFT JOIN product p ON p.id = x.product_id
     WHERE i.status <> '취소'
-      ${m ? sql`AND to_char(COALESCE(i.issued_at::date, i.created_at::date), 'YYYY-MM') = ${m}` : sql``}
+      AND d.recv_date IS NOT NULL
+      ${m ? sql`AND left(d.recv_date, 7) = ${m}` : sql``}
       ${sup ? sql`AND replace(lower(i.supplier),' ','') = ${sup.replace(/\s/g, "").toLowerCase()}` : sql``}
-    ORDER BY COALESCE(i.issued_at, to_char(i.created_at, 'YYYY-MM-DD')) DESC, i.id DESC, x.id
+    ORDER BY d.recv_date DESC, i.id DESC, x.id
   `);
 
   const { parseTireName } = await import("./tire-name");

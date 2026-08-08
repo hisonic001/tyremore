@@ -1053,7 +1053,7 @@ export async function receiveAll(
     if (!l.productId && classifyLine(l.description, parseTireSpec(l.description).parsed) === "notTire") {
       await db
         .update(purchaseInvoiceItem)
-        .set({ receivedQty: l.qty })
+        .set({ receivedQty: l.qty, receivedAt: new Date() })
         .where(eq(purchaseInvoiceItem.id, l.itemId));
       skipped++;
       continue;
@@ -1210,7 +1210,8 @@ export async function receiveLine(input: {
 
   await db
     .update(purchaseInvoiceItem)
-    .set({ receivedQty: line.receivedQty + input.qty })
+    // ⭐ 입고 확정을 누른 이 순간이 입고 시각이다 (사장님 지시 2026-08-08) — 매입 내역의 날짜 기준
+    .set({ receivedQty: line.receivedQty + input.qty, receivedAt: new Date() })
     .where(eq(purchaseInvoiceItem.id, line.id));
 
   // 상품을 「미등록」에서 풀어 준다 (D-12 6번)
