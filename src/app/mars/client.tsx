@@ -123,6 +123,7 @@ function Entry({ e }: { e: MarsEntry }) {
                     memo: l.memo,
                     // MARS 원본 이름에는 규격이 이미 들어 있다 — 따로 안 단다
                     spec: null,
+                    listPrice: l.listPrice,
                   }}
                   onMessage={setEditMsg}
                 />

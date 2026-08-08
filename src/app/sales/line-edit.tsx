@@ -10,6 +10,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { RateBox } from "../rate-box";
 import { addSaleLine, removeSaleLine, updateSaleLine } from "@/lib/sale-edit";
 import { findServices } from "@/lib/sale";
 import { searchProducts } from "@/lib/search-actions";
@@ -125,6 +126,12 @@ export function EditableLine({ line: l, onMessage }: { line: SaleLine; onMessage
           <span className="text-xs text-slate-500">원</span>
         </label>
       </div>
+      {/* ⭐ 검색 카드와 같은 할인 계산 (사장님 요청 2026-08-08) — %를 치면 단가가 따라온다 */}
+      {l.listPrice ? (
+        <div className="mt-1.5 flex justify-end">
+          <RateBox listPrice={l.listPrice} price={Number(price) || 0} onPrice={(n) => setPrice(String(n))} />
+        </div>
+      ) : null}
       {/* ⭐ 줄별 메모 (사장님 지시 2026-08-07) — MARS 이 줄의 「설명 2」로 들어간다 */}
       <input
         value={memo}

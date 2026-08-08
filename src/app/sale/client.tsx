@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { RateBox } from "../rate-box";
 import type { ProductHit, VehicleHit } from "@/lib/search";
 import { searchProducts, searchVehicles } from "@/lib/search-actions";
 import { createCustomerAndVehicle, findServices, saveSale, type SaleLine } from "@/lib/sale";
@@ -379,6 +380,16 @@ function LineRow({
         </label>
         <span className="tabular w-24 text-right text-sm font-semibold">{won(row.unitPrice * row.qty)}</span>
       </div>
+      {/* ⭐ 검색 카드와 같은 할인 계산 (사장님 요청 2026-08-08) — %를 치면 단가가 따라온다 */}
+      {row.listPrice ? (
+        <div className="mt-1.5 flex justify-end">
+          <RateBox
+            listPrice={row.listPrice}
+            price={row.unitPrice}
+            onPrice={(n) => onChange({ unitPrice: n })}
+          />
+        </div>
+      ) : null}
       {/* ⭐ 줄별 메모 (사장님 지시 2026-08-07) — MARS 이 줄의 「설명 2」로 들어간다 */}
       <input
         value={row.memo ?? ""}

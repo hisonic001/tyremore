@@ -25,6 +25,8 @@ export interface SaleLine {
   memo: string | null;
   /** ⭐ 타이어 규격 (사장님 요청 2026-08-07 — "바꾼 타이어의 사이즈도 카드에 명기") */
   spec: string | null;
+  /** ⭐ 기표가 (사장님 요청 2026-08-08) — 고치기의 할인% ↔ 단가 계산 기준 */
+  listPrice: number | null;
 }
 
 export interface SaleRow {
@@ -117,6 +119,7 @@ export async function saleHistory(opts: {
     final_price: number | null;
     line_memo: string | null;
     spec: string | null;
+    list_price: number | null;
     tyre_positions: string | null;
     created_hm: string | null;
   }>(sql`
@@ -131,7 +134,8 @@ export async function saleHistory(opts: {
            CASE WHEN p.width IS NOT NULL AND p.rim_inch IS NOT NULL THEN
              p.width::text || COALESCE('/' || p.aspect_ratio::text, '')
                || 'R' || regexp_replace(p.rim_inch::text, '\.0$', '')
-           END AS spec
+           END AS spec,
+           p.list_price
     FROM quote q
     LEFT JOIN customer   c  ON c.id = q.customer_id
     LEFT JOIN vehicle    v  ON v.id = q.vehicle_id
@@ -185,6 +189,7 @@ export async function saleHistory(opts: {
         memo: r.line_memo,
         // 규격이 이름에 이미 적혀 있으면(백필 원본명 등) 겹쳐 쓰지 않는다
         spec: r.spec && !(r.description ?? "").includes(r.spec) ? r.spec : null,
+        listPrice: r.list_price === null ? null : Number(r.list_price),
       });
     }
   }

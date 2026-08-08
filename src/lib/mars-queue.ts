@@ -47,6 +47,8 @@ export interface MarsLine {
   kind: string;
   /** ⭐ 줄별 메모 (사장님 지시 2026-08-07) — **이 줄의 「설명 2」**에 들어간다 */
   memo: string | null;
+  /** ⭐ 기표가 (2026-08-08) — 대기열 「품목 고치기」의 할인 계산 기준 */
+  listPrice: number | null;
 }
 
 export interface MarsEntry {
@@ -159,12 +161,13 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     final_price: number;
     line_type: string;
     memo: string | null;
+    list_price: number | null;
   }>(sql`
     SELECT qi.quote_id, qi.id AS item_id,
            COALESCE(p.mars_item_no, s.mars_service_no) AS no,
            -- ⚠️ MARS 원본 이름이 우선이다. 다듬은 이름으로는 MARS 에서 못 찾는다
            COALESCE(p.raw_name, s.name, qi.description) AS mars_name,
-           qi.qty, qi.final_price, qi.line_type, qi.memo
+           qi.qty, qi.final_price, qi.line_type, qi.memo, p.list_price
     FROM quote_item qi
     LEFT JOIN product      p ON p.id = qi.product_id
     LEFT JOIN service_item s ON s.id = qi.service_item_id
@@ -185,6 +188,7 @@ export async function marsQueue(): Promise<MarsEntry[]> {
       amount: r.final_price * r.qty,
       kind: r.line_type,
       memo: r.memo,
+      listPrice: r.list_price === null ? null : Number(r.list_price),
     });
   }
 
