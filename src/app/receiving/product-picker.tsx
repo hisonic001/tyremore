@@ -26,7 +26,7 @@ interface Hit {
  *
  * 설계
  *   · 검색 결과가 **닫히지 않는다.** 한 번 찾아서 여러 줄을 잇달아 담을 수 있어야 한다
- *   · 수량 기본값은 **4본** — 타이어는 네 짝이 기본이다. 한 짝만 사 오면 줄이면 된다
+ *   · 수량 기본값은 **1본** (사장님 지시 2026-08-08 — 4본에서 변경. 매입은 낱개가 잦다)
  *   · 담은 줄에는 「✓ 담김」이 남는다. 뭘 담았는지 눈으로 세지 않아도 되게
  *   · 매입가는 여기서 안 받는다. 아래 목록에서 넣는 자리가 이미 있고,
  *     담는 손을 멈추게 하면 여러 품목을 담기 힘들다
@@ -75,7 +75,7 @@ export function ProductPicker({
   }
 
   function add(h: Hit) {
-    const n = qty[h.productId] ?? 4;
+    const n = qty[h.productId] ?? 1;
     setError(null);
     start(async () => {
       const r = await addProductToPurchase({ invoiceId, productId: h.productId, qty: n });
@@ -86,7 +86,7 @@ export function ProductPicker({
   }
 
   const step = (id: number, d: number) =>
-    setQty((s) => ({ ...s, [id]: Math.max(1, (s[id] ?? 4) + d) }));
+    setQty((s) => ({ ...s, [id]: Math.max(1, (s[id] ?? 1) + d) }));
 
   return (
     <div className="mt-3">
@@ -130,7 +130,7 @@ export function ProductPicker({
       {hits !== null && hits.length > 0 && (
         <ul className="mt-2 max-h-96 space-y-2 overflow-y-auto">
           {hits.map((h) => {
-            const n = qty[h.productId] ?? 4;
+            const n = qty[h.productId] ?? 1;
             const done = added[h.productId];
             return (
               <li key={h.productId} className="rounded-lg border border-slate-200 bg-white p-2.5">

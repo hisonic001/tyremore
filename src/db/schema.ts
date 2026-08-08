@@ -790,6 +790,11 @@ export const purchaseInvoiceItem = pgTable(
     /** ⭐ 실제로 도착해 확정한 수량 */
     receivedQty: integer("received_qty").notNull().default(0),
     /**
+     * ⭐ 담을 때 적어 두는 DOT (사장님 요청 2026-08-08 — 직접담기에서 DOT 다른
+     *    물건을 줄로 나눠 담기). 전량 입고가 이 값을 재고에 그대로 박는다.
+     */
+    dot: text("dot"),
+    /**
      * ⭐ 입고 확정을 누른 순간 (사장님 지시 2026-08-08).
      *    "전량입고 혹은 입고확정 버튼을 누르는 때가 입고가 되는 순간이며 …
      *     입고 되는 순간을 기점으로 입고 날짜와 입고 내역을 기록해줘."

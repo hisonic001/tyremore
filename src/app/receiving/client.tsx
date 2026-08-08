@@ -434,7 +434,8 @@ function PendingRow({ l }: { l: PendingLine }) {
   const [pending, start] = useTransition();
   const remain = l.qty - l.receivedQty;
   const [qty, setQty] = useState(remain);
-  const [dot, setDot] = useState("");
+  // ⭐ 담을 때 적어 둔 DOT 가 있으면 미리 채워진다 (2026-08-08)
+  const [dot, setDot] = useState(l.dot ?? "");
   const [error, setError] = useState<string | null>(null);
 
   const BTN = "h-11 w-11 shrink-0 rounded-lg border border-slate-300 bg-white text-xl font-bold";

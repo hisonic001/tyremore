@@ -354,6 +354,8 @@ export interface PendingLine {
   qty: number;
   receivedQty: number;
   unitCost: number | null;
+  /** ⭐ 담을 때 적어 둔 DOT (2026-08-08) — 전량 입고가 이 값을 쓴다 */
+  dot: string | null;
 }
 
 export interface PendingInvoice {
@@ -933,10 +935,21 @@ export async function addProductToPurchase(input: {
   });
   const model = p.display_name?.trim() || n.model;
 
+  /**
+   * 같은 상품 합치기는 **DOT 를 아직 안 적은 줄에만** 한다 (2026-08-08).
+   * DOT 를 적어 둔 줄은 그 DOT 묶음이다 — 거기에 합치면 다른 DOT 물건이 섞인다.
+   * 그래서 「담기 → DOT 적기 → 같은 상품 또 담기」가 자연스럽게 새 줄이 된다.
+   */
   const [exist] = await db
     .select()
     .from(purchaseInvoiceItem)
-    .where(and(eq(purchaseInvoiceItem.invoiceId, invoiceId), eq(purchaseInvoiceItem.productId, productId)))
+    .where(
+      and(
+        eq(purchaseInvoiceItem.invoiceId, invoiceId),
+        eq(purchaseInvoiceItem.productId, productId),
+        sql`${purchaseInvoiceItem.dot} IS NULL`,
+      ),
+    )
     .limit(1);
 
   if (exist) {
@@ -972,11 +985,13 @@ export async function addProductToPurchase(input: {
   return { ok: true, model, qty };
 }
 
-/** 직접 매입 품목의 수량·매입가를 고친다 */
+/** 직접 매입 품목의 수량·매입가·DOT 를 고친다 */
 export async function updatePurchaseItem(input: {
   itemId: number;
   qty?: number;
   unitCost?: number | null;
+  /** ⭐ 담을 때 적어 두는 DOT (2026-08-08) — null/빈 값이면 지운다 */
+  dot?: string | null;
 }): Promise<{ ok: boolean; error?: string }> {
   // 🔴 매입가 쓰기는 사장님만 — 수량 수정은 누구나 (D-05, 2026-08-08)
   if (input.unitCost !== undefined && !(await isOwner())) input = { ...input, unitCost: undefined };
@@ -984,6 +999,13 @@ export async function updatePurchaseItem(input: {
   if (input.qty !== undefined) {
     if (!Number.isInteger(input.qty) || input.qty < 1) return { ok: false, error: "수량을 확인해 주세요" };
     set.qty = input.qty;
+  }
+  if (input.dot !== undefined) {
+    const d = input.dot?.trim() || null;
+    if (d && !isPlausibleDot(d)) {
+      return { ok: false, error: `DOT '${d}' 를 확인해 주세요 (주차 01~53, 최근 15년)` };
+    }
+    set.dot = d;
   }
   if (input.unitCost !== undefined) {
     set.unitCost = input.unitCost;
@@ -1065,7 +1087,8 @@ export async function receiveAll(
       continue;
     }
 
-    const r = await receiveLine({ itemId: l.itemId, qty: remain, dot: null, userId });
+    // ⭐ 담을 때 적어 둔 DOT 가 있으면 그대로 재고에 박는다 (2026-08-08)
+    const r = await receiveLine({ itemId: l.itemId, qty: remain, dot: l.dot ?? null, userId });
     if (r.ok) created += r.created;
     else failed.push(`${l.model ?? l.cai}: ${r.error}`);
   }
@@ -1104,11 +1127,12 @@ export async function pendingLines(): Promise<PendingLine[]> {
     qty: number;
     received_qty: number;
     unit_cost: number | null;
+    dot: string | null;
   }>(sql`
     SELECT ii.id item_id, i.id invoice_id, i.invoice_no, i.supplier, i.issued_at,
            ii.cai, ii.product_id, ii.description, p.pattern, p.display_name,
            p.width, p.aspect_ratio, p.rim_inch,
-           ii.qty, ii.received_qty, ii.unit_cost
+           ii.qty, ii.received_qty, ii.unit_cost, ii.dot
     FROM purchase_invoice_item ii
     JOIN purchase_invoice i ON i.id = ii.invoice_id
     LEFT JOIN product p ON p.id = ii.product_id
@@ -1139,6 +1163,7 @@ export async function pendingLines(): Promise<PendingLine[]> {
     qty: Number(r.qty),
     receivedQty: Number(r.received_qty),
     unitCost: r.unit_cost === null ? null : Number(r.unit_cost),
+    dot: r.dot,
   }));
 }
 

@@ -23,16 +23,16 @@ export function RegisterPurchase({
   /** 매입가 입력·표시는 사장님만 (D-05, 2026-08-08) */
   owner: boolean;
 }) {
-  // 직접 매입 장부가 열려 있으면 그 탭부터 — 하다 만 일이 먼저 보여야 한다
-  const [tab, setTab] = useState<"invoice" | "manual">(openManual ? "manual" : "invoice");
+  // ⭐ 기본은 직접 담기 (사장님 지시 2026-08-08 — "직접담기가 default로 변경")
+  const [tab, setTab] = useState<"invoice" | "manual">("manual");
 
   return (
     <section className="mt-4">
       <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
         {(
           [
-            ["invoice", "인보이스 파일 올리기"],
             ["manual", openManual ? "직접 담기 (작성 중)" : "직접 담기"],
+            ["invoice", "인보이스 파일 올리기"],
           ] as const
         ).map(([id, label]) => (
           <button

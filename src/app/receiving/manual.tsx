@@ -147,10 +147,15 @@ function ManualRow({ line, owner }: { line: PendingInvoice["lines"][number]; own
   const [pending, start] = useTransition();
   const [qty, setQty] = useState(line.qty);
   const [cost, setCost] = useState(line.unitCost ? String(line.unitCost) : "");
+  /** ⭐ 담을 때 DOT 를 바로 적는다 (사장님 요청 2026-08-08) — DOT 다른 물건은 줄이 나뉜다 */
+  const [dot, setDot] = useState(line.dot ?? "");
+  const [err, setErr] = useState<string | null>(null);
 
-  const save = (next: { qty?: number; unitCost?: number | null }) =>
+  const save = (next: { qty?: number; unitCost?: number | null; dot?: string | null }) =>
     start(async () => {
-      await updatePurchaseItem({ itemId: line.itemId, ...next });
+      setErr(null);
+      const r = await updatePurchaseItem({ itemId: line.itemId, ...next });
+      if (!r.ok) return setErr(r.error ?? "저장하지 못했습니다");
       router.refresh();
     });
 
@@ -186,6 +191,18 @@ function ManualRow({ line, owner }: { line: PendingInvoice["lines"][number]; own
             +
           </button>
         </div>
+        {/* ⭐ DOT — 여기 적어 두면 전량 입고가 그대로 재고에 박는다. DOT 다른 물건은 새 줄로 담긴다 */}
+        <label className="flex items-center gap-1">
+          <span className="text-xs text-slate-500">DOT</span>
+          <input
+            value={dot}
+            onChange={(e) => setDot(e.target.value.replace(/\D/g, "").slice(0, 4))}
+            onBlur={() => save({ dot: dot || null })}
+            placeholder="선택"
+            inputMode="numeric"
+            className="tabular h-10 w-20 rounded-lg border border-indigo-300 px-2 text-center"
+          />
+        </label>
         {/* 🔴 매입가 칸은 사장님만 — 정비사 화면에 있으면 값이 보이고, 지운 채 저장하면 덮어써진다 */}
         {owner && (
           <label className="ml-auto flex items-center gap-1">
@@ -202,6 +219,7 @@ function ManualRow({ line, owner }: { line: PendingInvoice["lines"][number]; own
           </label>
         )}
       </div>
+      {err && <span className="text-xs text-red-600">{err}</span>}
       {pending && <span className="text-xs text-slate-400">저장 중…</span>}
     </li>
   );
