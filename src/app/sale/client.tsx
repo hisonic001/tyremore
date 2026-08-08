@@ -350,6 +350,18 @@ function LineRow({
   onRemove: () => void;
 }) {
   const BTN = "h-9 w-9 shrink-0 rounded-lg border border-slate-300 bg-white text-lg font-bold";
+  /**
+   * 🔴 단가를 바꾸면 저장될 할인율도 같이 따라간다 (코드 리뷰 2026-08-08).
+   *    전에는 담을 때의 기본 할인율이 스냅샷으로 남아, 30% 로 깎아 팔아도
+   *    기록에는 25% 로 남았다 — 나중의 마진·할인 분석이 거짓 근거를 읽는다.
+   */
+  const priceChange = (n: number): Partial<Row> => ({
+    unitPrice: n,
+    salesRate:
+      row.listPrice && row.listPrice > 0
+        ? Math.round(Math.max(0, Math.min(0.999, 1 - n / row.listPrice)) * 10000) / 10000
+        : (row.salesRate ?? null),
+  });
   return (
     <li className="rounded-lg bg-slate-50 p-2">
       <div className="flex items-start gap-2">
@@ -373,7 +385,7 @@ function LineRow({
           <span className="text-xs text-slate-500">단가</span>
           <input
             value={won(row.unitPrice)}
-            onChange={(e) => onChange({ unitPrice: Number(e.target.value.replace(/\D/g, "")) || 0 })}
+            onChange={(e) => onChange(priceChange(Number(e.target.value.replace(/\D/g, "")) || 0))}
             inputMode="numeric"
             className="tabular h-9 w-28 rounded-lg border border-slate-300 px-2 text-right"
           />
@@ -386,7 +398,7 @@ function LineRow({
           <RateBox
             listPrice={row.listPrice}
             price={row.unitPrice}
-            onPrice={(n) => onChange({ unitPrice: n })}
+            onPrice={(n) => onChange(priceChange(n))}
           />
         </div>
       ) : null}
