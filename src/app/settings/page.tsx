@@ -2,6 +2,7 @@ import Link from "@/lib/link";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, logout } from "@/lib/auth";
+import { ChangePassword } from "./password";
 
 export const dynamic = "force-dynamic";
 
@@ -49,6 +50,12 @@ export default async function SettingsPage() {
             href: "/reports",
             title: "매출·재고 리포트",
             desc: "월별 매출 · 결제수단 · 짝 안 맞는 타이어 · 안 나가는 재고 (사장님 전용)",
+          },
+          /* ⭐ 계정 관리 (사장님 요청 2026-08-08) — 계정 만들기·권한·비밀번호 재설정 */
+          {
+            href: "/settings/users",
+            title: "계정 관리",
+            desc: "계정 만들기 · 사장님/정비사 권한 · 비밀번호 재설정 (사장님 전용)",
           },
         ]
       : []),
@@ -116,7 +123,9 @@ export default async function SettingsPage() {
               {session.role === "owner" ? "사장님 (매입가·마진 보임)" : "정비사"}
             </span>
           </div>
-          <form action={logout} className="mt-3">
+          {/* ⭐ 내 비밀번호 바꾸기 (사장님 요청 2026-08-08) */}
+          <ChangePassword />
+          <form action={logout} className="mt-2">
             <button
               type="submit"
               className="w-full rounded-lg border border-slate-300 py-3 font-medium text-slate-600"
