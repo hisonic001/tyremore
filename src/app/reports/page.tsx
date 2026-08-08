@@ -162,6 +162,30 @@ export default async function ReportsPage({
   const avg = cur.n > 0 ? Math.round(cur.amt / cur.n) : 0;
   const topMax = top.length ? Number(top[0].amt) : 0;
 
+  /**
+   * ⭐ 요일별 분석 (사장님 요청 2026-08-08).
+   *    이미 불러온 일별 데이터에서 계산한다 — 진행 중인 달은 오늘까지만 세고,
+   *    요일마다 든 날 수가 달라서 막대는 합계, 풍선에 하루 평균을 같이 적는다.
+   */
+  const WD = ["일", "월", "화", "수", "목", "금", "토"];
+  const lastDay = isCurrent ? todayDay : daysInMonth;
+  const wk = Array.from({ length: 7 }, () => ({ amt: 0, n: 0, days: 0 }));
+  for (let d = 1; d <= lastDay; d++) {
+    const w = new Date(yy, mm - 1, d).getDay();
+    const v = byDay.get(d) ?? { n: 0, amt: 0 };
+    wk[w].amt += v.amt;
+    wk[w].n += v.n;
+    wk[w].days += 1;
+  }
+  // 월요일부터 일요일 순으로 — 가게 한 주의 흐름대로
+  const weekBars: Bar[] = [1, 2, 3, 4, 5, 6, 0].map((w) => ({
+    label: `${WD[w]}`,
+    value: wk[w].amt,
+    hint: `${WD[w]}요일 · ${wk[w].n}건 · 합 ${fmtWon(wk[w].amt)}${
+      wk[w].days > 0 ? ` · 하루 평균 ${fmtWon(Math.round(wk[w].amt / wk[w].days))}` : ""
+    }`,
+  }));
+
   const salesDelta = isCurrent ? pct(cur.amt, prevSpan?.amt ?? 0) : pct(cur.amt, prev.amt);
   const yearDelta = isCurrent ? null : pct(cur.amt, lastYear.amt);
 
@@ -254,7 +278,15 @@ export default async function ReportsPage({
         </details>
       </Section>
 
-      {/* ---- ④ 결제수단 ---- */}
+      {/* ---- ④ 요일별 (사장님 요청 2026-08-08) ---- */}
+      <Section
+        title="요일별 매출"
+        sub={`${isCurrent ? `1~${todayDay}일 기준` : `${mm}월 전체`} · 막대에 손을 대면 건수·하루 평균이 뜹니다`}
+      >
+        <ColumnChart data={weekBars} height={170} />
+      </Section>
+
+      {/* ---- ⑤ 결제수단 ---- */}
       <Section title="결제수단">
         {segs.length ? (
           <>
@@ -281,8 +313,8 @@ export default async function ReportsPage({
         )}
       </Section>
 
-      {/* ---- ⑤ 많이 판 품목 ---- */}
-      <Section title="많이 판 품목 톱10" sub="금액 순 · 막대는 1위 대비 크기">
+      {/* ---- ⑥ 많이 판 품목 ---- */}
+      <Section wide title="많이 판 품목 톱10" sub="금액 순 · 막대는 1위 대비 크기">
         {top.length ? (
           /* 🔴 막대를 글자 뒤에 깔지 않는다 (2026-08-07 재고 리포트에서 같은 문제 제보) */
           <ol className="space-y-2">
@@ -336,10 +368,21 @@ function Delta({ v, label }: { v: number; label: string }) {
   );
 }
 
-function Section({ title, sub, children }: { title: string; sub?: string; children: React.ReactNode }) {
+function Section({
+  title,
+  sub,
+  wide,
+  children,
+}: {
+  title: string;
+  sub?: string;
+  /** PC 2열 배치에서 전체 폭 (긴 목록용) */
+  wide?: boolean;
+  children: React.ReactNode;
+}) {
   // 간격은 부모 grid 의 gap 이 준다 — PC 2열 배치와 폰 1열 모두에서 맞는다 (2026-08-08)
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-4">
+    <section className={`rounded-xl border border-slate-200 bg-white p-4 ${wide ? "lg:col-span-2" : ""}`}>
       <h2 className="font-semibold">{title}</h2>
       {sub && <p className="mt-0.5 text-xs text-slate-400">{sub}</p>}
       <div className="mt-3">{children}</div>
