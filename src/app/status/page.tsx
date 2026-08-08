@@ -78,8 +78,16 @@ export default async function Status() {
 
       <section className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
         <h2 className="mb-1 font-semibold">사람이 봐야 하는 것</h2>
+        {/*
+          ⭐ 2026-08-08 정리 (사장님 결정):
+            · 규격 못 읽은 상품 114건 — 참조 상품이 이미 삭제된 유령이라 닫음
+            · 고객 전화 겹침 74쌍·번호판 6건 — 과거 테스트 데이터라 합치지 않기로 닫음.
+              "앞으로 겹치지 않게 잘 등록하는 것이 중요함" — 신규 등록은 같은 번호판이면
+              기존 차량을, 같은 전화면 기존 손님을 재사용하므로 중복이 새로 생기지 않는다.
+        */}
         <p className="mb-3 text-sm text-amber-800">
-          자동으로 처리하지 못한 건입니다. 보정 화면은 다음 단계에서 만듭니다.
+          자동으로 처리하지 못한 건입니다. 큰 덩어리(규격·고객 겹침·번호판)는 2026-08-08 에
+          정리를 마쳤고, 남은 것은 급하지 않은 소소한 것들입니다.
         </p>
         <dl className="divide-y divide-amber-100">
           {issues.map((i) => (
