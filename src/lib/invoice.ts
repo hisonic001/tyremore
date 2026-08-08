@@ -19,7 +19,9 @@ import { product, purchaseInvoice, purchaseInvoiceItem, stockItem, stockMovement
 import type { LineKind } from "./invoice-desc";
 import { parseInvoiceRows, parseInvoiceText, type ParsedInvoice } from "./invoice-parse";
 import { isPlausibleDot } from "./normalize";
-import { savePriceRule } from "./pricing";
+import { isOwner } from "./auth";
+// 권한 없는 내부용 — 정비사가 인보이스를 올려도 할인율 갱신이 끊기지 않게 (2026-08-08)
+import { savePriceRuleCore } from "./pricing-core";
 
 /**
  * 인보이스 품번으로 우리 상품을 찾는다.
@@ -309,7 +311,7 @@ export async function saveInvoice(
     if (!opts.updatePrices) continue;
     for (const it of one.items) {
       if (it.discountRate <= 0) continue;
-      await savePriceRule({ scope: "item", target: it.cai, purchaseRate: it.discountRate });
+      await savePriceRuleCore({ scope: "item", target: it.cai, purchaseRate: it.discountRate });
       priceUpdates++;
       /**
        * 기표가가 다르면 인보이스 쪽이 최신이다 (MARS 데이터는 낡을 수 있다).
@@ -892,6 +894,8 @@ export async function addProductToPurchase(input: {
   qty: number;
   unitCost?: number | null;
 }): Promise<{ ok: true; model: string; qty: number } | { ok: false; error: string }> {
+  // 🔴 매입가 쓰기는 사장님만 — 담기는 누구나, 값만 무시한다 (D-05, 2026-08-08)
+  if (input.unitCost !== undefined && !(await isOwner())) input = { ...input, unitCost: undefined };
   const { invoiceId, productId } = input;
   const qty = Number(input.qty);
   if (!Number.isInteger(qty) || qty < 1) return { ok: false, error: "수량은 1 이상이어야 합니다" };
@@ -974,6 +978,8 @@ export async function updatePurchaseItem(input: {
   qty?: number;
   unitCost?: number | null;
 }): Promise<{ ok: boolean; error?: string }> {
+  // 🔴 매입가 쓰기는 사장님만 — 수량 수정은 누구나 (D-05, 2026-08-08)
+  if (input.unitCost !== undefined && !(await isOwner())) input = { ...input, unitCost: undefined };
   const set: Record<string, unknown> = {};
   if (input.qty !== undefined) {
     if (!Number.isInteger(input.qty) || input.qty < 1) return { ok: false, error: "수량을 확인해 주세요" };

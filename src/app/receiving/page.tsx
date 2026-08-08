@@ -1,5 +1,6 @@
 import Link from "@/lib/link";
 import { cookies } from "next/headers";
+import { isOwner } from "@/lib/auth";
 import { pendingInvoices } from "@/lib/invoice";
 import { PendingList } from "./client";
 import { RegisterPurchase } from "./register";
@@ -12,7 +13,16 @@ export const dynamic = "force-dynamic";
  *   ② 실물이 도착하면 확정 → 재고가 된다
  */
 export default async function ReceivingPage() {
-  const invoices = await pendingInvoices();
+  /**
+   * 🔴 매입 단가는 사장님만 본다 (D-05 5번 — 2026-08-08 코드 리뷰로 구멍 발견).
+   *    화면에서 감추는 것으로는 부족하다 — **서버에서 아예 빼고** 내려보낸다.
+   *    입고 작업(수량·DOT·전량 입고)은 정비사도 그대로 할 수 있다.
+   */
+  const owner = await isOwner();
+  const raw = await pendingInvoices();
+  const invoices = owner
+    ? raw
+    : raw.map((i) => ({ ...i, lines: i.lines.map((l) => ({ ...l, unitCost: null })) }));
   const totalPending = invoices.reduce((s, i) => s + i.remain, 0);
 
   /**
@@ -59,7 +69,7 @@ export default async function ReceivingPage() {
       </p>
 
       {/* ⭐ 등록 입구는 하나 (2026-08-04 — "중구난방" 지적). 탭으로 갈릴 뿐 결과는 같은 장부다 */}
-      <RegisterPurchase openManual={openManual} />
+      <RegisterPurchase openManual={openManual} owner={owner} />
 
       <section className="mt-8">
         <h2 className="font-semibold">

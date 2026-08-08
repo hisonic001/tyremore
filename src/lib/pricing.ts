@@ -27,10 +27,10 @@ import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { priceRule, product } from "@/db/schema";
+import { isOwner } from "./auth";
+import { savePriceRuleCore } from "./pricing-core";
 
 export type RuleScope = "item" | "pattern" | "brand" | "category";
-
-const PRIORITY: Record<RuleScope, number> = { item: 1, pattern: 2, brand: 3, category: 4 };
 
 function refresh(...paths: string[]) {
   for (const p of paths) {
@@ -75,6 +75,12 @@ export interface PriceInfo {
 const won = (n: number) => Math.round(n);
 
 export async function getPrice(productId: number): Promise<PriceInfo | null> {
+  /**
+   * 🔴 매입원가·마진이 담긴다 — 사장님만 (D-05 5번, 2026-08-08 코드 리뷰로 발견).
+   *    "use server" export 는 로그인만 있으면 누구나 부를 수 있는 끝점이라
+   *    여기서 직접 막아야 한다. 화면에서 감추는 것으로는 부족하다.
+   */
+  if (!(await isOwner())) return null;
   const [p] = await db.execute<{
     mars_item_no: string | null;
     pattern: string | null;
@@ -170,60 +176,31 @@ export async function savePriceRule(input: {
   purchaseRate?: number | null;
   productId?: number;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
-  const { scope, target } = input;
-  if (!target) return { ok: false, error: "저장 대상이 비어 있습니다" };
-
-  const bad = (r: number | null | undefined) => r !== null && r !== undefined && (r < 0 || r >= 1);
-  if (bad(input.salesRate) || bad(input.purchaseRate)) {
-    return { ok: false, error: "할인율은 0% 이상 100% 미만이어야 합니다" };
-  }
-
   /**
-   * ⚠️ `ON CONFLICT` 를 쓸 수 없다.
-   *    `UNIQUE(scope, target, supplier_code)` 인데 `supplier_code` 가 NULL 이면
-   *    PostgreSQL 은 NULL 끼리 서로 다르다고 보아 유니크 제약이 걸리지 않는다.
-   *    그래서 새 행이 계속 쌓이고, **매입 할인율을 넣어도 판매 할인율만 있는
-   *    옛 행이 조회돼 반영이 안 됐다** (2026-08-01 발견).
-   *    → 직접 찾아서 갱신한다. price_rule 은 규모가 작아 부담이 없다.
-   *
-   * 기존 값을 지우지 않는다 — 판매 할인율만 넣어도 매입 할인율은 남아야 한다.
+   * 🔴 할인율 규칙은 판매가를 통째로 움직인다 — 사장님만 (2026-08-08 코드 리뷰).
+   *    본체는 pricing-core.savePriceRuleCore 로 옮겼다 — 인보이스 업로드가
+   *    서버 안에서 쓰는 길은 권한과 무관하게 계속 돌아야 해서다.
    */
-  const [existing] = await db
-    .select({ id: priceRule.id })
-    .from(priceRule)
-    .where(and(eq(priceRule.scope, scope), eq(priceRule.target, target)))
-    .limit(1);
+  if (!(await isOwner())) return { ok: false, error: "사장님 계정에서만 할 수 있습니다" };
 
-  const num = (v: number | null | undefined) => (v === null || v === undefined ? null : String(v));
-
-  if (existing) {
-    const set: Record<string, unknown> = { updatedAt: new Date() };
-    if (input.salesRate !== undefined) set.salesDiscountRate = num(input.salesRate);
-    if (input.purchaseRate !== undefined) set.purchaseDiscountRate = num(input.purchaseRate);
-    await db.update(priceRule).set(set).where(eq(priceRule.id, existing.id));
-  } else {
-    await db.insert(priceRule).values([
-      {
-        scope,
-        target,
-        priority: PRIORITY[scope],
-        salesDiscountRate: num(input.salesRate),
-        purchaseDiscountRate: num(input.purchaseRate),
-      },
-    ]);
-  }
-
+  const r = await savePriceRuleCore(input);
+  if (!r.ok) return r;
   if (input.productId) refresh(`/stock/${input.productId}`);
   refresh("/");
   return { ok: true };
 }
 
-/** 규칙 삭제 — 다시 「미설정」으로 돌린다 */
-export async function clearPriceRule(scope: RuleScope, target: string, productId?: number) {
+/** 규칙 삭제 — 다시 「미설정」으로 돌린다. 사장님만 (2026-08-08) */
+export async function clearPriceRule(
+  scope: RuleScope,
+  target: string,
+  productId?: number,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!(await isOwner())) return { ok: false, error: "사장님 계정에서만 할 수 있습니다" };
   await db.delete(priceRule).where(and(eq(priceRule.scope, scope), eq(priceRule.target, target)));
   if (productId) refresh(`/stock/${productId}`);
   refresh("/");
-  return { ok: true as const };
+  return { ok: true };
 }
 
 /** 판매가 → 할인율 (양방향 계산의 반대 방향) */

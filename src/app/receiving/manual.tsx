@@ -25,7 +25,14 @@ const won = (n: number) => n.toLocaleString();
  *
  * 장부는 인보이스와 같은 구조로 남긴다 — 매입 내역·원가 추적이 한 곳에서 이어져야 한다.
  */
-export function ManualPurchase({ open }: { open: PendingInvoice | null }) {
+export function ManualPurchase({
+  open,
+  owner,
+}: {
+  open: PendingInvoice | null;
+  /** 매입가 입력·표시는 사장님만 (D-05, 2026-08-08 코드 리뷰) */
+  owner: boolean;
+}) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [supplier, setSupplier] = useState("");
@@ -73,10 +80,10 @@ export function ManualPurchase({ open }: { open: PendingInvoice | null }) {
     );
   }
 
-  return <ManualLedger inv={open} />;
+  return <ManualLedger inv={open} owner={owner} />;
 }
 
-function ManualLedger({ inv }: { inv: PendingInvoice }) {
+function ManualLedger({ inv, owner }: { inv: PendingInvoice; owner: boolean }) {
   const router = useRouter();
   const [pending, start] = useTransition();
 
@@ -103,13 +110,15 @@ function ManualLedger({ inv }: { inv: PendingInvoice }) {
       {inv.lines.length > 0 && (
         <ul className="mt-3 space-y-2">
           {inv.lines.map((l) => (
-            <ManualRow key={l.itemId} line={l} />
+            <ManualRow key={l.itemId} line={l} owner={owner} />
           ))}
         </ul>
       )}
 
       <p className="mt-3 text-xs text-indigo-700">
-        매입가는 나중에 넣어도 됩니다. 비워 두면 원가·마진만 안 나옵니다.
+        {owner
+          ? "매입가는 나중에 넣어도 됩니다. 비워 두면 원가·마진만 안 나옵니다. "
+          : "매입가는 사장님 계정에서 넣습니다. "}
         아래 「입고 예정」에서 <strong>전량 입고</strong>를 누르면 재고가 됩니다.
       </p>
 
@@ -133,7 +142,7 @@ function ManualLedger({ inv }: { inv: PendingInvoice }) {
   );
 }
 
-function ManualRow({ line }: { line: PendingInvoice["lines"][number] }) {
+function ManualRow({ line, owner }: { line: PendingInvoice["lines"][number]; owner: boolean }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [qty, setQty] = useState(line.qty);
@@ -177,18 +186,21 @@ function ManualRow({ line }: { line: PendingInvoice["lines"][number] }) {
             +
           </button>
         </div>
-        <label className="ml-auto flex items-center gap-1">
-          <span className="text-xs text-slate-500">본당</span>
-          <input
-            value={cost === "" ? "" : Number(cost).toLocaleString()}
-            onChange={(e) => setCost(e.target.value.replace(/\D/g, ""))}
-            onBlur={() => save({ qty, unitCost: cost === "" ? null : Number(cost) })}
-            inputMode="numeric"
-            placeholder="매입가"
-            className="tabular h-10 w-28 rounded-lg border border-indigo-300 px-2 text-right"
-          />
-          <span className="text-xs text-slate-500">원</span>
-        </label>
+        {/* 🔴 매입가 칸은 사장님만 — 정비사 화면에 있으면 값이 보이고, 지운 채 저장하면 덮어써진다 */}
+        {owner && (
+          <label className="ml-auto flex items-center gap-1">
+            <span className="text-xs text-slate-500">본당</span>
+            <input
+              value={cost === "" ? "" : Number(cost).toLocaleString()}
+              onChange={(e) => setCost(e.target.value.replace(/\D/g, ""))}
+              onBlur={() => save({ qty, unitCost: cost === "" ? null : Number(cost) })}
+              inputMode="numeric"
+              placeholder="매입가"
+              className="tabular h-10 w-28 rounded-lg border border-indigo-300 px-2 text-right"
+            />
+            <span className="text-xs text-slate-500">원</span>
+          </label>
+        )}
       </div>
       {pending && <span className="text-xs text-slate-400">저장 중…</span>}
     </li>

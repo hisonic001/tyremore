@@ -15,7 +15,14 @@ import { ManualPurchase } from "./manual";
  * 어디로 들어가야 하는지부터 고민하게 했다. 이제 갈림길은 하나다:
  * **파일이 있으면 올리고, 없으면 담는다.** 결과는 같은 장부·같은 입고 예정 목록이다.
  */
-export function RegisterPurchase({ openManual }: { openManual: PendingInvoice | null }) {
+export function RegisterPurchase({
+  openManual,
+  owner,
+}: {
+  openManual: PendingInvoice | null;
+  /** 매입가 입력·표시는 사장님만 (D-05, 2026-08-08) */
+  owner: boolean;
+}) {
   // 직접 매입 장부가 열려 있으면 그 탭부터 — 하다 만 일이 먼저 보여야 한다
   const [tab, setTab] = useState<"invoice" | "manual">(openManual ? "manual" : "invoice");
 
@@ -53,7 +60,7 @@ export function RegisterPurchase({ openManual }: { openManual: PendingInvoice | 
           <p className="mt-2 px-1 text-xs text-slate-500">
             인보이스가 없을 때 — 거래처를 적고 품목을 검색해 담습니다.
           </p>
-          <ManualPurchase open={openManual} />
+          <ManualPurchase open={openManual} owner={owner} />
         </>
       )}
     </section>

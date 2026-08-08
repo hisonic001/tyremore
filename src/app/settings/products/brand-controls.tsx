@@ -136,7 +136,7 @@ export function BulkActions({ hidden }: { hidden: { reason: string; n: number }[
           onClick={() =>
             run(async () => {
               const r = await hideUnpricedTires();
-              return `${r.hidden.toLocaleString()}종을 숨겼습니다`;
+              return r.error ?? `${r.hidden.toLocaleString()}종을 숨겼습니다`;
             })
           }
           className="mt-3 w-full rounded-xl bg-slate-900 py-3 font-medium text-white disabled:opacity-50"
@@ -161,7 +161,7 @@ export function BulkActions({ hidden }: { hidden: { reason: string; n: number }[
                   onClick={() =>
                     run(async () => {
                       const r = await restoreProducts(h.reason as "no_price" | "manual");
-                      return `${r.restored.toLocaleString()}종을 되살렸습니다`;
+                      return r.error ?? `${r.restored.toLocaleString()}종을 되살렸습니다`;
                     })
                   }
                   className="shrink-0 rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium"

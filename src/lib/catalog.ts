@@ -16,6 +16,7 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { brand, product, stockItem } from "@/db/schema";
+import { isOwner } from "./auth";
 
 function refresh(...paths: string[]) {
   for (const p of paths) {
@@ -65,13 +66,29 @@ export async function setListPrice(
   productId: number,
   inclVat: number | null,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  // 🔴 기표가는 고객에게 말하는 가격의 출발점 — 사장님만 (2026-08-08 코드 리뷰)
+  if (!(await isOwner())) return { ok: false, error: "사장님 계정에서만 할 수 있습니다" };
   if (inclVat !== null && (!Number.isFinite(inclVat) || inclVat < 0 || inclVat > 100_000_000)) {
     return { ok: false, error: "기표가가 올바르지 않습니다" };
   }
   const v = inclVat && inclVat > 0 ? Math.round(inclVat) : null;
+
+  /**
+   * 🔴 VAT 제외값은 **브랜드 방식대로** 맞춘다 (2026-08-08 코드 리뷰).
+   *    price_excludes_vat=true 브랜드(미쉐린식)만 ÷1.1 이고, VAT 포함 단가
+   *    브랜드는 excl 에도 같은 값이 들어가야 한다 — 무조건 ÷1.1 하면
+   *    원가 계산·인보이스 대조가 10% 낮은 기준으로 돌아간다.
+   */
+  const [b] = await db.execute<{ vat: boolean }>(sql`
+    SELECT COALESCE(b.price_excludes_vat, false) vat
+    FROM product p LEFT JOIN brand b ON b.code = p.brand_code
+    WHERE p.id = ${productId}
+  `);
+  const excl = v ? (b?.vat ? Math.round(v / 1.1) : v) : null;
+
   await db
     .update(product)
-    .set({ listPrice: v, listPriceExcl: v ? Math.round(v / 1.1) : null, updatedAt: new Date() })
+    .set({ listPrice: v, listPriceExcl: excl, updatedAt: new Date() })
     .where(eq(product.id, productId));
   refresh("/", `/stock/${productId}`);
   return { ok: true };
@@ -91,6 +108,8 @@ export async function setBrandHandled(code: string, handled: boolean) {
  * 금액을 부르게 된다. 원본(list_price_excl)은 건드리지 않으므로 언제든 되돌린다.
  */
 export async function setBrandVatExcluded(code: string, excludes: boolean) {
+  // 🔴 브랜드 전체 기표가를 일괄로 바꾼다 — 사장님만 (2026-08-08 코드 리뷰)
+  if (!(await isOwner())) return { ok: false as const, error: "사장님 계정에서만 할 수 있습니다" };
   await db.update(brand).set({ priceExcludesVat: excludes }).where(eq(brand.code, code));
   const r = await db.execute<{ n: number }>(sql`
     WITH u AS (
@@ -114,7 +133,9 @@ export async function setBrandVatExcluded(code: string, excludes: boolean) {
  *
  * 단, **재고가 있으면 끄지 않는다.** 창고에 있는 물건이 화면에서 사라지면 안 된다.
  */
-export async function hideUnpricedTires() {
+export async function hideUnpricedTires(): Promise<{ hidden: number; error?: string }> {
+  // 🔴 상품을 무더기로 숨긴다 — 사장님만 (2026-08-08 코드 리뷰)
+  if (!(await isOwner())) return { hidden: 0, error: "사장님 계정에서만 할 수 있습니다" };
   const r = await db.execute<{ n: number }>(sql`
     WITH u AS (
       UPDATE product SET is_active = false, hidden_reason = 'no_price', updated_at = now()
@@ -132,7 +153,11 @@ export async function hideUnpricedTires() {
 }
 
 /** 되살리기 — 사유별로 한 번에 */
-export async function restoreProducts(reason: "no_price" | "manual" | "all") {
+export async function restoreProducts(
+  reason: "no_price" | "manual" | "all",
+): Promise<{ restored: number; error?: string }> {
+  // 🔴 숨긴 상품을 무더기로 되살린다 — 사장님만 (2026-08-08 코드 리뷰)
+  if (!(await isOwner())) return { restored: 0, error: "사장님 계정에서만 할 수 있습니다" };
   const where =
     reason === "all"
       ? sql`is_active = false`
