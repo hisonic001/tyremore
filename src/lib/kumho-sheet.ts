@@ -413,14 +413,15 @@ export async function applyCatalog(
           mars_item_no, item_type, is_serialized, brand_code, pattern, display_name, raw_name,
           width, aspect_ratio, rim_inch, load_index, speed_rating, season,
           is_runflat, is_acoustic, is_suv, list_price, list_price_excl,
-          spec_parsed, is_active, created_at, updated_at
+          category, spec_parsed, is_active, created_at, updated_at
         ) VALUES (
           ${"KM" + r.code}, 'tire', true, 'KM', ${label}, ${displayName},
           ${`Kumho ${r.name}`},
           ${r.width}, ${r.aspectRatio}, ${r.rimInch}, ${r.loadIndex}, ${r.speedRating}, ${season},
           ${attrs.isRunflat}, ${attrs.isAcoustic}, ${attrs.isSuv},
           ${r.listPrice}, ${r.listPrice === null ? null : Math.round(r.listPrice / 1.1)},
-          true, true, now(), now()
+          -- 🔴 '10-TIRES' 가 없으면 기본 판매 할인율 25% 규칙이 안 붙는다 (2026-08-09)
+          '10-TIRES', true, true, now(), now()
         )
         ON CONFLICT (mars_item_no) DO NOTHING
         RETURNING id`);

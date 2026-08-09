@@ -433,6 +433,9 @@ export async function createProduct(input: {
       marsItemNo,
       itemType,
       isSerialized: itemType === "tire",
+      // 🔴 기본 판매 할인율 25% 는 category='10-TIRES' 규칙에 걸려 있다 (2026-08-09
+      //    사장님 버그 제보 — 새 상품이 검색에서 「할인율 미설정」으로 나왔다)
+      category: itemType === "tire" ? "10-TIRES" : null,
       brandCode: input.brandCode || null,
       pattern: input.pattern.trim(),
       // 손 등록은 사장님이 친 이름 그대로가 표시 이름이다 (2026-08-08 품목명 통일)
