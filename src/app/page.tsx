@@ -75,7 +75,14 @@ export default async function Home({
            나머지 메뉴는 설정 아이콘 하나로 접었다.
       */}
       <header className="mb-4 flex items-center justify-between gap-2">
-        <h1 className="shrink-0 whitespace-nowrap text-xl font-bold tracking-tight">타이어모어</h1>
+        <h1 className="shrink-0 whitespace-nowrap text-xl font-bold tracking-tight">
+          {/*
+            ⭐ 제목을 누르면 홈 초기 화면으로 (사장님 요청 2026-08-09 — "마치 새로고침 하듯").
+               <a> 를 일부러 쓴다: 이미 홈(/)에 있을 때 Link 는 같은 주소라 아무 일도
+               안 하지만, <a> 는 진짜 새로 불러와 검색어·필터까지 싹 비운다.
+          */}
+          <a href="/">타이어모어</a>
+        </h1>
         <nav className="flex shrink-0 items-center gap-1">
           {/* ⭐ 판매 등록이 하루에 가장 자주 쓰는 화면이다 — 눈에 띄게 둔다 */}
           <Link
