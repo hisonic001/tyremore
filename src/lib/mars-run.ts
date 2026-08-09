@@ -39,7 +39,7 @@ export async function requestMarsRun(
     .where(inArray(marsRun.status, ["대기", "실행중"]))
     .limit(1);
   if (open) {
-    revalidatePath("/mars");
+    revalidatePath("/sales");
     return { ok: true, runId: open.id, existing: true };
   }
 
@@ -47,7 +47,7 @@ export async function requestMarsRun(
     .insert(marsRun)
     .values({ kind, requestedBy: session.uid ?? null })
     .returning({ id: marsRun.id });
-  revalidatePath("/mars");
+  revalidatePath("/sales");
   return { ok: true, runId: r.id, existing: false };
 }
 
@@ -98,6 +98,6 @@ export async function cancelMarsRun(runId: number): Promise<{ ok: true } | { ok:
     .update(marsRun)
     .set({ status: "실패", log: sql`COALESCE(${marsRun.log} || E'\n', '') || '(화면에서 중단 처리)'`, finishedAt: new Date() })
     .where(and(eq(marsRun.id, runId), inArray(marsRun.status, ["대기", "실행중"])));
-  revalidatePath("/mars");
+  revalidatePath("/sales");
   return { ok: true };
 }

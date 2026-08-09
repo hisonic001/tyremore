@@ -1,0 +1,260 @@
+"use client";
+
+import { useEffect, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { queueForMars } from "@/lib/mars-queue";
+import { cancelMarsRun, requestMarsRun, type MarsRunRow } from "@/lib/mars-run";
+import type { SaleDay, SaleRow } from "@/lib/sale-history";
+import { SaleCard } from "./client";
+
+const won = (n: number) => n.toLocaleString("ko-KR");
+
+/**
+ * ⭐ MARS 올리기 — 정비 내역에서 골라서 (사장님 지시 2026-08-09)
+ *
+ *   "MARS 입력 대기열 페이지 자체를 삭제. 정비 내역에 MARS 자동 올리기 버튼을 만들고
+ *    클릭시 정비카드들을 체크할 수 있도록 되며 … mars올리기 버튼을 누르면 체크한
+ *    카드들이 자동으로 현재처럼 mars에 올라가고 mars에 등록되었다는 표식이 생김."
+ *
+ * 판매 등록은 '보류' 로 저장되고, 여기서 체크한 것만 '미전송' 이 되어
+ * 매장 PC 의 mars-agent 가 집어 간다. 실행 진행 로그(옛 /mars 의 패널)도 여기서 보인다.
+ *
+ * 체크할 수 있는 카드 = 성사 + '보류'·'수동처리'.
+ * '해당없음'(거래처·서비스)과 이미 올라간 '전송완료', 올라가는 중인 '미전송'은 체크 불가.
+ */
+export function SalesList({
+  days,
+  run,
+  hiddenCount,
+  shown,
+}: {
+  days: SaleDay[];
+  run: MarsRunRow | null;
+  hiddenCount: number;
+  shown: number;
+}) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [selecting, setSelecting] = useState(false);
+  const [sel, setSel] = useState<Record<number, boolean>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const eligible = (s: SaleRow) =>
+    s.status === "성사" && (s.marsStatus === "보류" || s.marsStatus === "수동처리");
+  const all = days.flatMap((d) => d.sales);
+  const eligibleCount = all.filter(eligible).length;
+  /** 체크해서 '미전송' 이 됐지만 매장 PC 가 아직 안 집어 간 것 */
+  const waitingCount = all.filter((s) => s.status === "성사" && s.marsStatus === "미전송").length;
+  const selected = Object.entries(sel)
+    .filter(([, v]) => v)
+    .map(([k]) => Number(k));
+
+  const busy = run !== null && (run.status === "대기" || run.status === "실행중");
+
+  /**
+   * 🔴 실행 중에는 5초마다 다시 불러 로그를 보여준다 — 단, 앞선 새로고침이
+   *    끝나기 전에는 다음 것을 쏘지 않는다 (2026-08-07 마비 사건. 겹쳐 쏘면
+   *    렌더가 중단되고 그 DB 질의가 좀비로 남아 풀러를 채운다). 탭이 안 보일 때도 쉰다.
+   */
+  const [refreshing, startRefresh] = useTransition();
+  const refreshingRef = useRef(false);
+  useEffect(() => {
+    refreshingRef.current = refreshing;
+  }, [refreshing]);
+  useEffect(() => {
+    if (!busy) return;
+    const t = setInterval(() => {
+      if (document.hidden || refreshingRef.current) return;
+      startRefresh(() => router.refresh());
+    }, 5000);
+    return () => clearInterval(t);
+  }, [busy, router]);
+
+  function upload() {
+    start(async () => {
+      setError(null);
+      setMsg(null);
+      const r = await queueForMars(selected);
+      if (!r.ok) return setError(r.error);
+      setSelecting(false);
+      setSel({});
+      setMsg(
+        `${r.queued}건을 MARS 올리기로 보냈습니다.` +
+          (r.runExisting ? " 앞선 실행이 끝나면 「다시 실행 요청」을 눌러 주세요." : " 매장 PC 가 곧 처리합니다."),
+      );
+    });
+  }
+
+  /** 매장 PC 가 꺼져 있었거나 실행이 실패해 '미전송' 이 남았을 때 다시 부른다 */
+  function rerun() {
+    start(async () => {
+      setError(null);
+      setMsg(null);
+      const r = await requestMarsRun("입력");
+      if (!r.ok) return setError(r.error);
+      setMsg(r.existing ? "이미 실행이 잡혀 있습니다 — 곧 처리됩니다." : "실행을 요청했습니다.");
+    });
+  }
+
+  return (
+    <>
+      {/* ── MARS 올리기 판 — 옛 /mars 페이지가 이 안으로 들어왔다 ── */}
+      <div className="sticky top-0 z-10 mt-4 rounded-xl border border-indigo-300 bg-indigo-50 p-3 shadow-sm">
+        {busy ? (
+          <>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-semibold text-indigo-900">MARS 자동 입력</span>
+              <span className="flex items-center gap-1.5 text-xs font-medium text-indigo-700">
+                <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-indigo-600" />
+                {run.status === "대기" ? "매장 PC 를 기다리는 중" : "실행 중"}
+              </span>
+            </div>
+            <div className="mt-1.5 flex items-baseline justify-between text-xs text-indigo-700">
+              <span>{run.status === "대기" ? `${run.requestedAt} 요청됨` : `${run.startedAt} 시작`}</span>
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() =>
+                  start(async () => {
+                    const r = await cancelMarsRun(run.id);
+                    if (!r.ok) setError(r.error);
+                  })
+                }
+                className="underline underline-offset-2"
+              >
+                중단 처리
+              </button>
+            </div>
+            {run.log && (
+              <pre className="tabular mt-1.5 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg bg-white p-2 text-xs leading-relaxed text-slate-700">
+                {run.log.split("\n").slice(-20).join("\n")}
+              </pre>
+            )}
+            {run.status === "대기" && (
+              <p className="mt-1.5 text-xs text-indigo-700">
+                1분이 지나도 시작하지 않으면 매장 PC 의 <code className="rounded bg-white px-1">mars-agent</code>{" "}
+                창이 꺼진 것입니다.
+              </p>
+            )}
+          </>
+        ) : selecting ? (
+          <>
+            <p className="text-sm font-semibold text-indigo-900">
+              MARS 에 올릴 카드를 체크하세요 — <span className="tabular">{selected.length}건</span> 선택됨
+            </p>
+            <p className="mt-0.5 text-xs text-indigo-700">
+              이미 올라간 것(✓)과 거래처·서비스 판매는 체크할 수 없습니다.
+            </p>
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                disabled={pending || selected.length === 0}
+                onClick={upload}
+                className="flex-1 rounded-xl bg-indigo-700 py-3 font-semibold text-white active:bg-indigo-800 disabled:opacity-40"
+              >
+                {pending ? "처리 중…" : `체크한 ${selected.length}건 MARS 올리기`}
+              </button>
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => {
+                  setSelecting(false);
+                  setSel({});
+                }}
+                className="rounded-xl border border-indigo-300 bg-white px-4 text-sm font-medium text-indigo-700"
+              >
+                취소
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={pending || eligibleCount === 0}
+              onClick={() => {
+                setError(null);
+                setMsg(null);
+                setSelecting(true);
+              }}
+              className="flex-1 rounded-xl bg-indigo-700 py-3 font-semibold text-white active:bg-indigo-800 disabled:opacity-40"
+            >
+              {eligibleCount === 0 ? "MARS 에 올릴 것이 없습니다" : `MARS 자동 올리기 (올릴 수 있는 ${eligibleCount}건)`}
+            </button>
+            {waitingCount > 0 && (
+              <button
+                type="button"
+                disabled={pending}
+                onClick={rerun}
+                className="rounded-xl border border-indigo-400 bg-white px-3 py-3 text-sm font-semibold text-indigo-800"
+              >
+                대기 {waitingCount}건 다시 실행 요청
+              </button>
+            )}
+          </div>
+        )}
+
+        {!busy && run?.status === "실패" && (
+          <p className="mt-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900">
+            ⚠️ 지난 실행이 실패했습니다 ({run.finishedAt ?? ""}). 올라가지 못한 건은 「다시 실행 요청」으로 다시 부를 수 있습니다.
+          </p>
+        )}
+        {error && <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+        {msg && <p className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{msg}</p>}
+      </div>
+
+      {days.length === 0 ? (
+        <p className="mt-6 rounded-xl border border-dashed border-slate-300 p-8 text-center text-slate-500">
+          정비 내역이 없습니다
+        </p>
+      ) : (
+        <div className="mt-4 space-y-5">
+          {days.map((d) => (
+            <section key={d.date}>
+              <div className="flex items-baseline justify-between px-1">
+                <h2 className="tabular font-semibold">{d.date}</h2>
+                <span className="tabular text-sm text-slate-500">
+                  {d.qty > 0 && `타이어 ${d.qty}본 · `}
+                  {won(d.amount)}원
+                </span>
+              </div>
+              {/*
+                🔴 그날 판매가 1건이면 2열을 쓰지 않는다 (사장님 버그 제보 2026-08-08).
+                   2열 격자에서 카드가 왼쪽 반칸만 차지하고 합계 금액만 허공에 떠 보였다.
+              */}
+              <ul
+                className={`mt-1.5 grid grid-cols-1 items-start gap-2 ${
+                  d.sales.length > 1 ? "lg:grid-cols-2" : ""
+                }`}
+              >
+                {d.sales.map((s) => (
+                  <SaleCard
+                    key={s.quoteId}
+                    sale={s}
+                    select={
+                      selecting
+                        ? {
+                            eligible: eligible(s),
+                            checked: !!sel[s.quoteId],
+                            toggle: () => setSel((v) => ({ ...v, [s.quoteId]: !v[s.quoteId] })),
+                          }
+                        : undefined
+                    }
+                  />
+                ))}
+              </ul>
+            </section>
+          ))}
+          {hiddenCount > 0 && (
+            <p className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-center text-sm text-amber-900">
+              화면이 얼지 않도록 <strong>최근 {shown}건까지만</strong> 보여드렸습니다.
+              <br />
+              나머지 {hiddenCount.toLocaleString()}건은 위에서 <strong>달이나 기간을 좁히면</strong> 다 보입니다.
+            </p>
+          )}
+        </div>
+      )}
+    </>
+  );
+}

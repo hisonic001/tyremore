@@ -18,10 +18,11 @@
  *    실제로 들어 있는 이름을 그대로 보여줘야 검색해서 찾을 수 있다 (D-14).
  */
 
-import { desc, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { quote } from "@/db/schema";
+import { requestMarsRun } from "./mars-run";
 
 function refresh(...paths: string[]) {
   for (const p of paths) {
@@ -110,7 +111,49 @@ export interface MarsEntry {
   lines: MarsLine[];
 }
 
-/** 아직 MARS 에 안 친 판매 */
+/**
+ * ⭐ 정비 내역에서 **체크한 판매만** MARS 로 보낸다 (사장님 지시 2026-08-09).
+ *
+ *   "판매 등록시에 MARS 입력 대기열 화면으로도 판매내역이 넘어가는데 … 페이지 자체를 삭제.
+ *    정비 내역에 MARS 자동 올리기 버튼을 만들고 … 체크한 카드들이 자동으로 올라가고
+ *    등록되었다는 표식이 생김."
+ *
+ * 판매 등록은 이제 '보류' 로 저장된다 — 자동으로 대기열에 올라가지 않는다.
+ * 여기서 체크한 것만 '미전송' 이 되고, 매장 PC 의 mars-agent 가 그것만 집어 간다
+ * (marsQueue() 가 '미전송' 만 보므로 **매장 PC 스크립트는 안 고쳐도 된다**).
+ */
+export async function queueForMars(
+  quoteIds: number[],
+): Promise<{ ok: true; queued: number; runExisting: boolean } | { ok: false; error: string }> {
+  const { getSession } = await import("./auth");
+  if (!(await getSession())) return { ok: false, error: "로그인이 필요합니다" };
+  const ids = quoteIds.filter((n) => Number.isInteger(n) && n > 0);
+  if (ids.length === 0) return { ok: false, error: "올릴 판매를 선택해 주세요" };
+
+  // '해당없음'(거래처·서비스)과 이미 올라간 '전송완료'는 서버에서도 막는다
+  const updated = await db
+    .update(quote)
+    .set({ marsStatus: "미전송", updatedAt: new Date() })
+    .where(
+      and(
+        inArray(quote.id, ids),
+        eq(quote.status, "성사"),
+        inArray(quote.marsStatus, ["보류", "수동처리"]),
+      ),
+    )
+    .returning({ id: quote.id });
+
+  if (updated.length === 0) {
+    return { ok: false, error: "올릴 수 있는 판매가 없습니다 — 이미 올라갔거나 MARS 대상이 아닙니다" };
+  }
+
+  // 실행 요청까지 한 번에 — 이미 대기·실행중이면 그 실행 뒤에 남는다 (다시 요청하면 된다)
+  const run = await requestMarsRun("입력");
+  refresh("/sales");
+  return { ok: true, queued: updated.length, runExisting: run.ok ? run.existing : false };
+}
+
+/** 아직 MARS 에 안 친 판매 — 정비 내역에서 체크해 '미전송' 이 된 것들 */
 export async function marsQueue(): Promise<MarsEntry[]> {
   const heads = await db.execute<{
     id: number;
@@ -265,7 +308,7 @@ export async function markEntered(
     })
     .where(eq(quote.id, quoteId));
 
-  refresh("/mars");
+  refresh("/sales");
   return { ok: true };
 }
 
@@ -281,50 +324,6 @@ export async function saveVehicleMarsNo(quoteId: number, marsNo: string): Promis
     WHERE id = (SELECT vehicle_id FROM quote WHERE id = ${quoteId})
       AND mars_vehicle_no IS NULL
   `);
-}
-
-/**
- * ⭐ 대기열에서 뺀다 — MARS 에 자동으로 보내지 않고 직접 처리하는 것으로 표시
- *    (사장님 요청 2026-08-05: "대기중인 내역들도 취소나 삭제가 가능했으면 좋겠음").
- *
- * 판매 자체를 지우는 것이 아니다 — 판매 취소는 /sales 의 「판매 취소」가 한다
- * (재고 복원까지). 여기서는 「MARS 자동 입력 대상에서 제외」만 한다.
- * 잘못 뺐으면 최근 목록의 「되돌리기」로 다시 대기열에 올릴 수 있다.
- */
-export async function removeFromQueue(
-  quoteId: number,
-  note?: string | null,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const [q] = await db.select({ id: quote.id }).from(quote).where(eq(quote.id, quoteId)).limit(1);
-  if (!q) return { ok: false, error: "판매 기록을 찾을 수 없습니다" };
-  await db
-    .update(quote)
-    .set({
-      marsStatus: "수동처리",
-      marsSyncedAt: new Date(),
-      marsRefNo: null,
-      marsMemo: note?.trim() || "대기열에서 뺌 — MARS 직접 처리",
-      updatedAt: new Date(),
-    })
-    .where(eq(quote.id, quoteId));
-  refresh("/mars");
-  return { ok: true };
-}
-
-/** 잘못 눌렀다 — 다시 대기열로 */
-export async function unmarkEntered(quoteId: number): Promise<{ ok: true }> {
-  await db
-    .update(quote)
-    .set({
-      marsStatus: "미전송",
-      marsSyncedAt: null,
-      marsRefNo: null,
-      marsMemo: null,
-      updatedAt: new Date(),
-    })
-    .where(eq(quote.id, quoteId));
-  refresh("/mars");
-  return { ok: true };
 }
 
 /**
@@ -408,25 +407,5 @@ export async function markVehicleChecked(quoteId: number): Promise<void> {
     .update(quote)
     .set({ vehicleCheckAt: new Date(), updatedAt: new Date() })
     .where(eq(quote.id, quoteId));
-  refresh("/mars");
-}
-
-/** 오늘 친 것 — 되돌릴 때 쓴다. 「수동처리」로 뺀 것도 같이 보여 되돌릴 수 있게 한다 */
-export async function marsDone(): Promise<
-  { quoteId: number; quoteNo: string; customerName: string | null; total: number; refNo: string | null; status: string }[]
-> {
-  const rows = await db
-    .select({
-      quoteId: quote.id,
-      quoteNo: quote.quoteNo,
-      total: quote.totalAmount,
-      refNo: quote.marsRefNo,
-      status: quote.marsStatus,
-      customerName: sql<string | null>`(SELECT name FROM customer c WHERE c.id = ${quote.customerId})`,
-    })
-    .from(quote)
-    .where(sql`${quote.marsStatus} IN ('전송완료', '수동처리') AND ${quote.marsSyncedAt} > now() - interval '2 days'`)
-    .orderBy(desc(quote.marsSyncedAt))
-    .limit(20);
-  return rows;
+  refresh("/sales");
 }

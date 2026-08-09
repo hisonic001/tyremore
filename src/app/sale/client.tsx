@@ -149,7 +149,9 @@ export function SaleForm() {
     return (
       <section className="mt-5 rounded-2xl border-2 border-emerald-600 bg-emerald-50 p-5">
         <h2 className="text-lg font-bold text-emerald-900">판매를 등록했습니다 — {done.quoteNo}</h2>
-        <p className="mt-1 text-sm text-emerald-800">재고가 빠졌고 MARS 입력 대기열에 올라갔습니다.</p>
+        <p className="mt-1 text-sm text-emerald-800">
+          재고가 빠졌고 정비 내역에 남았습니다. MARS 에 올릴 때는 정비 내역에서 카드를 체크하세요.
+        </p>
         {done.shortages.length > 0 && (
           <div className="mt-3 rounded-lg bg-amber-100 p-3 text-sm text-amber-900">
             <strong>재고보다 많이 팔렸습니다</strong> — {done.shortages.join(", ")}
@@ -159,10 +161,10 @@ export function SaleForm() {
         )}
         <div className="mt-4 flex gap-2">
           <a
-            href="/mars"
+            href="/sales"
             className="flex-1 rounded-lg bg-indigo-700 py-3 text-center font-semibold text-white"
           >
-            MARS 입력하러 가기
+            정비 내역 보기
           </a>
           <button
             type="button"

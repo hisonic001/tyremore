@@ -222,9 +222,11 @@ export async function saveSale(
             paymentMethod: input.paymentMethod ?? null,
             paidAmount: total,
             paymentMemo: input.memo ?? null,
-            // 거래처 판매는 MARS 에 안 간다 (사장님 요청 2026-08-05) — 대기열은 '미전송'만 본다
+            // 거래처 판매는 MARS 에 안 간다 (사장님 요청 2026-08-05)
             // 서비스(무상)도 MARS 에 안 간다 (2026-08-07) — 0원 매출 주문을 자동 전기하는 것은 위험하다
-            marsStatus: input.supplierName || input.paymentMethod === "서비스" ? "해당없음" : "미전송",
+            // ⭐ '보류' = 자동으로 MARS 에 올라가지 않는다 (사장님 지시 2026-08-09).
+            //    정비 내역에서 체크한 것만 queueForMars 가 '미전송' 으로 바꿔 올린다.
+            marsStatus: input.supplierName || input.paymentMethod === "서비스" ? "해당없음" : "보류",
             tyrePositions: input.tyrePositions?.length ? input.tyrePositions.join(",") : null,
             marsMemo: input.supplierName
               ? `거래처 ${input.supplierName.trim()}`
@@ -270,7 +272,7 @@ export async function saveSale(
         return { quoteId: q.id, quoteNo, shortages };
       });
 
-      refresh("/sale", "/mars", "/");
+      refresh("/sale", "/sales", "/");
       return { ok: true, ...done };
     } catch (e) {
       lastErr = (e as Error).message.split("\n")[0];
@@ -383,7 +385,7 @@ export async function createCustomerAndVehicle(
     })
     .returning({ id: vehicle.id });
 
-  refresh("/sale", "/mars");
+  refresh("/sale", "/sales");
   return { ok: true, customerId, vehicleId: v.id };
 }
 

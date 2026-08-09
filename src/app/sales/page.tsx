@@ -1,7 +1,8 @@
 import Link from "@/lib/link";
+import { latestMarsRun } from "@/lib/mars-run";
 import { saleHistory } from "@/lib/sale-history";
-import { SaleCard } from "./client";
 import { PeriodFilter } from "./filter";
+import { SalesList } from "./mars-upload";
 
 export const dynamic = "force-dynamic";
 
@@ -52,6 +53,8 @@ export default async function SalesPage({
   const explicit = sp.range ?? (sp.month ? "month" : sp.from || sp.to ? "range" : null);
   const active = explicit ?? (scoped ? "all" : "today");
 
+  // ⭐ MARS 실행 진행도 여기서 보인다 — /mars 페이지는 없앴다 (사장님 지시 2026-08-09)
+  const run = await latestMarsRun();
   const h = await saleHistory({
     month: active === "month" ? sp.month : active === "thisMonth" ? thisMonth : undefined,
     from: active === "today" ? today : active === "yesterday" ? yesterday : active === "range" ? sp.from : undefined,
@@ -152,46 +155,8 @@ export default async function SalesPage({
         {h.saleCount}건 · {won(h.totalAmount)}원
       </p>
 
-      {h.days.length === 0 ? (
-        <p className="mt-6 rounded-xl border border-dashed border-slate-300 p-8 text-center text-slate-500">
-          정비 내역이 없습니다
-        </p>
-      ) : (
-        <div className="mt-4 space-y-5">
-          {days.map((d) => (
-            <section key={d.date}>
-              <div className="flex items-baseline justify-between px-1">
-                <h2 className="tabular font-semibold">{d.date}</h2>
-                <span className="tabular text-sm text-slate-500">
-                  {d.qty > 0 && `타이어 ${d.qty}본 · `}
-                  {won(d.amount)}원
-                </span>
-              </div>
-              {/*
-                🔴 그날 판매가 1건이면 2열을 쓰지 않는다 (사장님 버그 제보 2026-08-08).
-                   차량별 이력은 하루 1건이 보통이라, 2열 격자에서 카드가 왼쪽 반칸만
-                   차지하고 오른쪽이 비어 날짜 줄의 합계 금액만 허공에 떠 보였다.
-              */}
-              <ul
-                className={`mt-1.5 grid grid-cols-1 items-start gap-2 ${
-                  d.sales.length > 1 ? "lg:grid-cols-2" : ""
-                }`}
-              >
-                {d.sales.map((s) => (
-                  <SaleCard key={s.quoteId} sale={s} />
-                ))}
-              </ul>
-            </section>
-          ))}
-          {hiddenCount > 0 && (
-            <p className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-center text-sm text-amber-900">
-              화면이 얼지 않도록 <strong>최근 {shown}건까지만</strong> 보여드렸습니다.
-              <br />
-              나머지 {hiddenCount.toLocaleString()}건은 위에서 <strong>달이나 기간을 좁히면</strong> 다 보입니다.
-            </p>
-          )}
-        </div>
-      )}
+      {/* ⭐ MARS 올리기 판 + 날짜별 목록 — 카드 체크·올리기·진행 로그가 한 화면 (2026-08-09) */}
+      <SalesList days={days} run={run} hiddenCount={hiddenCount} shown={shown} />
 
       <div className="mt-6 text-center">
         <Link

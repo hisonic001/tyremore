@@ -23,7 +23,7 @@ import { db } from "@/db";
 import { quote, stockItem, stockMovement } from "@/db/schema";
 
 function refresh() {
-  for (const p of ["/sales", "/mars", "/", "/stock"]) {
+  for (const p of ["/sales", "/", "/stock"]) {
     try {
       revalidatePath(p);
     } catch {

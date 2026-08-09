@@ -16,7 +16,14 @@ const PAYS = ["현금", "카드", "계좌이체", "외상", "혼합", "서비스
  *    수량·단가 수정, 줄 삭제·추가 — 재고는 서버가 따라 맞춘다 (line-edit.tsx).
  *    MARS 전송완료 건을 고치면 금액이 어긋난다는 경고가 뜬다.
  */
-export function SaleCard({ sale: s }: { sale: SaleRow }) {
+export function SaleCard({
+  sale: s,
+  select,
+}: {
+  sale: SaleRow;
+  /** ⭐ MARS 올리기 선택 모드 (사장님 지시 2026-08-09) — 있으면 카드가 체크박스가 된다 */
+  select?: { eligible: boolean; checked: boolean; toggle: () => void };
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -69,12 +76,28 @@ export function SaleCard({ sale: s }: { sale: SaleRow }) {
     <li
       className={`rounded-xl border bg-white ${
         canceled ? "border-slate-200 opacity-60" : "border-slate-200"
+      } ${
+        // 선택 모드: 체크된 카드는 테두리로, 체크 못 하는 카드는 흐리게
+        select ? (select.checked ? "ring-2 ring-indigo-600" : select.eligible ? "" : "opacity-40") : ""
       }`}
     >
       {/* ⭐ PC 는 카드가 세로로 크고 내용이 더 드러난다 (사장님 요청 2026-08-08) — 폰은 그대로 */}
-      <button type="button" onClick={() => setOpen(!open)} className="w-full p-3 text-left lg:p-5">
+      <button
+        type="button"
+        onClick={() => (select ? select.eligible && select.toggle() : setOpen(!open))}
+        className="w-full p-3 text-left lg:p-5"
+      >
         <div className="flex items-baseline justify-between gap-2">
           <span className="min-w-0 truncate font-semibold lg:text-lg">
+            {select && select.eligible && (
+              <span
+                className={`mr-2 inline-block h-5 w-5 shrink-0 translate-y-1 rounded border-2 text-center text-sm leading-4 ${
+                  select.checked ? "border-indigo-600 bg-indigo-600 text-white" : "border-slate-300 bg-white"
+                }`}
+              >
+                {select.checked ? "✓" : ""}
+              </span>
+            )}
             {canceled && <span className="mr-1.5 rounded bg-slate-200 px-1.5 py-0.5 text-xs">취소</span>}
             {who}
             {s.plateNo && <span className="ml-2 text-sm font-normal text-slate-500">{s.plateNo}</span>}
@@ -94,7 +117,11 @@ export function SaleCard({ sale: s }: { sale: SaleRow }) {
           <span className="hidden lg:block" />
           <span className="tabular shrink-0">
             {s.paymentMethod ?? ""}
-            {s.marsStatus === "전송완료" && <span className="ml-1.5 text-indigo-500">MARS ✓</span>}
+            {/* ⭐ MARS 표식 (사장님 지시 2026-08-09) — ✓ 올라감 · 올리는 중 = 체크 후 대기 */}
+            {s.marsStatus === "전송완료" && <span className="ml-1.5 font-semibold text-indigo-600">MARS ✓</span>}
+            {s.marsStatus === "미전송" && !canceled && (
+              <span className="ml-1.5 text-amber-600">MARS 올리는 중</span>
+            )}
           </span>
         </div>
         {/* PC: 품목을 줄별로 펼쳐서 — 펼치지 않아도 무엇을 얼마에 했는지 보인다 */}
@@ -178,9 +205,11 @@ export function SaleCard({ sale: s }: { sale: SaleRow }) {
             ) : null}
             {s.tyrePositions.length > 0 && <p>갈아 끼운 바퀴: {s.tyrePositions.join(" · ")}</p>}
             {s.paymentMemo && <p>메모: {s.paymentMemo}</p>}
-            {s.marsStatus !== "미전송" && (
+            {/* '보류'(아직 안 올림)는 굳이 안 적는다 — 올린 것·안 가는 것만 남긴다 */}
+            {s.marsStatus !== "보류" && (
               <p className="tabular">
-                MARS {s.marsStatus}
+                MARS{" "}
+                {s.marsStatus === "미전송" ? "올리는 중 (매장 PC 대기)" : s.marsStatus}
                 {s.marsRefNo && ` · ${s.marsRefNo}`}
               </p>
             )}
