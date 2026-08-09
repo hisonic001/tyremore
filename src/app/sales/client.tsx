@@ -100,7 +100,12 @@ export function SaleCard({
             )}
             {canceled && <span className="mr-1.5 rounded bg-slate-200 px-1.5 py-0.5 text-xs">취소</span>}
             {who}
-            {s.plateNo && <span className="ml-2 text-sm font-normal text-slate-500">{s.plateNo}</span>}
+            {/* ⭐ 차종도 같이 — 「현대 카니발 23나1111」 (사장님 요청 2026-08-09) */}
+            {(s.plateNo || s.vehicleModel) && (
+              <span className="ml-2 text-sm font-normal text-slate-500">
+                {[s.makerName, s.vehicleModel, s.plateNo].filter(Boolean).join(" ")}
+              </span>
+            )}
           </span>
           <span className={`tabular shrink-0 font-bold lg:text-xl ${canceled ? "line-through" : ""}`}>
             {won(s.totalAmount)}원

@@ -39,6 +39,8 @@ export interface SaleRow {
   customerName: string | null;
   plateNo: string | null;
   vehicleModel: string | null;
+  /** ⭐ 제조사 (사장님 요청 2026-08-09 — "현대 카니발 23나1111 처럼") */
+  makerName: string | null;
   /** ⭐ 그때 입력한 주행거리 (사장님 요청 2026-08-08). 없으면 차량 최근값으로 대신 보여준다 */
   mileage: number | null;
   /** 차량 카드의 최근 주행거리 — 과거 건의 대체 표시용 */
@@ -110,6 +112,7 @@ export async function saleHistory(opts: {
     customer_name: string | null;
     plate_no: string | null;
     vehicle_model: string | null;
+    maker_name: string | null;
     mileage: number | null;
     veh_mileage: number | null;
     mars_memo: string | null;
@@ -132,6 +135,8 @@ export async function saleHistory(opts: {
     SELECT q.id quote_id, q.quote_no, q.status,
            to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM-DD') work_date,
            q.customer_id, c.name customer_name, v.plate_no, v.model vehicle_model,
+           -- 제조사는 코드 사전의 한글 이름 우선 (customer-edit 와 같은 규칙, 2026-08-09)
+           COALESCE(mk.name_ko, v.maker_name) maker_name,
            q.mileage, v.mileage veh_mileage,
            q.mars_memo, q.total_amount, q.payment_method, q.payment_memo,
            q.mars_status, q.mars_ref_no, q.tyre_positions,
@@ -145,10 +150,11 @@ export async function saleHistory(opts: {
            END AS spec,
            p.list_price
     FROM quote q
-    LEFT JOIN customer   c  ON c.id = q.customer_id
-    LEFT JOIN vehicle    v  ON v.id = q.vehicle_id
-    LEFT JOIN quote_item qi ON qi.quote_id = q.id
-    LEFT JOIN product    p  ON p.id = qi.product_id
+    LEFT JOIN customer      c  ON c.id = q.customer_id
+    LEFT JOIN vehicle       v  ON v.id = q.vehicle_id
+    LEFT JOIN vehicle_maker mk ON mk.code = v.maker_code
+    LEFT JOIN quote_item    qi ON qi.quote_id = q.id
+    LEFT JOIN product       p  ON p.id = qi.product_id
     WHERE 1=1
       ${opts.includeCanceled ? sql`` : sql`AND q.status <> '취소'`}
       ${m ? sql`AND to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM') = ${m}` : sql``}
@@ -174,6 +180,7 @@ export async function saleHistory(opts: {
         customerName: r.customer_name,
         plateNo: r.plate_no,
         vehicleModel: r.vehicle_model,
+        makerName: r.maker_name,
         mileage: r.mileage === null ? null : Number(r.mileage),
         vehicleMileage: r.veh_mileage === null ? null : Number(r.veh_mileage),
         // 「비회원 …」·「거래처 …」 판매는 marsMemo 가 이름 역할을 한다 (2026-08-05 거래처 판매 추가)

@@ -126,11 +126,7 @@ export function SalesList({
                 중단 처리
               </button>
             </div>
-            {run.log && (
-              <pre className="tabular mt-1.5 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg bg-white p-2 text-xs leading-relaxed text-slate-700">
-                {run.log.split("\n").slice(-20).join("\n")}
-              </pre>
-            )}
+            {/* 로그는 안 보여준다 (사장님 지시 2026-08-09) — 매장 PC 터미널에서 보면 된다 */}
             {run.status === "대기" && (
               <p className="mt-1.5 text-xs text-indigo-700">
                 1분이 지나도 시작하지 않으면 매장 PC 의 <code className="rounded bg-white px-1">mars-agent</code>{" "}
