@@ -1045,58 +1045,50 @@ function ServicePick({
 }: {
   onAdd: (s: { id: number; marsNo: string | null; name: string; price: number | null }) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<Awaited<ReturnType<typeof findServices>>>([]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  /**
+   * ⭐ 접지 않는다 (사장님 지시 2026-08-09) — "타이어 부품처럼 그냥 검색창이 바로".
+   *    전에는 「공임·정비 추가 ▼」를 눌러야 검색창이 나왔다.
+   *    빈 검색어도 자주 쓰는 목록을 바로 보여준다 — 얼라인먼트·펑크수리는 치기 전에 보인다.
+   */
   useEffect(() => {
-    if (!open) return;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => void findServices(q).then(setHits), 250);
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [q, open]);
+  }, [q]);
 
   const list = useMemo(() => hits.slice(0, 12), [hits]);
 
   return (
     <section className="rounded-2xl border border-slate-300 bg-white p-3">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between font-bold"
-      >
-        공임·정비 추가
-        <span className="text-slate-400">{open ? "▲" : "▼"}</span>
-      </button>
-      {open && (
-        <>
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="얼라인먼트 · 펑크수리 · 배터리…"
-            className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2"
-          />
-          <ul className="mt-2 max-h-72 space-y-1 overflow-y-auto">
-            {list.map((s) => (
-              <li key={s.id}>
-                <button
-                  type="button"
-                  onClick={() => onAdd(s)}
-                  className="flex w-full items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-left active:bg-slate-100"
-                >
-                  <span className="min-w-0 flex-1 truncate text-sm">{s.name}</span>
-                  <span className="tabular shrink-0 text-sm font-semibold">
-                    {s.price ? won(s.price) : "—"}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
+      <h2 className="font-bold">공임·정비 추가</h2>
+      <input
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder="얼라인먼트 · 펑크수리 · 배터리…"
+        className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2"
+      />
+      <ul className="mt-2 max-h-72 space-y-1 overflow-y-auto">
+        {list.map((s) => (
+          <li key={s.id}>
+            <button
+              type="button"
+              onClick={() => onAdd(s)}
+              className="flex w-full items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-left active:bg-slate-100"
+            >
+              <span className="min-w-0 flex-1 truncate text-sm">{s.name}</span>
+              <span className="tabular shrink-0 text-sm font-semibold">
+                {s.price ? won(s.price) : "—"}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
