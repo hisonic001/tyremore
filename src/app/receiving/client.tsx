@@ -15,6 +15,7 @@ import {
   removeInvoiceItem,
   resumeManualPurchase,
   saveInvoice,
+  updatePurchaseItem,
   type InvoicePreview,
   type LinkCandidate,
   type PendingInvoice,
@@ -272,17 +273,17 @@ function InvoiceCard({ one }: { one: InvoicePreview }) {
  *    실사용 결과가 근거다 — 배운 바코드 1건 · 스캔으로 만든 입출고 0건.
  *    확정은 원래부터 줄마다 수량·DOT 를 넣거나 「전량 입고」로 됐다.
  */
-export function PendingList({ invoices, draftId }: { invoices: PendingInvoice[]; draftId?: number }) {
+export function PendingList({ invoices }: { invoices: PendingInvoice[] }) {
   return (
     <ul className="mt-4 space-y-4">
       {invoices.map((inv) => (
-        <PendingInvoiceCard key={inv.invoiceId} inv={inv} mine={inv.invoiceId === draftId} />
+        <PendingInvoiceCard key={inv.invoiceId} inv={inv} />
       ))}
     </ul>
   );
 }
 
-function PendingInvoiceCard({ inv, mine }: { inv: PendingInvoice; mine?: boolean }) {
+function PendingInvoiceCard({ inv }: { inv: PendingInvoice }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -296,11 +297,6 @@ function PendingInvoiceCard({ inv, mine }: { inv: PendingInvoice; mine?: boolean
         <span className="font-bold">
           {inv.supplier}{" "}
           <span className="tabular text-sm font-normal text-slate-500">{inv.invoiceNo}</span>
-          {isManual && mine && (
-            <span className="ml-1.5 rounded bg-indigo-100 px-1.5 py-0.5 text-xs font-medium text-indigo-800">
-              담는 중
-            </span>
-          )}
         </span>
         <span className="tabular text-sm text-slate-500">
           {inv.issuedAt} · <strong className="text-amber-800">{inv.remain}본 대기</strong>
@@ -309,9 +305,10 @@ function PendingInvoiceCard({ inv, mine }: { inv: PendingInvoice; mine?: boolean
 
       {/*
         ⭐ 직접 장부는 기기마다 따로 담는다 (사장님 지적 2026-08-06).
-           다른 기기(사람)가 담던 장부는 여기서 「이어서 담기」로 넘겨받는다.
+           이 기기가 담는 중인 장부는 이 목록에 아예 안 나오므로(2026-08-09 redundancy 정리),
+           여기 보이는 직접 장부는 전부 「이어서 담기」로 넘겨받을 수 있는 남의(또는 지난) 장부다.
       */}
-      {isManual && !mine && (
+      {isManual && (
         <button
           type="button"
           disabled={pending}
@@ -392,7 +389,7 @@ function PendingInvoiceCard({ inv, mine }: { inv: PendingInvoice; mine?: boolean
         )}
       </div>
       <p className="mt-1 text-xs text-slate-400">
-        전량 입고는 DOT 없이 들어갑니다. DOT 를 넣으려면 아래에서 품목별로 하세요.
+        줄에 DOT 를 적어 두면 전량 입고에도 그대로 들어갑니다. 안 적은 줄은 비운 채 입고됩니다.
       </p>
 
       {/*
@@ -518,6 +515,14 @@ function PendingRow({ l }: { l: PendingLine }) {
               <input
                 value={dot}
                 onChange={(e) => setDot(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                /* ⭐ 적는 즉시 줄에 저장된다 — 그래야 「전량 입고」도 이 DOT 를 쓴다 (2026-08-09) */
+                onBlur={() =>
+                  start(async () => {
+                    setError(null);
+                    const r = await updatePurchaseItem({ itemId: l.itemId, dot: dot || null });
+                    if (!r.ok) setError(r.error ?? "DOT 를 저장하지 못했습니다");
+                  })
+                }
                 placeholder="모르면 비움"
                 inputMode="numeric"
                 className="tabular h-11 w-28 rounded-lg border border-slate-300 px-2 text-lg"

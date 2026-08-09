@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
+  receiveAll,
   removeInvoice,
   startManualPurchase,
   updatePurchaseItem,
@@ -86,8 +87,26 @@ export function ManualPurchase({
 function ManualLedger({ inv, owner }: { inv: PendingInvoice; owner: boolean }) {
   const router = useRouter();
   const [pending, start] = useTransition();
+  const [notice, setNotice] = useState<string | null>(null);
 
   const total = inv.lines.reduce((s, l) => s + (l.unitCost ?? 0) * l.qty, 0);
+
+  /**
+   * ⭐ 입고 확정이 장부 카드 **안에** 있다 (사장님 지적 2026-08-09 — "직접매입 칸에도
+   *    타이어와 DOT, 입고 예정에도 또 — redundancy"). 전에는 확정 버튼이 아래
+   *    「입고 예정」에만 있어서 같은 장부를 두 벌로 보여줘야 했다. 이제 담기부터
+   *    확정까지 이 카드 하나가 끝낸다 — 이 장부는 아래 목록에 안 나온다.
+   */
+  function confirmAll() {
+    start(async () => {
+      setNotice(null);
+      const r = await receiveAll(inv.invoiceId);
+      if (!r.ok) return setNotice(r.error);
+      const notes = [r.failed.length ? `남은 문제:\n${r.failed.join("\n")}` : null].filter(Boolean);
+      if (notes.length) setNotice(`${r.created}본 입고. ${notes.join("\n")}`);
+      router.refresh();
+    });
+  }
 
   return (
     <section className="mt-5 rounded-2xl border-2 border-indigo-600 bg-indigo-50 p-4">
@@ -119,8 +138,26 @@ function ManualLedger({ inv, owner }: { inv: PendingInvoice; owner: boolean }) {
         {owner
           ? "매입가는 나중에 넣어도 됩니다. 비워 두면 원가·마진만 안 나옵니다. "
           : "매입가는 사장님 계정에서 넣습니다. "}
-        아래 「입고 예정」에서 <strong>전량 입고</strong>를 누르면 재고가 됩니다.
+        DOT 를 적어 두면 입고할 때 그대로 재고에 남습니다.
       </p>
+
+      {notice && (
+        <p className="mt-2 whitespace-pre-line rounded-lg bg-white px-3 py-2 text-sm text-red-700">
+          {notice}
+        </p>
+      )}
+
+      {/* 담기의 끝 — 여기서 바로 재고가 된다 */}
+      {inv.remain > 0 && (
+        <button
+          type="button"
+          disabled={pending}
+          onClick={confirmAll}
+          className="mt-3 w-full rounded-xl bg-indigo-700 py-3.5 text-lg font-semibold text-white active:bg-indigo-800 disabled:opacity-50"
+        >
+          {pending ? "처리 중…" : `입고 확정 — 재고로 (${inv.remain}본)`}
+        </button>
+      )}
 
       {/* 잘못 열었거나 그만둘 때 — 이게 없으면 빈 장부가 화면을 계속 차지한다 */}
       <button
