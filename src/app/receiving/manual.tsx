@@ -88,6 +88,8 @@ function ManualLedger({ inv, owner }: { inv: PendingInvoice; owner: boolean }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [notice, setNotice] = useState<string | null>(null);
+  /** 🔴 확정은 두 번 눌러야 한다 (사장님 요청 2026-08-09) — 누르는 순간 재고가 되기 때문 */
+  const [arm, setArm] = useState(false);
 
   const total = inv.lines.reduce((s, l) => s + (l.unitCost ?? 0) * l.qty, 0);
 
@@ -100,6 +102,7 @@ function ManualLedger({ inv, owner }: { inv: PendingInvoice; owner: boolean }) {
   function confirmAll() {
     start(async () => {
       setNotice(null);
+      setArm(false);
       const r = await receiveAll(inv.invoiceId);
       if (!r.ok) return setNotice(r.error);
       const notes = [r.failed.length ? `남은 문제:\n${r.failed.join("\n")}` : null].filter(Boolean);
@@ -147,17 +150,42 @@ function ManualLedger({ inv, owner }: { inv: PendingInvoice; owner: boolean }) {
         </p>
       )}
 
-      {/* 담기의 끝 — 여기서 바로 재고가 된다 */}
-      {inv.remain > 0 && (
-        <button
-          type="button"
-          disabled={pending}
-          onClick={confirmAll}
-          className="mt-3 w-full rounded-xl bg-indigo-700 py-3.5 text-lg font-semibold text-white active:bg-indigo-800 disabled:opacity-50"
-        >
-          {pending ? "처리 중…" : `입고 확정 — 재고로 (${inv.remain}본)`}
-        </button>
-      )}
+      {/* 담기의 끝 — 여기서 바로 재고가 된다. 그래서 두 번 묻는다 */}
+      {inv.remain > 0 &&
+        (arm ? (
+          <div className="mt-3 rounded-xl border-2 border-indigo-700 bg-white p-3">
+            <p className="text-sm font-semibold text-indigo-900">
+              {inv.lines.length}품목 {inv.remain}본을 재고로 넣습니다. 수량·DOT 를 한 번 봐 주세요.
+            </p>
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                disabled={pending}
+                onClick={confirmAll}
+                className="flex-1 rounded-xl bg-indigo-700 py-3.5 text-lg font-semibold text-white active:bg-indigo-800 disabled:opacity-50"
+              >
+                {pending ? "처리 중…" : `정말 입고 (${inv.remain}본)`}
+              </button>
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => setArm(false)}
+                className="rounded-xl border border-slate-300 px-5 text-sm font-medium text-slate-600 active:bg-slate-100"
+              >
+                취소
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => setArm(true)}
+            className="mt-3 w-full rounded-xl bg-indigo-700 py-3.5 text-lg font-semibold text-white active:bg-indigo-800 disabled:opacity-50"
+          >
+            입고 확정 — 재고로 ({inv.remain}본)
+          </button>
+        ))}
 
       {/* 잘못 열었거나 그만둘 때 — 이게 없으면 빈 장부가 화면을 계속 차지한다 */}
       <button
