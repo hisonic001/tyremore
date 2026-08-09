@@ -6,6 +6,7 @@ import { RateBox } from "../rate-box";
 import type { ProductHit, VehicleHit } from "@/lib/search";
 import { searchProducts, searchVehicles } from "@/lib/search-actions";
 import { createCustomerAndVehicle, findServices, saveSale, type SaleLine } from "@/lib/sale";
+import { isMarsMaker, makerSuggestions, MARS_MAKER_LIST_ID, MarsMakerDatalist } from "@/lib/mars-makers";
 import { listSuppliers } from "@/lib/supplier";
 import { BODY_TYPES, FUEL_TYPES, type NewCustomerInput } from "@/lib/sale-types";
 
@@ -758,12 +759,18 @@ function NewCustomer({
           </label>
           <label>
             <span className={LB}>제조사</span>
+            {/*
+              🔴 MARS 의 「제조사」는 목록에서 고르는 칸이다 (사장님 제보 2026-08-09) —
+                 목록 밖 이름이면 MARS 차량 등록이 실패한다. 치면 목록이 걸러져 나온다.
+            */}
             <input
               value={f.makerName}
               onChange={(e) => set({ makerName: e.target.value })}
-              placeholder="현대·기아·BMW…"
+              list={MARS_MAKER_LIST_ID}
+              placeholder="치면 목록이 나옵니다"
               className={IN}
             />
+            <MarsMakerDatalist />
           </label>
           <label>
             <span className={LB}>모델</span>
@@ -926,6 +933,15 @@ function NewCustomer({
                */
               if (f.signed && (choices.privacy === null || choices.marketing === null)) {
                 setError("개인정보 동의를 종이 보고서대로 「동의함/거부함」 중에 골라 주세요.");
+                return;
+              }
+              // 🔴 제조사는 MARS 목록에 있는 이름만 (2026-08-09) — 아니면 MARS 등록이 실패한다
+              if (f.makerName.trim() && !isMarsMaker(f.makerName)) {
+                const near = makerSuggestions(f.makerName);
+                setError(
+                  `제조사 「${f.makerName.trim()}」 는 MARS 목록에 없습니다 — 목록에서 골라 주세요.` +
+                    (near.length ? ` 비슷한 것: ${near.join(" · ")}` : ""),
+                );
                 return;
               }
               const r = await createCustomerAndVehicle({

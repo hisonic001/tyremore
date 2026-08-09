@@ -5,6 +5,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { updateCustomerInfo, updateVehicleInfo } from "@/lib/customer-edit";
+import { isMarsMaker, makerSuggestions, MARS_MAKER_LIST_ID, MarsMakerDatalist } from "@/lib/mars-makers";
 
 const FIELD = "mt-0.5 block w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base outline-none focus:border-slate-900";
 const LB = "block text-xs font-medium text-slate-500";
@@ -44,6 +45,15 @@ export function VehicleEditForm({
     start(async () => {
       setError(null);
       setMsg(null);
+      // 🔴 제조사는 MARS 목록에 있는 이름만 (사장님 제보 2026-08-09) — 아니면 MARS 등록이 실패한다
+      if (maker.trim() && !isMarsMaker(maker)) {
+        const near = makerSuggestions(maker);
+        setError(
+          `제조사 「${maker.trim()}」 는 MARS 목록에 없습니다 — 목록에서 골라 주세요.` +
+            (near.length ? ` 비슷한 것: ${near.join(" · ")}` : ""),
+        );
+        return;
+      }
       const rc = await updateCustomerInfo({ customerId: customer.customerId, name, phone, address });
       if (!rc.ok) return setError(rc.error);
       const rv = await updateVehicleInfo({
@@ -90,7 +100,15 @@ export function VehicleEditForm({
           </label>
           <label>
             <span className={LB}>제조사</span>
-            <input value={maker} onChange={(e) => setMaker(e.target.value)} placeholder="현대·기아·BMW…" className={FIELD} />
+            {/* MARS 목록에서 고른다 (2026-08-09) — 치면 목록이 걸러져 나온다 */}
+            <input
+              value={maker}
+              onChange={(e) => setMaker(e.target.value)}
+              list={MARS_MAKER_LIST_ID}
+              placeholder="치면 목록이 나옵니다"
+              className={FIELD}
+            />
+            <MarsMakerDatalist />
           </label>
           <label>
             <span className={LB}>모델</span>

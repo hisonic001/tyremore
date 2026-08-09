@@ -324,6 +324,13 @@ export async function createCustomerAndVehicle(
   if (!plateNo) return { ok: false, error: "차량번호를 넣어 주세요" };
   if (!input.address.trim()) return { ok: false, error: "주소를 넣어 주세요 (MARS 필수 항목입니다)" };
   if (!input.fuelType) return { ok: false, error: "연료를 골라 주세요 (MARS 필수 항목입니다)" };
+  // 🔴 제조사는 MARS 목록의 이름만 (사장님 제보 2026-08-09) — 목록 밖이면 MARS 차량 등록이 실패한다
+  if (input.makerName.trim()) {
+    const { isMarsMaker } = await import("./mars-makers");
+    if (!isMarsMaker(input.makerName)) {
+      return { ok: false, error: `제조사 「${input.makerName.trim()}」 는 MARS 목록에 없습니다 — 목록에서 골라 주세요` };
+    }
+  }
 
   const plateNorm = plateNo.replace(/[\s-]/g, "");
   const phone = input.phone.replace(/[^\d]/g, "");

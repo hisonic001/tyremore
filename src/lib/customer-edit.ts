@@ -78,6 +78,13 @@ export async function updateVehicleInfo(input: {
    *    이름·코드·별칭 표에서 찾아지면 그 코드로, 못 찾으면 코드를 비워 글자가 보이게 한다.
    */
   const makerText = input.makerName?.trim() || null;
+  // 🔴 제조사는 MARS 목록의 이름만 (사장님 제보 2026-08-09) — 목록 밖이면 MARS 등록이 실패한다
+  if (makerText) {
+    const { isMarsMaker } = await import("./mars-makers");
+    if (!isMarsMaker(makerText)) {
+      return { ok: false, error: `제조사 「${makerText}」 는 MARS 목록에 없습니다 — 목록에서 골라 주세요` };
+    }
+  }
   let makerCode: string | null = null;
   if (makerText) {
     const [hit] = await db.execute<{ code: string }>(sql`
