@@ -1217,6 +1217,8 @@ export async function receiveLine(input: {
     dot,
     /** ⭐ 실매입가를 재고에 박아 둔다 — 나중에 원가를 정확히 되짚을 수 있다 */
     purchasePrice: line.unitCost,
+    /** ⭐ 어느 매입 줄에서 왔는지 — 매입 내역의 수정·지우기가 이 끈을 쓴다 (2026-08-09) */
+    purchaseItemId: line.id,
     /**
      * `serial`(개별 식별자)은 라벨 바코드에서만 나오던 값이다.
      * 바코드를 걷어내면서(2026-08-04) 채울 길이 없어졌다 — 컬럼은 남겨 둔다.

@@ -269,6 +269,11 @@ export const stockItem = pgTable(
      */
     serial: text("serial"),
     purchasePrice: integer("purchase_price"),
+    /**
+     * ⭐ 이 본이 어느 매입 줄에서 왔는지 (2026-08-09, 매입 내역 수정·지우기).
+     *    입고를 되돌릴 때 정확히 이 줄의 본만 지울 수 있다. 예전 재고는 비어 있다.
+     */
+    purchaseItemId: bigint("purchase_item_id", { mode: "number" }),
     location: text("location"),
     receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
     soldAt: timestamp("sold_at", { withTimezone: true }),

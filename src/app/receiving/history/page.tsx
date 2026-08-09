@@ -119,7 +119,7 @@ export default async function PurchaseHistoryPage({
           이 기간에 매입한 것이 없습니다
         </p>
       ) : (
-        <HistoryList days={h.days} />
+        <HistoryList days={h.days} owner={h.canSeeMoney} />
       )}
     </main>
   );
