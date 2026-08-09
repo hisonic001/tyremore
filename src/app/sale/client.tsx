@@ -1048,19 +1048,22 @@ function ServicePick({
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<Awaited<ReturnType<typeof findServices>>>([]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   /**
-   * ⭐ 접지 않는다 (사장님 지시 2026-08-09) — "타이어 부품처럼 그냥 검색창이 바로".
-   *    전에는 「공임·정비 추가 ▼」를 눌러야 검색창이 나왔다.
-   *    빈 검색어도 자주 쓰는 목록을 바로 보여준다 — 얼라인먼트·펑크수리는 치기 전에 보인다.
+   * ⭐ 검색창은 늘 보이되, 목록은 **검색칸을 눌렀을 때만** (사장님 2026-08-09 2차 지시
+   *    — "자주쓰는 공임내역이 평소에는 펼쳐져 있지 말고 검색입력칸을 클릭할때").
+   *    blur 를 150ms 늦추는 것은 목록 항목을 누르는 순간 목록이 먼저 사라지지 않게 하기 위함.
    */
+  const [focused, setFocused] = useState(false);
+  const showList = focused || q.trim() !== "";
+
   useEffect(() => {
+    if (!showList) return;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => void findServices(q).then(setHits), 250);
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [q]);
+  }, [q, showList]);
 
   const list = useMemo(() => hits.slice(0, 12), [hits]);
 
@@ -1070,25 +1073,29 @@ function ServicePick({
       <input
         value={q}
         onChange={(e) => setQ(e.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setTimeout(() => setFocused(false), 150)}
         placeholder="얼라인먼트 · 펑크수리 · 배터리…"
         className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2"
       />
-      <ul className="mt-2 max-h-72 space-y-1 overflow-y-auto">
-        {list.map((s) => (
-          <li key={s.id}>
-            <button
-              type="button"
-              onClick={() => onAdd(s)}
-              className="flex w-full items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-left active:bg-slate-100"
-            >
-              <span className="min-w-0 flex-1 truncate text-sm">{s.name}</span>
-              <span className="tabular shrink-0 text-sm font-semibold">
-                {s.price ? won(s.price) : "—"}
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
+      {showList && (
+        <ul className="mt-2 max-h-72 space-y-1 overflow-y-auto">
+          {list.map((s) => (
+            <li key={s.id}>
+              <button
+                type="button"
+                onClick={() => onAdd(s)}
+                className="flex w-full items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-left active:bg-slate-100"
+              >
+                <span className="min-w-0 flex-1 truncate text-sm">{s.name}</span>
+                <span className="tabular shrink-0 text-sm font-semibold">
+                  {s.price ? won(s.price) : "—"}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
