@@ -1074,12 +1074,22 @@ function ServicePick({
         value={q}
         onChange={(e) => setQ(e.target.value)}
         onFocus={() => setFocused(true)}
-        onBlur={() => setTimeout(() => setFocused(false), 150)}
+        onBlur={() => setTimeout(() => setFocused(false), 250)}
         placeholder="얼라인먼트 · 펑크수리 · 배터리…"
         className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2"
       />
       {showList && (
-        <ul className="mt-2 max-h-72 space-y-1 overflow-y-auto">
+        /*
+         * 🔴 mousedown 에서 preventDefault (사장님 버그 제보 2026-08-09).
+         *    항목을 누르는 순간 입력칸이 blur 되어 목록이 먼저 사라지고 클릭이
+         *    허공에 떨어졌다 — 검색어가 비어 있을 때만 나는 버그라 놓치기 쉬웠다
+         *    (검색어가 있으면 blur 후에도 목록이 남아 증상이 없다).
+         *    preventDefault 로 포커스를 안 뺏기면 blur 자체가 안 일어난다.
+         */
+        <ul
+          className="mt-2 max-h-72 space-y-1 overflow-y-auto"
+          onMouseDown={(e) => e.preventDefault()}
+        >
           {list.map((s) => (
             <li key={s.id}>
               <button
