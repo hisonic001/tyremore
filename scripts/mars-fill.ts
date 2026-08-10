@@ -1210,12 +1210,27 @@ async function fillLines(
     await page.waitForTimeout(400);
 
     const typeCell = row.locator('[controlname="Type"]').first();
-    const typeSel = row.locator('[controlname="Type"] select, select[controlname="Type"]').first();
-    const target = (await typeSel.count().catch(() => 0)) > 0 ? typeSel : await resolveInput(typeCell);
 
-    const typed =
-      (await target.selectOption(want).then(() => true).catch(() => false)) ||
-      (await target.selectOption({ label: wantLabel }).then(() => true).catch(() => false));
+    /**
+     * 🔴 한 번에 안 되면 다시 시도한다 (2026-08-10 run#58 — 첫 시도에 select 가
+     *    아직 없어 실패했는데, 같은 판매가 다음 실행(run#59)에서는 그대로 성공했다.
+     *    일시적인 화면 타이밍 문제라 즉시 포기하기엔 아깝다).
+     *    줄을 다시 눌러 편집 상태를 만들고 select 를 새로 찾는다.
+     */
+    let typed = false;
+    for (let att = 0; att < 3 && !typed; att++) {
+      if (att > 0) {
+        log(`      · 유형 선택이 안 돼 다시 시도합니다 (${att + 1}번째)`);
+        await page.waitForTimeout(700 * att);
+        await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+        await page.waitForTimeout(500);
+      }
+      const typeSel = row.locator('[controlname="Type"] select, select[controlname="Type"]').first();
+      const target = (await typeSel.count().catch(() => 0)) > 0 ? typeSel : await resolveInput(typeCell);
+      typed =
+        (await target.selectOption(want).then(() => true).catch(() => false)) ||
+        (await target.selectOption({ label: wantLabel }).then(() => true).catch(() => false));
+    }
 
     if (typed) {
       await page.waitForTimeout(500);
@@ -1636,42 +1651,107 @@ async function postOrder(
    */
   let postDlg: Locator | null = null;
   let ship: Locator | null = null;
+  /**
+   * 🔴 현금 결제는 「배송 및 송장」 창 대신 **「현금 등록기 소형」 창**이 뜬다
+   *    (2026-08-10 관찰 — 8/5 까지는 현금도 배송/송장 창이었다. MARS 쪽 절차가 바뀐 것).
+   *    이 창을 모르던 코드가 「배송 및 송장 선택지를 못 찾았다」며 취소해 버려서
+   *    현금 판매만 전기가 전멸했다 (Q26-0810-001 · Q26-0810-003).
+   */
+  let cashDlg: Locator | null = null;
   {
     const until = Date.now() + 8000;
-    while (Date.now() < until && !ship) {
+    while (Date.now() < until && !ship && !cashDlg) {
       const dlgs = f.getByRole("dialog");
       const nd = await dlgs.count().catch(() => 0);
-      for (let i = nd - 1; i >= 0 && !ship; i--) {
+      for (let i = nd - 1; i >= 0 && !ship && !cashDlg; i--) {
         const d = dlgs.nth(i);
         if (!(await d.isVisible().catch(() => false))) continue;
         const opt = d.getByText(/배송 및 송장|출하 및 송장/).first();
         if (await opt.isVisible().catch(() => false)) {
           postDlg = d;
           ship = opt;
+          continue;
+        }
+        const said = ((await d.innerText().catch(() => "")) || "").replace(/\s+/g, " ");
+        if (/현금 등록기/.test(said)) {
+          cashDlg = d;
         } else if (!postDlg) {
           postDlg = d; // 선택지 없는 대화상자라도 기억해 둔다 — 취소할 때 쓴다
         }
       }
-      if (!ship) await page.waitForTimeout(500);
+      if (!ship && !cashDlg) await page.waitForTimeout(500);
     }
   }
-  if (!postDlg) {
-    return { ok: false, invoiceNo: null, why: "전기 대화상자가 뜨지 않았습니다" };
+
+  if (cashDlg) {
+    /**
+     * 현금 등록기 창: 사람이 하던 것과 같은 단추 「전기 완료 및 인쇄(P)」를 누른다.
+     * 🔴 눌렀다고 믿지 않는다 — 창이 닫히는지 보고, 최종 확정은 아래 공통 경로의
+     *    「새 SI 번호」 또는 송장 목록 대조가 한다. 안 닫히면 취소해 다음 건을
+     *    막지 않게 하고 사람에게 넘긴다.
+     */
+    log("    · 현금 결제 — 「현금 등록기」 창이 떴습니다. 전기 완료를 누릅니다");
+    let clicked = false;
+    for (const b of [
+      cashDlg.getByRole("button", { name: /전기\s*완료/ }).first(),
+      cashDlg.getByText(/전기\s*완료(\s*및\s*인쇄)?/).first(),
+    ]) {
+      if (!(await b.isVisible().catch(() => false))) continue;
+      await b.click({ timeout: 8000 }).catch(() => {});
+      clicked = true;
+      break;
+    }
+    if (!clicked) {
+      const said = ((await cashDlg.innerText().catch(() => "")) || "").replace(/\s+/g, " ").slice(0, 120);
+      await cashDlg.getByRole("button", { name: "취소", exact: true }).last().click({ timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(800);
+      return {
+        ok: false,
+        invoiceNo: null,
+        why: `현금 등록기 창에서 「전기 완료」 단추를 못 찾아 취소했습니다 (창 내용: ${said})`,
+      };
+    }
+    // 인쇄가 이어질 수 있어 넉넉히 기다린다
+    const until = Date.now() + 20000;
+    while (Date.now() < until && (await cashDlg.isVisible().catch(() => false))) {
+      await page.waitForTimeout(700);
+    }
+    // 인쇄 미리보기가 새 탭으로 열렸으면 닫는다 (원래 화면을 가리지 않게)
+    for (const p2 of page.context().pages()) {
+      if (p2 !== page) await p2.close().catch(() => {});
+    }
+    if (await cashDlg.isVisible().catch(() => false)) {
+      const shot = path.resolve(SHOT_DIR, "mars-현금등록기.png");
+      await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
+      await cashDlg.getByRole("button", { name: "취소", exact: true }).last().click({ timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(800);
+      return {
+        ok: false,
+        invoiceNo: null,
+        why: `현금 등록기 창이 「전기 완료」 뒤에도 안 닫혀 취소했습니다 — MARS 에서 마무리해 주세요 (화면: ${shot})`,
+      };
+    }
+    await page.waitForTimeout(3000);
+    // ↓ 아래의 결과 창 정리·새 SI 확인은 배송/송장 경로와 같이 쓴다
+  } else {
+    if (!postDlg) {
+      return { ok: false, invoiceNo: null, why: "전기 대화상자가 뜨지 않았습니다" };
+    }
+    if (!ship) {
+      const said = ((await postDlg.innerText().catch(() => "")) || "").replace(/\s+/g, " ").slice(0, 120);
+      await postDlg.getByRole("button", { name: "취소", exact: true }).last().click({ timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(800);
+      return {
+        ok: false,
+        invoiceNo: null,
+        why: `「배송 및 송장」 선택지를 못 찾아 전기를 취소했습니다 (창 내용: ${said})`,
+      };
+    }
+    await ship.click().catch(() => {});
+    await page.waitForTimeout(400);
+    await postDlg.getByRole("button", { name: "확인", exact: true }).last().click({ timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(5000);
   }
-  if (!ship) {
-    const said = ((await postDlg.innerText().catch(() => "")) || "").replace(/\s+/g, " ").slice(0, 120);
-    await postDlg.getByRole("button", { name: "취소", exact: true }).last().click({ timeout: 5000 }).catch(() => {});
-    await page.waitForTimeout(800);
-    return {
-      ok: false,
-      invoiceNo: null,
-      why: `「배송 및 송장」 선택지를 못 찾아 전기를 취소했습니다 (창 내용: ${said})`,
-    };
-  }
-  await ship.click().catch(() => {});
-  await page.waitForTimeout(400);
-  await postDlg.getByRole("button", { name: "확인", exact: true }).last().click({ timeout: 8000 }).catch(() => {});
-  await page.waitForTimeout(5000);
 
   /** 결과 창들을 하나씩 읽는다 — 오류면 멈추고, 「여시겠습니까」면 연다 */
   for (let i = 0; i < 4; i++) {
@@ -1842,6 +1922,37 @@ async function pickInvoiceRow(
 }
 
 /**
+ * 송장 목록을 열어 이 판매의 송장 줄을 찾는다 — 전기 확인의 공통 경로.
+ *
+ * 🔴 방금 전기한 송장이 목록에 **아직 안 보일 때**가 있다 (2026-08-08 run#54,
+ *    Q26-0808-006 — 전기 직후 목록 대조에서 「전기된 송장이 없습니다」로 실패 처리).
+ *    「없습니다」로 끝나면 잠시 기다렸다 목록을 새로 열어 한 번 더 본다.
+ *    (여러 건이라 못 고르는 경우는 다시 봐도 같으니 바로 돌려준다.)
+ */
+async function findInvoiceInList(
+  page: Page,
+  c: { plateNo: string | null; workDate: string | null; total: number; marsRefNo: string | null },
+): Promise<Picked> {
+  let last: Picked = { ok: false, why: "송장 목록을 열지 못했습니다" };
+  for (let att = 0; att < 2; att++) {
+    if (att > 0) {
+      log("    · 목록에 아직 없을 수 있어 잠시 뒤 다시 봅니다");
+      await page.waitForTimeout(6000);
+    }
+    await page.goto(HOME);
+    await waitHome(page, 40000);
+    await clickAny(page, "판매완료");
+    await page.waitForTimeout(700);
+    await clickAny(page, "완료된 매출 송장, 완료된 매출 송장 목록을 엽니다.");
+    await page.waitForTimeout(3000);
+    await passBigSearchDialog(page);
+    last = await pickInvoiceRow(page, c);
+    if (last.ok || !/전기된 송장이 없습니다/.test(last.why)) return last;
+  }
+  return last;
+}
+
+/**
  * ⭐ 고른 줄의 송장을 **연다** (2026-08-04).
  *
  * 🔴 `row.locator('[controlname="No."]').click()` 이 10초를 기다리다 죽었다.
@@ -1930,21 +2041,43 @@ async function setReplace(page: Page, rowText: string): Promise<boolean> {
   const f = main(page);
   const row = f.getByRole("row").filter({ hasText: rowText }).first();
   if (!(await row.isVisible().catch(() => false))) return false;
+  await row.scrollIntoViewIfNeeded().catch(() => {});
   await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
   await page.waitForTimeout(300);
-  const rep = row.locator('[controlname="Replace"]').first();
-  if ((await rep.count().catch(() => 0)) === 0) return false;
-  const checked = async () =>
-    (await rep.getAttribute("aria-checked").catch(() => null)) === "true" ||
-    (await rep.isChecked().catch(() => false));
-  if (await checked()) return true;
-  await rep.click({ timeout: 6000 }).catch(() => {});
-  await page.waitForTimeout(400);
-  if (await checked()) return true;
-  await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
-  await rep.click({ timeout: 6000 }).catch(() => {});
-  await page.waitForTimeout(400);
-  return checked();
+
+  /**
+   * 🔴 `controlname="Replace"` 는 **타이어 트레드 표에만 있다** (2026-08-10 확인 —
+   *    얼라이먼트·패드·엔진오일의 교체 표시는 지금까지 5번 시도해 5번 다 실패했고,
+   *    성공한 적이 한 번도 없다. 이름이 다른 표에서 같은 이름을 찾고 있었던 것).
+   *    setGrade100 이 「이름을 외우지 않고 맨 오른쪽」을 찾듯, 여기도 후보를 차례로 본다:
+   *    ① Replace 칸(타이어 표) ② 라벨에 교체/Replace 가 든 체크박스
+   *    ③ 줄의 **맨 왼쪽** 체크박스 — 사장님 확인(2026-08-02): "맨 왼쪽 체크란이 교체"
+   */
+  const candidates: [string, Locator][] = [];
+  const named = row.locator('[controlname="Replace"]').first();
+  if ((await named.count().catch(() => 0)) > 0) candidates.push(["Replace 칸", named]);
+  const byLabel = row.getByRole("checkbox", { name: /교체|replace/i }).first();
+  if ((await byLabel.count().catch(() => 0)) > 0) candidates.push(["교체 라벨", byLabel]);
+  const boxes = row.locator('input[type="checkbox"], [role="checkbox"]');
+  if ((await boxes.count().catch(() => 0)) > 0) candidates.push(["맨 왼쪽 칸", boxes.first()]);
+
+  for (const [name, box] of candidates) {
+    if (!(await box.isVisible().catch(() => false))) continue;
+    const checked = async () =>
+      (await box.getAttribute("aria-checked").catch(() => null)) === "true" ||
+      (await box.isChecked().catch(() => false));
+    if (await checked()) return true;
+    for (let att = 0; att < 2; att++) {
+      await box.click({ timeout: 6000 }).catch(() => {});
+      await page.waitForTimeout(400);
+      if (await checked()) {
+        if (name !== "Replace 칸") log(`        (교체 칸: ${name}으로 켰습니다)`);
+        return true;
+      }
+      await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+    }
+  }
+  return false;
 }
 
 /** 판매한 타이어 본수로 어느 바퀴를 갈았는지 정한다 */
@@ -2428,14 +2561,7 @@ async function main_() {
       let posted = await postOrder(page);
       if (!posted.ok && posted.unsure) {
         log("    · 전기 여부를 송장 목록에서 확인합니다");
-        await page.goto(HOME);
-        await waitHome(page, 40000);
-        await clickAny(page, "판매완료");
-        await page.waitForTimeout(700);
-        await clickAny(page, "완료된 매출 송장, 완료된 매출 송장 목록을 엽니다.");
-        await page.waitForTimeout(3000);
-        await passBigSearchDialog(page);
-        const picked = await pickInvoiceRow(page, {
+        const picked = await findInvoiceInList(page, {
           plateNo: POST_DRAFT.plate,
           workDate: null,
           total: POST_DRAFT.total,
@@ -2799,14 +2925,7 @@ async function main_() {
         let verifiedRow: Locator | null = null;
         if (!posted.ok && posted.unsure && q.plateNo) {
           log("    · 전기 여부를 송장 목록에서 확인합니다");
-          await page.goto(HOME);
-          await waitHome(page, 40000);
-          await clickAny(page, "판매완료");
-          await page.waitForTimeout(700);
-          await clickAny(page, "완료된 매출 송장, 완료된 매출 송장 목록을 엽니다.");
-          await page.waitForTimeout(3000);
-          await passBigSearchDialog(page);
-          const picked = await pickInvoiceRow(page, {
+          const picked = await findInvoiceInList(page, {
             plateNo: q.plateNo,
             workDate: iso,
             total: q.total,
