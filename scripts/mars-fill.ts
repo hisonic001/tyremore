@@ -2178,12 +2178,18 @@ async function fillVehicleCheck(
   /** 👀 보기만 하는 모드는 여기까지 — 아무것도 쓰지 않는다 */
   if (LOOK) return { ok: true, missed: [], already: false };
 
-  // 방문 이유 — 타이어 교체는 CHANGE
+  /**
+   * 방문 이유 — 코드는 셋: CHANGE · CHECK · DAMAGE (사장님 확인 2026-08-10).
+   * "타이어를 갈았으면 CHANGE. 나머지는 그냥 CHECK으로."
+   * (DAMAGE 는 자동으로 판단할 근거가 없어 쓰지 않는다 — 필요하면 사람이 고친다)
+   */
+  const visitReason = opts.tyreQty > 0 ? "CHANGE" : "CHECK";
   const reason = f.locator('[controlname="Reason for Visit"]').first();
   if (await reason.isVisible().catch(() => false)) {
-    await reason.fill("CHANGE").catch(() => {});
+    await reason.fill(visitReason).catch(() => {});
     await reason.press("Tab").catch(() => {});
     await page.waitForTimeout(800);
+    log(`      방문 이유 → ${visitReason}`);
   }
 
   const missed: string[] = [];
