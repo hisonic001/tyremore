@@ -44,6 +44,11 @@ export function SaleForm() {
    */
   const [payMethods, setPayMethods] = useState<string[]>(["카드"]);
   const [payAmounts, setPayAmounts] = useState<Record<string, string>>({});
+  /**
+   * ⭐ 복합결제 스위치 (사장님 요청 2026-08-10 — "두개를 누르는게 활성화되니까 좀 불편").
+   *    꺼져 있으면 예전처럼 하나만 골라진다(누르면 바뀜). 켰을 때만 2개 이상 + 금액 분배.
+   */
+  const [combo, setCombo] = useState(false);
   const [memo, setMemo] = useState("");
   /** 실제로 정비한 날 — 기본은 오늘이지만 고칠 수 있다 */
   const today = new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD
@@ -74,18 +79,43 @@ export function SaleForm() {
   const exclusivePay = (EXCLUSIVE as readonly string[]);
   const paySum = payMethods.reduce((s, m) => s + Number(payAmounts[m] || "0"), 0);
   const payKey = payMethods.join("|");
-  /** 수단이 1개면 금액은 전액 — 품목이 바뀌어 합계가 달라져도 따라간다 */
+  /** 복합결제에서 수단이 1개면 금액은 전액 — 품목이 바뀌어 합계가 달라져도 따라간다 */
   useEffect(() => {
-    if (payMethods.length === 1 && splitPay.includes(payMethods[0])) {
+    if (combo && payMethods.length === 1 && splitPay.includes(payMethods[0])) {
       setPayAmounts({ [payMethods[0]]: String(total) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [total, payKey]);
+  }, [total, payKey, combo]);
+
+  /** 복합결제 켜고 끄기 — 끄면 첫 수단 하나만 남긴다 */
+  const toggleCombo = () => {
+    setError(null);
+    setCombo((on) => {
+      if (on) {
+        setPayMethods((prev) => {
+          const first = prev.find((m) => splitPay.includes(m)) ?? "카드";
+          return [first];
+        });
+        setPayAmounts({});
+        return false;
+      }
+      // 켜는 순간 — 외상·서비스가 골라져 있었으면 카드부터 시작한다
+      setPayMethods((prev) => (prev.every((m) => splitPay.includes(m)) && prev.length ? prev : ["카드"]));
+      return true;
+    });
+  };
 
   const togglePay = (p: string) => {
     setError(null);
     if (exclusivePay.includes(p)) {
       // 외상·서비스는 단독 — MARS·대기열 처리가 결제수단 하나를 전제한다
+      setCombo(false);
+      setPayMethods([p]);
+      setPayAmounts({});
+      return;
+    }
+    /** 복합결제가 꺼져 있으면 예전처럼 하나만 — 누르면 바뀐다 (사장님 요청 2026-08-10) */
+    if (!combo) {
       setPayMethods([p]);
       setPayAmounts({});
       return;
@@ -211,6 +241,7 @@ export function SaleForm() {
       setMemo("");
       setPayMethods(["카드"]);
       setPayAmounts({});
+      setCombo(false);
       setWheels([]);
       wheelsTouched.current = false;
       router.refresh();
@@ -377,7 +408,10 @@ export function SaleForm() {
           )}
         </label>
 
-        {/* ⭐ 여러 개 고를 수 있다 (사장님 요청 2026-08-10) — 외상·서비스만 단독 */}
+        {/*
+          ⭐ 복합결제는 스위치를 켰을 때만 (사장님 요청 2026-08-10 —
+             "두개를 누르는게 활성화되니까 좀 불편하네"). 꺼져 있으면 하나만 골라진다.
+        */}
         <div className="mt-2 flex flex-wrap gap-2">
           {PAYMENTS.map((p) => (
             <button
@@ -391,10 +425,24 @@ export function SaleForm() {
               {p}
             </button>
           ))}
+          <button
+            type="button"
+            onClick={toggleCombo}
+            className={`rounded-lg border border-dashed px-4 py-2 text-sm font-medium ${
+              combo ? "border-indigo-700 bg-indigo-700 text-white" : "border-indigo-400 bg-white text-indigo-700"
+            }`}
+          >
+            복합결제
+          </button>
         </div>
+        {combo && (
+          <p className="mt-1.5 text-xs text-indigo-700">
+            복합결제 — 수단을 2개 이상 고르세요. 새 수단을 고르면 나머지 금액이 자동으로 들어갑니다.
+          </p>
+        )}
 
-        {/* 수단별 금액 — 하나만 골랐어도 보인다 (먼저 금액을 줄여 두고 다음 수단을 고르는 흐름) */}
-        {payMethods.every((m) => splitPay.includes(m)) && (
+        {/* 수단별 금액 — 복합결제일 때만 */}
+        {combo && payMethods.every((m) => splitPay.includes(m)) && (
           <div className="mt-2 space-y-1.5">
             {payMethods.map((m) => (
               <label key={m} className="flex items-center gap-2">

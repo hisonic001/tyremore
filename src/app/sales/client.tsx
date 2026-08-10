@@ -57,10 +57,34 @@ export function SaleCard({
 
   const splitPay = SPLITTABLE as readonly string[];
   const paySum = payM.reduce((sum, m) => sum + Number(payA[m] || "0"), 0);
+  /** 복합결제 스위치 — 켰을 때만 2개 이상 (사장님 요청 2026-08-10). 분할 건은 켠 채로 시작 */
+  const [combo, setCombo] = useState(s.payments.length >= 2);
+  const toggleCombo = () => {
+    setError(null);
+    setCombo((on) => {
+      if (on) {
+        setPayM((prev) => {
+          const first = prev.find((m) => splitPay.includes(m));
+          return first ? [first] : prev;
+        });
+        setPayA({});
+        return false;
+      }
+      setPayM((prev) => (prev.every((m) => splitPay.includes(m)) && prev.length ? prev : ["카드"]));
+      return true;
+    });
+  };
   const togglePay = (p: string) => {
     setError(null);
     if ((EXCLUSIVE as readonly string[]).includes(p)) {
+      setCombo(false);
       setPayM((prev) => (prev.length === 1 && prev[0] === p ? [] : [p]));
+      setPayA({});
+      return;
+    }
+    // 복합결제가 꺼져 있으면 하나만 — 누르면 바뀐다
+    if (!combo) {
+      setPayM([p]);
       setPayA({});
       return;
     }
@@ -338,8 +362,17 @@ export function SaleCard({
                         {p}
                       </button>
                     ))}
+                    <button
+                      type="button"
+                      onClick={toggleCombo}
+                      className={`rounded-lg border border-dashed px-2.5 py-1.5 text-sm font-medium ${
+                        combo ? "border-indigo-700 bg-indigo-700 text-white" : "border-indigo-400 bg-white text-indigo-700"
+                      }`}
+                    >
+                      복합결제
+                    </button>
                   </div>
-                  {payM.length >= 2 && (
+                  {combo && payM.length >= 2 && (
                     <div className="space-y-1.5">
                       {payM.map((m) => (
                         <label key={m} className="flex items-center gap-2">
