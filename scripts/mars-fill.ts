@@ -1143,12 +1143,23 @@ async function openSalesOrder(
    *    외상은 여기까지 오지 않는다 — 호출 쪽에서 걸러 낸다.
    */
   if (payCode) {
-    await fillField(page, "결제 수단 코드", f.locator('[controlname="<Payment Method Code_2>"]'), payCode);
+    const pmField = f.locator('[controlname="<Payment Method Code_2>"]');
+    await fillField(page, "결제 수단 코드", pmField, payCode);
     /**
      * 🔴 「결제 조건 코드」는 **건드리지 않는다** (사장님 지시 2026-08-05).
      *    "결제 수단 코드만 바꾸면 되고 결제 조건 코드는 건드리면 안되는 것 같아."
      *    수단을 고르면 MARS 가 조건을 알아서 맞춘다.
      */
+    /**
+     * ⭐ 넣은 값과 MARS 가 맞춘 조건을 **로그에 남긴다** (2026-08-10).
+     *    현금 등록기 창 추적용 — 수동 전기에서는 안 뜨는 창이 자동에서만 떠서,
+     *    다음에 뜰 때 「그때 이 두 칸이 무엇이었나」를 로그만 보고 알 수 있어야 한다.
+     */
+    await page.waitForTimeout(600);
+    const pmNow = ((await readField(pmField).catch(() => "")) || "").trim();
+    const ptNow = ((await readField(f.locator('[controlname="<Payment Terms Code_2>"]')).catch(() => "")) || "").trim();
+    log(`    · 결제 수단 코드 → ${payCode}${pmNow && pmNow !== payCode ? ` (칸에는 «${pmNow}»)` : " ✓"}` +
+        `${ptNow ? ` · 조건 코드(자동): «${ptNow}»` : ""}`);
   }
   await page.waitForTimeout(1200);
 }
@@ -1698,6 +1709,9 @@ async function postOrder(
     if (process.env.MARS_CASH_POST !== "1") {
       const shot = path.resolve(SHOT_DIR, "mars-현금등록기.png");
       await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
+      // 추적용 — 창 전체 글자를 로그에 남긴다 (수동에서는 안 뜨는 창이라 단서가 여기뿐이다)
+      const full = ((await cashDlg.innerText().catch(() => "")) || "").replace(/\s+/g, " ").slice(0, 600);
+      log(`    · 현금 등록기 창 내용: ${full}`);
       await cashDlg.getByRole("button", { name: "취소", exact: true }).last().click({ timeout: 5000 }).catch(() => {});
       await page.waitForTimeout(800);
       return {
