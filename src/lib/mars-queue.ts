@@ -382,8 +382,10 @@ export async function pendingVehicleChecks(): Promise<PendingCheck[]> {
       AND q.mars_status = '전송완료'
       AND q.vehicle_check_at IS NULL
       AND v.plate_no IS NOT NULL
+      -- 🔴 앱으로 등록한 판매만 (Q26-…). MARS 이관분(MARS-…) 3천여 건이
+      --    밀려들면 점검 실행이 과거를 훑느라 끝나지 않는다 (2026-08-10)
+      AND q.quote_no LIKE 'Q%'
     GROUP BY q.id, q.quote_no, v.plate_no, c.name, q.total_amount, q.mars_ref_no
-    HAVING COALESCE(SUM(qi.qty) FILTER (WHERE qi.line_type = 'tire'), 0) > 0
     ORDER BY q.confirmed_at DESC NULLS LAST
     LIMIT 40
   `);

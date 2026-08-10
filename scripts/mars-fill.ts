@@ -2217,7 +2217,9 @@ async function fillVehicleCheck(
   //       그래서 다른 항목의 100%(맨 오른쪽 체크박스)와 같은 setGrade100 을 그대로 쓴다 —
   //       맨 오른쪽이 안 켜져도 7mm 로 물러서지 않는 안전장치까지 동일하게 받는다.
   await openSection("타이어", "타이어 - 전륜");
-  const wheels = opts.wheels?.length ? opts.wheels : wheelsFor(opts.tyreQty);
+  // 🔴 타이어를 안 판 건(0본)은 어느 바퀴도 교체가 아니다 — 넷 다 8mm 로 간다
+  //    (2026-08-10, 점검을 전 판매로 넓히면서. wheelsFor(0)은 한 바퀴를 짐작해 버린다)
+  const wheels = opts.wheels?.length ? opts.wheels : opts.tyreQty > 0 ? wheelsFor(opts.tyreQty) : [];
   const ALL_WHEELS = ["전륜 좌측", "전륜 우측", "후륜 좌측", "후륜 우측"];
   for (const w of ALL_WHEELS) {
     if (wheels.includes(w)) {
@@ -2994,9 +2996,16 @@ async function main_() {
 
         await markEntered(q.quoteId, posted.invoiceNo ?? orderNo, `자동입력+전기 ${iso} · ${amount.note}`);
 
-        /** 전기 직후 그 자리에서 차량 점검까지 — 타이어를 판 건만 */
+        /**
+         * 전기 직후 그 자리에서 차량 점검까지.
+         * 🔴 타이어 건만 하던 것을 **모든 판매**로 넓혔다 (사장님 제보 2026-08-10 —
+         *    Koirala 엔진오일 판매가 점검 없이 「점검까지 끝났다」로 찍혀 손으로 하셨다).
+         *    점검은 전기된 송장마다 있어야 한다. 타이어를 안 판 건은 네 바퀴 모두
+         *    8mm(교체 아님)로, 교환한 정비 항목은 교체 칸으로 들어간다.
+         */
         const tyreQty = q.lines.filter((l) => l.kind === "tire").reduce((s, l) => s + l.qty, 0);
-        if (tyreQty > 0 && q.plateNo) {
+        let checkDone: "완료" | "이미 제출" | "실패" | "차량 없음" = q.plateNo ? "실패" : "차량 없음";
+        if (q.plateNo) {
           try {
             const f2 = main(page);
             // 송장 목록에서 확정했다면 그 줄을 바로 연다
@@ -3041,6 +3050,7 @@ async function main_() {
             });
             if (!r2.ok) throw new Error(`못 채운 항목: ${r2.missed.join(", ")}`);
             await markVehicleChecked(q.quoteId);
+            checkDone = r2.already ? "이미 제출" : "완료";
             log(r2.already ? "    · 차량 점검 — 이미 제출돼 있었습니다" : "    · 차량 점검 제출 ✅");
           } catch (e2) {
             log(`  ⚠️ 차량 점검은 못 끝냈습니다: ${(e2 as Error).message.split("\n")[0]}`);
@@ -3051,7 +3061,17 @@ async function main_() {
         }
 
         ok++;
-        log("  ✅ 매출 주문 → 전기 → 차량 점검까지 끝났습니다");
+        /**
+         * 🔴 요약은 실제로 한 만큼만 말한다 (사장님 제보 2026-08-10 —
+         *    점검을 건너뛰고도 「점검까지 끝났습니다」로 찍혀 있었다).
+         */
+        if (checkDone === "완료" || checkDone === "이미 제출") {
+          log("  ✅ 매출 주문 → 전기 → 차량 점검까지 끝났습니다");
+        } else if (checkDone === "차량 없음") {
+          log("  ✅ 매출 주문 → 전기까지 끝났습니다 (차량 정보가 없어 점검은 생략)");
+        } else {
+          log("  ✅ 매출 주문 → 전기까지 끝났습니다 — ⚠️ 차량 점검은 못 했습니다 (위 참고, 웹의 점검 단추로 다시)");
+        }
         await page.goto(HOME);
         await waitHome(page, 40000);
       } catch (e) {
