@@ -90,7 +90,8 @@ export default async function SalesPage({
     shown += take.length;
     days.push(take.length === d.sales.length ? d : { ...d, sales: take });
   }
-  const hiddenCount = totalEntries - shown;
+  // 서버도 최근 240건까지만 가져온다 (2026-08-11) — 안 보인 수는 전체 건수 기준으로 센다
+  const hiddenCount = Math.max(totalEntries, h.saleCount) - shown;
 
   const qs = (over: Record<string, string | undefined>) => {
     const p = new URLSearchParams();

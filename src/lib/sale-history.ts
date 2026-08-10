@@ -105,6 +105,47 @@ export async function saleHistory(opts: {
     FROM quote q ORDER BY 1 DESC
   `);
 
+  /**
+   * 🔴 가져오는 양을 SQL 에서부터 자른다 (2026-08-11 무한로딩 사건).
+   *
+   * 8/7 에는 「카드 3천 장을 그리다 폰이 얼어붙는」 것만 막았는데(화면 200장 컷),
+   * 서버는 여전히 전체 기간 3,200건 × 품목 줄을 통째로 실어 날랐다. 그 큰 응답을
+   * 받다가 화면을 떠나면 질의가 좀비(active·ClientRead)로 남아 풀러 자리를 깔고
+   * 앉는다 — 오늘 그걸로 다시 전면 마비가 왔다. 이제 **최근 240건의 id 만 먼저
+   * 고르고 상세는 그 id 들만** 가져온다. 합계·건수는 아래 가벼운 집계가 전체 기준.
+   */
+  const conds = sql`
+    ${opts.includeCanceled ? sql`` : sql`AND q.status <> '취소'`}
+    ${m ? sql`AND to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM') = ${m}` : sql``}
+    ${from ? sql`AND COALESCE(q.work_date, q.created_at::date) >= ${from}::date` : sql``}
+    ${to ? sql`AND COALESCE(q.work_date, q.created_at::date) <= ${to}::date` : sql``}
+    ${opts.customerId ? sql`AND q.customer_id = ${opts.customerId}` : sql``}
+    ${opts.vehicleId ? sql`AND q.vehicle_id = ${opts.vehicleId}` : sql``}
+    ${
+      opts.paymentMethod
+        ? // ⭐ 분할 결제도 걸린다 (2026-08-10) — 「카드」로 거르면 카드가 섞인 혼합 건도 나온다
+          sql`AND (q.payment_method = ${opts.paymentMethod}
+               OR EXISTS (SELECT 1 FROM quote_payment px WHERE px.quote_id = q.id AND px.method = ${opts.paymentMethod}))`
+        : sql``
+    }
+  `;
+  const FETCH_CAP = 240;
+  const [idRows, agg] = await Promise.all([
+    db.execute<{ id: number }>(sql`
+      SELECT q.id FROM quote q
+      WHERE 1=1 ${conds}
+      ORDER BY COALESCE(q.work_date, q.created_at::date) DESC, q.id DESC
+      LIMIT ${FETCH_CAP}
+    `),
+    // 합계·건수는 전체 기간 기준 그대로 (취소 제외) — 상세를 안 가져와도 숫자는 맞아야 한다
+    db.execute<{ n: number; amt: string }>(sql`
+      SELECT count(*)::int n, COALESCE(SUM(q.total_amount), 0)::bigint amt
+      FROM quote q
+      WHERE q.status <> '취소' ${conds}
+    `),
+  ]);
+  const ids = idRows.map((r) => Number(r.id));
+
   const rows = await db.execute<{
     quote_id: number;
     quote_no: string;
@@ -161,20 +202,7 @@ export async function saleHistory(opts: {
     LEFT JOIN vehicle_maker mk ON mk.code = v.maker_code
     LEFT JOIN quote_item    qi ON qi.quote_id = q.id
     LEFT JOIN product       p  ON p.id = qi.product_id
-    WHERE 1=1
-      ${opts.includeCanceled ? sql`` : sql`AND q.status <> '취소'`}
-      ${m ? sql`AND to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM') = ${m}` : sql``}
-      ${from ? sql`AND COALESCE(q.work_date, q.created_at::date) >= ${from}::date` : sql``}
-      ${to ? sql`AND COALESCE(q.work_date, q.created_at::date) <= ${to}::date` : sql``}
-      ${opts.customerId ? sql`AND q.customer_id = ${opts.customerId}` : sql``}
-      ${opts.vehicleId ? sql`AND q.vehicle_id = ${opts.vehicleId}` : sql``}
-      ${
-        opts.paymentMethod
-          ? // ⭐ 분할 결제도 걸린다 (2026-08-10) — 「카드」로 거르면 카드가 섞인 혼합 건도 나온다
-            sql`AND (q.payment_method = ${opts.paymentMethod}
-                 OR EXISTS (SELECT 1 FROM quote_payment px WHERE px.quote_id = q.id AND px.method = ${opts.paymentMethod}))`
-          : sql``
-      }
+    WHERE q.id IN ${sql.raw(`(${ids.length ? ids.join(",") : "0"})`)}
     ORDER BY COALESCE(q.work_date, q.created_at::date) DESC, q.id DESC, qi.id
   `);
 
@@ -254,11 +282,11 @@ export async function saleHistory(opts: {
     if (c) filterLabel = c.name;
   }
 
-  const all = [...map.values()].filter((s) => s.status !== "취소");
   return {
     days: [...dayMap.values()].sort((a, b) => b.date.localeCompare(a.date)),
-    totalAmount: all.reduce((s, x) => s + x.totalAmount, 0),
-    saleCount: all.length,
+    // 전체 기간 기준 집계 — 상세는 최근 240건만 가져와도 이 숫자는 전체다 (2026-08-11)
+    totalAmount: Number(agg[0]?.amt ?? 0),
+    saleCount: Number(agg[0]?.n ?? 0),
     months: monthRows.map((r) => r.m),
     filterLabel,
   };
