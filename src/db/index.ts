@@ -24,6 +24,13 @@ if (!url) {
 const client = postgres(url, {
   max: 3,
   idle_timeout: 20,
+  /**
+   * 🔴 소켓을 5분마다 갈아 끼운다 (2026-08-11 무한로딩 2차).
+   *    Vercel 로그에 「write CONNECTION_CLOSED」 — 풀러(Supavisor)가 이미 닫은
+   *    낡은 소켓에 질의를 쓰다 죽거나, 어중간한 소켓에서 멈춰(ClientRead) 좀비가 됐다.
+   *    수명을 짧게 하면 낡은 소켓 자체가 안 생긴다.
+   */
+  max_lifetime: 60 * 5,
   connect_timeout: 15,
   /**
    * ⭐ 트랜잭션 풀러(6543) 대비 (2026-08-06 안정성 작업).

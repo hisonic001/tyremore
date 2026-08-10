@@ -129,21 +129,24 @@ export async function saleHistory(opts: {
         : sql``
     }
   `;
+  /**
+   * 🔴 질의는 **하나씩 차례로** (2026-08-11 2차 마비).
+   *    Promise.all 로 동시에 쏘자 트랜잭션 풀러에서 전송이 꼬여
+   *    ClientRead 좀비가 됐다 — 같은 질의가 순차로는 수십 ms 다.
+   */
   const FETCH_CAP = 240;
-  const [idRows, agg] = await Promise.all([
-    db.execute<{ id: number }>(sql`
-      SELECT q.id FROM quote q
-      WHERE 1=1 ${conds}
-      ORDER BY COALESCE(q.work_date, q.created_at::date) DESC, q.id DESC
-      LIMIT ${FETCH_CAP}
-    `),
-    // 합계·건수는 전체 기간 기준 그대로 (취소 제외) — 상세를 안 가져와도 숫자는 맞아야 한다
-    db.execute<{ n: number; amt: string }>(sql`
-      SELECT count(*)::int n, COALESCE(SUM(q.total_amount), 0)::bigint amt
-      FROM quote q
-      WHERE q.status <> '취소' ${conds}
-    `),
-  ]);
+  const idRows = await db.execute<{ id: number }>(sql`
+    SELECT q.id FROM quote q
+    WHERE 1=1 ${conds}
+    ORDER BY COALESCE(q.work_date, q.created_at::date) DESC, q.id DESC
+    LIMIT ${FETCH_CAP}
+  `);
+  // 합계·건수는 전체 기간 기준 그대로 (취소 제외) — 상세를 안 가져와도 숫자는 맞아야 한다
+  const agg = await db.execute<{ n: number; amt: string }>(sql`
+    SELECT count(*)::int n, COALESCE(SUM(q.total_amount), 0)::bigint amt
+    FROM quote q
+    WHERE q.status <> '취소' ${conds}
+  `);
   const ids = idRows.map((r) => Number(r.id));
 
   const rows = await db.execute<{

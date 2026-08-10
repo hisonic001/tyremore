@@ -61,8 +61,9 @@ export default async function SalesPage({
 
   // ⭐ MARS 실행 진행도 여기서 보인다 — /mars 페이지는 없앴다 (사장님 지시 2026-08-09)
   const run = await latestMarsRun();
-  // ⭐ MARS 정합 감사 (2026-08-10 개선 전략) — 어긋난 건이 있을 때만 배너가 뜬다
-  const audit = await marsAudit();
+  // ⭐ MARS 정합 감사 (2026-08-10 개선 전략) — 어긋난 건이 있을 때만 배너가 뜬다.
+  //    🔴 감사가 죽어도 정비 내역은 떠야 한다 (2026-08-11) — 부가 정보일 뿐이다.
+  const audit = await marsAudit().catch(() => null);
   const h = await saleHistory({
     month: active === "month" ? sp.month : active === "thisMonth" ? thisMonth : undefined,
     from: active === "today" ? today : active === "yesterday" ? yesterday : active === "range" ? sp.from : undefined,
@@ -169,7 +170,7 @@ export default async function SalesPage({
            자동입력이 실패하면 그 건은 조용히 어긋난 채 남는다 — 그걸 여기서 센다.
            문제가 없으면 아무것도 안 보인다.
       */}
-      {audit.hasIssues && (
+      {audit?.hasIssues && (
         <details className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
           <summary className="cursor-pointer text-sm font-semibold text-amber-900">
             ⚠️ MARS 정리할 것 {audit.unposted.length + audit.unchecked.length}건

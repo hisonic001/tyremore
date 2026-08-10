@@ -64,8 +64,11 @@ export async function marsAudit(): Promise<MarsAudit> {
     memo: r.mars_memo,
   });
 
-  const [unposted, unchecked, pending, runs, smokeRows] = await Promise.all([
-    db.execute<Raw>(sql`
+  /**
+   * 🔴 질의는 하나씩 차례로 (2026-08-11 2차 마비) — Promise.all 로 동시에 쏘면
+   *    트랜잭션 풀러에서 전송이 꼬여 ClientRead 좀비가 된다. 순차 5개 ≈ 0.1초다.
+   */
+  const unposted = await db.execute<Raw>(sql`
       SELECT ${rowFields}
       FROM quote q
       LEFT JOIN vehicle v ON v.id = q.vehicle_id
@@ -74,8 +77,8 @@ export async function marsAudit(): Promise<MarsAudit> {
         AND q.mars_ref_no IS NULL
         AND q.quote_no LIKE 'Q%'  -- 이관분(MARS-…)은 이미 MARS 에 있던 것 — 감사 대상 아님
       ORDER BY q.id DESC LIMIT 20
-    `),
-    db.execute<Raw>(sql`
+    `);
+  const unchecked = await db.execute<Raw>(sql`
       SELECT ${rowFields}
       FROM quote q
       LEFT JOIN vehicle v ON v.id = q.vehicle_id
@@ -86,20 +89,19 @@ export async function marsAudit(): Promise<MarsAudit> {
         AND v.plate_no IS NOT NULL
         AND q.quote_no LIKE 'Q%'
       ORDER BY q.id DESC LIMIT 20
-    `),
-    db.execute<{ n: number }>(sql`
+    `);
+  const pending = await db.execute<{ n: number }>(sql`
       SELECT count(*)::int n FROM quote
       WHERE status = '성사' AND mars_status IN ('보류', '수동처리')
-    `),
-    db.execute<{ warned: boolean }>(sql`
+    `);
+  const runs = await db.execute<{ warned: boolean }>(sql`
       SELECT (log LIKE '%⚠️%' OR status = '실패') warned
       FROM mars_run WHERE kind = '입력' ORDER BY id DESC LIMIT 20
-    `),
-    db.execute<{ at: string; log: string | null; status: string }>(sql`
+    `);
+  const smokeRows = await db.execute<{ at: string; log: string | null; status: string }>(sql`
       SELECT to_char(requested_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at, log, status
       FROM mars_run WHERE kind = '자가점검' ORDER BY id DESC LIMIT 1
-    `),
-  ]);
+    `);
 
   const smoke = smokeRows[0]
     ? {
