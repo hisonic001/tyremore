@@ -77,9 +77,20 @@ export default async function ReportsPage({
       GROUP BY 1
     `),
     db.execute<{ p: string; n: number; amt: string }>(sql`
-      SELECT COALESCE(payment_method, '기타') p, count(*)::int n, COALESCE(SUM(total_amount),0)::bigint amt
-      FROM quote
-      WHERE status = '성사' AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
+      -- ⭐ 분할 결제는 수단별 금액으로 갈라 센다 (2026-08-10).
+      --    분할 내역이 있으면 그 줄들로, 없으면 판매 전체가 그 수단으로.
+      --    (옛 「혼합」 건은 내역이 없어 혼합 그대로 남는다)
+      SELECT p, count(DISTINCT qid)::int n, COALESCE(SUM(amt),0)::bigint amt
+      FROM (
+        SELECT q.id qid,
+               COALESCE(qp.method, q.payment_method, '기타') p,
+               COALESCE(qp.amount, q.total_amount) amt
+        FROM quote q
+        LEFT JOIN quote_payment qp ON qp.quote_id = q.id
+        WHERE q.status = '성사'
+          AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${start}::date
+          AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${nextStart}::date
+      ) t
       GROUP BY 1 ORDER BY amt DESC
     `),
     // 신규 vs 재방문 — 그 손님의 생애 첫 성사 판매가 이번 달이면 신규
@@ -151,6 +162,7 @@ export default async function ReportsPage({
     카드: "#2a78d6",
     현금: "#eb6834",
     계좌이체: "#1baf7a",
+    지역화폐: "#8657c9",
   };
   const segs: Segment[] = pay.map((p) => ({
     label: p.p,

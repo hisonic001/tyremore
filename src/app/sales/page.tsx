@@ -34,8 +34,12 @@ export default async function SalesPage({
   const customerId = sp.customer ? Number(sp.customer) : undefined;
   const vehicleId = sp.vehicle ? Number(sp.vehicle) : undefined;
   const includeCanceled = sp.canceled === "1";
-  /** ⭐ 결제 방법 필터 (사장님 요청 2026-08-07) */
-  const PAY_OPTIONS = ["현금", "카드", "계좌이체", "외상", "혼합", "서비스"];
+  /**
+   * ⭐ 결제 방법 필터 (사장님 요청 2026-08-07).
+   *    지역화폐 추가 (2026-08-10). 「카드」로 거르면 카드가 섞인 분할 결제도 나온다 —
+   *    「혼합」은 분할 결제 건만 모아 본다.
+   */
+  const PAY_OPTIONS = ["현금", "카드", "계좌이체", "지역화폐", "외상", "혼합", "서비스"];
   const pay = sp.pay && PAY_OPTIONS.includes(sp.pay) ? sp.pay : undefined;
   const scoped = Number.isFinite(customerId) || Number.isFinite(vehicleId);
 

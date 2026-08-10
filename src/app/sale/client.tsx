@@ -8,6 +8,7 @@ import { searchProducts, searchVehicles } from "@/lib/search-actions";
 import { createCustomerAndVehicle, findServices, saveSale, type SaleLine } from "@/lib/sale";
 import { isMarsMaker, makerSuggestions, MARS_MAKER_LIST_ID, MarsMakerDatalist } from "@/lib/mars-makers";
 import { listSuppliers } from "@/lib/supplier";
+import { EXCLUSIVE, SPLITTABLE } from "@/lib/payments";
 import { BODY_TYPES, FUEL_TYPES, type NewCustomerInput } from "@/lib/sale-types";
 
 const won = (n: number) => n.toLocaleString();
@@ -19,8 +20,12 @@ interface Row extends SaleLine {
   rimInch?: number | null;
 }
 
-/** 서비스 = 무상 (사장님 요청 2026-08-07 — 단골 무상 점검·가벼운 서비스) */
-const PAYMENTS = ["카드", "현금", "계좌이체", "외상", "서비스"] as const;
+/**
+ * 서비스 = 무상 (사장님 요청 2026-08-07 — 단골 무상 점검·가벼운 서비스)
+ * ⭐ 결제수단을 여러 개 고를 수 있다 (사장님 요청 2026-08-10) —
+ *    카드·현금·계좌이체·지역화폐는 섞어서, 외상·서비스는 단독으로만.
+ */
+const PAYMENTS = [...SPLITTABLE, ...EXCLUSIVE] as readonly string[];
 
 export function SaleForm() {
   const router = useRouter();
@@ -32,7 +37,13 @@ export function SaleForm() {
   const [walkIn, setWalkIn] = useState({ name: "", phone: "", plateNo: "" });
   const [mileage, setMileage] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
-  const [payment, setPayment] = useState<string>("카드");
+  /**
+   * ⭐ 결제수단 여러 개 + 수단별 금액 (사장님 요청 2026-08-10).
+   *    금액은 숫자만 담은 글자로 든다. 수단이 1개면 금액은 어차피 전액이라
+   *    저장 때 무시된다 — 2개 이상일 때만 분할로 저장된다.
+   */
+  const [payMethods, setPayMethods] = useState<string[]>(["카드"]);
+  const [payAmounts, setPayAmounts] = useState<Record<string, string>>({});
   const [memo, setMemo] = useState("");
   /** 실제로 정비한 날 — 기본은 오늘이지만 고칠 수 있다 */
   const today = new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD
@@ -57,6 +68,53 @@ export function SaleForm() {
   }, [tyreQty]);
 
   const total = rows.reduce((s, r) => s + r.unitPrice * r.qty, 0);
+
+  /* ---- 분할 결제 (사장님 요청 2026-08-10) ---- */
+  const splitPay = (SPLITTABLE as readonly string[]);
+  const exclusivePay = (EXCLUSIVE as readonly string[]);
+  const paySum = payMethods.reduce((s, m) => s + Number(payAmounts[m] || "0"), 0);
+  const payKey = payMethods.join("|");
+  /** 수단이 1개면 금액은 전액 — 품목이 바뀌어 합계가 달라져도 따라간다 */
+  useEffect(() => {
+    if (payMethods.length === 1 && splitPay.includes(payMethods[0])) {
+      setPayAmounts({ [payMethods[0]]: String(total) });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [total, payKey]);
+
+  const togglePay = (p: string) => {
+    setError(null);
+    if (exclusivePay.includes(p)) {
+      // 외상·서비스는 단독 — MARS·대기열 처리가 결제수단 하나를 전제한다
+      setPayMethods([p]);
+      setPayAmounts({});
+      return;
+    }
+    setPayMethods((prev) => {
+      const cur = prev.filter((m) => splitPay.includes(m));
+      if (cur.includes(p)) {
+        const next = cur.filter((m) => m !== p);
+        if (next.length === 0) return prev; // 마지막 하나는 못 끈다
+        setPayAmounts((a) => {
+          const rest = { ...a };
+          delete rest[p];
+          return next.length === 1 ? { [next[0]]: String(total) } : rest;
+        });
+        return next;
+      }
+      /**
+       * ⭐ 새 수단을 고르는 순간 **나머지 금액이 자동으로** 들어간다 (사장님 요청 2026-08-10).
+       *    "합계가 10000원이면 카드를 골라 2000원을 입력하고 현금을 고르는 순간 자동으로 8000원"
+       */
+      setPayAmounts((a) => {
+        const used = cur.reduce((s, m) => s + Number(a[m] || "0"), 0);
+        return cur.length === 0
+          ? { [p]: String(total) }
+          : { ...a, [p]: String(Math.max(0, total - used)) };
+      });
+      return cur.length === 0 ? [p] : [...cur, p];
+    });
+  };
 
   /**
    * 🔴 공임·밸런스를 **자동으로 올리지 않는다** (사장님 지시 2026-08-02).
@@ -114,6 +172,13 @@ export function SaleForm() {
       );
       if (!ok) return;
     }
+    // 분할 결제는 금액 합이 판매 합계와 같아야 저장된다 (서버도 다시 검증한다)
+    if (payMethods.length >= 2 && paySum !== total) {
+      setError(
+        `분할 금액 합계(${won(paySum)}원)가 판매 합계(${won(total)}원)와 ${won(Math.abs(total - paySum))}원 다릅니다 — 결제 칸에서 맞춰 주세요`,
+      );
+      return;
+    }
     start(async () => {
       setError(null);
       const res = await saveSale({
@@ -122,7 +187,11 @@ export function SaleForm() {
         walkIn: supplierSale || vehicle ? null : walkIn.name || walkIn.phone || walkIn.plateNo ? walkIn : null,
         supplierName: supplierSale,
         lines: rows.map(({ key, rimInch, ...l }) => l),
-        paymentMethod: payment,
+        paymentMethod: payMethods.length === 1 ? payMethods[0] : "혼합",
+        payments:
+          payMethods.length >= 2
+            ? payMethods.map((m) => ({ method: m, amount: Number(payAmounts[m] || "0") }))
+            : null,
         workDate,
         memo: memo.trim() || null,
         mileage: mileage ? Number(mileage.replace(/\D/g, "")) : null,
@@ -140,6 +209,8 @@ export function SaleForm() {
       setWalkIn({ name: "", phone: "", plateNo: "" });
       setMileage("");
       setMemo("");
+      setPayMethods(["카드"]);
+      setPayAmounts({});
       setWheels([]);
       wheelsTouched.current = false;
       router.refresh();
@@ -306,29 +377,63 @@ export function SaleForm() {
           )}
         </label>
 
+        {/* ⭐ 여러 개 고를 수 있다 (사장님 요청 2026-08-10) — 외상·서비스만 단독 */}
         <div className="mt-2 flex flex-wrap gap-2">
           {PAYMENTS.map((p) => (
             <button
               key={p}
               type="button"
-              onClick={() => setPayment(p)}
+              onClick={() => togglePay(p)}
               className={`rounded-lg border px-4 py-2 text-sm font-medium ${
-                payment === p ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white"
+                payMethods.includes(p) ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white"
               }`}
             >
               {p}
             </button>
           ))}
         </div>
-        {payment === "외상" && (
+
+        {/* 수단별 금액 — 하나만 골랐어도 보인다 (먼저 금액을 줄여 두고 다음 수단을 고르는 흐름) */}
+        {payMethods.every((m) => splitPay.includes(m)) && (
+          <div className="mt-2 space-y-1.5">
+            {payMethods.map((m) => (
+              <label key={m} className="flex items-center gap-2">
+                <span className="w-16 shrink-0 text-sm text-slate-600">{m}</span>
+                <input
+                  value={payAmounts[m] ? Number(payAmounts[m]).toLocaleString() : ""}
+                  onChange={(e) => setPayAmounts((a) => ({ ...a, [m]: e.target.value.replace(/\D/g, "") }))}
+                  inputMode="numeric"
+                  className="tabular min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-right text-sm"
+                />
+                <span className="shrink-0 text-xs text-slate-400">원</span>
+              </label>
+            ))}
+            {payMethods.length >= 2 && paySum !== total && (
+              <p className="rounded-lg bg-red-50 px-2 py-1.5 text-xs text-red-700">
+                합계 {won(total)}원과 <strong>{won(Math.abs(total - paySum))}원 차이</strong> — 저장 전에 맞춰 주세요
+              </p>
+            )}
+            {payMethods.length === 1 && payAmounts[payMethods[0]] !== undefined && Number(payAmounts[payMethods[0]]) !== total && (
+              <p className="text-xs text-slate-400">
+                수단이 1개면 전액 {won(total)}원으로 저장됩니다 — 나눠 받으려면 수단을 하나 더 고르세요 (나머지가 자동으로 들어갑니다)
+              </p>
+            )}
+          </div>
+        )}
+        {payMethods[0] === "외상" && (
           <p className="mt-1.5 rounded-lg bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
             외상은 <strong>MARS 자동 입력에서 빠집니다.</strong> 여기 기록만 남고, MARS 는 직접 처리해 주세요.
           </p>
         )}
-        {payment === "서비스" && (
+        {payMethods[0] === "서비스" && (
           <p className="mt-1.5 rounded-lg bg-emerald-50 px-2 py-1.5 text-xs text-emerald-900">
             서비스(무상)는 <strong>MARS 에 등록하지 않습니다</strong> — 우리 기록에만 남습니다.
             단가를 0원으로 바꿔서 등록하세요.
+          </p>
+        )}
+        {payMethods.includes("지역화폐") && (
+          <p className="mt-1.5 rounded-lg bg-sky-50 px-2 py-1.5 text-xs text-sky-900">
+            지역화폐는 MARS 에 <strong>현금으로</strong> 들어갑니다.
           </p>
         )}
         {/*

@@ -49,6 +49,8 @@ export interface SaleRow {
   walkIn: string | null;
   totalAmount: number;
   paymentMethod: string | null;
+  /** ⭐ 분할 결제 내역 (2026-08-10) — 혼합이면 수단별 금액이 여기 있다. 아니면 빈 배열 */
+  payments: { method: string; amount: number }[];
   paymentMemo: string | null;
   marsStatus: string;
   marsRefNo: string | null;
@@ -131,8 +133,12 @@ export async function saleHistory(opts: {
     list_price: number | null;
     tyre_positions: string | null;
     created_hm: string | null;
+    pay_split: string | null;
   }>(sql`
     SELECT q.id quote_id, q.quote_no, q.status,
+           -- 분할 결제 「카드:30000,현금:5000」 (2026-08-10) — 수단 이름에는 콜론·쉼표가 없다
+           (SELECT string_agg(pm.method || ':' || pm.amount, ',' ORDER BY pm.id)
+              FROM quote_payment pm WHERE pm.quote_id = q.id) pay_split,
            to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM-DD') work_date,
            q.customer_id, c.name customer_name, v.plate_no, v.model vehicle_model,
            -- 제조사는 코드 사전의 한글 이름 우선 (customer-edit 와 같은 규칙, 2026-08-09)
@@ -162,7 +168,13 @@ export async function saleHistory(opts: {
       ${to ? sql`AND COALESCE(q.work_date, q.created_at::date) <= ${to}::date` : sql``}
       ${opts.customerId ? sql`AND q.customer_id = ${opts.customerId}` : sql``}
       ${opts.vehicleId ? sql`AND q.vehicle_id = ${opts.vehicleId}` : sql``}
-      ${opts.paymentMethod ? sql`AND q.payment_method = ${opts.paymentMethod}` : sql``}
+      ${
+        opts.paymentMethod
+          ? // ⭐ 분할 결제도 걸린다 (2026-08-10) — 「카드」로 거르면 카드가 섞인 혼합 건도 나온다
+            sql`AND (q.payment_method = ${opts.paymentMethod}
+                 OR EXISTS (SELECT 1 FROM quote_payment px WHERE px.quote_id = q.id AND px.method = ${opts.paymentMethod}))`
+          : sql``
+      }
     ORDER BY COALESCE(q.work_date, q.created_at::date) DESC, q.id DESC, qi.id
   `);
 
@@ -187,6 +199,12 @@ export async function saleHistory(opts: {
         walkIn: r.mars_memo?.startsWith("비회원") || r.mars_memo?.startsWith("거래처") ? r.mars_memo : null,
         totalAmount: Number(r.total_amount),
         paymentMethod: r.payment_method,
+        payments: r.pay_split
+          ? r.pay_split.split(",").map((x) => {
+              const [method, amt] = x.split(":");
+              return { method, amount: Number(amt) };
+            })
+          : [],
         paymentMemo: r.payment_memo,
         marsStatus: r.mars_status,
         marsRefNo: r.mars_ref_no,

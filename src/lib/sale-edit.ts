@@ -20,7 +20,8 @@
 import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { quote, stockItem, stockMovement } from "@/db/schema";
+import { quote, quotePayment, stockItem, stockMovement } from "@/db/schema";
+import { checkSplitPayments } from "./payments";
 
 function refresh() {
   for (const p of ["/sales", "/", "/stock"]) {
@@ -37,10 +38,12 @@ export async function updateSaleHead(input: {
   quoteId: number;
   workDate?: string | null;
   paymentMethod?: string | null;
+  /** ⭐ 분할 결제 (2026-08-10) — 2개 이상이면 paymentMethod 는 서버가 '혼합'으로 굳힌다 */
+  payments?: { method: string; amount: number }[] | null;
   paymentMemo?: string | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const [q] = await db
-    .select({ id: quote.id, status: quote.status })
+    .select({ id: quote.id, status: quote.status, total: quote.totalAmount })
     .from(quote)
     .where(eq(quote.id, input.quoteId))
     .limit(1);
@@ -51,20 +54,33 @@ export async function updateSaleHead(input: {
   if (workDate && !/^\d{4}-\d{2}-\d{2}$/.test(workDate)) {
     return { ok: false, error: "날짜는 2026-08-04 형식입니다" };
   }
-  const pay = input.paymentMethod?.trim() || null;
-  if (pay && !["현금", "카드", "계좌이체", "외상", "혼합", "서비스"].includes(pay)) {
+  // 분할이 넘어오면 합계와 맞는지 검증하고 '혼합'으로. 아니면 단일 수단 그대로 (2026-08-10)
+  const splitCheck = checkSplitPayments(input.payments, q.total);
+  if (!splitCheck.ok) return { ok: false, error: splitCheck.error };
+  const split = splitCheck.split;
+  const pay = split ? "혼합" : input.paymentMethod?.trim() || null;
+  if (pay && !["현금", "카드", "계좌이체", "지역화폐", "외상", "혼합", "서비스"].includes(pay)) {
     return { ok: false, error: "결제수단이 올바르지 않습니다" };
   }
 
-  await db
-    .update(quote)
-    .set({
-      ...(workDate ? { workDate } : {}),
-      paymentMethod: pay,
-      paymentMemo: input.paymentMemo?.trim() || null,
-      updatedAt: new Date(),
-    })
-    .where(eq(quote.id, input.quoteId));
+  await db.transaction(async (tx) => {
+    await tx
+      .update(quote)
+      .set({
+        ...(workDate ? { workDate } : {}),
+        paymentMethod: pay,
+        paymentMemo: input.paymentMemo?.trim() || null,
+        updatedAt: new Date(),
+      })
+      .where(eq(quote.id, input.quoteId));
+    // 분할 내역은 통째로 갈아 끼운다 — 단일 수단으로 바꾸면 이전 분할 줄이 남으면 안 된다
+    await tx.delete(quotePayment).where(eq(quotePayment.quoteId, input.quoteId));
+    if (split) {
+      await tx
+        .insert(quotePayment)
+        .values(split.map((p) => ({ quoteId: input.quoteId, method: p.method, amount: p.amount })));
+    }
+  });
 
   refresh();
   return { ok: true };
@@ -202,8 +218,12 @@ async function editableQuote(
   return { q };
 }
 
-/** 합계를 품목에서 다시 계산해 머리에 쓴다 — 손으로 맞추면 반드시 어긋난다 */
-async function recomputeTotal(quoteId: number) {
+/**
+ * 합계를 품목에서 다시 계산해 머리에 쓴다 — 손으로 맞추면 반드시 어긋난다.
+ * ⭐ 분할 결제가 있는 판매는 합이 어긋났는지 알려준다 (2026-08-10) —
+ *    품목을 고쳐 합계가 바뀌면 수단별 금액도 사람이 다시 맞춰야 한다.
+ */
+async function recomputeTotal(quoteId: number): Promise<string | null> {
   await db.execute(sql`
     UPDATE quote SET
       total_amount = COALESCE((SELECT SUM(qty * final_price) FROM quote_item WHERE quote_id = ${quoteId}), 0),
@@ -211,6 +231,15 @@ async function recomputeTotal(quoteId: number) {
       updated_at = now()
     WHERE id = ${quoteId}
   `);
+  const [chk] = await db.execute<{ total: number; ssum: number | null }>(sql`
+    SELECT q.total_amount total,
+           (SELECT SUM(amount)::int FROM quote_payment WHERE quote_id = q.id) ssum
+    FROM quote q WHERE q.id = ${quoteId}
+  `);
+  if (chk?.ssum != null && Number(chk.ssum) !== Number(chk.total)) {
+    return "금액이 바뀌어 분할 결제 합계와 어긋납니다 — 「날짜·결제 고치기」에서 수단별 금액을 다시 맞춰 주세요";
+  }
+  return null;
 }
 
 /** MARS 에 이미 들어간 건이면 경고를 만들고 메모에도 한 번만 남긴다 */
@@ -316,9 +345,10 @@ export async function updateSaleLine(input: {
       ${input.memo !== undefined ? sql`, memo = ${input.memo?.trim() || null}` : sql``}
     WHERE id = ${input.itemId}
   `);
-  await recomputeTotal(e.q.id);
+  const splitWarn = await recomputeTotal(e.q.id);
   const amountChanged = delta !== 0 || input.unitPrice !== Number(line.final_price);
-  const marsWarning = amountChanged ? await marsMismatchNote(e.q.id, e.q.marsStatus) : null;
+  const marsNote = amountChanged ? await marsMismatchNote(e.q.id, e.q.marsStatus) : null;
+  const marsWarning = [marsNote, splitWarn].filter(Boolean).join(" · ") || null;
   refresh();
   return { ok: true, shortage, marsWarning };
 }
@@ -346,8 +376,9 @@ export async function removeSaleLine(
     restored = await restoreStockFor(e.q.id, e.q.quoteNo, Number(line.product_id), Number(line.qty));
   }
   await db.execute(sql`DELETE FROM quote_item WHERE id = ${itemId}`);
-  await recomputeTotal(e.q.id);
-  const marsWarning = await marsMismatchNote(e.q.id, e.q.marsStatus);
+  const splitWarn = await recomputeTotal(e.q.id);
+  const marsNote = await marsMismatchNote(e.q.id, e.q.marsStatus);
+  const marsWarning = [marsNote, splitWarn].filter(Boolean).join(" · ") || null;
   refresh();
   return { ok: true, restored, marsWarning };
 }
@@ -379,8 +410,9 @@ export async function addSaleLine(input: {
     const { short } = await sellFromStock(input.productId, input.qty, e.q.id);
     shortage = short;
   }
-  await recomputeTotal(e.q.id);
-  const marsWarning = await marsMismatchNote(e.q.id, e.q.marsStatus);
+  const splitWarn = await recomputeTotal(e.q.id);
+  const marsNote = await marsMismatchNote(e.q.id, e.q.marsStatus);
+  const marsWarning = [marsNote, splitWarn].filter(Boolean).join(" · ") || null;
   refresh();
   return { ok: true, shortage, marsWarning };
 }

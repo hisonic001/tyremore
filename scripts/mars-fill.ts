@@ -1038,11 +1038,17 @@ async function findCustomerByName(page: Page, name: string, phone: string | null
   return true;
 }
 
-/** 우리 결제 방법 → MARS 결제 수단 코드 */
+/**
+ * 우리 결제 방법 → MARS 결제 수단 코드.
+ * 지역화폐는 MARS 에 그냥 현금 (사장님 지시 2026-08-10).
+ * 혼합(분할 결제)은 marsQueue 가 금액 큰 수단을 marsPayMethod 로 뽑아 준다 —
+ * 여기서는 그 수단의 코드를 그대로 쓴다.
+ */
 const PAY_CODE: Record<string, string> = {
   카드: "CREDITCARD",
   현금: "CASH",
   계좌이체: "BANK",
+  지역화폐: "CASH",
 };
 
 /** 신규 매출 주문을 열고 고객·주행거리·결제·날짜를 넣는다 */
@@ -2922,7 +2928,10 @@ async function main_() {
         const iso =
           q.workDate ??
           `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-        log(`    · 작업일자 ${iso} · 결제 ${q.paymentMethod ?? "-"}`);
+        log(
+          `    · 작업일자 ${iso} · 결제 ${q.paymentMethod ?? "-"}` +
+            (q.paymentMethod === "혼합" ? ` (MARS 에는 ${q.marsPayMethod ?? "코드 없음"}으로)` : ""),
+        );
         /**
          * ⭐ 주행거리는 **차량의 최근 값**을 쓴다 (사장님 버그 제보 2026-08-05).
          *    전에는 newCustomer(신규 고객)에만 있어서 기존 고객은 주행거리가
@@ -2934,7 +2943,8 @@ async function main_() {
           q.plateNo,
           q.mileage ?? q.newCustomer?.mileage ?? null,
           iso,
-          PAY_CODE[q.paymentMethod ?? ""] ?? null,
+          // 혼합이면 금액 큰 수단, 지역화폐면 CASH (사장님 지시 2026-08-10)
+          PAY_CODE[q.marsPayMethod ?? q.paymentMethod ?? ""] ?? null,
         );
         const put = await fillLines(page, q.lines);
 

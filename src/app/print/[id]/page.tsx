@@ -44,9 +44,13 @@ export default async function PrintPage({
     address: string | null;
     plate_no: string | null;
     maker_model: string | null;
+    pay_split: string | null;
   }>(sql`
     SELECT q.quote_no, q.status, to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM-DD') work_date,
            q.total_amount, q.payment_method, q.payment_memo, q.mars_memo,
+           -- 분할 결제 「카드 30,000 + 현금 5,000」 (2026-08-10)
+           (SELECT string_agg(pm.method || ' ' || to_char(pm.amount, 'FM999,999,999'), ' + ' ORDER BY pm.id)
+              FROM quote_payment pm WHERE pm.quote_id = q.id) pay_split,
            c.name customer_name, c.phone, c.address,
            v.plate_no,
            trim(COALESCE((SELECT name_ko FROM vehicle_maker m WHERE m.code = v.maker_code), v.maker_name, '') || ' ' || COALESCE(v.model, '')) maker_model
@@ -93,7 +97,7 @@ export default async function PrintPage({
         address: head.address,
         plateNo: head.plate_no,
         vehicle: head.maker_model?.trim() || null,
-        paymentMethod: head.payment_method,
+        paymentMethod: head.pay_split ?? head.payment_method,
         canceled: head.status === "취소",
       }}
       lines={lines.map((l) => ({

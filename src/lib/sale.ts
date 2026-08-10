@@ -21,7 +21,8 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { customer, quote, quoteItem, serviceItem, stockItem, stockMovement, vehicle } from "@/db/schema";
+import { customer, quote, quoteItem, quotePayment, serviceItem, stockItem, stockMovement, vehicle } from "@/db/schema";
+import { checkSplitPayments } from "./payments";
 import type { NewCustomerInput } from "./sale-types";
 
 function refresh(...paths: string[]) {
@@ -60,6 +61,11 @@ export interface SaleInput {
   walkIn?: { name?: string; phone?: string; plateNo?: string } | null;
   lines: SaleLine[];
   paymentMethod?: string | null;
+  /**
+   * ⭐ 분할 결제 (사장님 요청 2026-08-10) — 결제수단을 2개 이상 고르면 수단별 금액.
+   *    합이 판매 합계와 같아야 한다. 이때 paymentMethod 는 서버가 '혼합'으로 굳힌다.
+   */
+  payments?: { method: string; amount: number }[] | null;
   memo?: string | null;
   /** 주행거리를 적어 주면 차량 기록을 갱신한다 */
   mileage?: number | null;
@@ -178,6 +184,16 @@ export async function saveSale(
 
   const total = lines.reduce((s, l) => s + l.unitPrice * l.qty, 0);
 
+  /**
+   * ⭐ 분할 결제 검증 (2026-08-10).
+   *    2개 이상일 때만 분할이다 — 1개면 지금처럼 paymentMethod 하나로 저장한다.
+   *    외상·서비스는 분할에 못 섞는다 (MARS·대기열 처리가 결제수단 하나를 전제한다).
+   */
+  const splitCheck = checkSplitPayments(input.payments, total);
+  if (!splitCheck.ok) return { ok: false, error: splitCheck.error };
+  const split = splitCheck.split;
+  const payMethod = split ? "혼합" : (input.paymentMethod ?? null);
+
   /** 회원이 아닌 손님도 이름·전화가 있으면 남겨 둔다 — 다음에 오시면 이어진다 */
   let customerId = input.customerId ?? null;
   if (!customerId && input.walkIn?.phone?.replace(/\D/g, "").length) {
@@ -219,7 +235,7 @@ export async function saveSale(
             // 그때의 주행거리를 판매에 박아 둔다 (사장님 요청 2026-08-08)
             mileage: input.mileage && input.mileage > 0 ? input.mileage : null,
             totalAmount: total,
-            paymentMethod: input.paymentMethod ?? null,
+            paymentMethod: payMethod,
             paidAmount: total,
             paymentMemo: input.memo ?? null,
             // 거래처 판매는 MARS 에 안 간다 (사장님 요청 2026-08-05)
@@ -237,6 +253,11 @@ export async function saveSale(
                 : null,
           })
           .returning({ id: quote.id });
+
+        // 분할 결제 — 수단별 금액을 한 줄씩 (2026-08-10)
+        if (split) {
+          await tx.insert(quotePayment).values(split.map((p) => ({ quoteId: q.id, method: p.method, amount: p.amount })));
+        }
 
         await tx.insert(quoteItem).values(
           lines.map((l) => ({

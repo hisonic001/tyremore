@@ -104,6 +104,12 @@ export interface MarsEntry {
     mileage: number | null;
   } | null;
   paymentMethod: string | null;
+  /**
+   * ⭐ MARS 결제 수단 코드에 쓸 수단 (사장님 지시 2026-08-10).
+   *    혼합(분할 결제)이면 **금액이 가장 큰 수단** — 동액이면 먼저 고른 것.
+   *    지역화폐→현금 변환은 mars-fill 의 PAY_CODE 가 맡는다.
+   */
+  marsPayMethod: string | null;
   /** 실제로 정비한 날 — MARS 문서 날짜·완료 일자 (YYYY-MM-DD) */
   workDate: string | null;
   total: number;
@@ -178,9 +184,13 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     mileage: number | null;
     mars_vehicle_no: string | null;
     tyre_positions: string | null;
+    split_main: string | null;
   }>(sql`
     SELECT q.id, q.quote_no, q.confirmed_at, q.payment_method, q.work_date::text AS work_date,
            q.total_amount, q.mars_memo, q.tyre_positions,
+           -- 분할 결제의 대표 수단: 금액 큰 것, 동액이면 먼저 고른 것 (사장님 지시 2026-08-10)
+           (SELECT pm.method FROM quote_payment pm WHERE pm.quote_id = q.id
+             ORDER BY pm.amount DESC, pm.id ASC LIMIT 1) AS split_main,
            c.mars_contact_no AS contact_no, c.name AS customer_name, c.phone,
            c.address, c.consent_privacy, c.consent_marketing, c.consent_signed_at,
            v.plate_no, v.model AS vehicle_model, v.maker_name, v.year, v.fuel_type,
@@ -253,6 +263,7 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     marsVehicleNo: h.mars_vehicle_no,
     tyrePositions: h.tyre_positions ? h.tyre_positions.split(",").map((s) => s.trim()).filter(Boolean) : [],
     paymentMethod: h.payment_method,
+    marsPayMethod: h.payment_method === "혼합" ? (h.split_main ?? null) : h.payment_method,
     workDate: h.work_date,
     total: h.total_amount,
     memo: h.mars_memo,

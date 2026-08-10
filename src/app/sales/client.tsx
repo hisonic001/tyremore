@@ -4,10 +4,12 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { cancelSale, updateSaleHead } from "@/lib/sale-edit";
 import type { SaleRow } from "@/lib/sale-history";
+import { EXCLUSIVE, SPLITTABLE, splitLabel } from "@/lib/payments";
 import { AddLine, EditableLine } from "./line-edit";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
-const PAYS = ["현금", "카드", "계좌이체", "외상", "혼합", "서비스"] as const;
+/** ⭐ 혼합은 이제 직접 고르지 않는다 — 수단을 2개 이상 고르면 자동으로 혼합이 된다 (2026-08-10) */
+const PAYS = [...SPLITTABLE, ...EXCLUSIVE] as readonly string[];
 
 /**
  * 정비 한 건 — 펼치면 품목과 고치기·취소가 나온다.
@@ -34,19 +36,70 @@ export function SaleCard({
   const [askMars, setAskMars] = useState(false);
 
   const [workDate, setWorkDate] = useState(s.workDate);
-  const [pay, setPay] = useState(s.paymentMethod ?? "");
+  /**
+   * ⭐ 결제수단 여러 개 + 수단별 금액 (사장님 요청 2026-08-10).
+   *    옛 「혼합」 건(분할 내역 없음)은 아무것도 안 골린 채 시작한다 — 새로 고르면 된다.
+   */
+  const [payM, setPayM] = useState<string[]>(
+    s.payments.length
+      ? s.payments.map((p) => p.method)
+      : s.paymentMethod && s.paymentMethod !== "혼합"
+        ? [s.paymentMethod]
+        : [],
+  );
+  const [payA, setPayA] = useState<Record<string, string>>(
+    Object.fromEntries(s.payments.map((p) => [p.method, String(p.amount)])),
+  );
   const [memo, setMemo] = useState(s.paymentMemo ?? "");
 
   const canceled = s.status === "취소";
   const who = s.customerName ?? s.walkIn ?? "손님 미지정";
 
+  const splitPay = SPLITTABLE as readonly string[];
+  const paySum = payM.reduce((sum, m) => sum + Number(payA[m] || "0"), 0);
+  const togglePay = (p: string) => {
+    setError(null);
+    if ((EXCLUSIVE as readonly string[]).includes(p)) {
+      setPayM((prev) => (prev.length === 1 && prev[0] === p ? [] : [p]));
+      setPayA({});
+      return;
+    }
+    setPayM((prev) => {
+      const cur = prev.filter((m) => splitPay.includes(m));
+      if (cur.includes(p)) {
+        const next = cur.filter((m) => m !== p);
+        setPayA((a) => {
+          const rest = { ...a };
+          delete rest[p];
+          return rest;
+        });
+        return next;
+      }
+      // 새 수단을 고르는 순간 나머지 금액이 자동으로 (사장님 요청 2026-08-10)
+      setPayA((a) => {
+        const used = cur.reduce((sum, m) => sum + Number(a[m] || "0"), 0);
+        return cur.length === 0
+          ? { [p]: String(s.totalAmount) }
+          : { ...a, [p]: String(Math.max(0, s.totalAmount - used)) };
+      });
+      return [...cur, p];
+    });
+  };
+
   function saveHead() {
+    if (payM.length >= 2 && paySum !== s.totalAmount) {
+      setError(
+        `분할 금액 합계(${won(paySum)}원)가 판매 합계(${won(s.totalAmount)}원)와 다릅니다 — 금액을 맞춰 주세요`,
+      );
+      return;
+    }
     start(async () => {
       setError(null);
       const r = await updateSaleHead({
         quoteId: s.quoteId,
         workDate,
-        paymentMethod: pay || null,
+        paymentMethod: payM.length === 1 ? payM[0] : null,
+        payments: payM.length >= 2 ? payM.map((m) => ({ method: m, amount: Number(payA[m] || "0") })) : null,
         paymentMemo: memo || null,
       });
       if (!r.ok) return setError(r.error);
@@ -121,7 +174,8 @@ export function SaleCard({
           </span>
           <span className="hidden lg:block" />
           <span className="tabular shrink-0">
-            {s.paymentMethod ?? ""}
+            {/* 분할 결제는 「카드+현금」 으로 (2026-08-10) — 금액은 펼치면 나온다 */}
+            {s.payments.length ? s.payments.map((p) => p.method).join("+") : (s.paymentMethod ?? "")}
             {/* ⭐ MARS 표식 (사장님 지시 2026-08-09) — ✓ 올라감 · 올리는 중 = 체크 후 대기 */}
             {s.marsStatus === "전송완료" && <span className="ml-1.5 font-semibold text-indigo-600">MARS ✓</span>}
             {s.marsStatus === "미전송" && !canceled && (
@@ -200,7 +254,10 @@ export function SaleCard({
             <p className="tabular">
               {s.quoteNo}
               {s.createdAt && ` · ${s.createdAt} 등록`}
-              {s.paymentMethod && ` · ${s.paymentMethod}`}
+              {/* 분할 결제는 수단별 금액까지 (2026-08-10) — 「카드 30,000 + 현금 5,000」 */}
+              {s.payments.length
+                ? ` · ${splitLabel(s.payments)}원`
+                : s.paymentMethod && ` · ${s.paymentMethod}`}
             </p>
             {/* ⭐ 주행거리 (사장님 요청 2026-08-08) — 그때 입력값이 우선, 없으면 차량 최근값 */}
             {s.mileage !== null ? (
@@ -267,20 +324,42 @@ export function SaleCard({
                       className="tabular mt-0.5 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                     />
                   </label>
+                  {/* ⭐ 여러 개 고르면 분할 결제 — 고르는 순간 나머지 금액 자동 (2026-08-10) */}
                   <div className="flex flex-wrap gap-1.5">
                     {PAYS.map((p) => (
                       <button
                         key={p}
                         type="button"
-                        onClick={() => setPay(pay === p ? "" : p)}
+                        onClick={() => togglePay(p)}
                         className={`rounded-lg px-2.5 py-1.5 text-sm font-medium ${
-                          pay === p ? "bg-slate-900 text-white" : "bg-white text-slate-600 ring-1 ring-slate-300"
+                          payM.includes(p) ? "bg-slate-900 text-white" : "bg-white text-slate-600 ring-1 ring-slate-300"
                         }`}
                       >
                         {p}
                       </button>
                     ))}
                   </div>
+                  {payM.length >= 2 && (
+                    <div className="space-y-1.5">
+                      {payM.map((m) => (
+                        <label key={m} className="flex items-center gap-2">
+                          <span className="w-16 shrink-0 text-xs text-slate-600">{m}</span>
+                          <input
+                            value={payA[m] ? Number(payA[m]).toLocaleString() : ""}
+                            onChange={(e) => setPayA((a) => ({ ...a, [m]: e.target.value.replace(/\D/g, "") }))}
+                            inputMode="numeric"
+                            className="tabular min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-right text-sm"
+                          />
+                          <span className="shrink-0 text-xs text-slate-400">원</span>
+                        </label>
+                      ))}
+                      {paySum !== s.totalAmount && (
+                        <p className="rounded-lg bg-red-50 px-2 py-1 text-xs text-red-700">
+                          합계 {won(s.totalAmount)}원과 {won(Math.abs(s.totalAmount - paySum))}원 차이
+                        </p>
+                      )}
+                    </div>
+                  )}
                   <input
                     value={memo}
                     onChange={(e) => setMemo(e.target.value)}

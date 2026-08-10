@@ -586,7 +586,9 @@ export const quote = pgTable(
     check(
       "quote_payment_method",
       // 서비스 = 무상 (사장님 요청 2026-08-07 — 단골 무상 점검·가벼운 서비스). MARS 에 안 간다
-      sql`${t.paymentMethod} IS NULL OR ${t.paymentMethod} IN ('현금','카드','계좌이체','외상','혼합','서비스')`,
+      // 지역화폐 (사장님 요청 2026-08-10) — MARS 에는 현금으로 들어간다
+      // 혼합 = 결제수단 2개 이상 — 수단별 금액은 quote_payment 에 (2026-08-10)
+      sql`${t.paymentMethod} IS NULL OR ${t.paymentMethod} IN ('현금','카드','계좌이체','지역화폐','외상','혼합','서비스')`,
     ),
     /** ⭐ 이 인덱스가 MARS 입력 대기열 화면 그 자체다 */
     index("idx_quote_mars")
@@ -594,6 +596,31 @@ export const quote = pgTable(
       .where(sql`${t.marsStatus} = '미전송'`),
     index("idx_quote_vehicle").on(t.vehicleId, t.createdAt),
     index("idx_quote_customer").on(t.customerId, t.createdAt),
+  ],
+);
+
+/* ============================================================
+ * quote_payment — 분할 결제 (사장님 요청 2026-08-10)
+ * "결제시 결제수단을 1개 이상 고르게 할 수 있으며 동시에 반영가능하게"
+ * 결제수단 2개 이상이면 수단별 금액이 여기 한 줄씩. 합은 quote.total_amount 와
+ * 같아야 한다(saveSale 이 검증). 그때 quote.payment_method = '혼합'.
+ * 1개짜리 결제는 이 표를 안 쓴다 — quote.payment_method 하나로 끝.
+ * ========================================================== */
+export const quotePayment = pgTable(
+  "quote_payment",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    quoteId: bigint("quote_id", { mode: "number" })
+      .notNull()
+      .references(() => quote.id, { onDelete: "cascade" }),
+    method: text("method").notNull(),
+    amount: integer("amount").notNull(),
+    createdAt,
+  },
+  (t) => [
+    check("quote_payment_method_check", sql`${t.method} IN ('현금','카드','계좌이체','지역화폐')`),
+    check("quote_payment_amount_check", sql`${t.amount} > 0`),
+    index("idx_quote_payment_quote").on(t.quoteId),
   ],
 );
 
