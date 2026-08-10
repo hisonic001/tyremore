@@ -1685,12 +1685,37 @@ async function postOrder(
 
   if (cashDlg) {
     /**
+     * 🔴 확인 전에는 자동으로 누르지 않는다 (사장님 의문 2026-08-10 —
+     *    "현금등록기 창을 왜 켜야 하는지 모르겠음. 수동으로 등록시에는 사용한 적 없었음").
+     *
+     *    조사 결과: 우리가 켜는 것이 아니다. 결제 수단 코드(CASH)는 8/2 사장님 조작에서
+     *    배운 그 필드 그대로고, 8/5 현금 건(SI 003178)은 배송/송장 창으로 정상 전기됐다.
+     *    즉 8/5~8/10 사이 **MARS 쪽이 바뀌어** CASH 주문의 전기가 현금 등록기(C0001)로
+     *    돌아간다. 본사 장부(현금 출납)에 닿는 창이라, 눌러도 되는지 사장님이 확인해
+     *    주시기 전에는 화면만 남기고 물러난다.
+     *    확인되면 `.env.local` 에 `MARS_CASH_POST=1` 을 넣으면 자동으로 누른다.
+     */
+    if (process.env.MARS_CASH_POST !== "1") {
+      const shot = path.resolve(SHOT_DIR, "mars-현금등록기.png");
+      await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
+      await cashDlg.getByRole("button", { name: "취소", exact: true }).last().click({ timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(800);
+      return {
+        ok: false,
+        invoiceNo: null,
+        why:
+          "현금 결제 전기가 「현금 등록기」 창으로 갑니다 (MARS 쪽 변경으로 보임) — " +
+          `자동으로 누르지 않고 물러났습니다. 화면: ${shot} · ` +
+          "눌러도 되는 것이 확인되면 .env.local 에 MARS_CASH_POST=1",
+      };
+    }
+    /**
      * 현금 등록기 창: 사람이 하던 것과 같은 단추 「전기 완료 및 인쇄(P)」를 누른다.
      * 🔴 눌렀다고 믿지 않는다 — 창이 닫히는지 보고, 최종 확정은 아래 공통 경로의
      *    「새 SI 번호」 또는 송장 목록 대조가 한다. 안 닫히면 취소해 다음 건을
      *    막지 않게 하고 사람에게 넘긴다.
      */
-    log("    · 현금 결제 — 「현금 등록기」 창이 떴습니다. 전기 완료를 누릅니다");
+    log("    · 현금 결제 — 「현금 등록기」 창이 떴습니다. 전기 완료를 누릅니다 (MARS_CASH_POST=1)");
     let clicked = false;
     for (const b of [
       cashDlg.getByRole("button", { name: /전기\s*완료/ }).first(),
