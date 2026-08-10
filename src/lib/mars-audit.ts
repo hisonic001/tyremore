@@ -1,0 +1,129 @@
+import { sql } from "drizzle-orm";
+import { db } from "@/db";
+
+/**
+ * ⭐ MARS 정합 감사 (사장님 승인 2026-08-10 — 자동입력 개선 전략).
+ *
+ * 자동입력의 실패는 이제 대부분 「MARS 쪽이 바뀌는 것」이라 완전히 막을 수 없다.
+ * 대신 **어긋난 채로 조용히 남는 것**을 막는다 — 실행이 끝날 때마다 이 감사가
+ * 「우리 기록과 MARS 진행 상태가 안 맞는 건」을 세어 정비 내역 맨 위에 띄운다.
+ *
+ * 전부 조회 전용이다. 여기 나온 것을 사람이 처리하는 길:
+ *   전기 미확인   → MARS 에서 전기 (주문은 채워져 있다) 또는 --post-draft
+ *   점검 미완     → 정비 내역의 「점검 실행」 단추
+ *   보류·수동처리 → 카드 체크 → MARS 자동 올리기
+ */
+
+export interface MarsAuditRow {
+  quoteId: number;
+  quoteNo: string;
+  plateNo: string | null;
+  customerName: string | null;
+  total: number;
+  workDate: string | null;
+  memo: string | null;
+}
+
+export interface MarsAudit {
+  /** 전송완료인데 송장번호가 없다 — 주문은 들어갔는데 전기가 확인 안 된 것 */
+  unposted: MarsAuditRow[];
+  /** 전기까지 됐는데 차량 점검이 안 끝났다 */
+  unchecked: MarsAuditRow[];
+  /** 아직 MARS 에 안 올라간 성사 판매 (보류 + 수동처리) — 배너에는 수만 */
+  pendingCount: number;
+  /** 최근 입력 실행 20회의 성공/경고 요약 */
+  recentRuns: { total: number; warned: number };
+  /** 마지막 자가점검 결과 — 없으면 null */
+  smoke: { at: string; ok: boolean; note: string } | null;
+  /** 배너를 띄울 일이 있는가 */
+  hasIssues: boolean;
+}
+
+export async function marsAudit(): Promise<MarsAudit> {
+  const rowFields = sql`
+    q.id, q.quote_no, v.plate_no, c.name customer_name, q.total_amount,
+    to_char(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date), 'MM-DD') work_date,
+    q.mars_memo
+  `;
+  type Raw = {
+    id: number;
+    quote_no: string;
+    plate_no: string | null;
+    customer_name: string | null;
+    total_amount: number;
+    work_date: string | null;
+    mars_memo: string | null;
+  };
+  const toRow = (r: Raw): MarsAuditRow => ({
+    quoteId: Number(r.id),
+    quoteNo: r.quote_no,
+    plateNo: r.plate_no,
+    customerName: r.customer_name,
+    total: Number(r.total_amount),
+    workDate: r.work_date,
+    memo: r.mars_memo,
+  });
+
+  const [unposted, unchecked, pending, runs, smokeRows] = await Promise.all([
+    db.execute<Raw>(sql`
+      SELECT ${rowFields}
+      FROM quote q
+      LEFT JOIN vehicle v ON v.id = q.vehicle_id
+      LEFT JOIN customer c ON c.id = q.customer_id
+      WHERE q.status = '성사' AND q.mars_status = '전송완료'
+        AND q.mars_ref_no IS NULL
+        AND q.quote_no LIKE 'Q%'  -- 이관분(MARS-…)은 이미 MARS 에 있던 것 — 감사 대상 아님
+      ORDER BY q.id DESC LIMIT 20
+    `),
+    db.execute<Raw>(sql`
+      SELECT ${rowFields}
+      FROM quote q
+      LEFT JOIN vehicle v ON v.id = q.vehicle_id
+      LEFT JOIN customer c ON c.id = q.customer_id
+      WHERE q.status = '성사' AND q.mars_status = '전송완료'
+        AND q.mars_ref_no IS NOT NULL
+        AND q.vehicle_check_at IS NULL
+        AND v.plate_no IS NOT NULL
+        AND q.quote_no LIKE 'Q%'
+      ORDER BY q.id DESC LIMIT 20
+    `),
+    db.execute<{ n: number }>(sql`
+      SELECT count(*)::int n FROM quote
+      WHERE status = '성사' AND mars_status IN ('보류', '수동처리')
+    `),
+    db.execute<{ warned: boolean }>(sql`
+      SELECT (log LIKE '%⚠️%' OR status = '실패') warned
+      FROM mars_run WHERE kind = '입력' ORDER BY id DESC LIMIT 20
+    `),
+    db.execute<{ at: string; log: string | null; status: string }>(sql`
+      SELECT to_char(requested_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at, log, status
+      FROM mars_run WHERE kind = '자가점검' ORDER BY id DESC LIMIT 1
+    `),
+  ]);
+
+  const smoke = smokeRows[0]
+    ? {
+        at: smokeRows[0].at,
+        ok: smokeRows[0].status === "완료" && !/⚠️|❌/.test(smokeRows[0].log ?? ""),
+        note:
+          (smokeRows[0].log ?? "")
+            .split("\n")
+            .filter((l) => /⚠️|❌|✅ 자가점검/.test(l))
+            .slice(-3)
+            .join(" · ")
+            .trim() || (smokeRows[0].status === "완료" ? "통과" : smokeRows[0].status),
+      }
+    : null;
+
+  const audit: MarsAudit = {
+    unposted: unposted.map(toRow),
+    unchecked: unchecked.map(toRow),
+    pendingCount: Number(pending[0]?.n ?? 0),
+    recentRuns: { total: runs.length, warned: runs.filter((r) => r.warned).length },
+    smoke,
+    hasIssues: false,
+  };
+  // 보류는 「아직 안 올린 것」일 뿐 문제가 아니다 — 배너 기준은 어긋남·점검 누락·자가점검 실패
+  audit.hasIssues = audit.unposted.length > 0 || audit.unchecked.length > 0 || (smoke !== null && !smoke.ok);
+  return audit;
+}

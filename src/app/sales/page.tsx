@@ -1,4 +1,6 @@
 import Link from "@/lib/link";
+import { marsAudit } from "@/lib/mars-audit";
+import { ResolveButton } from "./audit-resolve";
 import { latestMarsRun } from "@/lib/mars-run";
 import { saleHistory } from "@/lib/sale-history";
 import { PeriodFilter } from "./filter";
@@ -59,6 +61,8 @@ export default async function SalesPage({
 
   // ⭐ MARS 실행 진행도 여기서 보인다 — /mars 페이지는 없앴다 (사장님 지시 2026-08-09)
   const run = await latestMarsRun();
+  // ⭐ MARS 정합 감사 (2026-08-10 개선 전략) — 어긋난 건이 있을 때만 배너가 뜬다
+  const audit = await marsAudit();
   const h = await saleHistory({
     month: active === "month" ? sp.month : active === "thisMonth" ? thisMonth : undefined,
     from: active === "today" ? today : active === "yesterday" ? yesterday : active === "range" ? sp.from : undefined,
@@ -158,6 +162,60 @@ export default async function SalesPage({
         {pay && `${pay}만 · `}
         {h.saleCount}건 · {won(h.totalAmount)}원
       </p>
+
+      {/*
+        ⭐ MARS 정합 감사 배너 (사장님 승인 2026-08-10 — 자동입력 개선 전략).
+           자동입력이 실패하면 그 건은 조용히 어긋난 채 남는다 — 그걸 여기서 센다.
+           문제가 없으면 아무것도 안 보인다.
+      */}
+      {audit.hasIssues && (
+        <details className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
+          <summary className="cursor-pointer text-sm font-semibold text-amber-900">
+            ⚠️ MARS 정리할 것 {audit.unposted.length + audit.unchecked.length}건
+            {audit.smoke && !audit.smoke.ok && " · 아침 자가점검 이상"}
+            <span className="ml-1 font-normal text-amber-700">(눌러서 자세히)</span>
+          </summary>
+          <div className="mt-3 space-y-3 text-sm text-amber-900">
+            {audit.unposted.length > 0 && (
+              <div>
+                <p className="font-semibold">전기 미확인 {audit.unposted.length}건 — 주문은 MARS 에 채워져 있습니다. MARS 에서 전기해 주세요</p>
+                <ul className="tabular mt-1 space-y-0.5 text-amber-800">
+                  {audit.unposted.map((r) => (
+                    <li key={r.quoteId}>
+                      {r.quoteNo} · {r.workDate} · {[r.customerName, r.plateNo].filter(Boolean).join(" ")} ·{" "}
+                      {won(r.total)}원
+                      {/* 이미 MARS 에서 직접 전기한 건은 이 단추로 배너에서 내린다 */}
+                      <ResolveButton quoteId={r.quoteId} />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {audit.unchecked.length > 0 && (
+              <div>
+                <p className="font-semibold">차량 점검 미완 {audit.unchecked.length}건 — 매장 PC 에서 점검 실행(npm run mars -- --check)으로 한 번에 처리됩니다</p>
+                <ul className="tabular mt-1 space-y-0.5 text-amber-800">
+                  {audit.unchecked.map((r) => (
+                    <li key={r.quoteId}>
+                      {r.quoteNo} · {r.workDate} · {[r.customerName, r.plateNo].filter(Boolean).join(" ")}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {audit.smoke && !audit.smoke.ok && (
+              <p>
+                <span className="font-semibold">아침 자가점검({audit.smoke.at}) 이상</span> — {audit.smoke.note}.
+                MARS 화면이 바뀌었을 수 있습니다. 오늘 자동 올리기 결과를 지켜봐 주세요.
+              </p>
+            )}
+            <p className="text-xs text-amber-700">
+              최근 입력 실행 {audit.recentRuns.total}회 중 경고 {audit.recentRuns.warned}회
+              {audit.smoke?.ok && ` · 자가점검 ${audit.smoke.at} 통과`}
+            </p>
+          </div>
+        </details>
+      )}
 
       {/* ⭐ MARS 올리기 판 + 날짜별 목록 — 카드 체크·올리기·진행 로그가 한 화면 (2026-08-09) */}
       <SalesList days={days} run={run} hiddenCount={hiddenCount} shown={shown} />

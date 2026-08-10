@@ -43,6 +43,8 @@ async function runOne(id: number, kind: string): Promise<void> {
 
   const args = ["tsx", "scripts/mars-fill.ts", "--agent"];
   if (kind === "점검") args.push("--check");
+  // 아침 자가점검 (2026-08-10) — 화면 구조만 훑고 아무것도 저장하지 않는다
+  if (kind === "자가점검") args.push("--smoke");
 
   const exit = await new Promise<number>((resolve) => {
     const child = spawn("npx", args, { shell: true, cwd: process.cwd() });

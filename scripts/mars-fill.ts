@@ -115,6 +115,14 @@ const POST_DRAFT = (() => {
  */
 const CHECK = process.argv.includes("--check");
 /**
+ * ⭐ 아침 자가점검 (사장님 승인 2026-08-10 — 자동입력 개선 전략).
+ *    아무것도 저장하지 않고 화면 구조만 훑는다: 로그인 → 송장 목록 → 최근 송장 →
+ *    점검 화면의 필수 항목. MARS 가 바뀌면 **손님 건 전에** 여기서 걸린다.
+ *    작업 스케줄러가 scripts/mars-smoke-request.ts 로 요청을 넣고, 대리인이 이걸 돌린다.
+ *      npx tsx scripts/mars-fill.ts --smoke
+ */
+const SMOKE = process.argv.includes("--smoke");
+/**
  * ⭐ 「보기만」 — 송장을 찾는 데까지만 하고 **아무것도 제출하지 않는다** (2026-08-04).
  *    전기가 됐는지, 어느 송장이 걸리는지 눈으로 먼저 보려고 둔다.
  *      npm run mars -- --check --look
@@ -2302,11 +2310,13 @@ async function main_() {
     "../src/lib/mars-queue"
   );
 
-  /** 차량 점검 모드는 대기열이 아니라 「전기까지 끝난 것」을 본다 */
-  const checks = CHECK ? (await pendingVehicleChecks()).slice(0, LIMIT) : [];
-  const queue = CHECK ? [] : (await marsQueue()).slice(0, LIMIT);
+  /** 차량 점검 모드는 대기열이 아니라 「전기까지 끝난 것」을 본다. 자가점검은 둘 다 안 본다 */
+  const checks = CHECK && !SMOKE ? (await pendingVehicleChecks()).slice(0, LIMIT) : [];
+  const queue = CHECK || SMOKE ? [] : (await marsQueue()).slice(0, LIMIT);
 
-  if (CHECK) {
+  if (SMOKE) {
+    log("MARS 자가점검 — 아무것도 저장하지 않고 화면 구조만 확인합니다\n");
+  } else if (CHECK) {
     log(`MARS 차량 점검\n  점검할 것 ${checks.length}건\n`);
     for (const c of checks) {
       log(`  ${c.quoteNo}  ${c.plateNo}  ${c.customerName ?? ""}  타이어 ${c.tyreQty}본`);
@@ -2318,7 +2328,7 @@ async function main_() {
     }
   } else {
     log(`MARS 자동 입력\n  대기열 ${queue.length}건\n`);
-    if (queue.length === 0 && !PROBE_ORDER && !TRY_ITEM && !PEEK_INV && !TRY_CONSENT && !TRY_ATTACH && !POST_DRAFT) {
+    if (queue.length === 0 && !SMOKE && !PROBE_ORDER && !TRY_ITEM && !PEEK_INV && !TRY_CONSENT && !TRY_ATTACH && !POST_DRAFT) {
       log("칠 것이 없습니다.");
       process.exit(0);
     }
@@ -2379,6 +2389,90 @@ async function main_() {
     if (!(await login(page))) {
       await ctx.close();
       process.exit(1);
+    }
+
+    /**
+     * ⭐ 아침 자가점검 (2026-08-10) — 읽기만 한다. 확인하는 것:
+     *    ① 로그인·시작 화면 ② 완료된 매출 송장 목록 ③ 최근 송장 카드
+     *    ④ 전기 후 차량 점검 화면과 필수 항목 행들.
+     *    매출 주문 입력·전기 창은 실제 주문 없이는 못 보므로 여기 안 들어간다 —
+     *    그 쪽 변화(현금 등록기류)는 실전 실행의 안전 후퇴가 잡는다.
+     */
+    if (SMOKE) {
+      const bad: string[] = [];
+      const f = main(page);
+      log("── MARS 자가점검 ─────────");
+      log("  ✅ 로그인·시작 화면");
+      try {
+        await clickAny(page, "판매완료");
+        await page.waitForTimeout(700);
+        await clickAny(page, "완료된 매출 송장, 완료된 매출 송장 목록을 엽니다.");
+        await page.waitForTimeout(3000);
+        await passBigSearchDialog(page);
+        log("  ✅ 완료된 매출 송장 목록");
+      } catch (e) {
+        bad.push("송장 목록");
+        log(`  ⚠️ 송장 목록을 못 열었습니다: ${(e as Error).message.split("\n")[0]}`);
+      }
+      if (bad.length === 0) {
+        const row = f.getByRole("row").filter({ hasText: /-23SI\+/ }).first();
+        if (!(await row.isVisible({ timeout: 8000 }).catch(() => false))) {
+          log("  · 목록에 송장 줄이 안 보입니다 — 카드 확인은 건너뜁니다");
+        } else if (!(await openInvoice(page, row))) {
+          bad.push("송장 열기");
+          log("  ⚠️ 최근 송장을 못 열었습니다 (번호 링크가 안 눌립니다)");
+        } else {
+          log("  ✅ 송장 카드 열림 (탐색 메뉴 보임)");
+          try {
+            await clickAny(page, "탐색");
+            await page.waitForTimeout(700);
+            await clickAny(page, "전기 후 차량 점검");
+            await page.waitForTimeout(3500);
+            const status = await readStatus(f);
+            if (!status) {
+              bad.push("점검 상태");
+              log("  ⚠️ 점검 화면의 상태를 못 읽었습니다");
+            } else {
+              log(`  ✅ 점검 화면 (상태: ${status})`);
+            }
+            // 필수 항목 행 — 섹션이 접혀 있으면 한 번 열어 본다 (화면만 만질 뿐 저장 없음)
+            for (const [sec, probe] of [
+              ["타이어", "타이어 - 전륜"],
+              ["브레이크", "패드 - 전륜"],
+              ["얼라이먼트", "얼라이먼트"],
+              ["배터리", "배터리"],
+              ["기타", "엔진오일"],
+            ] as const) {
+              const probeVisible = () =>
+                f.getByRole("row").filter({ hasText: probe }).first().isVisible({ timeout: 1500 }).catch(() => false);
+              let vis = await probeVisible();
+              if (!vis) {
+                await clickAny(page, sec, 4000).catch(() => {});
+                await page.waitForTimeout(1000);
+                vis = await probeVisible();
+              }
+              if (vis) log(`  ✅ 점검 항목 「${probe}」`);
+              else {
+                bad.push(`점검 항목 ${probe}`);
+                log(`  ⚠️ 점검 항목 「${probe}」 이 안 보입니다`);
+              }
+            }
+          } catch (e) {
+            bad.push("점검 화면");
+            log(`  ⚠️ 점검 화면을 못 열었습니다: ${(e as Error).message.split("\n")[0]}`);
+          }
+        }
+      }
+      if (bad.length === 0) {
+        log("\n  ✅ 자가점검 통과 — 화면 구조가 예상대로입니다");
+      } else {
+        const shot = path.resolve(SHOT_DIR, "mars-자가점검.png");
+        await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
+        log(`\n  ⚠️ 자가점검 이상 ${bad.length}곳: ${bad.join(", ")}`);
+        log(`     화면을 저장했습니다: ${shot} — MARS 가 바뀌었을 수 있습니다`);
+      }
+      await ctx.close().catch(() => {});
+      process.exit(bad.length === 0 ? 0 : 1);
     }
 
     /**
@@ -3100,6 +3194,12 @@ async function main_() {
         const shot = path.resolve(SHOT_DIR, `mars-오류-${q.quoteNo}.png`);
         await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
         log(`     화면을 저장했습니다: ${shot}`);
+        // ⭐ 화면 글자도 로그에 (2026-08-10) — 현금 등록기 창을 이 방식으로 잡았다.
+        //    스크린샷은 PC 에 가서 봐야 하지만 글자는 웹 로그에서 바로 보인다.
+        const saidNow = ((await main(page).locator("body").innerText().catch(() => "")) || "")
+          .replace(/\s+/g, " ")
+          .slice(0, 400);
+        if (saidNow) log(`     화면 글자: ${saidNow}`);
         await page.goto(HOME).catch(() => {});
         await waitHome(page, 30000).catch(() => false);
       }
