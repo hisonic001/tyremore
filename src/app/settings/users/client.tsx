@@ -2,7 +2,47 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { setMarsReportTechAccess } from "@/lib/mars-eval";
 import { createAccount, resetPassword, setActive, setRole, type UserRow } from "@/lib/user-admin";
+
+/** ⭐ MARS 평가 리포트 정비사 열람 (사장님 요청 2026-08-10) — 계정 전체에 걸리는 스위치 하나 */
+export function MarsReportToggle({ allowed }: { allowed: boolean }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [msg, setMsg] = useState<string | null>(null);
+
+  return (
+    <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="font-semibold">MARS 입력 평가 리포트</div>
+          <div className="mt-0.5 text-sm text-slate-500">
+            정비사 계정도 <span className="font-medium">/reports/mars</span> 를 볼 수 있게 합니다
+            (매입가·마진은 안 나오는 화면입니다)
+          </div>
+        </div>
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() =>
+            start(async () => {
+              setMsg(null);
+              const r = await setMarsReportTechAccess(!allowed);
+              if (!r.ok) return setMsg(`⚠️ ${r.error}`);
+              router.refresh();
+            })
+          }
+          className={`shrink-0 rounded-lg px-4 py-2.5 text-sm font-semibold ${
+            allowed ? "bg-emerald-700 text-white" : "border border-slate-300 text-slate-600"
+          } disabled:opacity-50`}
+        >
+          {allowed ? "정비사 열람 켜짐" : "정비사 열람 꺼짐"}
+        </button>
+      </div>
+      {msg && <p className="mt-2 text-sm text-red-600">{msg}</p>}
+    </div>
+  );
+}
 
 /** 계정 한 장 — 역할·비밀번호·중지를 이 자리에서 (사장님 요청 2026-08-08) */
 export function UserCard({ u }: { u: UserRow }) {

@@ -162,6 +162,10 @@ export default async function StockReportPage() {
           매출
         </Link>
         <span className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white">재고</span>
+        {/* ⭐ MARS 입력 평가 (사장님 요청 2026-08-10) */}
+        <Link href="/reports/mars" className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-600">
+          MARS 평가
+        </Link>
         <Link
           href="/stock"
           className="ml-auto rounded-lg px-3 py-1.5 text-sm text-slate-500 underline underline-offset-4"

@@ -23,6 +23,8 @@ export function VehicleCard({ v }: { v: VehicleHit }) {
       <div className="mt-1 text-sm text-slate-600">
         {[v.makerName, v.model, v.year ? `${v.year}년` : null].filter(Boolean).join(" · ")}
       </div>
+      {/* ⭐ 차대번호 (사장님 요청 2026-08-10) — 부품 조회 때 카드에서 바로 읽는다 */}
+      {v.vin && <div className="tabular mt-0.5 text-xs text-slate-500">차대 {v.vin}</div>}
       <div className="tabular mt-1 flex flex-wrap gap-x-4 text-sm text-slate-500">
         {v.mileage ? <span>{v.mileage.toLocaleString()} km</span> : null}
         {v.phone ? <span>{v.phone}</span> : <span className="text-amber-600">번호 없음</span>}

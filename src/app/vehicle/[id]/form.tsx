@@ -22,6 +22,7 @@ export function VehicleEditForm({
     model: string | null;
     year: number | null;
     mileage: number | null;
+    vin: string | null;
     memo: string | null;
   };
 }) {
@@ -39,6 +40,7 @@ export function VehicleEditForm({
   const [model, setModel] = useState(vehicle.model ?? "");
   const [year, setYear] = useState(vehicle.year ? String(vehicle.year) : "");
   const [mileage, setMileage] = useState(vehicle.mileage ? String(vehicle.mileage) : "");
+  const [vin, setVin] = useState(vehicle.vin ?? "");
   const [memo, setMemo] = useState(vehicle.memo ?? "");
 
   function save() {
@@ -63,6 +65,7 @@ export function VehicleEditForm({
         model,
         year: year ? Number(year) : null,
         mileage: mileage ? Number(mileage.replace(/\D/g, "")) : null,
+        vin,
         memo,
       });
       if (!rv.ok) return setError(rv.error);
@@ -132,7 +135,20 @@ export function VehicleEditForm({
               className={FIELD + " tabular"}
             />
           </label>
-          <label>
+          <label className="col-span-2">
+            {/* ⭐ 차대번호 (사장님 요청 2026-08-10) — 17자라 두 칸을 다 쓴다 */}
+            <span className={LB}>차대번호</span>
+            <input
+              value={vin}
+              onChange={(e) => setVin(e.target.value.toUpperCase().replace(/\s/g, ""))}
+              placeholder="예: KMHD841DBGU165729"
+              autoCapitalize="characters"
+              autoCorrect="off"
+              spellCheck={false}
+              className={FIELD + " tabular"}
+            />
+          </label>
+          <label className="col-span-2">
             <span className={LB}>메모</span>
             <input value={memo} onChange={(e) => setMemo(e.target.value)} className={FIELD} />
           </label>

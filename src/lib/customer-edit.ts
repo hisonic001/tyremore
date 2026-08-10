@@ -57,6 +57,7 @@ export async function updateVehicleInfo(input: {
   model?: string | null;
   year?: number | null;
   mileage?: number | null;
+  vin?: string | null;
   memo?: string | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const plate = input.plateNo.trim();
@@ -106,6 +107,9 @@ export async function updateVehicleInfo(input: {
       model: input.model?.trim() || null,
       year: input.year ?? null,
       mileage: input.mileage ?? null,
+      // 차대번호 — 대문자·공백 제거만 하고 길이는 강제하지 않는다 (사장님 요청 2026-08-10).
+      // 등록증에서 못 읽은 자리를 일부만 적어 두는 경우가 있다
+      vin: input.vin?.trim().toUpperCase().replace(/\s/g, "") || null,
       memo: input.memo?.trim() || null,
     })
     .where(eq(vehicle.id, input.vehicleId));

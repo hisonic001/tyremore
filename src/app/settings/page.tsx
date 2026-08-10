@@ -2,6 +2,7 @@ import Link from "@/lib/link";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, logout } from "@/lib/auth";
+import { marsReportTechAllowed } from "@/lib/mars-eval";
 import { ChangePassword } from "./password";
 
 export const dynamic = "force-dynamic";
@@ -42,6 +43,9 @@ export default async function SettingsPage() {
   `);
   const backupStale = !bk || Number(bk.ago_h) > 48;
 
+  /* ⭐ 정비사도 MARS 평가 리포트를 볼 수 있게 켜 놨으면 여기로 들어간다 (2026-08-10) */
+  const techMarsLink = session?.role === "tech" && (await marsReportTechAllowed());
+
   const items = [
     /* ⭐ 매출 리포트는 사장님 계정에만 보인다 (2026-08-06) — 화면 자체도 owner 만 연다 */
     ...(session?.role === "owner"
@@ -49,13 +53,22 @@ export default async function SettingsPage() {
           {
             href: "/reports",
             title: "매출·재고 리포트",
-            desc: "월별 매출 · 결제수단 · 짝 안 맞는 타이어 · 안 나가는 재고 (사장님 전용)",
+            desc: "월별 매출 · 결제수단 · 재고 · MARS 입력 평가 (사장님 전용)",
           },
           /* ⭐ 계정 관리 (사장님 요청 2026-08-08) — 계정 만들기·권한·비밀번호 재설정 */
           {
             href: "/settings/users",
             title: "계정 관리",
             desc: "계정 만들기 · 사장님/정비사 권한 · 비밀번호 재설정 (사장님 전용)",
+          },
+        ]
+      : []),
+    ...(techMarsLink
+      ? [
+          {
+            href: "/reports/mars",
+            title: "MARS 입력 평가",
+            desc: "본사 평가표 기준 — 이번 분기 MARS 등록 수량·점수",
           },
         ]
       : []),

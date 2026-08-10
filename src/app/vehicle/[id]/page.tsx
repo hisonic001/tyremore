@@ -27,6 +27,7 @@ export default async function VehiclePage({ params }: { params: Promise<{ id: st
     model: string | null;
     year: number | null;
     mileage: number | null;
+    vin: string | null;
     v_memo: string | null;
     mars_vehicle_no: string | null;
     customer_id: number;
@@ -42,7 +43,7 @@ export default async function VehiclePage({ params }: { params: Promise<{ id: st
   }>(sql`
     SELECT v.id vehicle_id, v.plate_no,
            COALESCE((SELECT name_ko FROM vehicle_maker m WHERE m.code = v.maker_code), v.maker_name) maker_name,
-           v.model, v.year, v.mileage,
+           v.model, v.year, v.mileage, v.vin,
            v.memo v_memo, v.mars_vehicle_no,
            c.id customer_id, c.name, c.phone, c.address, c.mars_contact_no,
            c.consent_privacy, c.consent_marketing, (c.consent_signed_at IS NOT NULL) consent_signed,
@@ -105,6 +106,7 @@ export default async function VehiclePage({ params }: { params: Promise<{ id: st
           model: row.model,
           year: row.year === null ? null : Number(row.year),
           mileage: row.mileage === null ? null : Number(row.mileage),
+          vin: row.vin,
           memo: row.v_memo,
         }}
       />

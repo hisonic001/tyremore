@@ -206,6 +206,10 @@ export default async function ReportsPage({
         <Link href="/reports/stock" className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-600">
           재고
         </Link>
+        {/* ⭐ MARS 입력 평가 (사장님 요청 2026-08-10) */}
+        <Link href="/reports/mars" className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-600">
+          MARS 평가
+        </Link>
       </div>
 
       {/* 달 넘기기 */}

@@ -1,8 +1,9 @@
 import Link from "@/lib/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
+import { marsReportTechAllowed } from "@/lib/mars-eval";
 import { listUsers } from "@/lib/user-admin";
-import { NewAccount, UserCard } from "./client";
+import { MarsReportToggle, NewAccount, UserCard } from "./client";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,7 @@ export default async function UsersPage() {
   if (session.role !== "owner") redirect("/settings");
 
   const users = (await listUsers()) ?? [];
+  const marsAllowed = await marsReportTechAllowed();
 
   return (
     <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6">
@@ -36,6 +38,9 @@ export default async function UsersPage() {
       </ul>
 
       <NewAccount />
+
+      {/* ⭐ MARS 평가 리포트 정비사 열람 (사장님 요청 2026-08-10) */}
+      <MarsReportToggle allowed={marsAllowed} />
 
       <div className="mt-6 space-y-1 text-xs text-slate-400">
         <p>· 사장님 역할은 매입가·마진·리포트·가격 변경·계정 관리를 볼 수 있습니다.</p>

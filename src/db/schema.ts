@@ -53,6 +53,17 @@ export const appUser = pgTable(
 );
 
 /* ============================================================
+ * 3-1b. app_setting — 키-값 설정 (2026-08-10)
+ * MARS 평가 리포트의 정비사 열람 허용(mars_report_tech)과
+ * 분기별 미쉐린 타겟 수량(mars_target_2026Q3 …)을 담는다.
+ * ========================================================== */
+export const appSetting = pgTable("app_setting", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt,
+});
+
+/* ============================================================
  * 3-2. brand — 타이어 브랜드 (MARS 제조사 코드 18종)
  * ========================================================== */
 export const brand = pgTable("brand", {

@@ -40,6 +40,8 @@ export interface VehicleHit {
   model: string | null;
   year: number | null;
   mileage: number | null;
+  /** 차대번호 — 검색 카드에서 바로 보인다 (사장님 요청 2026-08-10) */
+  vin: string | null;
   lastFittedSize: string | null;
   customerId: number;
   customerName: string;
@@ -184,6 +186,7 @@ export async function findVehicles(q: string): Promise<VehicleHit[]> {
       model: vehicle.model,
       year: vehicle.year,
       mileage: vehicle.mileage,
+      vin: vehicle.vin,
       lastFittedSize: vehicle.lastFittedSize,
       customerId: customer.id,
       customerName: customer.name,
