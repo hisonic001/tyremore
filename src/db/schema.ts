@@ -690,7 +690,8 @@ export const quoteItem = pgTable(
     createdAt,
   },
   (t) => [
-    check("quote_item_line_type", sql`${t.lineType} IN ('tire','service','custom')`),
+    // 'use' = 정비에 쓴 부품 소모 — 0원 줄, 재고만 차감, MARS 제외 (2026-08-11)
+    check("quote_item_line_type", sql`${t.lineType} IN ('tire','service','custom','use')`),
     index("idx_quote_item_quote").on(t.quoteId),
   ],
 );

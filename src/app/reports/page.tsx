@@ -110,6 +110,7 @@ export default async function ReportsPage({
       SELECT qi.description name, SUM(qi.qty)::int q, COALESCE(SUM(qi.final_price * qi.qty),0)::bigint amt
       FROM quote_item qi JOIN quote qq ON qq.id = qi.quote_id
       WHERE qq.status = '성사'
+        AND qi.line_type <> 'use'  -- 부품 소모(0원)는 판 것이 아니다 (2026-08-11)
         AND COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${start}::date
         AND COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${nextStart}::date
       GROUP BY 1 ORDER BY amt DESC LIMIT 10

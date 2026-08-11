@@ -377,6 +377,26 @@ export function SaleForm() {
           ])
         }
       />
+
+      {/* ⭐ 정비에 쓴 부품 — 0원 소모 줄, 재고만 차감 (사장님 확인 2026-08-11) */}
+      <UsedPartsPick
+        onAdd={(p) =>
+          setRows((rs) => [
+            ...rs,
+            {
+              key: `u-${p.productId}-${Date.now()}`,
+              kind: "use",
+              productId: p.productId,
+              description: p.model,
+              marsName: p.marsName,
+              qty: 1,
+              unitPrice: 0,
+              listPrice: null,
+              salesRate: null,
+            },
+          ])
+        }
+      />
     </div>
 
     {/* 오른쪽 — 결제만 고정(sticky). 스크롤해도 결제·메모가 늘 보인다 */}
@@ -546,10 +566,14 @@ function LineRow({
         : (row.salesRate ?? null),
   });
   return (
-    <li className="rounded-lg bg-slate-50 p-2">
+    <li className={`rounded-lg p-2 ${row.kind === "use" ? "bg-sky-50" : "bg-slate-50"}`}>
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium">{row.description}</div>
+          <div className="truncate text-sm font-medium">
+            {/* ⭐ 부품 소모 (사장님 확인 2026-08-11) — 0원, 재고만 차감 */}
+            {row.kind === "use" && <span className="mr-1 rounded bg-sky-200 px-1.5 py-0.5 text-xs font-semibold text-sky-900">부품 사용</span>}
+            {row.description}
+          </div>
           {row.marsNo && <div className="tabular text-xs text-slate-500">{row.marsNo}</div>}
         </div>
         <button type="button" onClick={onRemove} className="shrink-0 px-1.5 text-slate-400" aria-label="빼기">
@@ -564,16 +588,22 @@ function LineRow({
         <button type="button" className={BTN} onClick={() => onChange({ qty: row.qty + 1 })}>
           +
         </button>
-        <label className="ml-auto flex items-center gap-1">
-          <span className="text-xs text-slate-500">단가</span>
-          <input
-            value={won(row.unitPrice)}
-            onChange={(e) => onChange(priceChange(Number(e.target.value.replace(/\D/g, "")) || 0))}
-            inputMode="numeric"
-            className="tabular h-9 w-28 rounded-lg border border-slate-300 px-2 text-right"
-          />
-        </label>
-        <span className="tabular w-24 text-right text-sm font-semibold">{won(row.unitPrice * row.qty)}</span>
+        {row.kind === "use" ? (
+          <span className="ml-auto text-xs text-sky-800">재고만 차감 · 0원 (손님 청구 없음)</span>
+        ) : (
+          <>
+            <label className="ml-auto flex items-center gap-1">
+              <span className="text-xs text-slate-500">단가</span>
+              <input
+                value={won(row.unitPrice)}
+                onChange={(e) => onChange(priceChange(Number(e.target.value.replace(/\D/g, "")) || 0))}
+                inputMode="numeric"
+                className="tabular h-9 w-28 rounded-lg border border-slate-300 px-2 text-right"
+              />
+            </label>
+            <span className="tabular w-24 text-right text-sm font-semibold">{won(row.unitPrice * row.qty)}</span>
+          </>
+        )}
       </div>
       {/* ⭐ 검색 카드와 같은 할인 계산 (사장님 요청 2026-08-08) — %를 치면 단가가 따라온다 */}
       {row.listPrice ? (
@@ -585,13 +615,16 @@ function LineRow({
           />
         </div>
       ) : null}
-      {/* ⭐ 줄별 메모 (사장님 지시 2026-08-07) — MARS 이 줄의 「설명 2」로 들어간다 */}
-      <input
-        value={row.memo ?? ""}
-        onChange={(e) => onChange({ memo: e.target.value })}
-        placeholder="이 줄 메모 (선택) — MARS 설명 2"
-        className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
-      />
+      {/* ⭐ 줄별 메모 (사장님 지시 2026-08-07) — MARS 이 줄의 「설명 2」로 들어간다.
+            부품 사용 줄은 MARS 에 안 가므로 메모 칸도 없다 */}
+      {row.kind !== "use" && (
+        <input
+          value={row.memo ?? ""}
+          onChange={(e) => onChange({ memo: e.target.value })}
+          placeholder="이 줄 메모 (선택) — MARS 설명 2"
+          className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
+        />
+      )}
     </li>
   );
 }
@@ -1257,6 +1290,79 @@ function ServicePick({
               </button>
             </li>
           ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/**
+ * ⭐ 정비에 쓴 부품 담기 (사장님 확인 2026-08-11 — "판매 등록에서 함께 담기").
+ *    오일필터·엔진오일(통)·배터리 등을 검색해 담으면 0원 소모 줄이 되어
+ *    재고만 차감된다. 손님 청구액·MARS 에는 안 들어간다.
+ *    검색·목록 동작은 위 ServicePick 과 같은 규칙 (blur 250ms · mousedown 방어).
+ */
+function UsedPartsPick({ onAdd }: { onAdd: (p: ProductHit) => void }) {
+  const [q, setQ] = useState("");
+  const [hits, setHits] = useState<ProductHit[]>([]);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [focused, setFocused] = useState(false);
+  const showList = focused || q.trim() !== "";
+
+  useEffect(() => {
+    if (!showList || q.trim() === "") {
+      setHits([]);
+      return;
+    }
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(
+      () =>
+        void searchProducts(q).then((r) =>
+          // 부품만 — 타이어는 위의 작업 내역 검색으로 (유상 판매)
+          setHits(r.filter((p) => p.itemType === "part")),
+        ),
+      250,
+    );
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, [q, showList]);
+
+  const list = useMemo(() => hits.slice(0, 12), [hits]);
+
+  return (
+    <section className="rounded-2xl border border-slate-300 bg-white p-3">
+      <h2 className="font-bold">
+        쓴 부품 담기 <span className="text-sm font-normal text-slate-500">— 재고만 차감 (0원)</span>
+      </h2>
+      <input
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setTimeout(() => setFocused(false), 250)}
+        placeholder="오일필터 · MBA-039 · 배터리 · 엔진오일…"
+        className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2"
+      />
+      {showList && q.trim() !== "" && (
+        <ul className="mt-2 max-h-72 space-y-1 overflow-y-auto" onMouseDown={(e) => e.preventDefault()}>
+          {list.map((p) => (
+            <li key={p.productId}>
+              <button
+                type="button"
+                onClick={() => onAdd(p)}
+                className="flex w-full items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-left active:bg-slate-100"
+              >
+                <span className="min-w-0 flex-1 truncate text-sm">
+                  {p.model}
+                  {p.partNo && <span className="tabular ml-1 text-xs text-slate-400">{p.partNo}</span>}
+                </span>
+                <span className="tabular shrink-0 text-xs text-slate-500">
+                  {p.stockTracked ? `재고 ${p.stockQty}개` : "재고 미등록"}
+                </span>
+              </button>
+            </li>
+          ))}
+          {list.length === 0 && <li className="px-3 py-2 text-sm text-slate-400">부품을 못 찾았습니다</li>}
         </ul>
       )}
     </section>

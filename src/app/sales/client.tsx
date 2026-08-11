@@ -223,6 +223,7 @@ export function SaleCard({
             <div key={l.itemId} className="flex items-baseline justify-between gap-3 text-sm text-slate-600">
               <span className="min-w-0 truncate">
                 {l.lineType === "service" && <span className="mr-1 text-xs text-slate-400">공임</span>}
+                {l.lineType === "use" && <span className="mr-1 text-xs text-sky-600">부품 사용</span>}
                 {l.description}
                 {l.spec && <span className="tabular ml-1 text-slate-500">{l.spec}</span>}
               </span>
@@ -248,6 +249,7 @@ export function SaleCard({
                   <div className="flex items-baseline justify-between gap-2">
                     <span className="min-w-0 truncate">
                       {l.lineType === "service" && <span className="mr-1 text-xs text-slate-400">공임</span>}
+                {l.lineType === "use" && <span className="mr-1 text-xs text-sky-600">부품 사용</span>}
                       {l.description}
                       {l.spec && <span className="tabular ml-1 text-xs text-slate-500">{l.spec}</span>}
                     </span>

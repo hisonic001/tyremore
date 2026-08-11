@@ -227,6 +227,9 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     LEFT JOIN product      p ON p.id = qi.product_id
     LEFT JOIN service_item s ON s.id = qi.service_item_id
     WHERE qi.quote_id IN ${sql.raw(`(${ids.join(",")})`)}
+      -- 🔴 부품 소모(use) 줄은 MARS 에 안 넣는다 (2026-08-11) — 0원·품번 없음이라
+      --    넣으면 mars-fill 이 「줄 부족」으로 실패한다
+      AND qi.line_type <> 'use'
     ORDER BY qi.quote_id, qi.line_type DESC, qi.id
   `);
 
@@ -384,7 +387,8 @@ export async function pendingVehicleChecks(): Promise<PendingCheck[]> {
     SELECT q.id, q.quote_no, v.plate_no, c.name, q.total_amount, q.mars_ref_no, q.tyre_positions,
            to_char(COALESCE(q.work_date, q.confirmed_at::date, q.created_at::date), 'YYYY-MM-DD') work_date,
            COALESCE(SUM(qi.qty) FILTER (WHERE qi.line_type = 'tire'), 0)::int AS tyre_qty,
-           array_agg(qi.description) FILTER (WHERE qi.line_type <> 'tire') AS service_names
+           -- 부품 소모(use) 줄은 「교환한 항목」 판정에서 뺀다 — 서비스 줄이 그 역할을 한다 (2026-08-11)
+           array_agg(qi.description) FILTER (WHERE qi.line_type NOT IN ('tire', 'use')) AS service_names
     FROM quote q
     LEFT JOIN vehicle    v ON v.id = q.vehicle_id
     LEFT JOIN customer   c ON c.id = q.customer_id

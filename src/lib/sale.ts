@@ -36,7 +36,8 @@ function refresh(...paths: string[]) {
 }
 
 export interface SaleLine {
-  kind: "tire" | "service" | "custom";
+  /** 'use' = 정비에 쓴 부품 소모 (2026-08-11) — 0원, 재고만 차감, MARS·청구 제외 */
+  kind: "tire" | "service" | "custom" | "use";
   productId?: number | null;
   serviceItemId?: number | null;
   /** 화면·MARS 표시용. 상품명이 나중에 바뀌어도 그때 판 이름이 남는다 */
@@ -179,8 +180,17 @@ export async function sellFromStock(
 export async function saveSale(
   input: SaleInput,
 ): Promise<{ ok: true; quoteId: number; quoteNo: string; shortages: string[] } | { ok: false; error: string }> {
-  const lines = input.lines.filter((l) => l.qty > 0);
+  // 부품 소모(use) 줄은 서버가 0원으로 못박는다 — 청구액·MARS 에 절대 안 섞이게 (2026-08-11)
+  const lines = input.lines
+    .filter((l) => l.qty > 0)
+    .map((l) => (l.kind === "use" ? { ...l, unitPrice: 0, listPrice: null, salesRate: null } : l));
   if (lines.length === 0) return { ok: false, error: "판매할 품목이 없습니다" };
+  if (lines.every((l) => l.kind === "use")) {
+    return { ok: false, error: "부품 소모만으로는 판매가 안 됩니다 — 작업 내역이나 공임을 함께 담아 주세요" };
+  }
+  for (const l of lines) {
+    if (l.kind === "use" && !l.productId) return { ok: false, error: "부품 소모 줄에 상품이 없습니다" };
+  }
 
   const total = lines.reduce((s, l) => s + l.unitPrice * l.qty, 0);
 

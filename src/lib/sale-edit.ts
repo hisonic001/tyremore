@@ -322,10 +322,12 @@ export async function updateSaleLine(input: {
   const desc = input.description?.trim();
   if (input.description !== undefined && !desc) return { ok: false, error: "품목 이름은 비울 수 없습니다" };
 
-  const [line] = await db.execute<{ id: number; quote_id: number; product_id: number | null; qty: number; final_price: number }>(
-    sql`SELECT id, quote_id, product_id, qty, final_price FROM quote_item WHERE id = ${input.itemId}`,
+  const [line] = await db.execute<{ id: number; quote_id: number; product_id: number | null; qty: number; final_price: number; line_type: string }>(
+    sql`SELECT id, quote_id, product_id, qty, final_price, line_type FROM quote_item WHERE id = ${input.itemId}`,
   );
   if (!line) return { ok: false, error: "품목을 찾을 수 없습니다" };
+  // 🔴 부품 소모(use) 줄은 언제나 0원 — 값을 넣어도 무시한다 (2026-08-11)
+  if (line.line_type === "use") input.unitPrice = 0;
   const e = await editableQuote(Number(line.quote_id));
   if (e.error !== undefined) return { ok: false, error: e.error };
 
