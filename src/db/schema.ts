@@ -171,6 +171,8 @@ export const product = pgTable(
     position: text("position"), // '앞' | '뒤'
 
     category: text("category"),
+    /** ⭐ 재주문점 (2026-08-11 부품 재고관리) — 이 수량 이하면 「부족」. NULL = 알림 안 함 */
+    minQty: integer("min_qty"),
     /** 제조사 바코드. SKU 단위라 같은 상품 4본은 값이 전부 같다 (D-02) */
     barcode: text("barcode"),
     /**

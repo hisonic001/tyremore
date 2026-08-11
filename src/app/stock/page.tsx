@@ -1,7 +1,9 @@
 import Link from "@/lib/link";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
+import { listPartStock } from "@/lib/part-stock";
 import { StockExcel } from "./excel-ui";
+import { PartStockList } from "./parts";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +31,9 @@ export default async function StockPage() {
     FROM stock_item s JOIN product p ON p.id = s.product_id
     WHERE s.status='재고' AND s.qty > 0 AND p.item_type='tire'
   `);
+
+  // ⭐ 부품 재고 (사장님 선택 2026-08-11) — 타이어와 달리 종류별 수량으로 관리
+  const parts = await listPartStock();
 
   return (
     <main className="mx-auto min-h-dvh max-w-3xl px-4 py-5">
@@ -60,6 +65,8 @@ export default async function StockPage() {
           )}
         </div>
       </section>
+
+      <PartStockList parts={parts} />
 
       <StockExcel />
 
