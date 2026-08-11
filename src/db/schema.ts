@@ -624,6 +624,33 @@ export const quotePayment = pgTable(
   ],
 );
 
+/* ============================================================
+ * receivable_payment — 외상 수금 (사장님 선택 2026-08-11)
+ * 외상 판매(quote.payment_method='외상')의 수금 기록.
+ * 잔액 = quote.total_amount − SUM(amount) 파생값 — 별도 잔액 컬럼 없음.
+ * ========================================================== */
+export const receivablePayment = pgTable(
+  "receivable_payment",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    quoteId: bigint("quote_id", { mode: "number" })
+      .notNull()
+      .references(() => quote.id, { onDelete: "cascade" }),
+    amount: integer("amount").notNull(),
+    method: text("method").notNull(),
+    paidOn: date("paid_on")
+      .notNull()
+      .default(sql`(now() AT TIME ZONE 'Asia/Seoul')::date`),
+    memo: text("memo"),
+    createdAt,
+  },
+  (t) => [
+    check("receivable_payment_amount_check", sql`${t.amount} > 0`),
+    check("receivable_payment_method_check", sql`${t.method} IN ('현금','카드','계좌이체','지역화폐')`),
+    index("idx_receivable_quote").on(t.quoteId),
+  ],
+);
+
 export const quoteItem = pgTable(
   "quote_item",
   {

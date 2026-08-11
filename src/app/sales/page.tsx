@@ -1,4 +1,6 @@
 import Link from "@/lib/link";
+import { sql } from "drizzle-orm";
+import { db } from "@/db";
 import { marsAudit } from "@/lib/mars-audit";
 import { ResolveButton } from "./audit-resolve";
 import { latestMarsRun } from "@/lib/mars-run";
@@ -58,6 +60,21 @@ export default async function SalesPage({
   const thisMonth = today.slice(0, 7);
   const explicit = sp.range ?? (sp.month ? "month" : sp.from || sp.to ? "range" : null);
   const active = explicit ?? (scoped ? "all" : "today");
+
+  // ⭐ 외상 필터일 때 미수금 총액 (사장님 선택 2026-08-11)
+  const receivable =
+    pay === "외상"
+      ? (
+          await db.execute<{ n: number; remain: string }>(sql`
+            SELECT count(*) FILTER (WHERE q.total_amount > COALESCE(rp.paid, 0))::int n,
+                   COALESCE(SUM(q.total_amount - COALESCE(rp.paid, 0)), 0)::bigint remain
+            FROM quote q
+            LEFT JOIN (SELECT quote_id, SUM(amount) paid FROM receivable_payment GROUP BY 1) rp
+              ON rp.quote_id = q.id
+            WHERE q.status = '성사' AND q.payment_method = '외상'
+          `)
+        )[0]
+      : null;
 
   // ⭐ MARS 실행 진행도 여기서 보인다 — /mars 페이지는 없앴다 (사장님 지시 2026-08-09)
   const run = await latestMarsRun();
@@ -164,6 +181,12 @@ export default async function SalesPage({
         {pay && `${pay}만 · `}
         {h.saleCount}건 · {won(h.totalAmount)}원
       </p>
+      {/* ⭐ 미수금 총액 — 외상 필터일 때 (사장님 선택 2026-08-11). 기간과 무관하게 전체 잔액이다 */}
+      {receivable && (
+        <p className="tabular mt-1 rounded-lg bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">
+          못 받은 외상 {Number(receivable.n)}건 · 잔액 {won(Number(receivable.remain))}원 (전체 기간 기준)
+        </p>
+      )}
 
       {/*
         ⭐ MARS 정합 감사 배너 (사장님 승인 2026-08-10 — 자동입력 개선 전략).

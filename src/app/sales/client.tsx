@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { cancelSale, updateSaleHead } from "@/lib/sale-edit";
 import type { SaleRow } from "@/lib/sale-history";
 import { EXCLUSIVE, SPLITTABLE, splitLabel } from "@/lib/payments";
+import { CollectionPanel } from "./collections";
 import { AddLine, EditableLine } from "./line-edit";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
@@ -200,6 +201,15 @@ export function SaleCard({
           <span className="tabular shrink-0">
             {/* 분할 결제는 「카드+현금」 으로 (2026-08-10) — 금액은 펼치면 나온다 */}
             {s.payments.length ? s.payments.map((p) => p.method).join("+") : (s.paymentMethod ?? "")}
+            {/* ⭐ 외상 잔액 (2026-08-11) — 접힌 채로도 얼마 남았는지 보인다 */}
+            {s.paymentMethod === "외상" && !canceled && (() => {
+              const remain = s.totalAmount - s.collections.reduce((sum, c) => sum + c.amount, 0);
+              return remain > 0 ? (
+                <span className="ml-1.5 font-semibold text-red-600">잔액 {won(remain)}</span>
+              ) : (
+                <span className="ml-1.5 font-semibold text-emerald-700">완납</span>
+              );
+            })()}
             {/* ⭐ MARS 표식 (사장님 지시 2026-08-09) — ✓ 올라감 · 올리는 중 = 체크 후 대기 */}
             {s.marsStatus === "전송완료" && <span className="ml-1.5 font-semibold text-indigo-600">MARS ✓</span>}
             {s.marsStatus === "미전송" && !canceled && (
@@ -300,6 +310,11 @@ export function SaleCard({
               </p>
             )}
           </div>
+
+          {/* ⭐ 외상 수금 (사장님 선택 2026-08-11) */}
+          {s.paymentMethod === "외상" && !canceled && (
+            <CollectionPanel quoteId={s.quoteId} total={s.totalAmount} collections={s.collections} />
+          )}
 
           {error && <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
           {notice && (

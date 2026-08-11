@@ -51,6 +51,8 @@ export interface SaleRow {
   paymentMethod: string | null;
   /** ⭐ 분할 결제 내역 (2026-08-10) — 혼합이면 수단별 금액이 여기 있다. 아니면 빈 배열 */
   payments: { method: string; amount: number }[];
+  /** ⭐ 외상 수금 이력 (2026-08-11) — 외상 건이 아니면 빈 배열 */
+  collections: { id: number; amount: number; method: string; paidOn: string; memo: string | null }[];
   paymentMemo: string | null;
   marsStatus: string;
   marsRefNo: string | null;
@@ -178,11 +180,17 @@ export async function saleHistory(opts: {
     tyre_positions: string | null;
     created_hm: string | null;
     pay_split: string | null;
+    collections: { id: number; amount: number; method: string; paid_on: string; memo: string | null }[] | null;
   }>(sql`
     SELECT q.id quote_id, q.quote_no, q.status,
            -- 분할 결제 「카드:30000,현금:5000」 (2026-08-10) — 수단 이름에는 콜론·쉼표가 없다
            (SELECT string_agg(pm.method || ':' || pm.amount, ',' ORDER BY pm.id)
               FROM quote_payment pm WHERE pm.quote_id = q.id) pay_split,
+           -- 외상 수금 이력 (2026-08-11) — 메모까지 필요해서 JSON 으로 싣는다
+           (SELECT json_agg(json_build_object('id', rp.id, 'amount', rp.amount, 'method', rp.method,
+                                              'paid_on', to_char(rp.paid_on, 'YYYY-MM-DD'), 'memo', rp.memo)
+                            ORDER BY rp.id)
+              FROM receivable_payment rp WHERE rp.quote_id = q.id) collections,
            to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM-DD') work_date,
            q.customer_id, c.name customer_name, v.plate_no, v.model vehicle_model,
            -- 제조사는 코드 사전의 한글 이름 우선 (customer-edit 와 같은 규칙, 2026-08-09)
@@ -237,6 +245,13 @@ export async function saleHistory(opts: {
             })
           : [],
         paymentMemo: r.payment_memo,
+        collections: (r.collections ?? []).map((c) => ({
+          id: Number(c.id),
+          amount: Number(c.amount),
+          method: c.method,
+          paidOn: c.paid_on,
+          memo: c.memo,
+        })),
         marsStatus: r.mars_status,
         marsRefNo: r.mars_ref_no,
         tyrePositions: r.tyre_positions ? r.tyre_positions.split(",").map((x) => x.trim()).filter(Boolean) : [],

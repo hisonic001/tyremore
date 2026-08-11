@@ -40,6 +40,7 @@ export default async function VehiclePage({ params }: { params: Promise<{ id: st
     consent_signed: boolean;
     sale_count: number;
     last_visit: string | null;
+    receivable: number;
   }>(sql`
     SELECT v.id vehicle_id, v.plate_no,
            COALESCE((SELECT name_ko FROM vehicle_maker m WHERE m.code = v.maker_code), v.maker_name) maker_name,
@@ -48,7 +49,13 @@ export default async function VehiclePage({ params }: { params: Promise<{ id: st
            c.id customer_id, c.name, c.phone, c.address, c.mars_contact_no,
            c.consent_privacy, c.consent_marketing, (c.consent_signed_at IS NOT NULL) consent_signed,
            (SELECT count(*) FROM quote q WHERE q.vehicle_id = v.id AND q.status <> '취소')::int sale_count,
-           to_char(v.last_visit_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') last_visit
+           to_char(v.last_visit_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') last_visit,
+           -- 이 손님의 외상 잔액 (2026-08-11) — 판매 합계 − 수금 합계
+           (SELECT COALESCE(SUM(q2.total_amount - COALESCE(rp.paid, 0)), 0)::int
+              FROM quote q2
+              LEFT JOIN (SELECT quote_id, SUM(amount) paid FROM receivable_payment GROUP BY 1) rp
+                ON rp.quote_id = q2.id
+              WHERE q2.customer_id = c.id AND q2.status = '성사' AND q2.payment_method = '외상') receivable
     FROM vehicle v JOIN customer c ON c.id = v.customer_id
     WHERE v.id = ${vehicleId}
   `);
@@ -91,6 +98,15 @@ export default async function VehiclePage({ params }: { params: Promise<{ id: st
         동의: 개인정보 {row.consent_privacy ? "수락" : "거부"} · 마케팅 {row.consent_marketing ? "수락" : "거부"} ·
         서명 {row.consent_signed ? "있음" : "없음"}
       </p>
+      {/* ⭐ 외상 잔액 (사장님 선택 2026-08-11) — 수금은 정비 내역의 외상 카드에서 */}
+      {Number(row.receivable) > 0 && (
+        <p className="tabular mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">
+          외상 잔액 {Number(row.receivable).toLocaleString()}원 —{" "}
+          <Link href={`/sales?customer=${row.customer_id}&pay=외상`} className="underline underline-offset-2">
+            외상 내역 보기
+          </Link>
+        </p>
+      )}
 
       <VehicleEditForm
         customer={{
