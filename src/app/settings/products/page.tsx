@@ -43,10 +43,12 @@ type TabId = (typeof TABS)[number]["id"];
 export default async function ProductsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; q?: string }>;
+  searchParams: Promise<{ tab?: string; q?: string; type?: string }>;
 }) {
   const sp = await searchParams;
   const q = sp.q ?? "";
+  /** ⭐ 재고 화면의 「새 부품 등록」이 부품 칸을 열어 둔 채로 들어온다 (2026-08-14) */
+  const type: "tire" | "part" = sp.type === "part" ? "part" : "tire";
   // 검색에서 「새 상품 등록」으로 들어오면 그 탭이 열려 있어야 한다
   const tab: TabId = TABS.some((t) => t.id === sp.tab) ? (sp.tab as TabId) : q ? "new" : "fill";
 
@@ -75,7 +77,7 @@ export default async function ProductsPage({
       </nav>
 
       {tab === "fill" && <FillTab />}
-      {tab === "new" && <NewTab q={q} />}
+      {tab === "new" && <NewTab q={q} type={type} />}
       {tab === "hide" && <HideTab />}
       {tab === "dup" && <DupTab />}
     </main>
@@ -153,7 +155,7 @@ async function FillTab() {
 /* ============================================================
  * ② 새 상품 — 한 건씩 손으로
  * ========================================================== */
-async function NewTab({ q }: { q: string }) {
+async function NewTab({ q, type }: { q: string; type: "tire" | "part" }) {
   const brands = await db
     .select({ code: brand.code, nameKo: brand.nameKo })
     .from(brand)
@@ -162,7 +164,8 @@ async function NewTab({ q }: { q: string }) {
   return (
     <>
       <p className="mt-4 text-sm text-slate-500">
-        거래처 목록에도 없는 <strong>정말 새로 나온 모델</strong>만 여기서 넣습니다.
+        목록에 없는 <strong>정말 새 물건</strong>만 여기서 넣습니다 — 새 타이어 모델, 새로 들이는
+        부품(배터리·필터·패드 등).
       </p>
 
       {/* ⭐ 만들기 전에 먼저 찾아본다 — 중복으로 만들면 재고가 갈라진다 */}
@@ -174,7 +177,7 @@ async function NewTab({ q }: { q: string }) {
         <div className="h-px flex-1 bg-slate-200" />
       </div>
 
-      <NewProductForm brands={brands} initialPattern={q} />
+      <NewProductForm brands={brands} initialPattern={q} initialType={type} />
     </>
   );
 }

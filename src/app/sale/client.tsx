@@ -1364,7 +1364,23 @@ function UsedPartsPick({ onAdd }: { onAdd: (p: ProductHit) => void }) {
               </button>
             </li>
           ))}
-          {list.length === 0 && <li className="px-3 py-2 text-sm text-slate-400">부품을 못 찾았습니다</li>}
+          {list.length === 0 && (
+            <li className="px-3 py-2 text-sm text-slate-400">
+              부품을 못 찾았습니다 —{" "}
+              {/*
+                ⭐ 새 부품이면 여기서 바로 만들러 간다 (사장님 질문 2026-08-14).
+                   <a> 를 쓴다: 판매 등록 중이라 새 창으로 열어 담던 내용을 지키게.
+              */}
+              <a
+                href={`/settings/products?tab=new&type=part&q=${encodeURIComponent(q.trim())}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-slate-600 underline underline-offset-2"
+              >
+                새 부품으로 등록
+              </a>
+            </li>
+          )}
         </ul>
       )}
     </section>

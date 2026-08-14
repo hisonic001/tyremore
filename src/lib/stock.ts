@@ -400,7 +400,7 @@ export async function setDotQty(input: {
  *    맞는 DOT 로 새 줄을 적으면 된다.
  */
 
-/** 새 상품 등록 — MARS 마스터에 없는 신모델용 */
+/** 새 상품 등록 — MARS 마스터에 없는 신모델·새 부품용 */
 export async function createProduct(input: {
   brandCode: string;
   pattern: string;
@@ -413,15 +413,38 @@ export async function createProduct(input: {
   itemType?: "tire" | "part";
   partNo?: string | null;
   fitment?: string | null;
+  /**
+   * ⭐ 부품 전용 (2026-08-14 — 사장님 "새로운 부품이 생겼을때 어떻게 등록해야할지").
+   *    분류는 재고 화면의 묶음이 되고, 매입가는 마진 계산의 바탕이 된다.
+   *    부품은 기표가(손님 가격) 대신 매입가를 넣는다 — 판매할 때 값을 친다.
+   */
+  category?: string | null;
+  purchasePrice?: number | null;
+  minQty?: number | null;
 }): Promise<{ ok: true; productId: number } | { ok: false; error: string }> {
   const itemType = input.itemType ?? "tire";
-  if (!input.pattern?.trim()) return { ok: false, error: "모델명을 입력해 주세요" };
+  if (!input.pattern?.trim()) {
+    return { ok: false, error: itemType === "part" ? "부품 이름을 입력해 주세요" : "모델명을 입력해 주세요" };
+  }
   if (itemType === "tire" && (!input.width || !input.aspectRatio || !input.rimInch)) {
     return { ok: false, error: "규격(폭/편평비/인치)을 모두 입력해 주세요" };
   }
 
-  const spec =
-    itemType === "tire" ? `${input.width}/${input.aspectRatio}R${input.rimInch}` : (input.partNo ?? "");
+  /**
+   * ⚠️ 같은 품번이 이미 있으면 막는다 — 부품이 갈라지면 재고가 두 곳으로 나뉜다.
+   *    (타이어는 같은 규격 여러 모델이 정상이라 경고만 하고 막지 않는다)
+   */
+  const partNo = input.partNo?.trim() || null;
+  if (itemType === "part" && partNo) {
+    const [dup] = await db
+      .select({ id: product.id, name: product.rawName })
+      .from(product)
+      .where(and(eq(product.itemType, "part"), eq(product.partNo, partNo)))
+      .limit(1);
+    if (dup) return { ok: false, error: `품번 ${partNo} 은(는) 이미 있습니다 — 「${dup.name}」` };
+  }
+
+  const spec = itemType === "tire" ? `${input.width}/${input.aspectRatio}R${input.rimInch}` : (partNo ?? "");
   const rawName = `${input.pattern.trim()} ${spec}`.trim();
 
   // MARS 품번이 없는 자체 등록품은 접두로 구분한다
@@ -435,7 +458,7 @@ export async function createProduct(input: {
       isSerialized: itemType === "tire",
       // 🔴 기본 판매 할인율 25% 는 category='10-TIRES' 규칙에 걸려 있다 (2026-08-09
       //    사장님 버그 제보 — 새 상품이 검색에서 「할인율 미설정」으로 나왔다)
-      category: itemType === "tire" ? "10-TIRES" : null,
+      category: itemType === "tire" ? "10-TIRES" : (input.category?.trim() || null),
       brandCode: input.brandCode || null,
       pattern: input.pattern.trim(),
       // 손 등록은 사장님이 친 이름 그대로가 표시 이름이다 (2026-08-08 품목명 통일)
@@ -447,13 +470,15 @@ export async function createProduct(input: {
       loadIndex: input.loadIndex ?? null,
       speedRating: input.speedRating ?? null,
       listPrice: input.listPrice ?? null,
-      partNo: input.partNo ?? null,
-      fitment: input.fitment ?? null,
+      purchasePrice: input.purchasePrice ?? null,
+      minQty: input.minQty ?? null,
+      partNo,
+      fitment: input.fitment?.trim() || null,
       specParsed: true,
       stockTracked: false,
     })
     .returning({ id: product.id });
 
-  refresh("/");
+  refresh("/", "/stock");
   return { ok: true, productId: row.id };
 }

@@ -61,6 +61,12 @@ export function PartStockList({ parts }: { parts: PartStockRow[] }) {
         <span className="text-sm text-slate-500">
           보유 {parts.length}종
           {lowCount > 0 && <strong className="ml-2 text-red-600">부족 {lowCount}종</strong>}
+          <a
+            href="/settings/products?tab=new&type=part"
+            className="ml-3 text-slate-500 underline underline-offset-4"
+          >
+            + 새 부품
+          </a>
         </span>
       </div>
 
@@ -84,9 +90,17 @@ export function PartStockList({ parts }: { parts: PartStockRow[] }) {
             <PartRow key={p.productId} p={p} onChanged={() => runSearch(q)} />
           ))}
           {hits !== null && hits.length === 0 && !searching && (
-            <li className="py-3 text-sm text-slate-500">
-              못 찾았습니다 — 다른 말로 검색해 보세요 (차종·품번). 없는 부품은 설정 → 상품에서
-              등록할 수 있습니다.
+            <li className="py-3">
+              <p className="text-sm text-slate-500">
+                못 찾았습니다 — 다른 말로도 찾아보세요 (차종·품번·이름).
+              </p>
+              {/* ⭐ 정말 없는 부품이면 여기서 바로 만든다 (사장님 질문 2026-08-14) */}
+              <a
+                href={`/settings/products?tab=new&type=part&q=${encodeURIComponent(q.trim())}`}
+                className="mt-2 inline-block rounded-xl border-2 border-dashed border-slate-300 px-5 py-2.5 text-sm font-medium text-slate-600"
+              >
+                + 새 부품으로 등록
+              </a>
             </li>
           )}
           {hits !== null && hits.length >= 30 && (
