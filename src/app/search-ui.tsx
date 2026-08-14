@@ -31,6 +31,12 @@ export interface Filter {
   acoustic: boolean;
   suv: boolean;
   inStock: boolean;
+  /**
+   * ⭐ 부품 검색 (사장님 지시 2026-08-14 — "디폴트로는 타이어만 검색이 되게 하고
+   *    필터를 켜서 부품들을 검색 가능하게").
+   *    끄면 타이어만, 켜면 부품만 — 부품몰 2,000여 종이 타이어 상담을 안 가린다.
+   */
+  parts: boolean;
 }
 
 const CHIP = "rounded-full border px-4 py-2 text-sm font-medium transition-colors";
@@ -73,6 +79,7 @@ export function FilterPanel({
     if (f.acoustic) p.set("ac", "1");
     if (f.suv) p.set("suv", "1");
     if (f.inStock) p.set("stock", "1");
+    if (f.parts) p.set("parts", "1");
     return `/?${p.toString()}`;
   }
 
@@ -100,6 +107,14 @@ export function FilterPanel({
           >
             재고 있는 것만
           </button>
+          {/* ⭐ 켜면 부품만, 끄면 타이어만 (2026-08-14) — 늘 보이는 자리에 둔다 */}
+          <button
+            type="button"
+            onClick={() => go({ parts: !filter.parts })}
+            className={`${CHIP} ${filter.parts ? CHIP_ON : CHIP_OFF}`}
+          >
+            부품
+          </button>
           {count > 0 && (
             <Link
               href={`/?mode=product&q=${encodeURIComponent(q)}`}
@@ -115,7 +130,14 @@ export function FilterPanel({
         </div>
       </div>
 
-      {open && (
+      {/* 계절·런플랫·제조사는 타이어 얘기다 — 부품 검색 중에는 접는다 */}
+      {open && filter.parts && (
+        <p className="mt-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-500">
+          부품 검색 중입니다 — 계절·제조사 필터는 타이어에만 해당돼서 잠시 숨겼습니다.
+          「부품」을 끄면 타이어 검색으로 돌아갑니다.
+        </p>
+      )}
+      {open && !filter.parts && (
         <div className="mt-3 space-y-4 rounded-2xl border border-slate-200 bg-white p-4">
           <div>
             <h3 className="mb-2 text-sm font-semibold text-slate-700">계절</h3>

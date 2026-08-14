@@ -59,6 +59,7 @@ export function SearchBox({ mode, q, filter }: { mode: Mode; q: string; filter: 
           {filter.acoustic && <input type="hidden" name="ac" value="1" />}
           {filter.suv && <input type="hidden" name="suv" value="1" />}
           {filter.inStock && <input type="hidden" name="stock" value="1" />}
+          {filter.parts && <input type="hidden" name="parts" value="1" />}
         </>
       )}
       <input
@@ -66,7 +67,13 @@ export function SearchBox({ mode, q, filter }: { mode: Mode; q: string; filter: 
         name="q"
         defaultValue={q}
         autoComplete="off"
-        placeholder={mode === "customer" ? "차량번호 · 전화 · 이름" : "규격 2254517 · 모델명 · CAI"}
+        placeholder={
+          mode === "customer"
+            ? "차량번호 · 전화 · 이름"
+            : filter.parts
+              ? "차종 · 품번 · 배터리 품명 (DF80L)"
+              : "규격 2254517 · 모델명 · CAI"
+        }
         aria-label="검색"
         className="w-full rounded-2xl border-2 border-slate-300 bg-white px-5 py-4 text-2xl
                    shadow-sm outline-none placeholder:text-slate-400 focus:border-slate-900"

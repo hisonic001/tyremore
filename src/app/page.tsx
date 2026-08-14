@@ -37,6 +37,8 @@ export default async function Home({
     acoustic: sp.ac === "1",
     suv: sp.suv === "1",
     inStock: sp.stock === "1",
+    /** ⭐ 부품 필터 (사장님 지시 2026-08-14) — 기본은 타이어만, 켜면 부품만 */
+    parts: sp.parts === "1",
   };
   /** ⭐ 전체 목록 보기 (품목 정리 ① — 기본은 취급 상품 770개만) */
   const all = sp.all === "1";
@@ -58,12 +60,16 @@ export default async function Home({
     (filter.runflat ? 1 : 0) +
     (filter.acoustic ? 1 : 0) +
     (filter.suv ? 1 : 0) +
-    (filter.inStock ? 1 : 0);
+    (filter.inStock ? 1 : 0) +
+    (filter.parts ? 1 : 0);
 
   const session = await getSession();
   const [vehicles, products, brands] = await Promise.all([
     mode === "customer" && q ? findVehicles(q) : Promise.resolve([]),
-    mode === "product" ? findProducts(q, { ...filter, all }) : Promise.resolve([]),
+    mode === "product"
+      ? // ⭐ 기본은 타이어만 — 「부품」 필터를 켰을 때만 부품이 나온다 (2026-08-14)
+        findProducts(q, { ...filter, all, itemType: filter.parts ? "part" : "tire" })
+      : Promise.resolve([]),
     mode === "product" ? tireBrands() : Promise.resolve([]),
   ]);
 
@@ -240,8 +246,6 @@ function Hint({ mode }: { mode: Mode }) {
           ["225/45R17", "규격 — 구분자 있어도 됩니다"],
           ["304349", "CAI — 미쉐린 고유번호"],
           ["PILOT SPORT", "모델명"],
-          ["MBA-039", "부품번호"],
-          ["제네시스", "부품 적용차종"],
         ];
   return (
     <div className="mt-6 space-y-1.5 text-sm text-slate-500">
@@ -251,6 +255,13 @@ function Hint({ mode }: { mode: Mode }) {
           <span className="ml-2">{v}</span>
         </div>
       ))}
+      {mode === "product" && (
+        // ⭐ 부품은 「부품」 필터를 켜야 나온다 (2026-08-14 분리) — 여기서 알려준다
+        <p className="pt-2">
+          필터·패드·배터리 같은 <strong className="text-slate-700">부품</strong>은 위의
+          「부품」을 켜고 차종·품번(예: <code className="rounded bg-slate-200 px-1.5 py-0.5 text-slate-800">DF80L</code>)으로 찾으세요.
+        </p>
+      )}
     </div>
   );
 }
