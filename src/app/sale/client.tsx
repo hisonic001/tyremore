@@ -1168,7 +1168,12 @@ function TirePick({ onAdd }: { onAdd: (p: ProductHit) => void }) {
       setAll(false);
       return;
     }
-    timer.current = setTimeout(() => void searchProducts(q, { all }).then((r) => setHits(r.slice(0, 8))), 250);
+    // ⭐ 타이어만 (사장님 지시 2026-08-14) — 부품 1,800여 종이 섞이면 상담 검색이 복잡해진다.
+    //    부품은 아래 「정비에 쓴 부품」에서, 유상 부품(배터리 교체 등)은 공임·정비 항목으로.
+    timer.current = setTimeout(
+      () => void searchProducts(q, { all, itemType: "tire" }).then((r) => setHits(r.slice(0, 8))),
+      250,
+    );
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
@@ -1176,7 +1181,7 @@ function TirePick({ onAdd }: { onAdd: (p: ProductHit) => void }) {
 
   return (
     <section className="rounded-2xl border border-slate-300 bg-white p-3">
-      <h2 className="font-bold">타이어·부품</h2>
+      <h2 className="font-bold">타이어</h2>
       <input
         value={q}
         onChange={(e) => setQ(e.target.value)}
@@ -1316,11 +1321,8 @@ function UsedPartsPick({ onAdd }: { onAdd: (p: ProductHit) => void }) {
     }
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(
-      () =>
-        void searchProducts(q).then((r) =>
-          // 부품만 — 타이어는 위의 작업 내역 검색으로 (유상 판매)
-          setHits(r.filter((p) => p.itemType === "part")),
-        ),
+      // ⭐ 서버에서부터 부품만 (2026-08-14 검색 분리) — 타이어는 위의 타이어 검색으로
+      () => void searchProducts(q, { itemType: "part" }).then((r) => setHits(r.slice(0, 10))),
       250,
     );
     return () => {

@@ -20,6 +20,12 @@ import type { Season } from "./tire-attrs";
 export type Mode = "customer" | "product";
 
 export interface ProductFilter {
+  /**
+   * ⭐ 타이어와 부품을 섞지 않는다 (사장님 지시 2026-08-14 — "검색시에 같이 나오면 복잡해짐").
+   * 판매 등록의 타이어 검색은 'tire', 부품 담기는 'part'를 지정한다.
+   * 지정 안 하면 전체 (매입·관리 화면).
+   */
+  itemType?: "tire" | "part";
   brands?: string[];
   seasons?: Season[];
   runflat?: boolean;
@@ -204,6 +210,9 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
   const t = q.trim();
   const conds: SQL[] = [];
 
+  // ⭐ 타이어·부품 분리 (2026-08-14) — 판매 화면은 반드시 한쪽만 본다
+  if (f.itemType) conds.push(eq(product.itemType, f.itemType));
+
   /**
    * ⭐ 기본은 「지금 팔 수 있는 것」만 보여준다 (사장님 요청 2026-08-01).
    *   MARS 마스터 10,318건에는 단종품·미취급 브랜드가 섞여 있어 상담에 방해가 된다.
@@ -226,12 +235,18 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
    * 저절로 취급이 된다. 관리 화면(includeHidden)은 원래부터 전체를 본다.
    */
   if (!f.all && !f.includeHidden) {
-    conds.push(sql`${product.id} IN (
+    /**
+     * ⭐ 「취급만」은 **타이어에만** 건다 (2026-08-14).
+     *    부품은 목록 자체가 카탈로그다 — 부품몰 목록 1,800여 종은 판매·재고 이력이
+     *    없어도 차종·품번으로 좁혀 찾으므로 전체가 나와야 한다. 타이어처럼 한 규격에
+     *    수십 개가 몰리는 문제도 없다 (부품은 규격 검색이 아니라 차종 검색).
+     */
+    conds.push(sql`(${product.itemType} = 'part' OR ${product.id} IN (
       SELECT product_id FROM stock_item WHERE product_id IS NOT NULL
       UNION SELECT product_id FROM quote_item WHERE product_id IS NOT NULL
       UNION SELECT product_id FROM purchase_invoice_item WHERE product_id IS NOT NULL
       UNION SELECT product_id FROM supplier_item_code WHERE product_id IS NOT NULL
-    )`);
+    ))`);
   }
 
   /**

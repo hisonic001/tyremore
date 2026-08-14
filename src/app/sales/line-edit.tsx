@@ -189,7 +189,8 @@ export function AddLine({ quoteId, onMessage }: { quoteId: number; onMessage: (m
     timer.current = setTimeout(() => {
       if (open === "tire") {
         if (!q.trim()) return setTires([]);
-        void searchProducts(q).then((r) => setTires(r.slice(0, 6)));
+        // 타이어 줄 추가·교체이므로 타이어만 (2026-08-14 검색 분리)
+        void searchProducts(q, { itemType: "tire" }).then((r) => setTires(r.slice(0, 6)));
       } else {
         void findServices(q).then((r) => setSvcs(r.slice(0, 6)));
       }
