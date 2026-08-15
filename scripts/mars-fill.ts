@@ -1245,6 +1245,18 @@ async function fillLines(
     let typed = false;
     for (let att = 0; att < 3 && !typed; att++) {
       if (att > 0) {
+        /**
+         * 🔴 다시 누르기 전에 **표가 아직 화면에 있는지** 본다 (2026-08-15, run#71).
+         *    그 건은 유형 선택 3번이 다 실패했는데, 오류 스크린샷을 보니 매출 주문
+         *    화면이 아니라 **시작 화면**이었다 — 주문 화면이 홈으로 튕긴 것이다.
+         *    화면이 사라졌으면 재시도해 봐야 소용없다. 정확한 원인을 남기고 끝낸다
+         *    (같은 판매는 다음 실행에서 처음부터 다시 하면 된다 — run#72 가 그랬다).
+         */
+        if (!(await grid.isVisible().catch(() => false))) {
+          throw new Error(
+            `매출 주문 화면이 사라졌습니다 (홈으로 튕김) — ${l.no} 줄을 넣기 전입니다. 다음 실행에서 처음부터 다시 합니다`,
+          );
+        }
         log(`      · 유형 선택이 안 돼 다시 시도합니다 (${att + 1}번째)`);
         await page.waitForTimeout(700 * att);
         await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
@@ -1542,14 +1554,25 @@ interface AmountCheck {
  */
 async function checkOrder(page: Page, expectTotal: number): Promise<AmountCheck> {
   const f = main(page);
-  const txt = (await f.locator("body").innerText().catch(() => "")) || "";
-  const nums = [...txt.matchAll(/[\d,]{5,}/g)].map((m) => Number(m[0].replace(/,/g, "")));
   const excl = Math.round(expectTotal / 1.1);
-  const ok = nums.some((n) => n === expectTotal || Math.abs(n - excl) <= 2);
 
-  if (ok) {
-    log(`    · 합계 대조 ✅ ${expectTotal.toLocaleString()}원 (공급가 ${excl.toLocaleString()})`);
-    return { ok, note: `합계 맞음 ${expectTotal.toLocaleString()}원` };
+  /**
+   * 🔴 **한 번만 읽고 판정하지 않는다** (2026-08-15, run#72 최열규 20,000원 건).
+   *    BC 는 마지막 칸을 넣은 직후 합계 영역을 늦게 갱신한다 — 그 순간 읽으면
+   *    화면에 우리 금액이 아직 없어서 「금액 확인 필요」 거짓 경고가 난다
+   *    (그 건은 화면 값이 19,430/3,867/1,927 로 엉뚱했다 = 갱신 전 잔상).
+   *    1.5초 간격으로 세 번까지 다시 읽고, 그래도 없으면 그때 경고한다.
+   */
+  let nums: number[] = [];
+  for (let att = 0; att < 3; att++) {
+    if (att > 0) await page.waitForTimeout(1500);
+    const txt = (await f.locator("body").innerText().catch(() => "")) || "";
+    nums = [...txt.matchAll(/[\d,]{5,}/g)].map((m) => Number(m[0].replace(/,/g, "")));
+    if (nums.some((n) => Math.abs(n - expectTotal) <= 2 || Math.abs(n - excl) <= 2)) {
+      if (att > 0) log(`      (합계가 ${att + 1}번째 읽기에서 나타났습니다 — 화면 갱신 대기)`);
+      log(`    · 합계 대조 ✅ ${expectTotal.toLocaleString()}원 (공급가 ${excl.toLocaleString()})`);
+      return { ok: true, note: `합계 맞음 ${expectTotal.toLocaleString()}원` };
+    }
   }
 
   // 우리 금액에 가까운 순으로 몇 개만 — 전부 남기면 읽을 수가 없다
@@ -1561,7 +1584,7 @@ async function checkOrder(page: Page, expectTotal: number): Promise<AmountCheck>
   log(`      MARS 화면에서 찾은 값: ${near.join(", ") || "없음"}`);
   log(`      전기하시기 전에 금액을 꼭 확인해 주세요`);
   return {
-    ok,
+    ok: false,
     note:
       `금액 확인 필요 — 우리 ${expectTotal.toLocaleString()}원(공급가 ${excl.toLocaleString()})` +
       ` · MARS 화면 값 ${near.join(", ") || "없음"}`,
@@ -2160,9 +2183,21 @@ async function fillVehicleCheck(
   opts: { plateNo: string; tyreQty: number; replaced?: ReplacedItems; wheels?: string[] },
 ): Promise<{ ok: boolean; missed: string[]; already?: boolean }> {
   const f = main(page);
-  await clickAny(page, "탐색");
-  await page.waitForTimeout(700);
-  await clickAny(page, "전기 후 차량 점검");
+  /**
+   * 🔴 「탐색」 메뉴가 열렸다 저절로 닫히는 때가 있다 (2026-08-13 run#76 — 20초를
+   *    기다려도 「전기 후 차량 점검」이 안 보였는데, 다음 실행에서는 그대로 됐다).
+   *    메뉴 항목만 재시도해 봐야 소용없다 — **탐색부터 다시** 연다.
+   */
+  let menuOk = false;
+  for (let att = 0; att < 2 && !menuOk; att++) {
+    if (att > 0) log("      · 점검 메뉴가 안 열려 「탐색」부터 다시 엽니다");
+    await clickAny(page, "탐색").catch(() => {});
+    await page.waitForTimeout(700 + 800 * att);
+    menuOk = await clickAny(page, "전기 후 차량 점검", att === 0 ? 12000 : 20000)
+      .then(() => true)
+      .catch(() => false);
+  }
+  if (!menuOk) throw new Error("「전기 후 차량 점검」을 누르지 못했습니다 (탐색 메뉴 2회 시도)");
   await page.waitForTimeout(3500);
 
   /**
@@ -2306,9 +2341,8 @@ async function fillVehicleCheck(
 }
 
 async function main_() {
-  const { marsQueue, markEntered, pendingVehicleChecks, markVehicleChecked, saveVehicleMarsNo } = await import(
-    "../src/lib/mars-queue"
-  );
+  const { marsQueue, markEntered, pendingVehicleChecks, markVehicleChecked, saveVehicleMarsNo, holdMars } =
+    await import("../src/lib/mars-queue");
 
   /** 차량 점검 모드는 대기열이 아니라 「전기까지 끝난 것」을 본다. 자가점검은 둘 다 안 본다 */
   const checks = CHECK && !SMOKE ? (await pendingVehicleChecks()).slice(0, LIMIT) : [];
@@ -3001,12 +3035,17 @@ async function main_() {
              * 🔴 서명을 안 받은 손님은 만들지 않는다.
              *    MARS 고객 등록 화면에는 「고객 서명」 칸이 있다.
              *    받지도 않은 서명을 「수락된 동의」로 넣을 수는 없다.
+             *
+             * ⭐ 그리고 **대기열에서 내린다** (2026-08-15 — 이원섭 건이 18번 연속
+             *    같은 경고를 내며 재시도됐다). 자동입력이 못 푸는 문제는 보류로
+             *    되돌리고, 서명 받은 뒤 정비 내역에서 다시 체크하면 도로 올라온다.
              */
-            log(
-              c
-                ? "  ⚠️ 개인정보 동의 서명이 없어 고객 등록을 하지 않습니다 — 판매 등록에서 서명 확인을 체크해 주세요"
-                : "  ⚠️ MARS 에 없는 차량·고객입니다 — 고객 등록은 직접 해 주세요",
-            );
+            const why = c
+              ? "개인정보 동의 서명이 없어 고객 등록을 하지 않았습니다 — 서명 받고 판매 등록에서 서명 확인 체크 후, 정비 내역에서 다시 MARS 체크"
+              : "MARS 에 없는 차량·고객입니다 — MARS 에서 직접 등록 후, 정비 내역에서 다시 MARS 체크";
+            log(`  ⚠️ ${why}`);
+            log("     (보류로 내렸습니다 — 다음 자동입력부터는 이 건을 건너뜁니다)");
+            await holdMars(q.quoteId, why);
             skipped++;
             await page.goto(HOME);
             continue;

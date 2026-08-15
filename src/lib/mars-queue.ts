@@ -327,6 +327,22 @@ export async function markEntered(
 }
 
 /**
+ * ⭐ 대기열에서 내려 「보류」로 되돌린다 (2026-08-15).
+ *
+ * 🔴 이원섭 건(Q26-0810-012)이 동의 서명이 없어 **18번 연속** 같은 경고를 내며
+ *    재시도됐다 — 자동입력이 못 푸는 문제(서명·사람 확인)는 대기열에 남겨 두면
+ *    로그만 어지럽힌다. 보류로 내리면, 서명을 받은 뒤 정비 내역에서 다시
+ *    체크하는 순간 (보류→미전송) 도로 올라간다 — 기존 흐름 그대로다.
+ */
+export async function holdMars(quoteId: number, memo?: string | null): Promise<void> {
+  await db
+    .update(quote)
+    .set({ marsStatus: "보류", marsMemo: memo?.trim() || null, updatedAt: new Date() })
+    .where(and(eq(quote.id, quoteId), eq(quote.marsStatus, "미전송")));
+  refresh("/sales");
+}
+
+/**
  * ⭐ 자동으로 만든 MARS 차량 번호를 기억한다 (2026-08-05).
  *    번호판 검색 색인이 늦어서 「만들었는데 검색에 안 잡히는」 시간이 있다 —
  *    그 사이에 다시 돌리면 같은 차량이 **또** 만들어진다 (실제로 한 번 그랬다,
