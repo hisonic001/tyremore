@@ -1,9 +1,10 @@
 import Link from "@/lib/link";
 import { cookies } from "next/headers";
 import { isOwner } from "@/lib/auth";
-import { pendingInvoices } from "@/lib/invoice";
+import { pendingInvoices, supplierList } from "@/lib/invoice";
 import { PendingList } from "./client";
 import { RegisterPurchase } from "./register";
+import { PastePurchase } from "./paste";
 
 export const dynamic = "force-dynamic";
 
@@ -47,6 +48,8 @@ export default async function ReceivingPage() {
    * 다른 기기의 장부는 여전히 목록에 보인다 — 「이어서 담기」로 넘겨받거나 지워야 하니까.
    */
   const listed = invoices.filter((i) => i.invoiceId !== openManual?.invoiceId);
+  /** 붙여넣기 화면의 거래처 추천 — 지금까지 거래한 곳 */
+  const suppliers = (await supplierList()).map((s) => s.name).slice(0, 20);
 
   return (
     <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6">
@@ -69,6 +72,13 @@ export default async function ReceivingPage() {
 
       {/* ⭐ 등록 입구는 하나 (2026-08-04 — "중구난방" 지적). 탭으로 갈릴 뿐 결과는 같은 장부다 */}
       <RegisterPurchase openManual={openManual} owner={owner} />
+
+      {/*
+        ⭐ 붙여넣기 매입 (사장님 요청 2026-08-15) — 부품 거래처(나이스 오토파츠 등)는
+           인보이스 파일을 안 준다. 주문서 화면을 복사해 붙이면 읽어서 바로 재고로.
+           부품 매입이 쌓여야 안전재고 계산의 빈 곳(부품 소비량)이 메워진다.
+      */}
+      <PastePurchase suppliers={suppliers} />
 
       <section className="mt-8">
         <h2 className="font-semibold">
