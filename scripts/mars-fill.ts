@@ -1911,12 +1911,14 @@ async function postOrder(
    */
   const afterSIs = await scanSIs();
   const fresh = [...afterSIs].filter((x) => !beforeSIs.has(x));
-  if (fresh.length === 1) {
-    log(`    · 전기 완료 — 송장 ${fresh[0]}`);
-    return { ok: true, invoiceNo: fresh[0] };
-  }
-  if (fresh.length > 1) {
-    log(`    · 새 송장 번호가 여러 개 보입니다 (${fresh.join(", ")}) — 송장 목록에서 확정합니다`);
+  /**
+   * 🔴 새 번호가 **하나여도 그대로 믿지 않는다** (2026-08-15, run#86 하상원 건).
+   *    전기가 실패했는데 뒤층 화면이 갱신되며 **다른 손님의 옛 송장 번호**(003168)가
+   *    하나 새로 나타났고, 그것을 「전기 완료」로 기록했다 — peek 로 실측하니 그 번호판의
+   *    송장은 0건이었다. 화면 번호는 후보일 뿐, 확정은 송장 목록 대조(호출 쪽)가 한다.
+   */
+  if (fresh.length > 0) {
+    log(`    · 새 송장 번호 후보: ${fresh.join(", ")} — 송장 목록에서 확정합니다`);
   }
   /**
    * 화면만으로는 못 정한다 — **모르겠다**고 답한다.
