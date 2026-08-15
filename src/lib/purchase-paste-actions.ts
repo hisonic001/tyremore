@@ -68,6 +68,15 @@ export async function previewPastedPurchase(text: string, supplier: string): Pro
      */
     const suffix = code.includes("_") ? code.slice(code.indexOf("_") + 1) : null;
     const keys = [code, ...(suffix ? [suffix] : [])];
+    /**
+     * 🔴 `= ANY(${배열})` 은 쓰지 않는다 (2026-08-15 실서비스 500) —
+     *    drizzle 이 JS 배열을 Postgres 배열 리터럴로 못 묶어
+     *    「malformed array literal」로 죽는다. IN 목록으로 편다 (값은 그대로 파라미터).
+     */
+    const keyList = sql.join(
+      keys.map((k) => sql`${k.toUpperCase()}`),
+      sql`, `,
+    );
 
     const [hit] = await db.execute<{
       id: number; name: string; item_type: string; purchase_price: number | null;
@@ -77,7 +86,7 @@ export async function previewPastedPurchase(text: string, supplier: string): Pro
         SELECT p.id, COALESCE(NULLIF(p.display_name,''), p.raw_name) name, p.item_type,
                p.purchase_price, '품번' how, 1 pri
         FROM product p
-        WHERE p.is_active AND upper(p.part_no) = ANY(${keys.map((k) => k.toUpperCase())})
+        WHERE p.is_active AND upper(p.part_no) IN (${keyList})
         UNION ALL
         SELECT p.id, COALESCE(NULLIF(p.display_name,''), p.raw_name), p.item_type,
                p.purchase_price, '거래처 사전', 2
