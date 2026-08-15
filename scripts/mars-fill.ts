@@ -53,19 +53,21 @@ const HOME = "https://mars.tyremore.co.kr/MARS/?tenant=61168583";
 const SHOT_DIR = path.resolve(process.cwd(), "..", "tyremore-data", "스크린샷");
 
 /**
- * ⭐ MARS 미등록 상품을 대신 넣는 **범용 품번** (사장님 결정 2026-08-04).
+ * ⭐ MARS 미등록 상품을 대신 넣는 **범용 품번** (사장님 결정 2026-08-04 → 2026-08-15 확정).
  *
- * 거래처 목록·손 등록으로 만든 상품(235개)은 MARS 마스터에 없다. 그 줄은 이 품번으로
- * 넣고 실제 상품명을 「설명 2」에 남긴다 — 금액·수량 실적은 정확하고 브랜드만 뭉개진다.
+ *   "mars 품목에 없는 타이어나 공임의 경우 그냥 전부 일괄적으로
+ *    유형:기타 / 번호: S001/1290 — 이 품목으로 입력시켜줘." (2026-08-15)
  *
- * 🔴 아직 **쓸 수 있는 범용 품번이 없다** (2026-08-04 실측).
- *    마스터에서 찾았던 후보 `580/001/00290`(이름 빈 10-TIRES 자리표시)를 실제로
- *    넣어 봤더니 **줄에 오류 두 개**가 떴다 — 마스터 설정이 미완성이라 MARS 가 거부한다.
- *    사장님이 MARS 에서 범용 품목을 하나 만들거나(또는 이 품목을 고치거나) 코드를
- *    주시면 .env.local 에 `MARS_FALLBACK_ITEM=코드` 로 넣는다. 그 전까지
- *    미등록 상품 줄은 **명확한 실패**로 알린다 — 깨진 줄을 만드는 것보다 낫다.
+ * 거래처 목록·손 등록으로 만든 상품·품번 없는 공임은 MARS 마스터에 없다. 그 줄은
+ * 이 품번(유형 「기타」)으로 넣고 실제 상품명을 「설명 2」에 남긴다 —
+ * 금액·수량 실적은 정확하고 품목 구분만 뭉개진다.
+ *
+ * (지난 후보 `580/001/00290` 은 마스터 설정 미완성으로 MARS 가 거부했었다 — 2026-08-04 실측.
+ *  다른 코드로 바꿔야 하면 .env.local 의 MARS_FALLBACK_ITEM 이 이긴다.)
  */
-const FALLBACK_ITEM = process.env.MARS_FALLBACK_ITEM ?? null;
+const FALLBACK_ITEM = process.env.MARS_FALLBACK_ITEM ?? "S001/1290";
+/** 범용 품번의 「유형」 — 상품·자원이 아니라 「기타」다 (사장님 지시 2026-08-15) */
+const FALLBACK_TYPE_LABEL = "기타";
 
 const DRY = process.argv.includes("--dry");
 /** 고객 생성 화면이 실제로 어떻게 생겼는지만 훑고 취소한다 — 아무것도 저장하지 않는다 */
@@ -1211,10 +1213,18 @@ async function fillLines(
   let put = 0;
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
-    if (!l.no) {
-      log(`    ⚠️ ${l.marsName.slice(0, 30)} — MARS 품번이 없어 건너뜁니다`);
-      continue;
-    }
+    /**
+     * ⭐ MARS 품번이 없는 타이어·공임은 **일괄 「기타」 품목**으로 (사장님 지시 2026-08-15).
+     *
+     *   "mars 품목에 없는 타이어나 공임의 경우 그냥 전부 일괄적으로
+     *    유형:기타 / 번호: S001/1290 — 이 품목으로 입력시켜줘."
+     *
+     * 전에는 건너뛰어서 그 판매 전체가 「줄 부족」으로 실패했다. 무엇을 팔았는지는
+     * 설명 2(우리 품목명)에 그대로 남으니 MARS 에서도 알아볼 수 있다.
+     */
+    const misc = !l.no;
+    const itemNo = misc ? FALLBACK_ITEM : l.no!;
+    if (misc) log(`    · ${l.marsName.slice(0, 34)} — MARS 품목에 없어 「기타」(${FALLBACK_ITEM})로 넣습니다`);
     const row = grid.locator("tr.real-current");
 
     /**
@@ -1222,6 +1232,8 @@ async function fillLines(
      *    ["", "G/L 계정", "상품", "자원", "고정 자산", "요금(품목)"] → 상품=2, 자원=3
      *    🔴 「서비스」라는 항목은 **없다.** 공임은 「자원」이다.
      *       없는 이름을 찾고 있었으니 공임 줄은 전부 실패했을 것이다.
+     *    「기타」는 숫자 값을 아직 실측 못 했다 — 라벨로 고르고, 실패하면 옵션
+     *    목록을 로그에 남긴다 (아래).
      */
     /**
      * 🔴 **누른 다음에 `<select>` 를 찾는다.**
@@ -1229,8 +1241,8 @@ async function fillLines(
      *    누르기 전에 찾았더니 두 줄 다 실패해서 MARS 기본값(상품)으로 들어갔고,
      *    얼라인먼트가 「자원」이 아니라 「상품」이 됐다 (2026-08-02 사장님 지적).
      */
-    const want = l.kind === "tire" ? "2" : "3";
-    const wantLabel = l.kind === "tire" ? "상품" : "자원";
+    const want = misc ? null : l.kind === "tire" ? "2" : "3";
+    const wantLabel = misc ? FALLBACK_TYPE_LABEL : l.kind === "tire" ? "상품" : "자원";
 
     /**
      * 🔴 **`<select>` 는 누르면 안 된다** (2026-08-02 화면으로 확인).
@@ -1262,7 +1274,7 @@ async function fillLines(
          */
         if (!(await grid.isVisible().catch(() => false))) {
           throw new Error(
-            `매출 주문 화면이 사라졌습니다 (홈으로 튕김) — ${l.no} 줄을 넣기 전입니다. 다음 실행에서 처음부터 다시 합니다`,
+            `매출 주문 화면이 사라졌습니다 (홈으로 튕김) — ${itemNo} 줄을 넣기 전입니다. 다음 실행에서 처음부터 다시 합니다`,
           );
         }
         log(`      · 유형 선택이 안 돼 다시 시도합니다 (${att + 1}번째)`);
@@ -1273,17 +1285,30 @@ async function fillLines(
       const typeSel = row.locator('[controlname="Type"] select, select[controlname="Type"]').first();
       const target = (await typeSel.count().catch(() => 0)) > 0 ? typeSel : await resolveInput(typeCell);
       typed =
-        (await target.selectOption(want).then(() => true).catch(() => false)) ||
+        (want !== null && (await target.selectOption(want).then(() => true).catch(() => false))) ||
         (await target.selectOption({ label: wantLabel }).then(() => true).catch(() => false));
+      if (!typed && misc) {
+        // 「기타」의 정확한 표기를 모를 수 있다 — 옵션 목록을 읽어 「기타」가 든 것을 고른다
+        const opts = await target
+          .locator("option")
+          .allInnerTexts()
+          .catch(() => [] as string[]);
+        const hit = opts.find((o) => o.includes("기타"));
+        if (hit) {
+          typed = await target.selectOption({ label: hit }).then(() => true).catch(() => false);
+        } else if (opts.length) {
+          log(`      · 유형 옵션 목록: ${opts.map((o) => `«${o.trim()}»`).join(" ")} — 「기타」가 없습니다`);
+        }
+      }
     }
 
     if (typed) {
       await page.waitForTimeout(500);
       const now = await readField(typeCell);
-      log(`      유형 → ${wantLabel}${now && now !== want ? ` (값 «${now}»)` : ""}`);
+      log(`      유형 → ${wantLabel}${now && want !== null && now !== want ? ` (값 «${now}»)` : ""}`);
     } else {
       /** 🔴 유형을 못 고르면 **그 줄은 넣지 않는다.** 엉뚱한 유형으로 들어가면 장부가 틀어진다 */
-      throw new Error(`「유형」을 «${wantLabel}» 으로 못 골랐습니다 — ${l.no} 줄을 넣지 않았습니다`);
+      throw new Error(`「유형」을 «${wantLabel}» 으로 못 골랐습니다 — ${itemNo} 줄을 넣지 않았습니다`);
     }
 
     /**
@@ -1295,8 +1320,8 @@ async function fillLines(
     await noCell.click({ timeout: 6000 }).catch(() => {});
     await page.waitForTimeout(300);
     const no = await resolveInput(noCell);
-    await no.fill(l.no).catch(async () => {
-      await no.evaluate(SET_VALUE, l.no!).catch(() => {});
+    await no.fill(itemNo).catch(async () => {
+      await no.evaluate(SET_VALUE, itemNo).catch(() => {});
     });
     /** ⭐ 엔터를 치면 품목을 불러오고 **바로 수량으로 넘어간다** (사장님 확인) */
     await no.press("Enter");
@@ -1400,13 +1425,30 @@ async function fillLines(
     const wasMatchWin = s1.match;
     let usedFallback = false;
     if (wasMatchWin || /찾을 수 없|존재하지 않|않습니다|없습니다/.test(noDlg)) {
-      if (!FALLBACK_ITEM) {
-        throw new Error(
-          `MARS 에 없는 품번입니다: ${l.no} «${l.marsName}» — 범용 품번이 아직 없어 이 줄은 직접 처리해 주세요` +
-            ` (MARS: ${noDlg.slice(0, 80)})`,
-        );
+      log(`      ⚠️ MARS 에 없는 품번 ${itemNo} — 「기타」(${FALLBACK_ITEM})로 대신 넣습니다`);
+
+      /**
+       * ⭐ 유형도 「기타」로 바꾼다 (사장님 지시 2026-08-15 — S001/1290 은 기타 품목이다).
+       *    상품·자원인 채로 이 품번을 치면 유형이 안 맞아 MARS 가 거부할 수 있다.
+       */
+      if (wantLabel !== FALLBACK_TYPE_LABEL) {
+        await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+        await page.waitForTimeout(400);
+        const ts = row.locator('[controlname="Type"] select, select[controlname="Type"]').first();
+        const tgt = (await ts.count().catch(() => 0)) > 0 ? ts : await resolveInput(typeCell);
+        let ok2 = await tgt.selectOption({ label: FALLBACK_TYPE_LABEL }).then(() => true).catch(() => false);
+        if (!ok2) {
+          const opts = await tgt.locator("option").allInnerTexts().catch(() => [] as string[]);
+          const hit = opts.find((o) => o.includes(FALLBACK_TYPE_LABEL));
+          if (hit) ok2 = await tgt.selectOption({ label: hit }).then(() => true).catch(() => false);
+          else if (opts.length)
+            log(`      · 유형 옵션 목록: ${opts.map((o) => `«${o.trim()}»`).join(" ")} — 「기타」가 없습니다`);
+        }
+        if (!ok2) throw new Error(`범용 품번을 넣으려면 유형을 「${FALLBACK_TYPE_LABEL}」로 바꿔야 하는데 못 골랐습니다`);
+        await page.waitForTimeout(600);
+        log(`      유형 → ${FALLBACK_TYPE_LABEL} (범용 품번용)`);
       }
-      log(`      ⚠️ MARS 에 없는 품번 ${l.no} — 범용 품번 ${FALLBACK_ITEM} 으로 대신 넣습니다`);
+
       await noCell.click({ timeout: 6000 }).catch(() => {});
       await page.waitForTimeout(300);
       const no2 = await resolveInput(noCell);
@@ -1432,7 +1474,8 @@ async function fillLines(
      *    먼저 써 두면 재계산이 지나간 뒤에 수량·단가가 들어간다.
      *    메모가 없으면 손대지 않는다 — 멀쩡한 기본값(규격·모델명)을 지울 이유가 없다.
      */
-    const d2Text = [usedFallback ? l.marsName : null, l.memo?.trim() || null]
+    // 「기타」(범용 품번)로 들어간 줄은 실제 품목명이 여기에만 남는다 — 꼭 쓴다
+    const d2Text = [usedFallback || misc ? l.marsName : null, l.memo?.trim() || null]
       .filter(Boolean)
       .join(" · ");
     if (d2Text) {
@@ -1479,7 +1522,7 @@ async function fillLines(
       }
     }
     if (!qtyOk) {
-      throw new Error(`${l.no} 줄의 수량 ${l.qty}을 넣지 못했습니다`);
+      throw new Error(`${itemNo} 줄의 수량 ${l.qty}을 넣지 못했습니다`);
     }
 
     /**
@@ -1528,11 +1571,11 @@ async function fillLines(
     }
     if (!priceOk) {
       throw new Error(
-        `${l.no} 줄의 단가 ${l.unitPrice.toLocaleString()}원을 넣지 못했습니다 — MARS 기본단가가 남아 있습니다`,
+        `${itemNo} 줄의 단가 ${l.unitPrice.toLocaleString()}원을 넣지 못했습니다 — MARS 기본단가가 남아 있습니다`,
       );
     }
 
-    log(`    ✅ ${l.no}  ${l.marsName.slice(0, 34)}  ×${l.qty}  ${l.unitPrice.toLocaleString()}원`);
+    log(`    ✅ ${itemNo}  ${l.marsName.slice(0, 34)}  ×${l.qty}  ${l.unitPrice.toLocaleString()}원`);
     put++;
 
     if (i < lines.length - 1) {
