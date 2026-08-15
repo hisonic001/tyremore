@@ -1048,15 +1048,23 @@ async function findCustomerByName(page: Page, name: string, phone: string | null
 
 /**
  * 우리 결제 방법 → MARS 결제 수단 코드.
- * 지역화폐는 MARS 에 그냥 현금 (사장님 지시 2026-08-10).
- * 혼합(분할 결제)은 marsQueue 가 금액 큰 수단을 marsPayMethod 로 뽑아 준다 —
- * 여기서는 그 수단의 코드를 그대로 쓴다.
+ *
+ * 🔴 **전부 CREDITCARD 로 올린다** (사장님 결정 2026-08-15).
+ *
+ *   "솔직히 mars에서 이런 결제 수단까지 확인 안해도 되니까 그냥 mars에는
+ *    전부 credit 카드로 이러한 문제가 생기지 않도록 올려버리는건 어떻게 생각해?"
+ *
+ * 근거: 수단 CASH 로 전기하면 「현금 등록기」 창이 떠서 5건 연속 막혔다
+ * (2026-08-10~12 로그 실측 — 조건 코드는 무관, CASH 수단이 방아쇠).
+ * CREDITCARD 는 14건 전부 창 없이 전기됐다. MARS 평가 점수(본수·소매 비중·SOA)는
+ * 결제 수단과 무관하고, 실제 결제 수단은 우리 앱 장부에 정확히 남는다.
+ * 옛 매핑(참고): 카드 CREDITCARD · 현금 CASH · 계좌이체 BANK · 지역화폐 CASH.
  */
 const PAY_CODE: Record<string, string> = {
   카드: "CREDITCARD",
-  현금: "CASH",
-  계좌이체: "BANK",
-  지역화폐: "CASH",
+  현금: "CREDITCARD",
+  계좌이체: "CREDITCARD",
+  지역화폐: "CREDITCARD",
 };
 
 /** 신규 매출 주문을 열고 고객·주행거리·결제·날짜를 넣는다 */
@@ -3063,7 +3071,8 @@ async function main_() {
           `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
         log(
           `    · 작업일자 ${iso} · 결제 ${q.paymentMethod ?? "-"}` +
-            (q.paymentMethod === "혼합" ? ` (MARS 에는 ${q.marsPayMethod ?? "코드 없음"}으로)` : ""),
+            // 전부 CREDITCARD 로 올린다 (사장님 결정 2026-08-15) — 실제 결제와 다르면 티를 낸다
+            (q.paymentMethod && q.paymentMethod !== "카드" ? " (MARS 에는 카드로)" : ""),
         );
         /**
          * ⭐ 주행거리는 **차량의 최근 값**을 쓴다 (사장님 버그 제보 2026-08-05).
