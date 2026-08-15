@@ -2991,6 +2991,19 @@ async function main_() {
           }
 
           await markVehicleChecked(c.quoteId);
+          /**
+           * ⭐ 송장 번호가 우리 기록에 없으면(현금 등록기에 막혀 수동 전기한 건 등)
+           *    목록에서 찾은 번호를 여기서 채운다 (2026-08-15) — 안 채우면
+           *    「전기 미확인」 감사가 계속 울린다.
+           */
+          if (!c.marsRefNo || c.marsRefNo === "수동확인") {
+            const m = /\d{8}-\d{2}SI\+\d{6}/.exec(picked.label);
+            if (m) {
+              const { saveMarsRefNo } = await import("../src/lib/mars-queue");
+              await saveMarsRefNo(c.quoteId, m[0]);
+              log(`  · 송장 번호를 기록에 채웠습니다: ${m[0]}`);
+            }
+          }
           ok++;
           log(r.already ? "  ✅ 이미 점검이 끝나 있어 기록만 맞췄습니다" : "  ✅ 차량 점검 제출 완료");
         } catch (e) {

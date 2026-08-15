@@ -327,6 +327,21 @@ export async function markEntered(
 }
 
 /**
+ * ⭐ 점검 실행이 송장 목록에서 알아낸 **송장 번호를 뒤늦게 채운다** (2026-08-15).
+ *
+ * 🔴 8/12 현금 3건이 「전기 미확인」으로 남아 있었는데, 점검 실행은 그 송장들을
+ *    목록에서 찾아 놓고도(003225·003226·003228) 점검 기록만 맞추고 번호는 안
+ *    적었다 — 감사 배너가 계속 울렸다. 번호가 비어 있거나 「수동확인」일 때만 채운다.
+ */
+export async function saveMarsRefNo(quoteId: number, refNo: string): Promise<void> {
+  await db.execute(sql`
+    UPDATE quote SET mars_ref_no = ${refNo}, updated_at = now()
+    WHERE id = ${quoteId} AND (mars_ref_no IS NULL OR mars_ref_no = '수동확인')
+  `);
+  refresh("/sales");
+}
+
+/**
  * ⭐ 대기열에서 내려 「보류」로 되돌린다 (2026-08-15).
  *
  * 🔴 이원섭 건(Q26-0810-012)이 동의 서명이 없어 **18번 연속** 같은 경고를 내며
