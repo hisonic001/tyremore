@@ -27,11 +27,14 @@ export function SalesList({
   run,
   hiddenCount,
   shown,
+  owner = false,
 }: {
   days: SaleDay[];
   run: MarsRunRow | null;
   hiddenCount: number;
   shown: number;
+  /** ⭐ 손님·거래처 바꾸기는 사장님만 보인다 (2026-08-17) */
+  owner?: boolean;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -226,6 +229,7 @@ export function SalesList({
               >
                 {d.sales.map((s) => (
                   <SaleCard
+                    owner={owner}
                     key={s.quoteId}
                     sale={s}
                     select={

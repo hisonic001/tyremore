@@ -7,6 +7,7 @@ import type { SaleRow } from "@/lib/sale-history";
 import { EXCLUSIVE, SPLITTABLE, splitLabel } from "@/lib/payments";
 import { CollectionPanel } from "./collections";
 import { AddLine, EditableLine } from "./line-edit";
+import { ReassignPanel } from "./reassign";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
 /** ⭐ 혼합은 이제 직접 고르지 않는다 — 수단을 2개 이상 고르면 자동으로 혼합이 된다 (2026-08-10) */
@@ -22,14 +23,19 @@ const PAYS = [...SPLITTABLE, ...EXCLUSIVE] as readonly string[];
 export function SaleCard({
   sale: s,
   select,
+  owner = false,
 }: {
   sale: SaleRow;
   /** ⭐ MARS 올리기 선택 모드 (사장님 지시 2026-08-09) — 있으면 카드가 체크박스가 된다 */
   select?: { eligible: boolean; checked: boolean; toggle: () => void };
+  /** ⭐ 손님·거래처 바꾸기는 사장님만 (2026-08-17) — 돈의 주인이 바뀌는 일이다 */
+  owner?: boolean;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
+  /** 손님·거래처 바꾸기 패널 (2026-08-17) */
+  const [reassigning, setReassigning] = useState(false);
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -320,6 +326,17 @@ export function SaleCard({
             <CollectionPanel quoteId={s.quoteId} total={s.totalAmount} collections={s.collections} />
           )}
 
+          {/* ⭐ 손님·거래처 바꾸기 (사장님 지시 2026-08-17) */}
+          {owner && reassigning && !canceled && (
+            <ReassignPanel
+              sale={s}
+              onDone={(m) => {
+                setNotice(m);
+                setReassigning(false);
+              }}
+            />
+          )}
+
           {error && <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
           {notice && (
             <p className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{notice}</p>
@@ -438,7 +455,7 @@ export function SaleCard({
                   </div>
                 </div>
               ) : (
-                <div className="mt-3 flex gap-2">
+                <div className="mt-3 flex flex-wrap gap-2">
                   <button
                     type="button"
                     onClick={() => setEditing(true)}
@@ -446,6 +463,16 @@ export function SaleCard({
                   >
                     날짜·결제 고치기
                   </button>
+                  {/* ⭐ 손님·거래처 바꾸기 (사장님 지시 2026-08-17) — 사장님 계정만 */}
+                  {owner && (
+                    <button
+                      type="button"
+                      onClick={() => setReassigning((v) => !v)}
+                      className="flex-1 rounded-lg border border-indigo-300 py-2 text-sm font-medium text-indigo-700 active:bg-indigo-50"
+                    >
+                      {reassigning ? "바꾸기 접기" : "손님·거래처 바꾸기"}
+                    </button>
+                  )}
                   <button
                     type="button"
                     disabled={pending}

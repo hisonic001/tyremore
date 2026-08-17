@@ -1,6 +1,7 @@
 import Link from "@/lib/link";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
+import { isOwner } from "@/lib/auth";
 import { marsAudit } from "@/lib/mars-audit";
 import { ResolveButton } from "./audit-resolve";
 import { latestMarsRun } from "@/lib/mars-run";
@@ -76,6 +77,8 @@ export default async function SalesPage({
         )[0]
       : null;
 
+  /** ⭐ 손님·거래처 바꾸기는 사장님만 (2026-08-17) — 질의는 순차로 */
+  const owner = await isOwner();
   // ⭐ MARS 실행 진행도 여기서 보인다 — /mars 페이지는 없앴다 (사장님 지시 2026-08-09)
   const run = await latestMarsRun();
   // ⭐ MARS 정합 감사 (2026-08-10 개선 전략) — 어긋난 건이 있을 때만 배너가 뜬다.
@@ -243,7 +246,7 @@ export default async function SalesPage({
       )}
 
       {/* ⭐ MARS 올리기 판 + 날짜별 목록 — 카드 체크·올리기·진행 로그가 한 화면 (2026-08-09) */}
-      <SalesList days={days} run={run} hiddenCount={hiddenCount} shown={shown} />
+      <SalesList days={days} run={run} hiddenCount={hiddenCount} shown={shown} owner={owner} />
 
       <div className="mt-6 text-center">
         <Link
