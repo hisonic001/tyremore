@@ -22,6 +22,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { quote } from "@/db/schema";
+import { marsMissing } from "./mars-ready";
 import { requestMarsRun } from "./mars-run";
 
 function refresh(...paths: string[]) {
@@ -61,6 +62,7 @@ export interface MarsEntry {
   customerName: string | null;
   phone: string | null;
   plateNo: string | null;
+  /** 차량 모델 — MARS 필수 정보 검사(mars-ready)와 차량 카드 만들기에 쓴다 */
   vehicleModel: string | null;
   /**
    * ⭐ 차량의 최근 주행거리 (사장님 버그 제보 2026-08-05).
@@ -146,29 +148,44 @@ export async function queueForMars(
   if (ids.length === 0) return { ok: false, error: "올릴 판매를 선택해 주세요" };
 
   /**
-   * ⭐ 주행거리 문지기 (사장님 지시 2026-08-17):
-   *   ① 주행거리가 없으면 MARS 가 전기 자체를 막는다
-   *      (「주행거리를 먼저 입력해야 합니다」 창 — run#89 택시 건 실측).
-   *   ② MARS 에 이미 등록된 값보다 **적어도** 거부된다 (사장님 관찰).
+   * ⭐ MARS 필수 정보 문지기 (사장님 지시 2026-08-17, 두 차례):
+   *   ① 차대번호를 뺀 고객·차량 필수 정보가 하나라도 없으면 올리지 않는다 —
+   *      "mars에는 사실 차대번호를 제외한 고객과 차량 정보가 없으면 입력이 안될것임"
+   *      규칙은 mars-ready.ts 한 곳 (화면 체크박스·매장 PC 와 같은 규칙).
+   *   ② 주행거리가 MARS 에 등록된 값보다 **적어도** 거부된다 (사장님 관찰).
    *      MARS 의 값은 직접 못 읽으니, 같은 차의 전송완료 건 중 최대 주행거리를
-   *      근사치로 쓴다 — 차량 카드·주문의 주행거리는 전부 우리가 넣은 값이라
-   *      이 근사가 실제 MARS 값과 같거나 작다(즉 덜 막을지언정 더 막지는 않는다).
+   *      근사치로 쓴다 — 덜 막을지언정 더 막지는 않는다.
    *   막힌 건은 그대로 두고 나머지만 올린다 — 한 건 때문에 전부 멈추지 않는다.
    */
   const inList = sql.join(ids.map((i) => sql`${i}`), sql`, `);
   const cands = await db.execute<{
     id: number;
     quote_no: string;
+    vehicle_id: number | null;
+    mars_vehicle_no: string | null;
+    maker_name: string | null;
+    model: string | null;
+    year: number | null;
+    fuel_type: string | null;
     eff: number | null;
+    mars_contact_no: string | null;
+    customer_name: string | null;
+    phone: string | null;
+    address: string | null;
+    consent_signed: boolean | null;
     posted_max: number | null;
   }>(sql`
-    SELECT q.id, q.quote_no,
+    SELECT q.id, q.quote_no, q.vehicle_id,
+           v.mars_vehicle_no, v.maker_name, v.model, v.year, v.fuel_type,
            COALESCE(q.mileage, v.mileage)::int AS eff,
+           c.mars_contact_no, c.name customer_name, c.phone, c.address,
+           (c.consent_signed_at IS NOT NULL) consent_signed,
            (SELECT max(q2.mileage)::int FROM quote q2
              WHERE q2.vehicle_id = q.vehicle_id AND q2.id <> q.id
                AND q2.mars_status = '전송완료' AND q2.mileage IS NOT NULL) AS posted_max
     FROM quote q
-    LEFT JOIN vehicle v ON v.id = q.vehicle_id
+    LEFT JOIN vehicle  v ON v.id = q.vehicle_id
+    LEFT JOIN customer c ON c.id = q.customer_id
     WHERE q.id IN (${inList}) AND q.status = '성사' AND q.mars_status IN ('보류', '수동처리')
   `);
   const blocked: string[] = [];
@@ -176,9 +193,23 @@ export async function queueForMars(
   for (const r of cands) {
     const eff = r.eff === null ? null : Number(r.eff);
     const postedMax = r.posted_max === null ? null : Number(r.posted_max);
-    if (eff === null) {
-      blocked.push(`${r.quote_no}: 주행거리가 없습니다 — 「날짜·결제 고치기」에서 넣어 주세요`);
-    } else if (postedMax !== null && eff < postedMax) {
+    const missing = marsMissing({
+      hasVehicle: r.vehicle_id !== null,
+      marsVehicleNo: r.mars_vehicle_no,
+      makerName: r.maker_name,
+      model: r.model,
+      year: r.year === null ? null : Number(r.year),
+      fuelType: r.fuel_type,
+      mileage: eff,
+      contactNo: r.mars_contact_no,
+      customerName: r.customer_name,
+      phone: r.phone,
+      address: r.address,
+      consentSigned: r.consent_signed === true,
+    });
+    if (missing.length) {
+      blocked.push(`${r.quote_no}: ${missing.join(" · ")} 이(가) 없습니다`);
+    } else if (eff !== null && postedMax !== null && eff < postedMax) {
       blocked.push(
         `${r.quote_no}: MARS 에 ${postedMax.toLocaleString()}km 로 등록된 차인데 이 판매는 ${eff.toLocaleString()}km 입니다 — MARS 는 적은 값을 거부합니다. 주행거리를 고쳐 주세요`,
       );

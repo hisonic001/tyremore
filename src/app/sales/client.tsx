@@ -27,7 +27,7 @@ export function SaleCard({
 }: {
   sale: SaleRow;
   /** ⭐ MARS 올리기 선택 모드 (사장님 지시 2026-08-09) — 있으면 카드가 체크박스가 된다 */
-  select?: { eligible: boolean; checked: boolean; toggle: () => void };
+  select?: { eligible: boolean; checked: boolean; toggle: () => void; reason?: string | null };
   /** ⭐ 손님·거래처 바꾸기는 사장님만 (2026-08-17) — 돈의 주인이 바뀌는 일이다 */
   owner?: boolean;
 }) {
@@ -229,6 +229,10 @@ export function SaleCard({
             )}
           </span>
         </div>
+        {/* ⭐ 선택 모드에서 체크가 막힌 이유 (사장님 지시 2026-08-17) — 이유 없이 안 눌리면 답답하다 */}
+        {select && !select.eligible && select.reason && (
+          <p className="mt-1 text-xs font-medium text-amber-700">⚠️ {select.reason}</p>
+        )}
         {/* PC: 품목을 줄별로 펼쳐서 — 펼치지 않아도 무엇을 얼마에 했는지 보인다 */}
         <div className="mt-2 hidden space-y-1 lg:block">
           {s.lines.map((l) => (

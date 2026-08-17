@@ -4,6 +4,7 @@ config({ path: ".env.local" });
 import { execSync } from "node:child_process";
 import path from "node:path";
 import { chromium, type FrameLocator, type Locator, type Page } from "playwright";
+import { marsMissing } from "../src/lib/mars-ready";
 
 /**
  * ⭐ MARS 자동 입력 (사장님 요청 2026-08-02)
@@ -3115,25 +3116,39 @@ async function main_() {
         continue;
       }
       /**
-       * ⭐ 주행거리 문지기 (사장님 지시 2026-08-17) — 웹의 queueForMars 가 먼저 거르지만,
-       *    체크 뒤에 판매가 수정됐거나 옛날에 올라온 건이 있을 수 있어 여기서도 거른다.
-       *   ① 주행거리가 없으면 MARS 가 전기를 막는다 (run#89 택시 건 실측).
-       *   ② MARS 에 등록된 값보다 적어도 거부된다 (사장님 관찰) — 같은 차의
-       *      전송완료 건 최대값(postedMaxMileage)을 근사치로 쓴다.
+       * ⭐ MARS 필수 정보 문지기 (사장님 지시 2026-08-17) — 웹의 queueForMars 가 먼저
+       *    거르지만, 체크 뒤에 판매가 수정됐거나 옛날에 올라온 건이 있을 수 있어
+       *    여기서도 거른다. 규칙은 mars-ready.ts 한 곳 (화면·서버와 같은 규칙):
+       *   ① 차대번호를 뺀 고객·차량 필수 정보가 하나라도 없으면 MARS 가 못 받는다.
+       *   ② 주행거리가 MARS 등록값(같은 차의 전송완료 건 최대값으로 근사)보다
+       *      적어도 거부된다 (사장님 관찰).
        *    둘 다 자동입력이 못 푸는 문제라 **보류로 내린다** (서명 없는 건과 같은 방식 —
        *    안 내리면 실행마다 같은 실패를 반복하며 초안만 쌓인다).
        */
       const effKm = q.mileage ?? q.newCustomer?.mileage ?? null;
-      const kmProblem =
-        effKm === null
-          ? "주행거리가 없어 MARS 가 전기를 막습니다 — 「날짜·결제 고치기」에서 주행거리를 넣고 다시 MARS 체크"
-          : q.postedMaxMileage !== null && Number(effKm) < Number(q.postedMaxMileage)
-            ? `MARS 에 ${Number(q.postedMaxMileage).toLocaleString()}km 로 등록된 차인데 이 판매는 ${Number(effKm).toLocaleString()}km 라 거부됩니다 — 주행거리를 고치고 다시 MARS 체크`
-            : null;
-      if (kmProblem) {
-        log(`  ⚠️ ${kmProblem}`);
+      const missing = marsMissing({
+        hasVehicle: !!q.plateNo,
+        marsVehicleNo: q.marsVehicleNo,
+        makerName: q.makerName,
+        model: q.vehicleModel,
+        year: q.year,
+        fuelType: q.fuelType,
+        mileage: effKm === null ? null : Number(effKm),
+        contactNo: q.contactNo,
+        customerName: q.customerName,
+        phone: q.phone,
+        address: q.newCustomer?.address ?? null,
+        consentSigned: q.newCustomer?.consentSigned ?? false,
+      });
+      const gateProblem = missing.length
+        ? `MARS 필수 정보가 없습니다 (${missing.join(" · ")}) — 채우고 다시 MARS 체크`
+        : effKm !== null && q.postedMaxMileage !== null && Number(effKm) < Number(q.postedMaxMileage)
+          ? `MARS 에 ${Number(q.postedMaxMileage).toLocaleString()}km 로 등록된 차인데 이 판매는 ${Number(effKm).toLocaleString()}km 라 거부됩니다 — 주행거리를 고치고 다시 MARS 체크`
+          : null;
+      if (gateProblem) {
+        log(`  ⚠️ ${gateProblem}`);
         log("     (보류로 내렸습니다 — 다음 자동입력부터는 이 건을 건너뜁니다)");
-        await holdMars(q.quoteId, kmProblem);
+        await holdMars(q.quoteId, gateProblem);
         skipped++;
         continue;
       }

@@ -44,15 +44,22 @@ export function SalesList({
   const [msg, setMsg] = useState<string | null>(null);
 
   /**
-   * ⭐ 주행거리 없는 판매는 체크 자체를 막는다 (사장님 지시 2026-08-17) —
-   *    MARS 가 주행거리 없이는 전기를 막아서(「주행거리를 먼저 입력해야 합니다」)
-   *    올려 봐야 실패한다. 「날짜·결제 고치기」에서 채우면 체크할 수 있게 된다.
-   *    (MARS 등록값보다 적은 경우는 서버 queueForMars 가 걸러서 알려준다)
+   * ⭐ MARS 필수 정보가 하나라도 없으면 체크 자체를 막는다 (사장님 지시 2026-08-17) —
+   *    "차대번호를 제외한 고객과 차량 정보가 없으면 입력이 안될것임".
+   *    앱 등록은 자유롭게 두고 문턱은 여기다. 규칙은 mars-ready.ts 한 곳
+   *    (서버 queueForMars·매장 PC 와 같은 규칙 — 주행거리 뒷걸음은 서버가 걸러 알려준다).
    */
   const eligible = (s: SaleRow) =>
     s.status === "성사" &&
     (s.marsStatus === "보류" || s.marsStatus === "수동처리") &&
-    (s.mileage ?? s.vehicleMileage) !== null;
+    s.marsMissing.length === 0;
+  /** 체크만 못 하게 흐려진 카드에 **왜**를 보여준다 — 이유 없이 안 눌리면 답답하다 */
+  const blockedReason = (s: SaleRow) =>
+    s.status === "성사" &&
+    (s.marsStatus === "보류" || s.marsStatus === "수동처리") &&
+    s.marsMissing.length > 0
+      ? `MARS 필수 정보 없음: ${s.marsMissing.join(" · ")}`
+      : null;
   const all = days.flatMap((d) => d.sales);
   const eligibleCount = all.filter(eligible).length;
   /** 체크해서 '미전송' 이 됐지만 매장 PC 가 아직 안 집어 간 것 */
@@ -153,8 +160,9 @@ export function SalesList({
               MARS 에 올릴 카드를 체크하세요 — <span className="tabular">{selected.length}건</span> 선택됨
             </p>
             <p className="mt-0.5 text-xs text-indigo-700">
-              이미 올라간 것(✓)과 거래처·서비스 판매, <strong>주행거리 없는 판매</strong>는 체크할 수
-              없습니다 — 주행거리는 「날짜·결제 고치기」에서 채울 수 있습니다.
+              이미 올라간 것(✓)과 거래처·서비스 판매, <strong>MARS 필수 정보가 빈 판매</strong>는 체크할
+              수 없습니다 — 흐린 카드에 무엇이 없는지 나옵니다. 주행거리는 「날짜·결제 고치기」에서,
+              나머지는 고객·차량 카드에서 채우면 됩니다.
             </p>
             <div className="mt-2 flex gap-2">
               <button
@@ -251,6 +259,7 @@ export function SalesList({
                             eligible: eligible(s),
                             checked: !!sel[s.quoteId],
                             toggle: () => setSel((v) => ({ ...v, [s.quoteId]: !v[s.quoteId] })),
+                            reason: blockedReason(s),
                           }
                         : undefined
                     }

@@ -14,6 +14,7 @@
  *    수정·취소 같은 쓰기는 `sale-edit.ts` 가 따로 한다.
  */
 import { sql } from "drizzle-orm";
+import { marsMissing } from "./mars-ready";
 
 export interface SaleLine {
   itemId: number;
@@ -49,6 +50,8 @@ export interface SaleRow {
   mileage: number | null;
   /** 차량 카드의 최근 주행거리 — 과거 건의 대체 표시용 */
   vehicleMileage: number | null;
+  /** ⭐ MARS 올리기에 모자란 필수 정보 (2026-08-17) — 비면 올릴 수 있다. 규칙은 mars-ready.ts */
+  marsMissing: string[];
   /** 비회원이면 marsMemo 의 「비회원 이름 전화」가 이름 역할을 한다 (거래처는 supplierName 으로) */
   walkIn: string | null;
   totalAmount: number;
@@ -172,6 +175,13 @@ export async function saleHistory(opts: {
     maker_name: string | null;
     mileage: number | null;
     veh_mileage: number | null;
+    veh_year: number | null;
+    fuel_type: string | null;
+    mars_vehicle_no: string | null;
+    mars_contact_no: string | null;
+    cust_phone: string | null;
+    cust_address: string | null;
+    consent_signed: boolean | null;
     mars_memo: string | null;
     total_amount: number;
     payment_method: string | null;
@@ -206,6 +216,10 @@ export async function saleHistory(opts: {
            -- 제조사는 코드 사전의 한글 이름 우선 (customer-edit 와 같은 규칙, 2026-08-09)
            COALESCE(mk.name_ko, v.maker_name) maker_name,
            q.mileage, v.mileage veh_mileage,
+           -- ⭐ MARS 필수 정보 검사 재료 (사장님 지시 2026-08-17 — mars-ready.ts)
+           v.year veh_year, v.fuel_type, v.mars_vehicle_no,
+           c.mars_contact_no, c.phone cust_phone, c.address cust_address,
+           (c.consent_signed_at IS NOT NULL) consent_signed,
            q.mars_memo, q.total_amount, q.payment_method, q.payment_memo,
            q.mars_status, q.mars_ref_no, q.tyre_positions,
            to_char(q.created_at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') created_hm,
@@ -246,6 +260,24 @@ export async function saleHistory(opts: {
         makerName: r.maker_name,
         mileage: r.mileage === null ? null : Number(r.mileage),
         vehicleMileage: r.veh_mileage === null ? null : Number(r.veh_mileage),
+        /**
+         * ⭐ MARS 에 올리기에 모자란 필수 정보 (사장님 지시 2026-08-17).
+         *    앱 등록은 자유 — 검사는 MARS 올리기 문턱에서만. 규칙은 mars-ready.ts 한 곳.
+         */
+        marsMissing: marsMissing({
+          hasVehicle: r.vehicle_id !== null,
+          marsVehicleNo: r.mars_vehicle_no,
+          makerName: r.maker_name,
+          model: r.vehicle_model,
+          year: r.veh_year === null ? null : Number(r.veh_year),
+          fuelType: r.fuel_type,
+          mileage: r.mileage ?? r.veh_mileage ?? null,
+          contactNo: r.mars_contact_no,
+          customerName: r.customer_name,
+          phone: r.cust_phone,
+          address: r.cust_address,
+          consentSigned: r.consent_signed === true,
+        }),
         /**
          * 「비회원 …」 판매는 marsMemo 가 이름 역할을 한다.
          * ⭐ 거래처는 2026-08-17 부터 supplierName 컬럼이 맡는다 — 여기서 뺀다.
