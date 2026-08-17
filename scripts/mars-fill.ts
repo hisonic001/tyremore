@@ -63,11 +63,20 @@ const SHOT_DIR = path.resolve(process.cwd(), "..", "tyremore-data", "스크린�
  * 금액·수량 실적은 정확하고 품목 구분만 뭉개진다.
  *
  * (지난 후보 `580/001/00290` 은 마스터 설정 미완성으로 MARS 가 거부했었다 — 2026-08-04 실측.
- *  다른 코드로 바꿔야 하면 .env.local 의 MARS_FALLBACK_ITEM 이 이긴다.)
+ *  다른 코드로 바꿔야 하면 .env.local 의 MARS_FALLBACK_ITEM 이 이긴다.
+ *  🔴 .env.local 에 옛 실험값 TEST000002 가 남아 있어 사장님이 정한 S001/1290 을
+ *     덮어쓰고 있었다 — 2026-08-17 지웠다. 낡은 env 가 새 기본값을 이기는 함정.)
  */
 const FALLBACK_ITEM = process.env.MARS_FALLBACK_ITEM ?? "S001/1290";
-/** 범용 품번의 「유형」 — 상품·자원이 아니라 「기타」다 (사장님 지시 2026-08-15) */
-const FALLBACK_TYPE_LABEL = "기타";
+/**
+ * 범용 품번의 「유형」.
+ * 🔴 「기타」가 아니다 — 매출 주문 줄의 유형 선택지는
+ *    «G/L 계정» «상품» «자원» «고정 자산» «요금(품목)» 뿐이다 (run#89·90 실측,
+ *    이영준 건이 3번 재시도 끝에 두 실행 연속 실패했다). 사장님이 말씀하신
+ *    「유형:기타」는 서비스 검색 목록의 **분류** 이야기고, S001/1290 은 다른
+ *    S001/* 작업(엔진오일 점검·얼라인먼트·패드…)과 같은 계열이라 줄 유형은 「자원」이다.
+ */
+const FALLBACK_TYPE_LABEL = process.env.MARS_FALLBACK_TYPE ?? "자원";
 
 const DRY = process.argv.includes("--dry");
 /** 고객 생성 화면이 실제로 어떻게 생겼는지만 훑고 취소한다 — 아무것도 저장하지 않는다 */
@@ -993,8 +1002,21 @@ async function createVehicleForContact(
   }
 
   // ⑥ 주행거리
+  /**
+   * 🔴 한 번 실패하면 다시 넣는다 (2026-08-15 run#89 노휘재 — «115790» 을 넣었는데
+   *    빈칸으로 남았고 경고만 찍고 지나갔다. 매출 주문 화면은 다시 넣는 코드가
+   *    있는데 차량 카드에는 없었다. MARS 는 주행거리가 없으면 전기 자체를 막을 수
+   *    있어(「주행거리를 먼저 입력해야 합니다」 창) 그냥 둘 일이 아니다).
+   */
   if (v.mileage) {
-    await fillField(page, "주행거리", await one(f.getByRole("textbox", { name: "주행거리" })), String(v.mileage));
+    let okKm = false;
+    for (let att = 0; att < 3 && !okKm; att++) {
+      if (att > 0) {
+        log(`    · 주행거리를 다시 넣습니다 (${att + 1}번째)`);
+        await page.waitForTimeout(700);
+      }
+      okKm = await fillField(page, "주행거리", await one(f.getByRole("textbox", { name: "주행거리" })), String(v.mileage));
+    }
     await page.waitForTimeout(400);
   }
   await guard("마무리");
@@ -1078,7 +1100,20 @@ async function openSalesOrder(
   payCode: string | null,
 ) {
   const f = main(page);
-  await clickAny(page, "판매 내역");
+  /**
+   * 🔴 「판매 내역」 단추는 검색 결과 줄이 **선택돼 있어야** 나타난다.
+   *    run#86(Q26-0808-006)에서 줄 선택이 풀린 채 20초를 기다리다 실패했다 —
+   *    화면 글자에는 결과 줄과 「신규」가 멀쩡히 있었다. 줄을 다시 누르고 한 번 더.
+   */
+  try {
+    await clickAny(page, "판매 내역");
+  } catch {
+    log("    · 「판매 내역」이 안 보여 검색 결과 줄을 다시 누릅니다");
+    const row = f.locator("tr").filter({ hasText: plate }).first();
+    await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+    await page.waitForTimeout(1200);
+    await clickAny(page, "판매 내역", 12000);
+  }
   await page.waitForTimeout(3000);
   await passBigSearchDialog(page);
 
@@ -1224,7 +1259,7 @@ async function fillLines(
      */
     const misc = !l.no;
     const itemNo = misc ? FALLBACK_ITEM : l.no!;
-    if (misc) log(`    · ${l.marsName.slice(0, 34)} — MARS 품목에 없어 「기타」(${FALLBACK_ITEM})로 넣습니다`);
+    if (misc) log(`    · ${l.marsName.slice(0, 34)} — MARS 품목에 없어 범용 품번(${FALLBACK_ITEM})으로 넣습니다`);
     const row = grid.locator("tr.real-current");
 
     /**
@@ -1232,8 +1267,8 @@ async function fillLines(
      *    ["", "G/L 계정", "상품", "자원", "고정 자산", "요금(품목)"] → 상품=2, 자원=3
      *    🔴 「서비스」라는 항목은 **없다.** 공임은 「자원」이다.
      *       없는 이름을 찾고 있었으니 공임 줄은 전부 실패했을 것이다.
-     *    「기타」는 숫자 값을 아직 실측 못 했다 — 라벨로 고르고, 실패하면 옵션
-     *    목록을 로그에 남긴다 (아래).
+     *    범용 품번의 유형은 「자원」(=3)이다 — 「기타」라는 선택지는 없다
+     *    (run#89·90 실측 — 위 FALLBACK_TYPE_LABEL 주석 참고).
      */
     /**
      * 🔴 **누른 다음에 `<select>` 를 찾는다.**
@@ -1241,7 +1276,8 @@ async function fillLines(
      *    누르기 전에 찾았더니 두 줄 다 실패해서 MARS 기본값(상품)으로 들어갔고,
      *    얼라인먼트가 「자원」이 아니라 「상품」이 됐다 (2026-08-02 사장님 지적).
      */
-    const want = misc ? null : l.kind === "tire" ? "2" : "3";
+    // env 로 유형을 갈아끼웠을 때는 숫자 값을 모르니 라벨로만 고른다
+    const want = misc ? (FALLBACK_TYPE_LABEL === "자원" ? "3" : null) : l.kind === "tire" ? "2" : "3";
     const wantLabel = misc ? FALLBACK_TYPE_LABEL : l.kind === "tire" ? "상품" : "자원";
 
     /**
@@ -1288,16 +1324,18 @@ async function fillLines(
         (want !== null && (await target.selectOption(want).then(() => true).catch(() => false))) ||
         (await target.selectOption({ label: wantLabel }).then(() => true).catch(() => false));
       if (!typed && misc) {
-        // 「기타」의 정확한 표기를 모를 수 있다 — 옵션 목록을 읽어 「기타」가 든 것을 고른다
+        // 표기가 조금 다를 수 있다 — 옵션 목록을 읽어 원하는 글자가 든 것을 고른다
         const opts = await target
           .locator("option")
           .allInnerTexts()
           .catch(() => [] as string[]);
-        const hit = opts.find((o) => o.includes("기타"));
+        const hit = opts.find((o) => o.includes(FALLBACK_TYPE_LABEL));
         if (hit) {
           typed = await target.selectOption({ label: hit }).then(() => true).catch(() => false);
         } else if (opts.length) {
-          log(`      · 유형 옵션 목록: ${opts.map((o) => `«${o.trim()}»`).join(" ")} — 「기타」가 없습니다`);
+          log(
+            `      · 유형 옵션 목록: ${opts.map((o) => `«${o.trim()}»`).join(" ")} — 「${FALLBACK_TYPE_LABEL}」가 없습니다`,
+          );
         }
       }
     }
@@ -1425,24 +1463,29 @@ async function fillLines(
     const wasMatchWin = s1.match;
     let usedFallback = false;
     if (wasMatchWin || /찾을 수 없|존재하지 않|않습니다|없습니다/.test(noDlg)) {
-      log(`      ⚠️ MARS 에 없는 품번 ${itemNo} — 「기타」(${FALLBACK_ITEM})로 대신 넣습니다`);
+      log(`      ⚠️ MARS 에 없는 품번 ${itemNo} — 범용 품번(${FALLBACK_ITEM})으로 대신 넣습니다`);
 
       /**
-       * ⭐ 유형도 「기타」로 바꾼다 (사장님 지시 2026-08-15 — S001/1290 은 기타 품목이다).
-       *    상품·자원인 채로 이 품번을 치면 유형이 안 맞아 MARS 가 거부할 수 있다.
+       * ⭐ 유형도 범용 품번에 맞게 바꾼다 (S001/1290 은 「자원」 — 위 FALLBACK_TYPE_LABEL 주석).
+       *    상품인 채로 이 품번을 치면 유형이 안 맞아 MARS 가 거부할 수 있다.
        */
       if (wantLabel !== FALLBACK_TYPE_LABEL) {
         await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
         await page.waitForTimeout(400);
         const ts = row.locator('[controlname="Type"] select, select[controlname="Type"]').first();
         const tgt = (await ts.count().catch(() => 0)) > 0 ? ts : await resolveInput(typeCell);
-        let ok2 = await tgt.selectOption({ label: FALLBACK_TYPE_LABEL }).then(() => true).catch(() => false);
+        let ok2 =
+          (FALLBACK_TYPE_LABEL === "자원" &&
+            (await tgt.selectOption("3").then(() => true).catch(() => false))) ||
+          (await tgt.selectOption({ label: FALLBACK_TYPE_LABEL }).then(() => true).catch(() => false));
         if (!ok2) {
           const opts = await tgt.locator("option").allInnerTexts().catch(() => [] as string[]);
           const hit = opts.find((o) => o.includes(FALLBACK_TYPE_LABEL));
           if (hit) ok2 = await tgt.selectOption({ label: hit }).then(() => true).catch(() => false);
           else if (opts.length)
-            log(`      · 유형 옵션 목록: ${opts.map((o) => `«${o.trim()}»`).join(" ")} — 「기타」가 없습니다`);
+            log(
+              `      · 유형 옵션 목록: ${opts.map((o) => `«${o.trim()}»`).join(" ")} — 「${FALLBACK_TYPE_LABEL}」가 없습니다`,
+            );
         }
         if (!ok2) throw new Error(`범용 품번을 넣으려면 유형을 「${FALLBACK_TYPE_LABEL}」로 바꿔야 하는데 못 골랐습니다`);
         await page.waitForTimeout(600);
@@ -1866,6 +1909,23 @@ async function postOrder(
     }
     if (!ship) {
       const said = ((await postDlg.innerText().catch(() => "")) || "").replace(/\s+/g, " ").slice(0, 120);
+      /**
+       * ⭐ 「주행거리를 먼저 입력해야 합니다」 창 (2026-08-15 run#89 택시 강원35바2821).
+       *    판매에 주행거리가 없으면 MARS 가 전기를 막는다. 「배송 및 송장을 못 찾았다」는
+       *    엉뚱한 진단 대신, 무엇을 하면 되는지 그대로 말한다.
+       *    확인 단추만 있는 안내 창이라 「확인」으로 닫는다 (취소 단추가 없다).
+       */
+      if (/주행거리/.test(said)) {
+        await postDlg.getByRole("button", { name: "확인" }).last().click({ timeout: 5000 }).catch(() => {});
+        await page.waitForTimeout(800);
+        return {
+          ok: false,
+          invoiceNo: null,
+          why:
+            "주행거리가 없어 MARS 가 전기를 막았습니다 — MARS 주문의 「현재 주행거리」를 채우고 전기해 주세요" +
+            " (판매 등록에 주행거리를 넣어 두면 다음부터는 자동으로 들어갑니다)",
+        };
+      }
       await postDlg.getByRole("button", { name: "취소", exact: true }).last().click({ timeout: 5000 }).catch(() => {});
       await page.waitForTimeout(800);
       return {
@@ -3054,6 +3114,8 @@ async function main_() {
         skipped++;
         continue;
       }
+      /** 실패 안내용 — 주문 화면까지 갔다가 죽으면 채우다 만 초안이 MARS 에 남는다 */
+      let draftOpened = false;
       try {
         const found = await findCustomer(page, q.plateNo);
 
@@ -3146,6 +3208,7 @@ async function main_() {
           // 혼합이면 금액 큰 수단, 지역화폐면 CASH (사장님 지시 2026-08-10)
           PAY_CODE[q.marsPayMethod ?? q.paymentMethod ?? ""] ?? null,
         );
+        draftOpened = true;
         const put = await fillLines(page, q.lines);
 
         /**
@@ -3293,6 +3356,14 @@ async function main_() {
       } catch (e) {
         skipped++;
         log(`  ⚠️ 실패: ${(e as Error).message.split("\n")[0]}`);
+        /**
+         * 🔴 주문 화면까지 갔다가 죽으면 **채우다 만 초안이 MARS 에 남는다**
+         *    (2026-08-17 확인 — 이영준 건이 run#89·90 두 번 실패하며 초안이 2개 쌓였는데
+         *    로그가 아무 말도 안 했다). 다음 실행은 새 초안을 또 만드니 꼭 알려야 한다.
+         */
+        if (draftOpened) {
+          log(`     ⚠️ 채우다 만 초안이 MARS 에 남았습니다 (${q.plateNo ?? q.quoteNo}) — 매출 주문 목록에서 지워 주세요`);
+        }
         /**
          * 어디서 막혔는지 나중에 볼 수 있게 남긴다.
          * 화면 조작은 MARS 가 바뀌면 어긋난다 — 그때 이 그림이 유일한 단서다.
