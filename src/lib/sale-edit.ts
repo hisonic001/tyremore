@@ -33,7 +33,7 @@ function refresh() {
   }
 }
 
-/** 작업일 · 결제수단 · 메모를 고친다 — 금액과 품목은 여기서 못 고친다 */
+/** 작업일 · 결제수단 · 주행거리 · 메모를 고친다 — 금액과 품목은 여기서 못 고친다 */
 export async function updateSaleHead(input: {
   quoteId: number;
   workDate?: string | null;
@@ -41,14 +41,24 @@ export async function updateSaleHead(input: {
   /** ⭐ 분할 결제 (2026-08-10) — 2개 이상이면 paymentMethod 는 서버가 '혼합'으로 굳힌다 */
   payments?: { method: string; amount: number }[] | null;
   paymentMemo?: string | null;
+  /**
+   * ⭐ 주행거리 (사장님 지시 2026-08-17 — 주행거리 없는 판매는 MARS 체크가 막히므로
+   *    여기서 채울 길이 있어야 한다). undefined = 안 건드림.
+   */
+  mileage?: number;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const [q] = await db
-    .select({ id: quote.id, status: quote.status, total: quote.totalAmount })
+    .select({ id: quote.id, status: quote.status, total: quote.totalAmount, vehicleId: quote.vehicleId })
     .from(quote)
     .where(eq(quote.id, input.quoteId))
     .limit(1);
   if (!q) return { ok: false, error: "판매 기록을 찾을 수 없습니다" };
   if (q.status === "취소") return { ok: false, error: "취소된 판매는 고칠 수 없습니다" };
+
+  const mileage = input.mileage === undefined ? undefined : Math.round(Number(input.mileage));
+  if (mileage !== undefined && (!Number.isFinite(mileage) || mileage <= 0 || mileage > 2_000_000)) {
+    return { ok: false, error: "주행거리가 올바르지 않습니다" };
+  }
 
   const workDate = input.workDate?.trim() || null;
   if (workDate && !/^\d{4}-\d{2}-\d{2}$/.test(workDate)) {
@@ -68,6 +78,7 @@ export async function updateSaleHead(input: {
       .update(quote)
       .set({
         ...(workDate ? { workDate } : {}),
+        ...(mileage !== undefined ? { mileage } : {}),
         paymentMethod: pay,
         paymentMemo: input.paymentMemo?.trim() || null,
         updatedAt: new Date(),
@@ -79,6 +90,17 @@ export async function updateSaleHead(input: {
       await tx
         .insert(quotePayment)
         .values(split.map((p) => ({ quoteId: input.quoteId, method: p.method, amount: p.amount })));
+    }
+    /**
+     * 차량의 최근 주행거리도 따라 올린다 — 단, **키우기만 한다.**
+     * 여기는 과거 판매를 고치는 자리라, 옛 판매에 작은 값을 넣었다고 차량의
+     * 최신 주행거리가 뒷걸음치면 안 된다 (saveSale 은 새 판매라 무조건 덮는다).
+     */
+    if (mileage !== undefined && q.vehicleId) {
+      await tx.execute(sql`
+        UPDATE vehicle SET mileage = ${mileage}, mileage_at = now()
+        WHERE id = ${q.vehicleId} AND (mileage IS NULL OR mileage < ${mileage})
+      `);
     }
   });
 

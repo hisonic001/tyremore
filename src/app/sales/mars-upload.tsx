@@ -43,8 +43,16 @@ export function SalesList({
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
+  /**
+   * ⭐ 주행거리 없는 판매는 체크 자체를 막는다 (사장님 지시 2026-08-17) —
+   *    MARS 가 주행거리 없이는 전기를 막아서(「주행거리를 먼저 입력해야 합니다」)
+   *    올려 봐야 실패한다. 「날짜·결제 고치기」에서 채우면 체크할 수 있게 된다.
+   *    (MARS 등록값보다 적은 경우는 서버 queueForMars 가 걸러서 알려준다)
+   */
   const eligible = (s: SaleRow) =>
-    s.status === "성사" && (s.marsStatus === "보류" || s.marsStatus === "수동처리");
+    s.status === "성사" &&
+    (s.marsStatus === "보류" || s.marsStatus === "수동처리") &&
+    (s.mileage ?? s.vehicleMileage) !== null;
   const all = days.flatMap((d) => d.sales);
   const eligibleCount = all.filter(eligible).length;
   /** 체크해서 '미전송' 이 됐지만 매장 PC 가 아직 안 집어 간 것 */
@@ -82,6 +90,8 @@ export function SalesList({
       if (!r.ok) return setError(r.error);
       setSelecting(false);
       setSel({});
+      // 주행거리 문제로 빠진 건이 있으면 같이 보여준다 (2026-08-17)
+      if (r.warning) setError(r.warning);
       setMsg(
         `${r.queued}건을 MARS 올리기로 보냈습니다.` +
           (r.runExisting ? " 앞선 실행이 끝나면 「다시 실행 요청」을 눌러 주세요." : " 매장 PC 가 곧 처리합니다."),
@@ -143,7 +153,8 @@ export function SalesList({
               MARS 에 올릴 카드를 체크하세요 — <span className="tabular">{selected.length}건</span> 선택됨
             </p>
             <p className="mt-0.5 text-xs text-indigo-700">
-              이미 올라간 것(✓)과 거래처·서비스 판매는 체크할 수 없습니다.
+              이미 올라간 것(✓)과 거래처·서비스 판매, <strong>주행거리 없는 판매</strong>는 체크할 수
+              없습니다 — 주행거리는 「날짜·결제 고치기」에서 채울 수 있습니다.
             </p>
             <div className="mt-2 flex gap-2">
               <button
@@ -199,7 +210,9 @@ export function SalesList({
             ⚠️ 지난 실행이 실패했습니다 ({run.finishedAt ?? ""}). 올라가지 못한 건은 「다시 실행 요청」으로 다시 부를 수 있습니다.
           </p>
         )}
-        {error && <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+        {error && (
+          <p className="mt-2 whitespace-pre-line rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+        )}
         {msg && <p className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{msg}</p>}
       </div>
 

@@ -58,6 +58,8 @@ export function SaleCard({
     Object.fromEntries(s.payments.map((p) => [p.method, String(p.amount)])),
   );
   const [memo, setMemo] = useState(s.paymentMemo ?? "");
+  /** ⭐ 주행거리 (2026-08-17) — 없으면 MARS 체크가 막히니 여기서 채운다 */
+  const [km, setKm] = useState(s.mileage !== null ? String(s.mileage) : "");
 
   const canceled = s.status === "취소";
   /** ⭐ 거래처는 제 컬럼에서 (2026-08-17) — 전에는 walkIn 글자에 뭉뚱그려져 있었다 */
@@ -134,6 +136,8 @@ export function SaleCard({
         paymentMethod: payM.length === 1 ? payM[0] : null,
         payments: payM.length >= 2 ? payM.map((m) => ({ method: m, amount: Number(payA[m] || "0") })) : null,
         paymentMemo: memo || null,
+        // 비워 두면 안 건드린다 — 지우는 기능은 일부러 없다 (MARS 가 주행거리 없는 전기를 막는다)
+        mileage: km === "" ? undefined : Number(km),
       });
       if (!r.ok) return setError(r.error);
       setEditing(false);
@@ -429,6 +433,20 @@ export function SaleCard({
                       )}
                     </div>
                   )}
+                  {/* ⭐ 주행거리 (2026-08-17) — 없으면 MARS 자동 올리기가 막힌다 */}
+                  <label className="flex items-center gap-2">
+                    <span className="w-16 shrink-0 text-xs text-slate-600">주행거리</span>
+                    <input
+                      value={km ? Number(km).toLocaleString() : ""}
+                      onChange={(e) => setKm(e.target.value.replace(/\D/g, ""))}
+                      inputMode="numeric"
+                      placeholder={
+                        s.vehicleMileage !== null ? `차량 최근값 ${s.vehicleMileage.toLocaleString()}` : "없음"
+                      }
+                      className="tabular min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-right text-sm"
+                    />
+                    <span className="shrink-0 text-xs text-slate-400">km</span>
+                  </label>
                   <input
                     value={memo}
                     onChange={(e) => setMemo(e.target.value)}

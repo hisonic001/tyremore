@@ -70,6 +70,12 @@ export interface MarsEntry {
    */
   mileage: number | null;
   /**
+   * ⭐ 이 차로 이미 MARS 에 올라간(전송완료) 판매들의 최대 주행거리 (2026-08-17).
+   *    MARS 는 등록된 값보다 **적은** 주행거리를 거부한다(사장님 관찰) — MARS 값을
+   *    직접 읽을 수는 없으니 이 값을 근사치로 쓴다. mars-fill 이 사전에 거른다.
+   */
+  postedMaxMileage: number | null;
+  /**
    * ⭐ 차량 정보 — 고객은 MARS 에 있는데 **차량만 없는** 경우 차량 카드를 만들 재료
    *    (사장님 버그 제보 2026-08-05 — 렌트카처럼 차가 여러 대인 손님, 차를 바꾼 손님).
    */
@@ -130,11 +136,64 @@ export interface MarsEntry {
  */
 export async function queueForMars(
   quoteIds: number[],
-): Promise<{ ok: true; queued: number; runExisting: boolean } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; queued: number; runExisting: boolean; warning: string | null }
+  | { ok: false; error: string }
+> {
   const { getSession } = await import("./auth");
   if (!(await getSession())) return { ok: false, error: "로그인이 필요합니다" };
   const ids = quoteIds.filter((n) => Number.isInteger(n) && n > 0);
   if (ids.length === 0) return { ok: false, error: "올릴 판매를 선택해 주세요" };
+
+  /**
+   * ⭐ 주행거리 문지기 (사장님 지시 2026-08-17):
+   *   ① 주행거리가 없으면 MARS 가 전기 자체를 막는다
+   *      (「주행거리를 먼저 입력해야 합니다」 창 — run#89 택시 건 실측).
+   *   ② MARS 에 이미 등록된 값보다 **적어도** 거부된다 (사장님 관찰).
+   *      MARS 의 값은 직접 못 읽으니, 같은 차의 전송완료 건 중 최대 주행거리를
+   *      근사치로 쓴다 — 차량 카드·주문의 주행거리는 전부 우리가 넣은 값이라
+   *      이 근사가 실제 MARS 값과 같거나 작다(즉 덜 막을지언정 더 막지는 않는다).
+   *   막힌 건은 그대로 두고 나머지만 올린다 — 한 건 때문에 전부 멈추지 않는다.
+   */
+  const inList = sql.join(ids.map((i) => sql`${i}`), sql`, `);
+  const cands = await db.execute<{
+    id: number;
+    quote_no: string;
+    eff: number | null;
+    posted_max: number | null;
+  }>(sql`
+    SELECT q.id, q.quote_no,
+           COALESCE(q.mileage, v.mileage)::int AS eff,
+           (SELECT max(q2.mileage)::int FROM quote q2
+             WHERE q2.vehicle_id = q.vehicle_id AND q2.id <> q.id
+               AND q2.mars_status = '전송완료' AND q2.mileage IS NOT NULL) AS posted_max
+    FROM quote q
+    LEFT JOIN vehicle v ON v.id = q.vehicle_id
+    WHERE q.id IN (${inList}) AND q.status = '성사' AND q.mars_status IN ('보류', '수동처리')
+  `);
+  const blocked: string[] = [];
+  const allowed: number[] = [];
+  for (const r of cands) {
+    const eff = r.eff === null ? null : Number(r.eff);
+    const postedMax = r.posted_max === null ? null : Number(r.posted_max);
+    if (eff === null) {
+      blocked.push(`${r.quote_no}: 주행거리가 없습니다 — 「날짜·결제 고치기」에서 넣어 주세요`);
+    } else if (postedMax !== null && eff < postedMax) {
+      blocked.push(
+        `${r.quote_no}: MARS 에 ${postedMax.toLocaleString()}km 로 등록된 차인데 이 판매는 ${eff.toLocaleString()}km 입니다 — MARS 는 적은 값을 거부합니다. 주행거리를 고쳐 주세요`,
+      );
+    } else {
+      allowed.push(Number(r.id));
+    }
+  }
+  if (allowed.length === 0) {
+    return {
+      ok: false,
+      error: blocked.length
+        ? `올리지 못했습니다.\n${blocked.join("\n")}`
+        : "올릴 수 있는 판매가 없습니다 — 이미 올라갔거나 MARS 대상이 아닙니다",
+    };
+  }
 
   // '해당없음'(거래처·서비스)과 이미 올라간 '전송완료'는 서버에서도 막는다
   const updated = await db
@@ -142,7 +201,7 @@ export async function queueForMars(
     .set({ marsStatus: "미전송", updatedAt: new Date() })
     .where(
       and(
-        inArray(quote.id, ids),
+        inArray(quote.id, allowed),
         eq(quote.status, "성사"),
         inArray(quote.marsStatus, ["보류", "수동처리"]),
       ),
@@ -156,7 +215,12 @@ export async function queueForMars(
   // 실행 요청까지 한 번에 — 이미 대기·실행중이면 그 실행 뒤에 남는다 (다시 요청하면 된다)
   const run = await requestMarsRun("입력");
   refresh("/sales");
-  return { ok: true, queued: updated.length, runExisting: run.ok ? run.existing : false };
+  return {
+    ok: true,
+    queued: updated.length,
+    runExisting: run.ok ? run.existing : false,
+    warning: blocked.length ? `⚠️ ${blocked.length}건은 빠졌습니다.\n${blocked.join("\n")}` : null,
+  };
 }
 
 /** 아직 MARS 에 안 친 판매 — 정비 내역에서 체크해 '미전송' 이 된 것들 */
@@ -182,6 +246,7 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     year: number | null;
     fuel_type: string | null;
     mileage: number | null;
+    posted_max: number | null;
     mars_vehicle_no: string | null;
     tyre_positions: string | null;
     split_main: string | null;
@@ -196,6 +261,10 @@ export async function marsQueue(): Promise<MarsEntry[]> {
            v.plate_no, v.model AS vehicle_model, v.maker_name, v.year, v.fuel_type,
            -- 판매 등록 때 입력한 주행거리가 우선 — 그 판매의 값이다 (2026-08-08)
            COALESCE(q.mileage, v.mileage) AS mileage,
+           -- 이 차로 이미 MARS 에 올라간 건들의 최대 주행거리 (2026-08-17 — 적으면 MARS 가 거부)
+           (SELECT max(q2.mileage)::int FROM quote q2
+             WHERE q2.vehicle_id = q.vehicle_id AND q2.id <> q.id
+               AND q2.mars_status = '전송완료' AND q2.mileage IS NOT NULL) AS posted_max,
            v.mars_vehicle_no
     FROM quote q
     LEFT JOIN customer c ON c.id = q.customer_id
@@ -260,6 +329,7 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     plateNo: h.plate_no,
     vehicleModel: h.vehicle_model,
     mileage: h.mileage,
+    postedMaxMileage: h.posted_max === null ? null : Number(h.posted_max),
     makerName: h.maker_name,
     year: h.year,
     fuelType: h.fuel_type,
