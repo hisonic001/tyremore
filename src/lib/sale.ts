@@ -254,6 +254,11 @@ export async function saveSale(
             //    정비 내역에서 체크한 것만 queueForMars 가 '미전송' 으로 바꿔 올린다.
             marsStatus: input.supplierName || input.paymentMethod === "서비스" ? "해당없음" : "보류",
             tyrePositions: input.tyrePositions?.length ? input.tyrePositions.join(",") : null,
+            /**
+             * ⭐ 거래처 이름은 이제 제 컬럼에 (2026-08-17). 아래 marsMemo 에도 당분간
+             *    같이 쓴다 — 되돌려도 옛 코드가 이름을 읽을 수 있게 (한 배포 뒤 뗀다).
+             */
+            supplierName: input.supplierName?.trim() || null,
             marsMemo: input.supplierName
               ? `거래처 ${input.supplierName.trim()}`
               : input.walkIn?.name

@@ -54,7 +54,9 @@ export function SaleCard({
   const [memo, setMemo] = useState(s.paymentMemo ?? "");
 
   const canceled = s.status === "취소";
-  const who = s.customerName ?? s.walkIn ?? "손님 미지정";
+  /** ⭐ 거래처는 제 컬럼에서 (2026-08-17) — 전에는 walkIn 글자에 뭉뚱그려져 있었다 */
+  const who =
+    s.customerName ?? (s.supplierName ? `거래처 ${s.supplierName}` : null) ?? s.walkIn ?? "손님 미지정";
 
   const splitPay = SPLITTABLE as readonly string[];
   const paySum = payM.reduce((sum, m) => sum + Number(payA[m] || "0"), 0);

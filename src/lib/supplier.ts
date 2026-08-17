@@ -181,6 +181,16 @@ export async function updateSupplier(input: {
       UPDATE purchase_invoice SET supplier = ${name}, updated_at = now()
       WHERE replace(lower(supplier), ' ', '') = ${cur.nameKey}
     `);
+    /**
+     * ⭐ 거래처 **판매**도 같이 옮긴다 (2026-08-17).
+     *    안 옮기면 외상 장부에서 「쌍성」과 「쌍성 타이어」가 두 거래처로 갈려
+     *    잔액이 나뉜다 — 매입 내역을 옮기는 것과 똑같은 이유다.
+     */
+    await db.execute(sql`
+      UPDATE quote SET supplier_name = ${name}, updated_at = now()
+      WHERE supplier_name IS NOT NULL
+        AND replace(lower(supplier_name), ' ', '') = ${cur.nameKey}
+    `);
   }
 
   if (merging) {
@@ -239,10 +249,24 @@ export async function deleteSupplier(id: number): Promise<Result> {
     SELECT count(*)::int n FROM purchase_invoice
     WHERE replace(lower(supplier), ' ', '') = ${s.nameKey}
   `);
-  if (Number(c?.n ?? 0) > 0) {
+  /**
+   * ⭐ 판매도 센다 (2026-08-17). 이 거래처로 판 기록(외상 잔액까지)이 있는데 지우면
+   *    외상 장부에서 그 이름이 떠돌게 된다 — 매입 내역과 같은 이유로 막는다.
+   */
+  const [sc] = await db.execute<{ n: number }>(sql`
+    SELECT count(*)::int n FROM quote
+    WHERE supplier_name IS NOT NULL
+      AND replace(lower(supplier_name), ' ', '') = ${s.nameKey}
+  `);
+  const buys = Number(c?.n ?? 0);
+  const sells = Number(sc?.n ?? 0);
+  if (buys > 0 || sells > 0) {
+    const what = [buys > 0 ? `매입 내역 ${buys}건` : null, sells > 0 ? `판매 내역 ${sells}건` : null]
+      .filter(Boolean)
+      .join(" · ");
     return {
       ok: false,
-      error: `매입 내역이 ${c.n}건 있어 지울 수 없습니다. 「숨기기」를 쓰시면 목록에서만 사라집니다`,
+      error: `${what}이 있어 지울 수 없습니다. 「숨기기」를 쓰시면 목록에서만 사라집니다`,
     };
   }
 

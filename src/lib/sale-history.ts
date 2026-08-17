@@ -37,6 +37,10 @@ export interface SaleRow {
   workDate: string;
   customerId: number | null;
   customerName: string | null;
+  /** ⭐ 대상 바꾸기가 「지금 이 차」를 알아야 한다 (2026-08-17) */
+  vehicleId: number | null;
+  /** ⭐ 거래처 판매면 거래처 이름 (2026-08-17) — 전에는 walkIn 에 뭉뚱그려져 있었다 */
+  supplierName: string | null;
   plateNo: string | null;
   vehicleModel: string | null;
   /** ⭐ 제조사 (사장님 요청 2026-08-09 — "현대 카니발 23나1111 처럼") */
@@ -45,7 +49,7 @@ export interface SaleRow {
   mileage: number | null;
   /** 차량 카드의 최근 주행거리 — 과거 건의 대체 표시용 */
   vehicleMileage: number | null;
-  /** 비회원이면 marsMemo 의 「비회원 이름 전화」가 이름 역할을 한다 */
+  /** 비회원이면 marsMemo 의 「비회원 이름 전화」가 이름 역할을 한다 (거래처는 supplierName 으로) */
   walkIn: string | null;
   totalAmount: number;
   paymentMethod: string | null;
@@ -158,6 +162,8 @@ export async function saleHistory(opts: {
     work_date: string;
     customer_id: number | null;
     customer_name: string | null;
+    vehicle_id: number | null;
+    supplier_name: string | null;
     plate_no: string | null;
     vehicle_model: string | null;
     maker_name: string | null;
@@ -192,7 +198,8 @@ export async function saleHistory(opts: {
                             ORDER BY rp.id)
               FROM receivable_payment rp WHERE rp.quote_id = q.id) collections,
            to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM-DD') work_date,
-           q.customer_id, c.name customer_name, v.plate_no, v.model vehicle_model,
+           q.customer_id, c.name customer_name, q.vehicle_id, q.supplier_name,
+           v.plate_no, v.model vehicle_model,
            -- 제조사는 코드 사전의 한글 이름 우선 (customer-edit 와 같은 규칙, 2026-08-09)
            COALESCE(mk.name_ko, v.maker_name) maker_name,
            q.mileage, v.mileage veh_mileage,
@@ -229,13 +236,19 @@ export async function saleHistory(opts: {
         workDate: r.work_date,
         customerId: r.customer_id === null ? null : Number(r.customer_id),
         customerName: r.customer_name,
+        vehicleId: r.vehicle_id === null ? null : Number(r.vehicle_id),
+        supplierName: r.supplier_name,
         plateNo: r.plate_no,
         vehicleModel: r.vehicle_model,
         makerName: r.maker_name,
         mileage: r.mileage === null ? null : Number(r.mileage),
         vehicleMileage: r.veh_mileage === null ? null : Number(r.veh_mileage),
-        // 「비회원 …」·「거래처 …」 판매는 marsMemo 가 이름 역할을 한다 (2026-08-05 거래처 판매 추가)
-        walkIn: r.mars_memo?.startsWith("비회원") || r.mars_memo?.startsWith("거래처") ? r.mars_memo : null,
+        /**
+         * 「비회원 …」 판매는 marsMemo 가 이름 역할을 한다.
+         * ⭐ 거래처는 2026-08-17 부터 supplierName 컬럼이 맡는다 — 여기서 뺀다.
+         *    (옛 건은 백필해 두었다)
+         */
+        walkIn: r.mars_memo?.startsWith("비회원") ? r.mars_memo : null,
         totalAmount: Number(r.total_amount),
         paymentMethod: r.payment_method,
         payments: r.pay_split

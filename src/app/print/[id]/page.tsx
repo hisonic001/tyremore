@@ -39,6 +39,7 @@ export default async function PrintPage({
     payment_method: string | null;
     payment_memo: string | null;
     mars_memo: string | null;
+    supplier_name: string | null;
     customer_name: string | null;
     phone: string | null;
     address: string | null;
@@ -47,7 +48,7 @@ export default async function PrintPage({
     pay_split: string | null;
   }>(sql`
     SELECT q.quote_no, q.status, to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM-DD') work_date,
-           q.total_amount, q.payment_method, q.payment_memo, q.mars_memo,
+           q.total_amount, q.payment_method, q.payment_memo, q.mars_memo, q.supplier_name,
            -- 분할 결제 「카드 30,000 + 현금 5,000」 (2026-08-10)
            (SELECT string_agg(pm.method || ' ' || to_char(pm.amount, 'FM999,999,999'), ' + ' ORDER BY pm.id)
               FROM quote_payment pm WHERE pm.quote_id = q.id) pay_split,
@@ -80,10 +81,16 @@ export default async function PrintPage({
 
   const shop = await getShopInfo();
 
-  // 「비회원 …」·「거래처 …」 판매는 marsMemo 가 이름 역할을 한다
-  const memoName = head.mars_memo?.startsWith("비회원") || head.mars_memo?.startsWith("거래처")
-    ? head.mars_memo.replace(/^(비회원|거래처)\s*/, "").replace(/·.*$/, "").trim()
-    : null;
+  /**
+   * 손님 이름이 없는 판매의 이름.
+   * ⭐ 거래처는 제 컬럼에서 (2026-08-17). 비회원은 여전히 marsMemo 글자다.
+   *    옛 건이 컬럼 없이 남아 있을 경우를 대비해 memo 파싱도 남겨 둔다.
+   */
+  const memoName =
+    head.supplier_name ??
+    (head.mars_memo?.startsWith("비회원") || head.mars_memo?.startsWith("거래처")
+      ? head.mars_memo.replace(/^(비회원|거래처)\s*/, "").replace(/·.*$/, "").trim()
+      : null);
 
   return (
     <PrintFrame
