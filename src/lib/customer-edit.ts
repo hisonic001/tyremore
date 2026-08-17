@@ -56,10 +56,16 @@ export async function updateVehicleInfo(input: {
   makerName?: string | null;
   model?: string | null;
   year?: number | null;
+  /** ⭐ 연료 (2026-08-17) — MARS 필수 정보. 값은 MARS 표기 그대로 (Fuel·Diesel·Hybird·BEV) */
+  fuelType?: string | null;
   mileage?: number | null;
   vin?: string | null;
   memo?: string | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
+  const fuelType = input.fuelType?.trim() || null;
+  if (fuelType && !["Fuel", "Diesel", "Hybird", "BEV", "LPG"].includes(fuelType)) {
+    return { ok: false, error: "연료 종류가 올바르지 않습니다" };
+  }
   const plate = input.plateNo.trim();
   const plateNorm = plate.replace(/[\s-]/g, "");
   if (!plateNorm) return { ok: false, error: "차량번호는 비울 수 없습니다" };
@@ -106,6 +112,7 @@ export async function updateVehicleInfo(input: {
       makerName: makerText,
       model: input.model?.trim() || null,
       year: input.year ?? null,
+      fuelType,
       mileage: input.mileage ?? null,
       // 차대번호 — 대문자·공백 제거만 하고 길이는 강제하지 않는다 (사장님 요청 2026-08-10).
       // 등록증에서 못 읽은 자리를 일부만 적어 두는 경우가 있다

@@ -6,6 +6,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { updateCustomerInfo, updateVehicleInfo } from "@/lib/customer-edit";
 import { isMarsMaker, makerSuggestions, MARS_MAKER_LIST_ID, MarsMakerDatalist } from "@/lib/mars-makers";
+import { FUEL_TYPES } from "@/lib/sale-types";
 
 const FIELD = "mt-0.5 block w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base outline-none focus:border-slate-900";
 const LB = "block text-xs font-medium text-slate-500";
@@ -21,6 +22,7 @@ export function VehicleEditForm({
     makerName: string | null;
     model: string | null;
     year: number | null;
+    fuelType: string | null;
     mileage: number | null;
     vin: string | null;
     memo: string | null;
@@ -39,6 +41,8 @@ export function VehicleEditForm({
   const [maker, setMaker] = useState(vehicle.makerName ?? "");
   const [model, setModel] = useState(vehicle.model ?? "");
   const [year, setYear] = useState(vehicle.year ? String(vehicle.year) : "");
+  // ⭐ 연료 (2026-08-17) — MARS 필수 정보인데 여기서만 고칠 수 있다 (판매 등록 밖에서는 처음)
+  const [fuel, setFuel] = useState(vehicle.fuelType ?? "");
   const [mileage, setMileage] = useState(vehicle.mileage ? String(vehicle.mileage) : "");
   const [vin, setVin] = useState(vehicle.vin ?? "");
   const [memo, setMemo] = useState(vehicle.memo ?? "");
@@ -64,6 +68,7 @@ export function VehicleEditForm({
         makerName: maker,
         model,
         year: year ? Number(year) : null,
+        fuelType: fuel || null,
         mileage: mileage ? Number(mileage.replace(/\D/g, "")) : null,
         vin,
         memo,
@@ -126,6 +131,24 @@ export function VehicleEditForm({
               className={FIELD + " tabular"}
             />
           </label>
+          <div className="col-span-2">
+            {/* ⭐ 연료 (2026-08-17) — MARS 차량 필수 정보. 값은 MARS 표기 그대로 (Fuel·Diesel…) */}
+            <span className={LB}>연료</span>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {FUEL_TYPES.map((t) => (
+                <button
+                  key={t.value}
+                  type="button"
+                  onClick={() => setFuel((cur) => (cur === t.value ? "" : t.value))}
+                  className={`rounded-lg border px-3 py-1.5 text-sm ${
+                    fuel === t.value ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white"
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <label>
             <span className={LB}>주행거리 (km)</span>
             <input
