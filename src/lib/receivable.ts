@@ -17,9 +17,10 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { quote, receivablePayment } from "@/db/schema";
 import { getSession } from "./auth";
+import { planSettlement } from "./receivable-plan";
 
 function refresh() {
-  for (const p of ["/sales", "/"]) {
+  for (const p of ["/sales", "/", "/receivables"]) {
     try {
       revalidatePath(p);
     } catch {
@@ -79,6 +80,113 @@ export async function addCollection(input: {
   });
   refresh();
   return { ok: true, remain: remainBefore - amount };
+}
+
+/* ============================================================
+ * ⭐ 한꺼번에 털기 (사장님 지시 2026-08-17)
+ *   "거래처별로 내역을 확인하고 한번에 외상을 떨어버릴 수 있는 방법
+ *    (한꺼번에 입금하는 경우도 있음)도 필요함"
+ * ========================================================== */
+
+/**
+ * 여러 건을 한 번에 수금한다.
+ *
+ * 🔴 addCollection 을 반복해 부르지 않는다:
+ *    ① 건마다 조회+삽입 2왕복 — 20건이면 40왕복이다 (커넥션 풀로 두 번 마비된 이력)
+ *    ② 중간에 한 건이 막히면 앞 건은 이미 들어가 있다. 「한꺼번에」는
+ *       전부 되거나 전부 아니거나여야 한다.
+ *    대신 잔액 배분 규칙은 planSettlement 한 곳에 모아 화면과 같이 쓴다.
+ */
+export async function settleReceivables(input: {
+  quoteIds: number[];
+  method: string;
+  paidOn?: string | null;
+  memo?: string | null;
+  /** 실제로 받은 총액. 비우면 고른 건들의 잔액 전부 */
+  received?: number | null;
+}): Promise<
+  | { ok: true; settled: number; applied: number; partialQuoteNo: string | null }
+  | { ok: false; error: string }
+> {
+  if (!(await getSession())) return { ok: false, error: "로그인이 필요합니다" };
+  if (!METHODS.includes(input.method)) return { ok: false, error: "수단이 올바르지 않습니다" };
+  const paidOn = input.paidOn?.trim() || null;
+  if (paidOn && !/^\d{4}-\d{2}-\d{2}$/.test(paidOn)) {
+    return { ok: false, error: "날짜는 2026-08-17 형식입니다" };
+  }
+  const ids = [...new Set(input.quoteIds.filter((n) => Number.isInteger(n) && n > 0))].slice(0, 200);
+  if (ids.length === 0) return { ok: false, error: "털 건을 골라 주세요" };
+
+  try {
+    return await db.transaction(async (tx) => {
+      /**
+       * 🔴 `= ANY(배열)` 은 쓰지 않는다 — drizzle 이 JS 배열을 Postgres 배열로 못 묶어
+       *    「malformed array literal」로 죽는다 (2026-08-15 실서비스 500).
+       * 🔴 FOR UPDATE — 읽고 넣는 사이에 다른 사람이 그 건에 수금을 넣으면 잔액을 넘긴다.
+       */
+      const inList = sql.join(ids.map((i) => sql`${i}`), sql`, `);
+      const rows = await tx.execute<{
+        id: number;
+        quote_no: string;
+        status: string;
+        payment_method: string | null;
+        total_amount: number;
+        paid: number;
+      }>(sql`
+        SELECT q.id, q.quote_no, q.status, q.payment_method, q.total_amount,
+               COALESCE((SELECT SUM(amount)::int FROM receivable_payment rp WHERE rp.quote_id = q.id), 0) paid
+        FROM quote q
+        WHERE q.id IN (${inList})
+        ORDER BY COALESCE(q.work_date, q.created_at::date) ASC, q.id ASC
+        FOR UPDATE OF q
+      `);
+      if (rows.length !== ids.length) throw new Error("없는 판매가 섞여 있습니다");
+
+      /** 하나라도 어긋나면 통째로 거부 — 되돌리는 것보다 안 넣는 것이 낫다 */
+      for (const r of rows) {
+        if (r.status === "취소") throw new Error(`${r.quote_no} 는 취소된 판매입니다`);
+        if (r.payment_method !== "외상") throw new Error(`${r.quote_no} 는 외상 판매가 아닙니다`);
+        if (Number(r.total_amount) - Number(r.paid) <= 0) {
+          throw new Error(`${r.quote_no} 는 이미 다 받았습니다`);
+        }
+      }
+
+      const open = rows.map((r) => ({
+        quoteId: Number(r.id),
+        quoteNo: r.quote_no,
+        remain: Number(r.total_amount) - Number(r.paid),
+      }));
+      const totalRemain = open.reduce((s, r) => s + r.remain, 0);
+      const received = input.received == null ? totalRemain : Math.round(Number(input.received));
+      if (!Number.isFinite(received) || received <= 0) throw new Error("받은 금액이 올바르지 않습니다");
+      if (received > totalRemain) {
+        throw new Error(`고른 건들의 잔액(${totalRemain.toLocaleString()}원)보다 많이 받을 수 없습니다`);
+      }
+
+      const { plan, partialQuoteNo } = planSettlement(open, received);
+      if (plan.length === 0) throw new Error("넣을 수금이 없습니다");
+
+      await tx.insert(receivablePayment).values(
+        plan.map((p) => ({
+          quoteId: p.quoteId,
+          amount: p.amount,
+          method: input.method,
+          ...(paidOn ? { paidOn } : {}),
+          memo: input.memo?.trim() || null,
+        })),
+      );
+      return {
+        ok: true as const,
+        settled: plan.length,
+        applied: received,
+        partialQuoteNo,
+      };
+    });
+  } catch (e) {
+    return { ok: false, error: (e as Error).message || "수금을 넣지 못했습니다" };
+  } finally {
+    refresh();
+  }
 }
 
 /** 잘못 넣은 수금 지우기 */

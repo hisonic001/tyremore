@@ -31,6 +31,7 @@ export default async function SalesPage({
     to?: string;
     customer?: string;
     vehicle?: string;
+    supplier?: string;
     canceled?: string;
     pay?: string;
   }>;
@@ -38,6 +39,7 @@ export default async function SalesPage({
   const sp = await searchParams;
   const customerId = sp.customer ? Number(sp.customer) : undefined;
   const vehicleId = sp.vehicle ? Number(sp.vehicle) : undefined;
+  const supplierName = sp.supplier?.trim() || undefined;
   const includeCanceled = sp.canceled === "1";
   /**
    * ⭐ 결제 방법 필터 (사장님 요청 2026-08-07).
@@ -46,7 +48,8 @@ export default async function SalesPage({
    */
   const PAY_OPTIONS = ["현금", "카드", "계좌이체", "지역화폐", "외상", "혼합", "서비스"];
   const pay = sp.pay && PAY_OPTIONS.includes(sp.pay) ? sp.pay : undefined;
-  const scoped = Number.isFinite(customerId) || Number.isFinite(vehicleId);
+  // 대상을 콕 집어 들어온 것이면 기간은 「전체」로 편다 — 그 대상의 과거를 보러 온 것이니까
+  const scoped = Number.isFinite(customerId) || Number.isFinite(vehicleId) || !!supplierName;
 
   /**
    * ⭐ 기간 필터 — 기본은 **오늘** (사장님 요청 2026-08-05).
@@ -90,6 +93,7 @@ export default async function SalesPage({
     to: active === "today" ? today : active === "yesterday" ? yesterday : active === "range" ? sp.to : undefined,
     customerId: Number.isFinite(customerId) ? customerId : undefined,
     vehicleId: Number.isFinite(vehicleId) ? vehicleId : undefined,
+    supplierName,
     includeCanceled,
     paymentMethod: pay,
   });
@@ -123,6 +127,7 @@ export default async function SalesPage({
       to: sp.to,
       customer: sp.customer,
       vehicle: sp.vehicle,
+      supplier: sp.supplier,
       canceled: sp.canceled,
       pay: sp.pay,
       ...over,
@@ -138,9 +143,15 @@ export default async function SalesPage({
         <Link href="/" className="text-sm text-slate-500 underline underline-offset-4">
           ← 검색으로
         </Link>
-        <Link href="/sale" className="text-sm font-medium text-emerald-700 underline underline-offset-4">
-          판매 등록 →
-        </Link>
+        <div className="flex items-center gap-3">
+          {/* ⭐ 외상 장부로 가는 길 (2026-08-17) — 거래처별로 모아 한꺼번에 턴다 */}
+          <Link href="/receivables" className="text-sm font-medium text-amber-800 underline underline-offset-4">
+            외상 장부
+          </Link>
+          <Link href="/sale" className="text-sm font-medium text-emerald-700 underline underline-offset-4">
+            판매 등록 →
+          </Link>
+        </div>
       </div>
 
       <h1 className="mt-3 text-2xl font-bold">정비 내역</h1>
@@ -167,6 +178,7 @@ export default async function SalesPage({
         keep={{
           customer: sp.customer,
           vehicle: sp.vehicle,
+          supplier: sp.supplier,
           canceled: sp.canceled,
           // 결제 필터를 바꿔도 기간이 풀리지 않게, 기간을 바꿔도 결제가 풀리지 않게
           month: sp.month,
@@ -186,9 +198,15 @@ export default async function SalesPage({
       </p>
       {/* ⭐ 미수금 총액 — 외상 필터일 때 (사장님 선택 2026-08-11). 기간과 무관하게 전체 잔액이다 */}
       {receivable && (
-        <p className="tabular mt-1 rounded-lg bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">
-          못 받은 외상 {Number(receivable.n)}건 · 잔액 {won(Number(receivable.remain))}원 (전체 기간 기준)
-        </p>
+        <Link
+          href="/receivables"
+          className="tabular mt-1 flex items-center justify-between rounded-lg bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900"
+        >
+          <span>
+            못 받은 외상 {Number(receivable.n)}건 · 잔액 {won(Number(receivable.remain))}원 (전체 기간 기준)
+          </span>
+          <span className="shrink-0 font-normal underline underline-offset-4">장부 →</span>
+        </Link>
       )}
 
       {/*

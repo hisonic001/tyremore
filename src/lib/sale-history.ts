@@ -96,6 +96,8 @@ export async function saleHistory(opts: {
   to?: string;
   customerId?: number;
   vehicleId?: number;
+  /** ⭐ 거래처로 좁히기 (2026-08-17) — 외상 장부의 「내역 보기」가 이걸로 들어온다 */
+  supplierName?: string;
   includeCanceled?: boolean;
   /** ⭐ 결제 방법으로 좁히기 (사장님 요청 2026-08-07) */
   paymentMethod?: string;
@@ -127,6 +129,7 @@ export async function saleHistory(opts: {
     ${to ? sql`AND COALESCE(q.work_date, q.created_at::date) <= ${to}::date` : sql``}
     ${opts.customerId ? sql`AND q.customer_id = ${opts.customerId}` : sql``}
     ${opts.vehicleId ? sql`AND q.vehicle_id = ${opts.vehicleId}` : sql``}
+    ${opts.supplierName ? sql`AND q.supplier_name = ${opts.supplierName}` : sql``}
     ${
       opts.paymentMethod
         ? // ⭐ 분할 결제도 걸린다 (2026-08-10) — 「카드」로 거르면 카드가 섞인 혼합 건도 나온다
@@ -311,6 +314,9 @@ export async function saleHistory(opts: {
     const [c] = await db.execute<{ name: string }>(sql`
       SELECT name FROM customer WHERE id = ${opts.customerId}`);
     if (c) filterLabel = c.name;
+  } else if (opts.supplierName) {
+    // 질의 없이 그대로 — 거래처 이름은 quote 에 그 글자로 들어 있다
+    filterLabel = `거래처 ${opts.supplierName}`;
   }
 
   return {
