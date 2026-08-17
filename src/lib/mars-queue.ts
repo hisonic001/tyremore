@@ -161,6 +161,7 @@ export async function queueForMars(
   const cands = await db.execute<{
     id: number;
     quote_no: string;
+    payment_method: string | null;
     vehicle_id: number | null;
     mars_vehicle_no: string | null;
     maker_name: string | null;
@@ -175,7 +176,7 @@ export async function queueForMars(
     consent_signed: boolean | null;
     posted_max: number | null;
   }>(sql`
-    SELECT q.id, q.quote_no, q.vehicle_id,
+    SELECT q.id, q.quote_no, q.payment_method, q.vehicle_id,
            v.mars_vehicle_no, v.maker_name, v.model, v.year, v.fuel_type,
            COALESCE(q.mileage, v.mileage)::int AS eff,
            c.mars_contact_no, c.name customer_name, c.phone, c.address,
@@ -191,6 +192,15 @@ export async function queueForMars(
   const blocked: string[] = [];
   const allowed: number[] = [];
   for (const r of cands) {
+    // 외상·서비스는 MARS 대상이 아니다 (2026-08-17 — 올려 봐야 로봇이 되돌린다)
+    if (r.payment_method === "외상" || r.payment_method === "서비스") {
+      blocked.push(
+        r.payment_method === "외상"
+          ? `${r.quote_no}: 외상은 MARS 에 넣지 않습니다 — 수금 뒤 결제를 실제 수단으로 바꾸고 다시 체크해 주세요`
+          : `${r.quote_no}: 서비스(무상)는 MARS 에 넣지 않습니다`,
+      );
+      continue;
+    }
     const eff = r.eff === null ? null : Number(r.eff);
     const postedMax = r.posted_max === null ? null : Number(r.posted_max);
     const missing = marsMissing({
@@ -435,8 +445,16 @@ export async function markEntered(
  *    적었다 — 감사 배너가 계속 울렸다. 번호가 비어 있거나 「수동확인」일 때만 채운다.
  */
 export async function saveMarsRefNo(quoteId: number, refNo: string): Promise<void> {
+  /**
+   * 🔴 「전기 실패」 메모도 함께 정정한다 (2026-08-17 run#91 — 송장 목록이 날짜순이라
+   *    과거 송장을 못 보고 25건을 「전기 실패」로 잘못 적었다. 뒤늦게 송장이
+   *    확인됐는데 메모가 실패라고 우기면, 사장님이 믿고 수동 전기를 또 할 수 있다).
+   */
   await db.execute(sql`
-    UPDATE quote SET mars_ref_no = ${refNo}, updated_at = now()
+    UPDATE quote SET mars_ref_no = ${refNo}, updated_at = now(),
+      mars_memo = CASE WHEN mars_memo LIKE '%전기 실패%'
+        THEN regexp_replace(mars_memo, ' · 전기 실패:.*$', '') || ' · 전기 확인됨(송장 목록 검색, ' || to_char(now() AT TIME ZONE 'Asia/Seoul', 'MM/DD') || ')'
+        ELSE mars_memo END
     WHERE id = ${quoteId} AND (mars_ref_no IS NULL OR mars_ref_no = '수동확인')
   `);
   refresh("/sales");

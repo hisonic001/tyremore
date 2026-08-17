@@ -1802,7 +1802,7 @@ async function postOrder(
    */
   let cashDlg: Locator | null = null;
   {
-    const until = Date.now() + 8000;
+    let until = Date.now() + 8000;
     while (Date.now() < until && !ship && !cashDlg) {
       const dlgs = f.getByRole("dialog");
       const nd = await dlgs.count().catch(() => 0);
@@ -1816,6 +1816,19 @@ async function postOrder(
           continue;
         }
         const said = ((await d.innerText().catch(() => "")) || "").replace(/\s+/g, " ");
+        /**
+         * ⭐ 0원 줄 안내 창 (사장님 승인 2026-08-17) — 서비스로 끼워 준 0원 줄이 있으면
+         *    「단가 또는 수량이 "0"과 같습니다. Nevertheless 전기? 예/아니요」가 먼저 뜬다.
+         *    0원 줄은 우리가 의도한 것이고 합계 대조는 이미 끝났으므로 「예」로 계속한다.
+         *    (run#91 — 이영준·김천주·박기선 3건이 이 창에 막혔다)
+         */
+        if (/단가 또는 수량|Nevertheless/i.test(said)) {
+          log(`    · 0원 줄 안내 창 — 「예」로 계속합니다 (${said.slice(0, 70)})`);
+          await d.getByRole("button", { name: /^(예|Yes)$/ }).last().click({ timeout: 5000 }).catch(() => {});
+          await page.waitForTimeout(1200);
+          until = Date.now() + 8000; // 다음 창(배송/송장 선택)을 처음처럼 기다린다
+          continue;
+        }
         if (/현금 등록기/.test(said)) {
           cashDlg = d;
         } else if (!postDlg) {
@@ -1955,11 +1968,23 @@ async function postOrder(
       await page.waitForTimeout(4000);
       continue;
     }
+    // 0원 줄 안내 창이 여기(선택 창 뒤)서 뜰 수도 있다 — 같은 이유로 「예」 (2026-08-17)
+    if (/단가 또는 수량|Nevertheless/i.test(said)) {
+      log(`    · 0원 줄 안내 창 — 「예」로 계속합니다`);
+      await f.getByRole("button", { name: /^(예|Yes)$/ }).last().click().catch(() => {});
+      await page.waitForTimeout(2500);
+      continue;
+    }
     if (/않습니다|없습니다|제공해야|입력해야|오류|잘못|부족/.test(said)) {
       await f.locator('button[controlname="Dialog"]', { hasText: "확인" }).last().click().catch(() => {});
       return { ok: false, invoiceNo: null, why: said.replace(/확인\s*$/, "").slice(0, 140) };
     }
-    // 그 밖의 안내 창은 닫고 계속
+    /**
+     * 그 밖의 안내 창 — 🔴 **무엇이었는지 로그에 남기고** 닫는다 (2026-08-17).
+     *    조용히 닫으면 전기가 왜 안 됐는지 아무 흔적이 없다 — run#91 진단 때
+     *    이 침묵 탓에 엉뚱한 가설(날짜 벽)을 세웠다.
+     */
+    if (said) log(`    · 안내 창(닫음): ${said.slice(0, 120)}`);
     await f.locator('button[controlname="Dialog"]', { hasText: "확인" }).last().click().catch(() => {});
     await page.waitForTimeout(1500);
   }
@@ -2069,11 +2094,57 @@ type Picked =
   | { ok: true; row: Locator; label: string }
   | { ok: false; why: string };
 
+/**
+ * ⭐ 완료된 매출 송장 목록을 번호판으로 **검색**한다 (사장님 정정 2026-08-17).
+ *
+ * 🔴 run#91 에서 8/11 이전 25건이 「전기된 송장이 없습니다」로 잘못 기록됐다.
+ *    전기는 됐는데(사장님 확인 — 8/11 김창종 건이 MARS 에 있다) 목록이 날짜
+ *    내림차순이라 **과거 날짜 송장은 첫 화면에 안 나온다.** 코드는 보이는 줄만
+ *    훑었고, 같은 맹점이 --peek-invoices 실측(박준현 «0건»)까지 속였다.
+ *    → 훑기 전에 목록의 돋보기(검색)에 번호판을 쳐서 서버가 걸러 주게 한다.
+ */
+async function searchInvoiceList(page: Page, text: string): Promise<boolean> {
+  const f = main(page);
+  const boxes = () => [
+    f.getByRole("searchbox").first(),
+    f.getByRole("textbox", { name: /검색/ }).first(),
+    f.locator('input[aria-label*="검색"], input[placeholder*="검색"]').first(),
+  ];
+  const visibleBox = async () => {
+    for (const b of boxes()) if (await b.isVisible({ timeout: 500 }).catch(() => false)) return b;
+    return null;
+  };
+  let box = await visibleBox();
+  if (!box) {
+    // 돋보기 단추(이름이 그냥 「검색」이다 — 「고객 정보 검색」과 헷갈리지 않게 exact)
+    const btn = f.getByRole("button", { name: "검색", exact: true }).first();
+    if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await btn.click().catch(() => {});
+    } else {
+      // BC 웹의 목록 검색 단축키
+      await page.keyboard.press("F3").catch(() => {});
+    }
+    await page.waitForTimeout(900);
+    box = await visibleBox();
+  }
+  if (!box) {
+    log("    ⚠️ 목록의 검색 칸을 못 찾았습니다 — 첫 화면의 줄만 봅니다 (과거 날짜 송장은 놓칠 수 있습니다)");
+    return false;
+  }
+  await box.click().catch(() => {});
+  await box.fill(text).catch(() => {});
+  await box.press("Enter").catch(() => {});
+  await page.waitForTimeout(2500); // 서버가 걸러서 다시 그릴 때까지
+  return true;
+}
+
 async function pickInvoiceRow(
   page: Page,
   c: { plateNo: string | null; workDate: string | null; total: number; marsRefNo: string | null },
 ): Promise<Picked> {
   const f = main(page);
+  // 🔴 먼저 검색으로 좁힌다 — 과거 날짜 송장은 검색 없이는 화면에 없다 (위 주석)
+  if (c.plateNo) await searchInvoiceList(page, c.plateNo);
   const rows = f.getByRole("row").filter({ hasText: c.plateNo! });
   const n = await rows.count().catch(() => 0);
   if (n === 0) return { ok: false, why: "전기된 송장이 없습니다 — MARS 에서 전기부터 해 주세요" };
@@ -2889,6 +2960,8 @@ async function main_() {
       await page.waitForTimeout(3000);
       await passBigSearchDialog(page);
       const f = main(page);
+      // 과거 날짜 송장은 검색해야 나온다 (2026-08-17) — 훑기 전에 번호판으로 거른다
+      await searchInvoiceList(page, PEEK_INV.plate);
       const rows = f.getByRole("row").filter({ hasText: PEEK_INV.plate });
       const n = await rows.count().catch(() => 0);
       log(`\n── ${PEEK_INV.plate} 의 전기된 송장 ${n}건 ──`);
@@ -3012,7 +3085,16 @@ async function main_() {
      *    송장 목록에서 **번호판으로** 찾는다. 전기 전이면 목록에 없으니 저절로 걸러진다.
      */
     if (CHECK) {
+      // ⏱️ 점검도 스스로 시간을 관리한다 (건당 1.5분 잡고, 대리인 제한보다 먼저 멈춘다)
+      const checkDeadline = Date.now() + checks.length * 90_000 + 5 * 60_000;
+      let cIdx = -1;
       for (const c of checks) {
+        cIdx++;
+        if (Date.now() > checkDeadline) {
+          log(`\n⏱️ 시간이 다 되어 여기서 멈춥니다 — 남은 ${checks.length - cIdx}건은 점검을 다시 돌리면 이어서 합니다`);
+          skipped += checks.length - cIdx;
+          break;
+        }
         log(`\n── ${c.quoteNo}  ${c.plateNo} ${c.customerName ?? ""} ─────────`);
         try {
           await clickAny(page, "판매완료");
@@ -3091,7 +3173,22 @@ async function main_() {
       await new Promise(() => {});
     }
 
+    /**
+     * ⏱️ 스스로 시간을 관리한다 (2026-08-17 run#91 — 50건 배치가 대리인의 30분
+     *    제한에 걸렸는데 강제 종료도 안 먹혀, 화면은 「실패」인 채 40분을 더 돌았다).
+     *    대리인의 제한(건수×2.5분+10분)보다 5분 먼저 **스스로** 멈추고 남은 건수를
+     *    알린다 — 남은 건은 미전송 그대로라 「다시 실행 요청」으로 이어서 하면 된다.
+     */
+    const fillDeadline = Date.now() + queue.length * 150_000 + 5 * 60_000;
+    let qIdx = -1;
     for (const q of queue) {
+      qIdx++;
+      if (Date.now() > fillDeadline) {
+        const left = queue.length - qIdx;
+        log(`\n⏱️ 시간이 다 되어 여기서 멈춥니다 — 남은 ${left}건은 「다시 실행 요청」을 누르면 이어서 합니다`);
+        skipped += left;
+        break;
+      }
       log(`\n── ${q.quoteNo}  ${q.plateNo ?? ""} ${q.customerName ?? ""} ─────────`);
       if (!q.plateNo) {
         log("  ⚠️ 차량번호가 없어 건너뜁니다 (비회원 판매는 MARS 에서 직접 처리해 주세요)");
@@ -3103,15 +3200,24 @@ async function main_() {
        *    "외상은 일단 mars 에 입력 보류하고 저장해놔야됨"
        *    우리 쪽에는 기록이 그대로 남고, 대기열에도 남아 나중에 처리할 수 있다.
        */
+      /**
+       * 🔴 건너뛰기만 하면 '미전송'이 그대로 남아 **실행마다 대기열에 다시 나온다**
+       *    (2026-08-17 run#91 — 외상 2건·서비스 1건이 영원히 「대기 N건」에 끼어 있었다).
+       *    보류로 내려 대기열에서 뺀다. 외상은 수금 뒤 결제를 고치고 다시 체크하면 올라간다.
+       */
       if (q.paymentMethod === "외상") {
-        log("  ⏸️ 외상이라 MARS 입력을 보류합니다 — 우리 기록에는 남아 있습니다");
+        const why = "외상은 MARS 에 넣지 않습니다 — 수금 뒤 「날짜·결제 고치기」로 실제 수단으로 바꾸고 다시 체크";
+        log(`  ⏸️ ${why} (보류로 내렸습니다)`);
+        await holdMars(q.quoteId, why);
         skipped++;
         continue;
       }
       // 서비스(무상)는 저장할 때 '해당없음'이 되어 애초에 대기열에 안 올라온다.
       // 그래도 수정으로 결제 방법이 바뀌어 들어올 수 있으니 한 번 더 거른다 (2026-08-07)
       if (q.paymentMethod === "서비스") {
-        log("  ⏸️ 서비스(무상)라 MARS 에 넣지 않습니다 — 우리 기록에만 남습니다");
+        const why = "서비스(무상)는 MARS 에 넣지 않습니다";
+        log(`  ⏸️ ${why} (보류로 내렸습니다)`);
+        await holdMars(q.quoteId, why);
         skipped++;
         continue;
       }

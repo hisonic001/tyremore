@@ -31,9 +31,10 @@ const stamp = () => new Date().toLocaleTimeString("ko-KR", { hour12: false });
 const log = (s: string) => console.log(`[${stamp()}] ${s}`);
 
 async function appendLog(id: number, line: string) {
+  // 🔴 캡 20만 자 (2026-08-17 — 50건 배치 로그가 옛 캡 2만 자에 잘려 뒷부분 실패 이유가 사라졌다)
   await sql`
     UPDATE mars_run
-    SET log = LEFT(COALESCE(log || E'\n', '') || ${line}, 20000)
+    SET log = LEFT(COALESCE(log || E'\n', '') || ${line}, 200000)
     WHERE id = ${id}`.catch(() => {});
 }
 
@@ -45,6 +46,23 @@ async function runOne(id: number, kind: string): Promise<void> {
   if (kind === "점검") args.push("--check");
   // 아침 자가점검 (2026-08-10) — 화면 구조만 훑고 아무것도 저장하지 않는다
   if (kind === "자가점검") args.push("--smoke");
+
+  /**
+   * ⏱️ 제한 시간은 일의 양에 비례한다 (2026-08-17 run#91 — 50건 배치는 70분이
+   *    걸리는데 고정 30분에 잘렸다). mars-fill 도 스스로 이보다 5분 먼저 멈추므로
+   *    이 제한은 로봇이 진짜로 굳었을 때만 발동하는 마지막 안전망이다.
+   */
+  let timeoutMs = 45 * 60_000;
+  if (kind === "입력") {
+    const [c] = await sql<{ n: number }[]>`
+      SELECT count(*)::int n FROM quote WHERE status='성사' AND mars_status='미전송'`;
+    timeoutMs = Math.max(30 * 60_000, Number(c.n) * 150_000 + 10 * 60_000);
+  } else if (kind === "점검") {
+    timeoutMs = 70 * 60_000;
+  } else if (kind === "자가점검") {
+    timeoutMs = 15 * 60_000;
+  }
+  log(`  제한 시간 ${Math.round(timeoutMs / 60_000)}분`);
 
   const exit = await new Promise<number>((resolve) => {
     const child = spawn("npx", args, { shell: true, cwd: process.cwd() });
@@ -63,19 +81,34 @@ async function runOne(id: number, kind: string): Promise<void> {
     };
     child.stdout.on("data", onChunk);
     child.stderr.on("data", onChunk);
-    child.on("close", (code) => resolve(code ?? 1));
-    // 30분 넘게 걸리면 무언가 잘못됐다 — 매출 주문 하나에 2~3분이면 충분하다
-    setTimeout(() => {
-      child.kill();
+    const timer = setTimeout(() => {
+      /**
+       * 🔴 `child.kill()` 은 겉껍데기(cmd)만 죽인다 (2026-08-17 run#91 실측 —
+       *    「실패」로 표시한 뒤에도 로봇이 40분을 더 MARS 에 입력했다. 그때
+       *    「다시 실행 요청」을 눌렀다면 로봇 두 대가 같은 크롬을 잡았을 것이다).
+       *    윈도우에서는 taskkill 로 **프로세스 나무 전체**를 끊는다.
+       */
+      if (process.platform === "win32" && child.pid) {
+        spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"]);
+      } else {
+        child.kill("SIGKILL");
+      }
       resolve(124);
-    }, 30 * 60 * 1000);
+    }, timeoutMs);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve(code ?? 1);
+    });
   });
 
   if (exit === 0) {
     await sql`UPDATE mars_run SET status='완료', finished_at=now() WHERE id=${id}`;
     log(`요청 #${id} 완료`);
   } else {
-    await appendLog(id, `⚠️ 종료 코드 ${exit}${exit === 124 ? " (30분 초과로 중단)" : ""}`);
+    await appendLog(
+      id,
+      `⚠️ 종료 코드 ${exit}${exit === 124 ? ` (제한 ${Math.round(timeoutMs / 60_000)}분 초과 — 프로세스 나무를 강제 종료함)` : ""}`,
+    );
     await sql`UPDATE mars_run SET status='실패', finished_at=now() WHERE id=${id}`;
     log(`요청 #${id} 실패 (코드 ${exit})`);
   }

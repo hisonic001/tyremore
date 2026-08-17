@@ -49,17 +49,21 @@ export function SalesList({
    *    앱 등록은 자유롭게 두고 문턱은 여기다. 규칙은 mars-ready.ts 한 곳
    *    (서버 queueForMars·매장 PC 와 같은 규칙 — 주행거리 뒷걸음은 서버가 걸러 알려준다).
    */
+  /** 외상·서비스는 MARS 에 안 올린다 — 체크했다가 로봇이 되돌리는 헛걸음을 없앤다 (2026-08-17) */
+  const payBlocked = (s: SaleRow) => s.paymentMethod === "외상" || s.paymentMethod === "서비스";
   const eligible = (s: SaleRow) =>
     s.status === "성사" &&
     (s.marsStatus === "보류" || s.marsStatus === "수동처리") &&
+    !payBlocked(s) &&
     s.marsMissing.length === 0;
   /** 체크만 못 하게 흐려진 카드에 **왜**를 보여준다 — 이유 없이 안 눌리면 답답하다 */
-  const blockedReason = (s: SaleRow) =>
-    s.status === "성사" &&
-    (s.marsStatus === "보류" || s.marsStatus === "수동처리") &&
-    s.marsMissing.length > 0
-      ? `MARS 필수 정보 없음: ${s.marsMissing.join(" · ")}`
-      : null;
+  const blockedReason = (s: SaleRow) => {
+    if (s.status !== "성사" || (s.marsStatus !== "보류" && s.marsStatus !== "수동처리")) return null;
+    if (s.paymentMethod === "외상") return "외상 — 수금 뒤 「날짜·결제 고치기」로 실제 수단으로 바꾸면 올릴 수 있습니다";
+    if (s.paymentMethod === "서비스") return "서비스(무상) — MARS 에 올리지 않습니다";
+    if (s.marsMissing.length > 0) return `MARS 필수 정보 없음: ${s.marsMissing.join(" · ")}`;
+    return null;
+  };
   const all = days.flatMap((d) => d.sales);
   const eligibleCount = all.filter(eligible).length;
   /** 체크해서 '미전송' 이 됐지만 매장 PC 가 아직 안 집어 간 것 */
