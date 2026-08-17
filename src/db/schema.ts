@@ -555,6 +555,20 @@ export const quote = pgTable(
     marsMemo: text("mars_memo"),
 
     /**
+     * ⭐ 거래처 판매의 거래처 이름 (2026-08-17)
+     *
+     * 전에는 `mars_memo` 에 「거래처 금호」 글자로만 남았다. 그런데 그 칸은 MARS
+     * 기능들이 덮어쓴다 — markEntered·holdMars 는 통째로 대체하고,
+     * marsMismatchNote 는 「거래처 금호 · 수정됨 …」으로 이어붙인다.
+     * 거래처 이름이 날아가거나, 외상 장부에서 한 거래처가 둘로 갈렸다.
+     *
+     * ⚠️ supplier 표에 외래키로 안 묶는다 — purchase_invoice.supplier 와 같은 이유
+     *    (옛 기록이 갈라진다). 대신 거래처 이름을 고치면 여기도 같이 고친다
+     *    (src/lib/supplier.ts updateSupplier).
+     */
+    supplierName: text("supplier_name"),
+
+    /**
      * ⭐ 전기 후 차량 점검을 제출한 시각 (2026-08-02)
      *
      * 사장님: "이것도 꼭 해야 하는 작업이야."
@@ -598,6 +612,8 @@ export const quote = pgTable(
       .where(sql`${t.marsStatus} = '미전송'`),
     index("idx_quote_vehicle").on(t.vehicleId, t.createdAt),
     index("idx_quote_customer").on(t.customerId, t.createdAt),
+    // 외상 장부가 거래처별로 묶어 볼 때 쓴다 (2026-08-17)
+    index("idx_quote_supplier").on(t.supplierName).where(sql`${t.supplierName} IS NOT NULL`),
   ],
 );
 
