@@ -2221,10 +2221,18 @@ async function pickInvoiceRow(
    *    번호 검색이 빈손이면(화면에서 번호가 잘려 보이는 등) 번호판으로 되돌아간다.
    */
   const refNo = c.marsRefNo && SI_EXACT_RE.test(c.marsRefNo) ? c.marsRefNo : null;
+  /**
+   * 🔴 번호로 검색했으면 **그 번호 줄**이 있는지로 판정한다 (2026-08-18 사고 —
+   *    「번호판 줄이 있나」로 확인하던 옛 장치가, 번호판 없는 송장에서는 정답을
+   *    찾아 놓고도 번호판 재검색으로 덮어버려 점검이 영영 실패했다).
+   */
+  let rowKey: string | RegExp = c.plateNo ?? SI_RE;
   if (refNo) {
-    // 🔴 검색창에 +가 든 전체 번호를 넣으면 필터가 깨진다 (2026-08-18 실측 — 조각 검색은 됨)
     await searchInvoiceList(page, refNo.slice(-6));
-    if ((await f.getByRole("row").filter({ hasText: c.plateNo! }).count().catch(() => 0)) === 0 && c.plateNo) {
+    if ((await f.getByRole("row").filter({ hasText: refNo }).count().catch(() => 0)) > 0) {
+      rowKey = refNo;
+    } else if (c.plateNo) {
+      // 번호 검색이 빈손일 때만 번호판으로 되돌아간다
       await searchInvoiceList(page, c.plateNo);
     }
   } else if (c.plateNo) {
@@ -2235,7 +2243,7 @@ async function pickInvoiceRow(
    *    비어 있어 번호판으로는 영영 못 찾는다 (이중 전기 사고의 뿌리). 번호를 알면
    *    번호로 거른다.
    */
-  const rows = f.getByRole("row").filter({ hasText: refNo ?? c.plateNo! });
+  const rows = f.getByRole("row").filter({ hasText: rowKey });
   const n = await rows.count().catch(() => 0);
   if (n === 0) return { ok: false, why: "전기된 송장이 없습니다 — MARS 에서 전기부터 해 주세요" };
 
