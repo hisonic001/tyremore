@@ -1780,10 +1780,43 @@ async function postOrder(
    *   → 「전기」 묶음을 연 뒤, **DOM 끝에서부터 거꾸로** 찾는다.
    *     팝업 메뉴는 문서 끝에 붙는다 — 끝에서 처음 만나는 「전기...」가 위층 것이다.
    */
-  try {
-    await clickAny(page, "전기", 8000);
-  } catch {
-    return { ok: false, invoiceNo: null, why: "「전기」 메뉴를 찾지 못했습니다" };
+  /**
+   * 🔴 「전기」 **묶음 단추도 끝에서부터** 찾는다 (2026-08-18 실측 — 이력 경로로 연
+   *    카드에서 clickAny 의 first() 가 뒤층(고객/차량 이력)의 것을 눌러
+   *    「전기...」 항목이 안 나타났다. 팝업 항목에 쓰던 끝-우선 원칙을 여기도 적용).
+   */
+  const clickPostGroup = async (): Promise<boolean> => {
+    // 🔴 exact 만 — 느슨하게 잡으면 「전기/문서 날짜」 열 머리글을 눌러 정렬 메뉴가 열린다 (실측)
+    for (const cand of [
+      f.getByRole("menuitem", { name: "전기", exact: true }),
+      f.getByRole("button", { name: "전기", exact: true }),
+    ]) {
+      const n = await cand.count().catch(() => 0);
+      for (let i = n - 1; i >= 0; i--) {
+        const el = cand.nth(i);
+        if (!(await el.isVisible().catch(() => false))) continue;
+        if (await el.click({ timeout: 4000 }).then(() => true).catch(() => false)) return true;
+      }
+    }
+    return false;
+  };
+  if (!(await clickPostGroup())) {
+    /**
+     * 🔴 목록에서 연 주문 카드는 **작은 편집 창(모달)**이라 리본이 접혀 있다
+     *    (2026-08-18 실측 — 「관리·차량 점검·페이지·추가 옵션」만 보이고 「전기」는
+     *    「추가 옵션」 뒤에 숨는다). 펼치고 한 번 더 찾는다.
+     */
+    log("    · 「전기」가 안 보여 「추가 옵션」을 펼칩니다 (접힌 리본)");
+    const more = f.getByRole("menuitem", { name: "추가 옵션" }).last();
+    if (await more.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await more.click().catch(() => {});
+    } else {
+      await f.getByRole("button", { name: "추가 옵션" }).last().click({ timeout: 4000 }).catch(() => {});
+    }
+    await page.waitForTimeout(1200);
+    if (!(await clickPostGroup())) {
+      return { ok: false, invoiceNo: null, why: "「전기」 메뉴를 찾지 못했습니다 (추가 옵션을 펼쳐도 — 주문 목록 경로의 슬림 카드에는 전기가 없습니다)" };
+    }
   }
   await page.waitForTimeout(1000);
 
@@ -2347,6 +2380,82 @@ async function openDraft(
     return false;
   };
 
+  /**
+   * 🔴 경로가 중요하다 (2026-08-18 실측):
+   *    · 고객 이력 → 열린 판매 문서 → 주문 → 카드 = **전체 리본** (「전기」 있음)
+   *    · 매출 주문 목록 → 카드 = 슬림 편집 창 — 「전기」 자체가 없어 열어도 전기 불가
+   *      (추가 옵션·관련·페이지 전부 펼쳐 실측 — 관리/차량점검/새 줄뿐)
+   *    그래서 이름을 알면 **이력 경로를 먼저** 탄다. 목록 경로는 마지막 수단이며,
+   *    그 카드로는 합계 확인까지만 되고 전기는 실패한다.
+   */
+  if (c.name) {
+    await page.goto(HOME);
+    await waitHome(page, 40000);
+    if (await findCustomerByName(page, c.name, c.phone)) {
+      await clickAny(page, "판매 내역");
+      await page.waitForTimeout(3000);
+      await passBigSearchDialog(page);
+      const openDocs = f.getByRole("menuitem", { name: "열린 판매 문서" }).first();
+      if (!(await openDocs.isVisible({ timeout: 3000 }).catch(() => false))) {
+        await clickAny(page, "프로세스", 6000).catch(() => {});
+        await page.waitForTimeout(1200);
+      }
+      await openDocs.click({ timeout: 8000 }).catch(() => {});
+      await page.waitForTimeout(1200);
+      // 「열린 판매 문서」는 하위 메뉴다 (실측: 견적·주문·송장…) — 「주문」을 고른다
+      const ordersItem = f.getByRole("menuitem", { name: "주문", exact: true }).last();
+      if (await ordersItem.isVisible({ timeout: 2500 }).catch(() => false)) {
+        await ordersItem.click().catch(() => {});
+      }
+      await page.waitForTimeout(2500);
+      // 초안 줄에는 번호판이 없을 수 있다 — 번호(알면) 또는 금액으로 좁힌다
+      /**
+       * 🔴 이 목록은 **줄 단위**다 (실측 — 라인 번호 10000 이 보인다). 합계 금액은
+       *    줄에 없으니 못 쓴다. 번호(알면) → 번호판 순으로 잡고, 엉뚱한 초안이 열려도
+       *    호출 쪽의 합계 대조가 전기를 막는다.
+       */
+      const won = c.total.toLocaleString();
+      let row2 = c.orderNo ? f.getByRole("row").filter({ hasText: c.orderNo }).last() : null;
+      if (!row2 || !(await row2.isVisible({ timeout: 4000 }).catch(() => false))) {
+        row2 = c.plate
+          ? f.getByRole("row").filter({ hasText: /-23SO[-+]/ }).filter({ hasText: c.plate }).last()
+          : f.getByRole("row").filter({ hasText: /-23SO[-+]/ }).filter({ hasText: won }).last();
+      }
+      if (await row2.isVisible({ timeout: 8000 }).catch(() => false)) {
+        log(`    · 열린 문서 줄: ${(((await row2.innerText().catch(() => "")) || "").replace(/\s+/g, " ")).slice(0, 120)}`);
+        await row2.click({ position: { x: 5, y: 5 } }).catch(() => {});
+        await page.waitForTimeout(500);
+        /**
+         * 🔴 줄의 <a> 클릭으로는 카드가 안 열린다 (실측 — 첫 링크는 문서 유형,
+         *    번호 칸은 버튼이다). 송장 열기(openInvoice)에서 배운 그대로:
+         *    **문서 번호를 접근성 이름으로 가진 버튼**을 누른다 — 화면에는
+         *    「…23SO-00…」로 잘려 보여도 이름은 전체 번호다.
+         */
+        const rowSo =
+          c.orderNo ??
+          (/\d{8}-\d{2}SO-\d{6}/.exec((((await row2.innerText().catch(() => "")) || "")).replace(/\s+/g, "")) ?? [null])[0];
+        if (rowSo) {
+          await f.getByRole("button", { name: rowSo }).last().click({ timeout: 8000 }).catch(() => {});
+        } else {
+          await row2.locator("a").nth(1).click({ timeout: 8000 }).catch(() => {});
+        }
+        await page.waitForTimeout(4500);
+        // 카드가 정말 열렸는지 — 제목 「매출 주문」이 보여야 한다
+        const cardOpen = await f
+          .getByRole("heading", { name: /매출 주문/ })
+          .last()
+          .isVisible({ timeout: 4000 })
+          .catch(() => false);
+        if (cardOpen && (await confirmCard())) return true;
+        if (!cardOpen) log("    · 카드가 열리지 않았습니다 (이력 목록 그대로)");
+      } else {
+        log(`    · 열린 판매 문서에서 못 찾았습니다 (${won}원)`);
+      }
+    }
+  }
+
+  /** 마지막 수단: 주문 목록 검색 — ⚠️ 이 카드는 슬림 창이라 전기가 안 된다 (합계 확인용) */
+  log("    · 주문 목록 경로로 찾아봅니다 (⚠️ 이 경로의 카드는 전기 단추가 없습니다)");
   await page.goto(HOME);
   await waitHome(page, 40000);
   await clickAny(page, "매출 주문 목록");
@@ -2376,43 +2485,6 @@ async function openDraft(
     await clickAny(page, "매출 주문 목록");
     await page.waitForTimeout(3000);
     await passBigSearchDialog(page);
-  }
-  /**
-   * 🔴 갓 만든 차량의 초안은 주문 목록 검색에 안 잡힌다 (색인 지연 — 2026-08-05).
-   *    고객 이력 창의 「열린 판매 문서」로 돌아 들어간다.
-   */
-  if (c.name) {
-    log("    · 고객 이력의 「열린 판매 문서」로 찾아봅니다");
-    await page.goto(HOME);
-    await waitHome(page, 40000);
-    if (await findCustomerByName(page, c.name, c.phone)) {
-      await clickAny(page, "판매 내역");
-      await page.waitForTimeout(3000);
-      await passBigSearchDialog(page);
-      const openDocs = f.getByRole("menuitem", { name: "열린 판매 문서" }).first();
-      if (!(await openDocs.isVisible({ timeout: 3000 }).catch(() => false))) {
-        await clickAny(page, "프로세스", 6000).catch(() => {});
-        await page.waitForTimeout(1200);
-      }
-      await openDocs.click({ timeout: 8000 }).catch(() => {});
-      await page.waitForTimeout(3500);
-      // 초안 줄에는 번호판이 없을 수 있다 — 번호(알면) 또는 금액으로 좁힌다
-      const won = c.total.toLocaleString();
-      let row2 = c.orderNo ? f.getByRole("row").filter({ hasText: c.orderNo }).last() : null;
-      if (!row2 || !(await row2.isVisible({ timeout: 4000 }).catch(() => false))) {
-        row2 = f.getByRole("row").filter({ hasText: /-23SO[-+]/ }).filter({ hasText: won }).last();
-      }
-      if (await row2.isVisible({ timeout: 8000 }).catch(() => false)) {
-        log(`    · 열린 문서 줄: ${(((await row2.innerText().catch(() => "")) || "").replace(/\s+/g, " ")).slice(0, 120)}`);
-        await row2.click({ position: { x: 5, y: 5 } }).catch(() => {});
-        await page.waitForTimeout(500);
-        await row2.locator("a").first().click({ timeout: 8000 }).catch(() => {});
-        await page.waitForTimeout(4500);
-        if (await confirmCard()) return true;
-      } else {
-        log(`    · 열린 판매 문서에서도 못 찾았습니다 (${won}원)`);
-      }
-    }
   }
   return false;
 }
@@ -3128,6 +3200,19 @@ ${"=".repeat(56)}`);
         await ctx.close().catch(() => {});
         process.exit(1);
       }
+      /**
+       * 🔴 전기 전에 합계를 대조한다 (2026-08-18) — 같은 차에 채우다 만 옛 초안이
+       *    여럿일 수 있다(박옥선 건). 열린 초안이 엉뚱한 것이면 전기하면 안 된다.
+       */
+      const chk = await checkOrder(page, POST_DRAFT.total);
+      if (!chk.ok) {
+        log(`  ⚠️ 연 초안의 합계가 다릅니다 (${chk.note}) — 전기하지 않습니다. MARS 에서 확인해 주세요`);
+        const shotC = path.resolve(SHOT_DIR, "mars-post-draft.png");
+        await page.screenshot({ path: shotC, fullPage: true }).catch(() => {});
+        await ctx.close().catch(() => {});
+        process.exit(1);
+      }
+      log(`  · 합계 대조 ✅ ${POST_DRAFT.total.toLocaleString()}원 — 전기합니다`);
       let posted = await postOrder(page);
       if (!posted.ok && posted.unsure) {
         log("    · 전기 여부를 송장 목록에서 확인합니다");
