@@ -2222,7 +2222,8 @@ async function pickInvoiceRow(
    */
   const refNo = c.marsRefNo && SI_EXACT_RE.test(c.marsRefNo) ? c.marsRefNo : null;
   if (refNo) {
-    await searchInvoiceList(page, refNo);
+    // 🔴 검색창에 +가 든 전체 번호를 넣으면 필터가 깨진다 (2026-08-18 실측 — 조각 검색은 됨)
+    await searchInvoiceList(page, refNo.slice(-6));
     if ((await f.getByRole("row").filter({ hasText: c.plateNo! }).count().catch(() => 0)) === 0 && c.plateNo) {
       await searchInvoiceList(page, c.plateNo);
     }
@@ -3758,7 +3759,7 @@ ${"=".repeat(56)}`);
             const flist = main(page);
             for (const si of posted.fresh ?? []) {
               await openInvoiceList(page);
-              await searchInvoiceList(page, si);
+              await searchInvoiceList(page, si.slice(-6)); // +가 든 전체 번호는 필터가 깨진다
               const row = flist.getByRole("row").filter({ hasText: si }).first();
               if (!(await row.isVisible({ timeout: 6000 }).catch(() => false))) continue;
               const t = (((await row.innerText().catch(() => "")) || "")).replace(/\s+/g, " ");
