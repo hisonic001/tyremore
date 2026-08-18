@@ -195,7 +195,7 @@ export function PastePurchase({ suppliers }: { suppliers: string[] }) {
               onClick={save}
               className="flex-1 rounded-xl bg-emerald-700 py-3 font-semibold text-white disabled:opacity-50"
             >
-              {pending ? "저장 중…" : `${pv.matched}줄 입고하기 (재고에 바로 반영)`}
+              {pending ? "저장 중…" : `${pv.matched}줄 입고 예정으로 담기`}
             </button>
           </div>
           {unmatched > 0 && (

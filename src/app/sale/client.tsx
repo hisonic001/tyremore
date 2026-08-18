@@ -17,6 +17,13 @@ interface Row extends SaleLine {
   key: string;
   /** 인치 — 화면에서만 쓴다 (저장할 때는 뺀다) */
   rimInch?: number | null;
+  /**
+   * ⭐ 타이어 규격 — 화면 표시용 (사장님 지시 2026-08-18: "타이어를 선택하면
+   *    사이즈는 작업내역에 안들어가서 사이즈를 알 수 없음").
+   *    저장 데이터에는 안 넣는다 — 내역·출력 화면이 상품에서 규격을 따로 붙이므로
+   *    설명에 넣으면 두 번 찍힌다.
+   */
+  spec?: string | null;
 }
 
 /**
@@ -167,6 +174,7 @@ export function SaleForm() {
           kind: "tire",
           productId: p.productId,
           description: p.model,
+          spec: p.spec ?? null,
           marsName: p.marsName,
           marsNo: p.cai,
           qty: 1,
@@ -572,6 +580,7 @@ function LineRow({
             {/* ⭐ 부품 소모 (사장님 확인 2026-08-11) — 0원, 재고만 차감 */}
             {row.kind === "use" && <span className="mr-1 rounded bg-sky-200 px-1.5 py-0.5 text-xs font-semibold text-sky-900">부품 사용</span>}
             {row.description}
+            {row.spec && <span className="tabular ml-1 font-normal text-slate-500">{row.spec}</span>}
           </div>
           {row.marsNo && <div className="tabular text-xs text-slate-500">{row.marsNo}</div>}
         </div>
@@ -579,7 +588,7 @@ function LineRow({
           ✕
         </button>
       </div>
-      <div className="mt-1.5 flex items-center gap-2">
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
         <button type="button" className={BTN} onClick={() => onChange({ qty: Math.max(1, row.qty - 1) })}>
           −
         </button>
@@ -597,10 +606,17 @@ function LineRow({
                 value={won(row.unitPrice)}
                 onChange={(e) => onChange(priceChange(Number(e.target.value.replace(/\D/g, "")) || 0))}
                 inputMode="numeric"
-                className="tabular h-9 w-28 rounded-lg border border-slate-300 px-2 text-right"
+                className="tabular h-9 w-24 rounded-lg border border-slate-300 px-2 text-right"
               />
             </label>
-            <span className="tabular w-24 text-right text-sm font-semibold">{won(row.unitPrice * row.qty)}</span>
+            <label className="flex items-center gap-1">
+              <span className="text-xs text-slate-500">금액</span>
+              <AmountBox
+                qty={row.qty}
+                unitPrice={row.unitPrice}
+                onUnit={(n) => onChange(priceChange(n))}
+              />
+            </label>
           </>
         )}
       </div>
@@ -625,6 +641,40 @@ function LineRow({
         />
       )}
     </li>
+  );
+}
+
+/**
+ * ⭐ 줄 합계 금액 칸 — 양방향 (사장님 지시 2026-08-18).
+ *    "단가는 조정가능하지만 수량을 곱한 금액이 조정이 되지 않는 것이 불편함."
+ *    금액을 치면 단가 = 금액÷수량(반올림)으로 따라온다. 나누어떨어지지 않으면
+ *    단가가 정수로 잡히며 금액이 몇 원 조정된다 — 손을 떼면 확정값을 보여준다.
+ */
+function AmountBox({
+  qty,
+  unitPrice,
+  onUnit,
+}: {
+  qty: number;
+  unitPrice: number;
+  onUnit: (unit: number) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const shown = draft ?? won(unitPrice * qty);
+  return (
+    <input
+      value={shown}
+      inputMode="numeric"
+      className="tabular h-9 w-24 rounded-lg border border-slate-300 px-2 text-right text-sm font-semibold"
+      onFocus={() => setDraft(won(unitPrice * qty))}
+      onChange={(e) => {
+        const raw = e.target.value.replace(/[^0-9]/g, "");
+        setDraft(raw === "" ? "" : Number(raw).toLocaleString());
+        const total = Number(raw) || 0;
+        onUnit(qty > 0 ? Math.round(total / qty) : total);
+      }}
+      onBlur={() => setDraft(null)}
+    />
   );
 }
 
