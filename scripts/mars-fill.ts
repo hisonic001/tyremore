@@ -2229,7 +2229,12 @@ async function pickInvoiceRow(
   } else if (c.plateNo) {
     await searchInvoiceList(page, c.plateNo);
   }
-  const rows = f.getByRole("row").filter({ hasText: c.plateNo! });
+  /**
+   * 🔴 줄 거름도 번호 우선 (2026-08-18) — 이름 경로로 만든 주문의 송장은 번호판이
+   *    비어 있어 번호판으로는 영영 못 찾는다 (이중 전기 사고의 뿌리). 번호를 알면
+   *    번호로 거른다.
+   */
+  const rows = f.getByRole("row").filter({ hasText: refNo ?? c.plateNo! });
   const n = await rows.count().catch(() => 0);
   if (n === 0) return { ok: false, why: "전기된 송장이 없습니다 — MARS 에서 전기부터 해 주세요" };
 
