@@ -28,6 +28,8 @@ export interface PurchaseLine {
   unitCost: number | null;
   /** 이 줄의 공급가액. 사장님만 */
   amount: number | null;
+  /** ⭐ 세는 단위 (사장님 지시 2026-08-18) — 타이어 '본', 부품 '개' */
+  unit: "본" | "개";
 }
 
 export interface PurchaseInvoiceRow {
@@ -43,6 +45,8 @@ export interface PurchaseInvoiceRow {
   receivedQty: number;
   /** 공급가액 합. 사장님만 */
   amount: number | null;
+  /** 줄들이 전부 타이어면 '본', 아니면 '개' */
+  unit: "본" | "개";
   lines: PurchaseLine[];
 }
 
@@ -51,6 +55,7 @@ export interface PurchaseDay {
   date: string;
   qty: number;
   amount: number | null;
+  unit: "본" | "개";
   invoices: PurchaseInvoiceRow[];
 }
 
@@ -58,10 +63,11 @@ export interface PurchaseHistory {
   days: PurchaseDay[];
   /** 고른 기간의 합 */
   totalQty: number;
+  totalUnit: "본" | "개";
   totalAmount: number | null;
   invoiceCount: number;
   /** 거래처별 요약 — 어디서 많이 사는지 */
-  bySupplier: { supplier: string; qty: number; amount: number | null; invoices: number }[];
+  bySupplier: { supplier: string; qty: number; amount: number | null; invoices: number; unit: "본" | "개" }[];
   /** 고를 수 있는 달 목록 ('2026-08'), 최근 순 */
   months: string[];
   canSeeMoney: boolean;
@@ -116,12 +122,13 @@ export async function purchaseHistory(
     received_qty: number | null;
     unit_cost: number | null;
     supply_amount: number | null;
+    is_serialized: boolean | null;
   }>(sql`
     SELECT i.id invoice_id, i.invoice_no, i.supplier,
            d.recv_date AS issued_at, i.status,
            x.id item_id, x.cai, x.product_id, x.description,
            p.display_name, p.raw_name, p.pattern, p.brand_code, p.width, p.aspect_ratio, p.rim_inch,
-           x.qty, x.received_qty, x.unit_cost, x.supply_amount
+           x.qty, x.received_qty, x.unit_cost, x.supply_amount, p.is_serialized
     FROM purchase_invoice i
     JOIN LATERAL (
       -- 이 장부의 마지막 입고 확정일 — 입고된 줄이 없으면 NULL 이라 아래에서 걸러진다
@@ -152,6 +159,7 @@ export async function purchaseHistory(
         issuedAt: r.issued_at,
         status: r.status,
         isManual: r.invoice_no.startsWith("직접-"),
+        unit: "본",
         qty: 0,
         receivedQty: 0,
         amount: money ? 0 : null,
@@ -186,6 +194,8 @@ export async function purchaseHistory(
       receivedQty: Number(r.received_qty ?? 0),
       unitCost: money ? cost : null,
       amount: money ? amount : null,
+      // 상품 연결이 없는 옛 타이어 인보이스 줄은 '본'으로 (부품임이 확실할 때만 '개')
+      unit: r.is_serialized === false ? "개" : "본",
     });
     inv.qty += qty;
     inv.receivedQty += Number(r.received_qty ?? 0);
@@ -199,28 +209,34 @@ export async function purchaseHistory(
    *    그 장부는 매입 입고 화면에 그대로 열려 있으니 사라지는 것이 아니다.
    */
   for (const [id, inv] of invMap) if (inv.lines.length === 0) invMap.delete(id);
+  /** 줄이 하나라도 부품이면 장부 단위는 '개' — 「4본」이라고 부품을 세지 않는다 */
+  for (const inv of invMap.values()) {
+    inv.unit = inv.lines.every((l) => l.unit === "본") ? "본" : "개";
+  }
 
   // 날짜별로 묶는다
   const dayMap = new Map<string, PurchaseDay>();
   for (const inv of invMap.values()) {
     const key = inv.issuedAt ?? "날짜 없음";
     const d =
-      dayMap.get(key) ?? dayMap.set(key, { date: key, qty: 0, amount: money ? 0 : null, invoices: [] }).get(key)!;
+      dayMap.get(key) ?? dayMap.set(key, { date: key, qty: 0, amount: money ? 0 : null, unit: "본", invoices: [] }).get(key)!;
     d.invoices.push(inv);
     d.qty += inv.qty;
+    if (inv.unit === "개") d.unit = "개";
     if (money && d.amount !== null) d.amount += inv.amount ?? 0;
   }
   const days = [...dayMap.values()].sort((a, b) => b.date.localeCompare(a.date));
 
-  const bySupMap = new Map<string, { supplier: string; qty: number; amount: number | null; invoices: number }>();
+  const bySupMap = new Map<string, { supplier: string; qty: number; amount: number | null; invoices: number; unit: "본" | "개" }>();
   for (const inv of invMap.values()) {
     const e =
       bySupMap.get(inv.supplier) ??
       bySupMap
-        .set(inv.supplier, { supplier: inv.supplier, qty: 0, amount: money ? 0 : null, invoices: 0 })
+        .set(inv.supplier, { supplier: inv.supplier, qty: 0, amount: money ? 0 : null, invoices: 0, unit: "본" })
         .get(inv.supplier)!;
     e.qty += inv.qty;
     e.invoices++;
+    if (inv.unit === "개") e.unit = "개";
     if (money && e.amount !== null) e.amount += inv.amount ?? 0;
   }
 
@@ -228,6 +244,7 @@ export async function purchaseHistory(
   return {
     days,
     totalQty: all.reduce((s, i) => s + i.qty, 0),
+    totalUnit: all.every((i) => i.unit === "본") ? "본" : "개",
     totalAmount: money ? all.reduce((s, i) => s + (i.amount ?? 0), 0) : null,
     invoiceCount: all.length,
     bySupplier: [...bySupMap.values()].sort((a, b) => b.qty - a.qty),

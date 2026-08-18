@@ -1196,6 +1196,16 @@ export async function receiveLine(input: {
   if (!line.productId) {
     return { ok: false, error: `상품을 찾지 못했습니다 (CAI ${line.cai}). 먼저 상품을 등록하세요` };
   }
+  /**
+   * 🔴 이 흐름은 타이어 전용(1본 1행)이다 (2026-08-18) — 부품 줄을 태우면 5개가
+   *    5행으로 쪼개진다. 부품 매입은 붙여넣기 카드의 「입고」 버튼이 맡는다.
+   */
+  const [prodKind] = await db.execute<{ is_serialized: boolean }>(sql`
+    SELECT is_serialized FROM product WHERE id = ${line.productId}
+  `);
+  if (prodKind && prodKind.is_serialized === false) {
+    return { ok: false, error: "부품 줄은 이 흐름으로 입고할 수 없습니다 — 붙여넣기 카드의 「입고」 버튼을 써 주세요" };
+  }
   const remain = line.qty - line.receivedQty;
   if (input.qty > remain) {
     return { ok: false, error: `남은 수량은 ${remain}본입니다` };

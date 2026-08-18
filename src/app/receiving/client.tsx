@@ -22,6 +22,7 @@ import {
   type PendingLine,
   type PreviewResult,
 } from "@/lib/invoice";
+import { receivePastedInvoice } from "@/lib/purchase-paste-actions";
 
 const won = (n: number) => n.toLocaleString();
 
@@ -290,6 +291,48 @@ function PendingInvoiceCard({ inv }: { inv: PendingInvoice }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const isManual = inv.invoiceNo.startsWith("직접-");
+  /**
+   * ⭐ 붙여넣기 매입은 단순 카드 (사장님 결정 변경 2026-08-18 — 먼저 입고 예정,
+   *    도착하면 버튼 한 번). 타이어용 줄별 DOT 입력 흐름(1본 1행)을 태우면
+   *    부품이 N행으로 쪼개지므로 전용 입고 액션을 쓴다.
+   */
+  if (inv.invoiceNo.startsWith("붙여넣기-")) {
+    return (
+      <li className="rounded-xl border-2 border-indigo-300 bg-white p-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <span className="font-bold">
+            {inv.supplier}{" "}
+            <span className="tabular text-sm font-normal text-slate-500">{inv.invoiceNo}</span>
+          </span>
+          <span className="tabular text-sm text-slate-500">입고 예정 {inv.remain}개</span>
+        </div>
+        <ul className="mt-2 divide-y divide-slate-100 border-t border-slate-100 text-sm">
+          {inv.lines.map((l) => (
+            <li key={l.itemId} className="flex items-baseline justify-between gap-2 py-1.5">
+              <span className="min-w-0 truncate">{l.description || l.cai}</span>
+              <span className="tabular shrink-0 text-slate-500">{l.qty - l.receivedQty}개</span>
+            </li>
+          ))}
+        </ul>
+        {error && <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() =>
+            start(async () => {
+              setError(null);
+              const r = await receivePastedInvoice(inv.invoiceId);
+              if (!r.ok) return setError(r.error);
+              router.refresh();
+            })
+          }
+          className="mt-3 w-full rounded-xl bg-indigo-700 py-3 font-semibold text-white active:bg-indigo-800 disabled:opacity-50"
+        >
+          {pending ? "입고 중…" : `입고 (${inv.remain}개 재고에 반영)`}
+        </button>
+      </li>
+    );
+  }
 
   return (
     <li className="rounded-xl border-2 border-slate-300 bg-white p-3">

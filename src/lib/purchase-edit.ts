@@ -35,53 +35,119 @@ function refresh() {
 
 type Line = typeof purchaseInvoiceItem.$inferSelect;
 
-/** 입고된 본에 해당하는 재고 id 를 찾는다 — 못 찾거나 이미 팔렸으면 이유를 돌려준다 */
-async function resolveStock(line: Line): Promise<{ ok: true; ids: number[] } | { ok: false; error: string }> {
-  if (line.receivedQty === 0) return { ok: true, ids: [] };
-
-  // ① 정확한 연결 (2026-08-09 이후 입고분)
-  const linked = await db
-    .select({ id: stockItem.id, status: stockItem.status })
-    .from(stockItem)
-    .where(eq(stockItem.purchaseItemId, line.id));
-
-  if (linked.length > 0) {
-    const notInStock = linked.filter((s) => s.status !== "재고");
-    if (notInStock.length > 0) {
-      return {
-        ok: false,
-        error: `이미 판매·보관된 본이 ${notInStock.length}본 있어 지울 수 없습니다 — 해당 판매를 먼저 취소해 주세요`,
-      };
-    }
-    return { ok: true, ids: linked.map((s) => s.id) };
-  }
-
-  // ② 예전 입고분 — 같은 상품·같은 매입가의 '재고' 본을 최신 것부터
-  if (!line.productId) return { ok: false, error: "상품 연결이 없는 줄이라 재고를 되짚을 수 없습니다" };
-  const rows = await db.execute<{ id: number }>(sql`
-    SELECT id FROM stock_item
-    WHERE product_id = ${line.productId}
-      AND status = '재고'
-      AND purchase_price IS NOT DISTINCT FROM ${line.unitCost}
-    ORDER BY id DESC
-    LIMIT ${line.receivedQty}
-  `);
-  if (rows.length < line.receivedQty) {
-    return {
-      ok: false,
-      error:
-        `입고된 ${line.receivedQty}본 중 재고에서 ${rows.length}본밖에 찾지 못했습니다 ` +
-        `(이미 팔렸거나 예전 자료라 연결이 없습니다). 재고 화면에서 수량을 직접 맞춰 주세요`,
-    };
-  }
-  return { ok: true, ids: rows.map((r) => Number(r.id)) };
+/**
+ * 되짚기 계획 — 무엇을 지우고(타이어 본) 무엇을 얼마나 뺄지(부품 수량).
+ * 🔴 2026-08-18 사장님 신고로 재작성: 부품은 한 행에 수량인데 옛 코드가
+ *    타이어처럼 **행 수**를 세서 「4본 중 1본밖에 못 찾았습니다」라며 거부했다
+ *    (행 하나에 7개가 들어 있어도 1로 셌다). 지웠으면 행째 날려 7개가 사라질 뻔.
+ */
+interface StockPlan {
+  /** 통째로 지울 타이어 본(1본 1행) */
+  serialIds: number[];
+  /** 수량을 뺄 부품 행들 */
+  qtyTakes: { id: number; take: number }[];
+  /** 재고가 모자라 못 뺀 수량 — 이미 팔린 것으로 본다 */
+  short: number;
+  /** '본'(타이어) 또는 '개'(부품) */
+  unit: string;
 }
 
-/** 재고 본과 이동 기록을 지운다 — 잘못 입고한 것은 「없던 일」이 맞다 */
-async function deleteStock(ids: number[]): Promise<void> {
-  if (ids.length === 0) return;
-  await db.delete(stockMovement).where(inArray(stockMovement.stockItemId, ids));
-  await db.delete(stockItem).where(inArray(stockItem.id, ids));
+async function resolveStock(line: Line): Promise<{ ok: true; plan: StockPlan } | { ok: false; error: string }> {
+  const empty: StockPlan = { serialIds: [], qtyTakes: [], short: 0, unit: "개" };
+  if (line.receivedQty === 0) return { ok: true, plan: empty };
+  if (!line.productId) return { ok: false, error: "상품 연결이 없는 줄이라 재고를 되짚을 수 없습니다" };
+
+  const [prod] = await db.execute<{ is_serialized: boolean }>(sql`
+    SELECT is_serialized FROM product WHERE id = ${line.productId}
+  `);
+  const serialized = prod?.is_serialized !== false;
+
+  if (serialized) {
+    /* ── 타이어: 1본 1행 — 전부 정확히 되짚어질 때만 지운다 (물러섬 없음) ── */
+    const linked = await db
+      .select({ id: stockItem.id, status: stockItem.status })
+      .from(stockItem)
+      .where(eq(stockItem.purchaseItemId, line.id));
+    if (linked.length > 0) {
+      const notInStock = linked.filter((x) => x.status !== "재고");
+      if (notInStock.length > 0) {
+        return {
+          ok: false,
+          error: `이미 판매·보관된 본이 ${notInStock.length}본 있어 지울 수 없습니다 — 해당 판매를 먼저 취소해 주세요`,
+        };
+      }
+      return { ok: true, plan: { ...empty, unit: "본", serialIds: linked.map((x) => x.id) } };
+    }
+    // 예전 입고분 — 같은 상품·같은 매입가의 '재고' 본을 최신 것부터
+    const rows = await db.execute<{ id: number }>(sql`
+      SELECT id FROM stock_item
+      WHERE product_id = ${line.productId}
+        AND status = '재고'
+        AND purchase_price IS NOT DISTINCT FROM ${line.unitCost}
+      ORDER BY id DESC
+      LIMIT ${line.receivedQty}
+    `);
+    if (rows.length < line.receivedQty) {
+      return {
+        ok: false,
+        error:
+          `입고된 ${line.receivedQty}본 중 재고에서 ${rows.length}본밖에 찾지 못했습니다 ` +
+          `(이미 팔렸거나 예전 자료라 연결이 없습니다). 재고 화면에서 수량을 직접 맞춰 주세요`,
+      };
+    }
+    return { ok: true, plan: { ...empty, unit: "본", serialIds: rows.map((r) => Number(r.id)) } };
+  }
+
+  /* ── 부품: 한 행에 수량 — 그 상품의 재고 행들에서 수량을 뺀다 ──
+   * 이 매입 줄에 연결된 행 → DOT 없는 행(부품 실사 자리) → 나머지 순으로.
+   * 재고가 모자라면(이미 팔림) 있는 만큼만 빼고 지운다 — 재고의 진실은
+   * 실사가 지키고, 잘못 들어간 매입 기록은 지워져야 하기 때문이다. */
+  const rows = await db.execute<{ id: number; qty: number }>(sql`
+    SELECT id, qty FROM stock_item
+    WHERE product_id = ${line.productId} AND status = '재고' AND qty > 0
+    ORDER BY (purchase_item_id = ${line.id}) DESC NULLS LAST, (dot IS NULL) DESC, id DESC
+  `);
+  let remain = line.receivedQty;
+  const qtyTakes: { id: number; take: number }[] = [];
+  for (const r of rows) {
+    if (remain <= 0) break;
+    const take = Math.min(remain, Number(r.qty));
+    qtyTakes.push({ id: Number(r.id), take });
+    remain -= take;
+  }
+  return { ok: true, plan: { serialIds: [], qtyTakes, short: remain, unit: "개" } };
+}
+
+/** 계획대로 재고를 되돌린다 — 타이어 본은 지우고, 부품은 수량을 빼며 이동 기록을 남긴다 */
+async function applyStockPlan(plan: StockPlan, why: string): Promise<void> {
+  if (plan.serialIds.length > 0) {
+    await db.delete(stockMovement).where(inArray(stockMovement.stockItemId, plan.serialIds));
+    await db.delete(stockItem).where(inArray(stockItem.id, plan.serialIds));
+  }
+  for (const t of plan.qtyTakes) {
+    await db.execute(sql`UPDATE stock_item SET qty = qty - ${t.take} WHERE id = ${t.id} AND qty >= ${t.take}`);
+    await db.insert(stockMovement).values({
+      stockItemId: t.id,
+      type: "조정",
+      reason: why,
+      qtyDelta: -t.take,
+      memo: null,
+      createdBy: null,
+    });
+  }
+}
+
+/** 사람이 읽을 결과 문장 — 몇 본을 지웠고 몇 개를 뺐고 몇 개가 모자랐는지 */
+function planNote(plans: StockPlan[]): string {
+  const tires = plans.reduce((n, p) => n + p.serialIds.length, 0);
+  const parts = plans.reduce((n, p) => n + p.qtyTakes.reduce((x, t) => x + t.take, 0), 0);
+  const short = plans.reduce((n, p) => n + p.short, 0);
+  const bits: string[] = [];
+  if (tires) bits.push(`타이어 ${tires}본`);
+  if (parts) bits.push(`부품 ${parts}개`);
+  let note = bits.length ? `재고에서 ${bits.join(" · ")}이(가) 같이 빠졌습니다.` : "재고 변동은 없습니다.";
+  if (short) note += ` ⚠️ ${short}개는 재고에 없어 못 뺐습니다(이미 팔린 것으로 보입니다) — 실물과 다르면 재고 화면에서 맞춰 주세요.`;
+  return note;
 }
 
 /** 장부 상태를 줄들의 입고 상황에 맞춘다. 줄이 하나도 없으면 장부째 지운다 */
@@ -148,7 +214,7 @@ export async function updatePurchaseCost(input: {
 /** 매입 줄 하나 지우기 — 입고된 본을 재고에서 되돌리고 줄을 없앤다 */
 export async function deletePurchaseLine(
   itemId: number,
-): Promise<{ ok: true; removedStock: number } | { ok: false; error: string }> {
+): Promise<{ ok: true; removedStock: number; note: string } | { ok: false; error: string }> {
   if (!(await getSession())) return { ok: false, error: "로그인이 필요합니다" };
 
   const [line] = await db
@@ -161,18 +227,22 @@ export async function deletePurchaseLine(
   const target = await resolveStock(line);
   if (!target.ok) return target;
 
-  await deleteStock(target.ids);
+  await applyStockPlan(target.plan, "매입 지움(입고 취소)");
   await db.delete(purchaseInvoiceItem).where(eq(purchaseInvoiceItem.id, line.id));
   await settleInvoice(line.invoiceId);
 
   refresh();
-  return { ok: true, removedStock: target.ids.length };
+  return {
+    ok: true,
+    removedStock: target.plan.serialIds.length + target.plan.qtyTakes.reduce((n, t) => n + t.take, 0),
+    note: planNote([target.plan]),
+  };
 }
 
 /** 매입 한 건(장부째) 지우기 — 모든 줄의 재고를 되돌릴 수 있을 때만 */
 export async function deletePurchaseInvoice(
   invoiceId: number,
-): Promise<{ ok: true; removedStock: number } | { ok: false; error: string }> {
+): Promise<{ ok: true; removedStock: number; note: string } | { ok: false; error: string }> {
   if (!(await getSession())) return { ok: false, error: "로그인이 필요합니다" };
 
   const lines = await db
@@ -182,20 +252,24 @@ export async function deletePurchaseInvoice(
   if (lines.length === 0) return { ok: false, error: "매입을 찾을 수 없습니다" };
 
   // 🔴 먼저 전부 되짚어지는지 확인 — 한 줄이라도 안 되면 아무것도 안 지운다
-  const targets: number[] = [];
+  const plans: StockPlan[] = [];
   for (const line of lines) {
     const t = await resolveStock(line);
     if (!t.ok) {
       const name = line.description || line.cai;
       return { ok: false, error: `「${name}」 줄: ${t.error}` };
     }
-    targets.push(...t.ids);
+    plans.push(t.plan);
   }
 
-  await deleteStock(targets);
+  for (const plan of plans) await applyStockPlan(plan, "매입 지움(입고 취소)");
   await db.delete(purchaseInvoiceItem).where(eq(purchaseInvoiceItem.invoiceId, invoiceId));
   await db.execute(sql`DELETE FROM purchase_invoice WHERE id = ${invoiceId}`);
 
   refresh();
-  return { ok: true, removedStock: targets.length };
+  return {
+    ok: true,
+    removedStock: plans.reduce((n, p) => n + p.serialIds.length + p.qtyTakes.reduce((x, t) => x + t.take, 0), 0),
+    note: planNote(plans),
+  };
 }

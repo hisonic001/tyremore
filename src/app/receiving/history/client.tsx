@@ -35,7 +35,7 @@ export function HistoryList({ days, owner }: { days: PurchaseDay[]; owner: boole
           <h2 className="mb-2 flex items-baseline justify-between gap-3">
             <span className="font-bold">{dayLabel(d.date)}</span>
             <span className="tabular text-sm text-slate-500">
-              {d.qty}본{d.amount !== null && ` · ${won(d.amount)}원`}
+              {d.qty}{d.unit}{d.amount !== null && ` · ${won(d.amount)}원`}
             </span>
           </h2>
           <ul className="space-y-2">
@@ -66,7 +66,7 @@ function InvoiceCard({ inv, owner }: { inv: PurchaseInvoiceRow; owner: boolean }
         setAskDelete(false);
         return setError(r.error);
       }
-      setNotice(`지웠습니다 — 재고 ${r.removedStock}본이 같이 빠졌습니다.`);
+      setNotice(`지웠습니다 — ${r.note}`);
       router.refresh();
     });
   }
@@ -84,7 +84,7 @@ function InvoiceCard({ inv, owner }: { inv: PurchaseInvoiceRow; owner: boolean }
             {inv.isManual && <span className="ml-2 text-xs font-normal text-slate-400">직접 매입</span>}
           </span>
           <span className="tabular text-sm text-slate-500">
-            {inv.qty}본{inv.amount !== null && ` · ${won(inv.amount)}원`}
+            {inv.qty}{inv.unit}{inv.amount !== null && ` · ${won(inv.amount)}원`}
           </span>
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -96,7 +96,7 @@ function InvoiceCard({ inv, owner }: { inv: PurchaseInvoiceRow; owner: boolean }
           <span className="tabular text-xs text-slate-400">{inv.invoiceNo}</span>
           {inv.status !== "입고완료" && inv.qty > 0 && (
             <span className="tabular text-xs text-amber-700">
-              {inv.receivedQty}/{inv.qty}본 도착
+              {inv.receivedQty}/{inv.qty}{inv.unit} 도착
             </span>
           )}
           <span className="ml-auto text-xs text-slate-400">
@@ -121,7 +121,7 @@ function InvoiceCard({ inv, owner }: { inv: PurchaseInvoiceRow; owner: boolean }
             {askDelete ? (
               <div className="rounded-lg border-2 border-red-300 bg-red-50 p-3">
                 <p className="text-sm font-semibold text-red-800">
-                  이 매입 {inv.receivedQty}본을 재고에서 빼고 기록을 지웁니다. 되돌릴 수 없습니다.
+                  이 매입의 입고분({inv.receivedQty}{inv.unit})을 재고에서 되돌리고 기록을 지웁니다. 되돌릴 수 없습니다.
                 </p>
                 <div className="mt-2 flex gap-2">
                   <button
@@ -192,7 +192,7 @@ function LineRow({ l, owner, onMessage }: { l: PurchaseLine; owner: boolean; onM
         setAsk(false);
         return setError(r.error);
       }
-      onMessage(`줄을 지웠습니다 — 재고 ${r.removedStock}본이 같이 빠졌습니다.`);
+      onMessage(`줄을 지웠습니다 — ${r.note}`);
       router.refresh();
     });
   };
@@ -207,7 +207,7 @@ function LineRow({ l, owner, onMessage }: { l: PurchaseLine; owner: boolean; onM
         <div className="flex shrink-0 items-center gap-2">
           <div className="tabular text-right text-sm">
             <div className="font-semibold">
-              {l.qty}본
+              {l.qty}{l.unit}
               {l.receivedQty > 0 && l.receivedQty < l.qty && (
                 <span className="ml-1 text-xs font-normal text-amber-700">({l.receivedQty} 도착)</span>
               )}
@@ -215,7 +215,7 @@ function LineRow({ l, owner, onMessage }: { l: PurchaseLine; owner: boolean; onM
             {/* 매입가 — 사장님은 그 자리에서 고친다. 재고의 원가도 같이 맞춰진다 */}
             {owner ? (
               <label className="mt-0.5 flex items-center justify-end gap-1 text-xs text-slate-500">
-                본당
+                {l.unit}당
                 <input
                   value={cost === "" ? "" : Number(cost).toLocaleString()}
                   onChange={(e) => setCost(e.target.value.replace(/\D/g, ""))}
@@ -227,7 +227,7 @@ function LineRow({ l, owner, onMessage }: { l: PurchaseLine; owner: boolean; onM
                 원
               </label>
             ) : l.unitCost !== null ? (
-              <div className="text-xs text-slate-500">본당 {won(l.unitCost)}원</div>
+              <div className="text-xs text-slate-500">{l.unit}당 {won(l.unitCost)}원</div>
             ) : null}
           </div>
           {ask ? (
@@ -238,7 +238,7 @@ function LineRow({ l, owner, onMessage }: { l: PurchaseLine; owner: boolean; onM
                 onClick={removeLine}
                 className="rounded-lg bg-red-600 px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
               >
-                {pending ? "…" : `정말 (${l.receivedQty}본↩)`}
+                {pending ? "…" : `정말 (${l.receivedQty}${l.unit}↩)`}
               </button>
               <button type="button" onClick={() => setAsk(false)} className="text-xs text-slate-500">
                 취소

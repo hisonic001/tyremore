@@ -67,7 +67,7 @@ export function PastePurchase({ suppliers }: { suppliers: string[] }) {
       const r = await savePastedPurchase({ supplier, lines, rawText: text });
       if (!r.ok) return setErr(r.error);
       setMsg(
-        `✅ ${r.received}개 입고했습니다${r.priceUpdated > 0 ? ` · 매입가 ${r.priceUpdated}종 갱신` : ""}`,
+        `✅ ${r.saved}개를 입고 예정으로 담았습니다 — 물건이 도착하면 매입 입고 화면에서 「입고」를 눌러 주세요`,
       );
       reset();
       router.refresh();

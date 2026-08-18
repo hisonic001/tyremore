@@ -79,7 +79,7 @@ export default async function PurchaseHistoryPage({
       <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
         <div className="tabular flex items-baseline gap-3">
           <span className="text-3xl font-bold">{h.totalQty}</span>
-          <span className="text-lg text-slate-500">본</span>
+          <span className="text-lg text-slate-500">{h.totalUnit}</span>
           {h.totalAmount !== null && (
             <span className="ml-auto text-right">
               <span className="text-xl font-bold">{won(h.totalAmount)}</span>
@@ -104,7 +104,7 @@ export default async function PurchaseHistoryPage({
                 >
                   <span className="truncate font-medium">{s.supplier}</span>
                   <span className="tabular shrink-0 text-sm text-slate-500">
-                    {s.qty}본
+                    {s.qty}{s.unit}
                     {s.amount !== null && ` · ${won(s.amount)}원`}
                   </span>
                 </Link>
