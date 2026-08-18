@@ -2144,7 +2144,20 @@ async function pickInvoiceRow(
 ): Promise<Picked> {
   const f = main(page);
   // 🔴 먼저 검색으로 좁힌다 — 과거 날짜 송장은 검색 없이는 화면에 없다 (위 주석)
-  if (c.plateNo) await searchInvoiceList(page, c.plateNo);
+  /**
+   * ⭐ 송장 번호를 이미 알면 **번호로** 검색한다 (2026-08-18) — 같은 번호판에
+   *    같은 날짜·금액 송장이 2장인 건(8/5 이중 전기 의심)도 정확히 고를 수 있다.
+   *    번호 검색이 빈손이면(화면에서 번호가 잘려 보이는 등) 번호판으로 되돌아간다.
+   */
+  const refNo = c.marsRefNo && /^\d{8}-\d{2}SI\+\d{6}$/.test(c.marsRefNo) ? c.marsRefNo : null;
+  if (refNo) {
+    await searchInvoiceList(page, refNo);
+    if ((await f.getByRole("row").filter({ hasText: c.plateNo! }).count().catch(() => 0)) === 0 && c.plateNo) {
+      await searchInvoiceList(page, c.plateNo);
+    }
+  } else if (c.plateNo) {
+    await searchInvoiceList(page, c.plateNo);
+  }
   const rows = f.getByRole("row").filter({ hasText: c.plateNo! });
   const n = await rows.count().catch(() => 0);
   if (n === 0) return { ok: false, why: "전기된 송장이 없습니다 — MARS 에서 전기부터 해 주세요" };
@@ -2163,6 +2176,7 @@ async function pickInvoiceRow(
     }
   };
 
+  if (refNo) narrow((t) => t.replace(/\s+/g, "").includes(refNo), "송장 번호");
   if (c.workDate) narrow((t) => t.includes(c.workDate!), "작업일자");
   // 금액은 공급가(부가세 제외)로 적힌다. 둘 다 본다
   const excl = Math.round(c.total / 1.1);
