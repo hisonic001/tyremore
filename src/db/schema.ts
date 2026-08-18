@@ -822,7 +822,7 @@ export const marsRun = pgTable(
   },
   (t) => [
     // 자가점검 = 아침 화면 구조 확인 (2026-08-10 — 자동입력 개선 전략)
-    check("mars_run_kind", sql`${t.kind} IN ('입력','점검','자가점검')`),
+    check("mars_run_kind", sql`${t.kind} IN ('입력','점검','자가점검','대사')`),
     check("mars_run_status", sql`${t.status} IN ('대기','실행중','완료','실패')`),
     index("idx_mars_run_open").on(t.status).where(sql`${t.status} IN ('대기','실행중')`),
   ],

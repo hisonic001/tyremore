@@ -24,6 +24,19 @@ async function main() {
       INSERT INTO mars_run (kind, status) VALUES ('자가점검', '대기') RETURNING id
     `;
     console.log(`✅ 자가점검 요청 #${r.id} — 대리인이 곧 실행합니다 (결과는 정비 내역 배너·mars_run 로그)`);
+    /**
+     * ⭐ 아침 대사도 같이 (2026-08-18 단계3, 사장님 승인 「매일 자동」) —
+     *    자가점검이 끝나면 대리인이 이어서 돌린다. 스케줄러는 재설정 불필요.
+     */
+    const [dup2] = await sql`
+      SELECT id FROM mars_run WHERE kind = '대사' AND status IN ('대기', '실행중') LIMIT 1
+    `;
+    if (!dup2) {
+      const [r2] = await sql`
+        INSERT INTO mars_run (kind, status) VALUES ('대사', '대기') RETURNING id
+      `;
+      console.log(`✅ 기록 맞추기(대사) 요청 #${r2.id} — 자가점검에 이어 실행됩니다`);
+    }
   } finally {
     await sql.end();
   }

@@ -444,6 +444,72 @@ export async function markEntered(
   return { ok: true };
 }
 
+/* ============================================================
+ * ⭐ 아침 대사(對査) 대상 (2026-08-18 단계3, 사장님 승인 「매일 자동」)
+ *
+ * 앱의 전송완료 기록과 MARS 송장 목록을 검색으로 대조해, 틀린 기록을
+ * **우리 DB 쪽만** 바로잡는다 — MARS 에는 아무것도 쓰지 않는다.
+ * run#91 오기록 25건을 손으로 복구했던 일을 매일 아침 로봇이 한다.
+ * ========================================================== */
+export interface ReconcileTarget {
+  quoteId: number;
+  quoteNo: string;
+  plateNo: string;
+  workDate: string | null;
+  total: number;
+  /** 'SI번호' | '수동확인' | null */
+  refNo: string | null;
+  /** 메모에 「전기 실패」가 남아 있나 — 송장이 실재하면 문구를 정정한다 */
+  staleFailMemo: boolean;
+}
+
+export async function marsReconcileTargets(): Promise<ReconcileTarget[]> {
+  const rows = await db.execute<{
+    id: number;
+    quote_no: string;
+    plate_no: string;
+    work_date: string | null;
+    total_amount: number;
+    mars_ref_no: string | null;
+    stale: boolean;
+  }>(sql`
+    SELECT q.id, q.quote_no, v.plate_no,
+           COALESCE(q.work_date, q.created_at::date)::text work_date,
+           q.total_amount, q.mars_ref_no,
+           (q.mars_memo LIKE '%전기 실패%') stale
+    FROM quote q
+    LEFT JOIN vehicle v ON v.id = q.vehicle_id
+    WHERE q.status = '성사' AND q.mars_status = '전송완료' AND q.quote_no LIKE 'Q%'
+      AND v.plate_no IS NOT NULL
+      AND (q.mars_ref_no IS NULL OR q.mars_ref_no = '수동확인' OR q.mars_memo LIKE '%전기 실패%')
+    ORDER BY q.id DESC
+    LIMIT 60
+  `);
+  return rows.map((r) => ({
+    quoteId: Number(r.id),
+    quoteNo: r.quote_no,
+    plateNo: r.plate_no,
+    workDate: r.work_date,
+    total: Number(r.total_amount),
+    refNo: r.mars_ref_no,
+    staleFailMemo: r.stale === true,
+  }));
+}
+
+/**
+ * 송장 번호는 이미 맞는데 메모에 「전기 실패」가 남은 건 — 대사가 송장 실재를
+ * 확인한 뒤 문구만 정정한다 (saveMarsRefNo 는 ref 가 이미 있으면 안 건드리므로 별도)
+ */
+export async function cleanMarsFailMemo(quoteId: number): Promise<void> {
+  await db.execute(sql`
+    UPDATE quote SET updated_at = now(),
+      mars_memo = regexp_replace(mars_memo, ' · 전기 실패:.*$', '')
+        || ' · 전기 확인됨(대사, ' || to_char(now() AT TIME ZONE 'Asia/Seoul', 'MM/DD') || ')'
+    WHERE id = ${quoteId} AND mars_memo LIKE '%전기 실패%'
+  `);
+  refresh("/sales");
+}
+
 /**
  * ⭐ 매출 주문(SO) 번호를 만들자마자 기록한다 (2026-08-18 단계2).
  *    중간에 죽어도 초안 번호가 남아 다음 시도가 이어서 쓴다 — 고아 초안 근절.

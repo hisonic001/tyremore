@@ -46,6 +46,8 @@ async function runOne(id: number, kind: string): Promise<void> {
   if (kind === "점검") args.push("--check");
   // 아침 자가점검 (2026-08-10) — 화면 구조만 훑고 아무것도 저장하지 않는다
   if (kind === "자가점검") args.push("--smoke");
+  // 아침 대사 (2026-08-18 단계3) — MARS 는 읽기만, 틀린 기록은 우리 DB 만 정정
+  if (kind === "대사") args.push("--reconcile");
 
   /**
    * ⏱️ 제한 시간은 일의 양에 비례한다 (2026-08-17 run#91 — 50건 배치는 70분이
@@ -61,6 +63,8 @@ async function runOne(id: number, kind: string): Promise<void> {
     timeoutMs = 70 * 60_000;
   } else if (kind === "자가점검") {
     timeoutMs = 15 * 60_000;
+  } else if (kind === "대사") {
+    timeoutMs = 45 * 60_000;
   }
   log(`  제한 시간 ${Math.round(timeoutMs / 60_000)}분`);
 

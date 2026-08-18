@@ -127,6 +127,13 @@ const POST_DRAFT = (() => {
  */
 const CHECK = process.argv.includes("--check");
 /**
+ * ⭐ 아침 대사(對査) — 앱의 전송완료 기록 ↔ MARS 송장 목록을 검색으로 대조해
+ *    틀린 기록을 **우리 DB 쪽만** 바로잡는다 (2026-08-18 단계3, 사장님 승인 「매일 자동」).
+ *    MARS 에는 아무것도 쓰지 않는다 — 송장을 열지도 않고 목록 줄 글자만 읽는다.
+ *      npm run mars -- --reconcile
+ */
+const RECONCILE = process.argv.includes("--reconcile");
+/**
  * ⭐ 아침 자가점검 (사장님 승인 2026-08-10 — 자동입력 개선 전략).
  *    아무것도 저장하지 않고 화면 구조만 훑는다: 로그인 → 송장 목록 → 최근 송장 →
  *    점검 화면의 필수 항목. MARS 가 바뀌면 **손님 건 전에** 여기서 걸린다.
@@ -2692,16 +2699,29 @@ async function main_() {
     startMarsAttempt,
     stageMarsAttempt,
     endMarsAttempt,
+    saveMarsRefNo,
+    cleanMarsFailMemo,
+    marsReconcileTargets,
   } = await import("../src/lib/mars-queue");
   /** 대리인이 알려주는 실행 번호 — 시도 이력(mars_attempt)에 같이 남긴다 */
   const RUN_ID = Number(process.env.MARS_RUN_ID) || null;
 
   /** 차량 점검 모드는 대기열이 아니라 「전기까지 끝난 것」을 본다. 자가점검은 둘 다 안 본다 */
   const checks = CHECK && !SMOKE ? (await pendingVehicleChecks()).slice(0, LIMIT) : [];
-  const queue = CHECK || SMOKE ? [] : (await marsQueue()).slice(0, LIMIT);
+  const recon = RECONCILE ? await marsReconcileTargets() : [];
+  const queue = CHECK || SMOKE || RECONCILE ? [] : (await marsQueue()).slice(0, LIMIT);
 
   if (SMOKE) {
     log("MARS 자가점검 — 아무것도 저장하지 않고 화면 구조만 확인합니다\n");
+  } else if (RECONCILE) {
+    log(`MARS 기록 맞추기(대사)\n  대상 ${recon.length}건 — MARS 는 읽기만, 고치는 건 우리 기록뿐\n`);
+    for (const t of recon) {
+      log(`  ${t.quoteNo}  ${t.plateNo}  ${t.total.toLocaleString()}원  ${t.refNo ?? "(송장 없음)"}${t.staleFailMemo ? " · 실패 문구 잔존" : ""}`);
+    }
+    if (recon.length === 0) {
+      log("맞출 것이 없습니다 — 기록이 깨끗합니다 👍");
+      process.exit(0);
+    }
   } else if (CHECK) {
     log(`MARS 차량 점검\n  점검할 것 ${checks.length}건\n`);
     for (const c of checks) {
@@ -2883,6 +2903,62 @@ async function main_() {
      *    (처음엔 기존 초안에 줄만 넣으려 했는데, 사장님이 시험 초안을 이미 다
      *     지우셔서 새로 만든다 — 2026-08-05 확인.)
      */
+    /* ⭐ 아침 대사 — MARS 는 읽기만, 정정은 우리 DB 만 (단계3, 사장님 승인 「매일 자동」) */
+    if (RECONCILE) {
+      let fixed = 0;
+      let cleaned = 0;
+      let notFound = 0;
+      let vague = 0;
+      const dl = Number(process.env.MARS_DEADLINE_TS) || Date.now() + recon.length * 30_000 + 10 * 60_000;
+      for (const t of recon) {
+        if (Date.now() > dl - 3 * 60_000) {
+          log("⏱️ 시간이 다 되어 여기서 멈춥니다 — 남은 것은 내일 아침 대사가 잇습니다");
+          break;
+        }
+        log(`
+── ${t.quoteNo}  ${t.plateNo}  ${t.total.toLocaleString()}원 ─────────`);
+        const knownSi = t.refNo && SI_EXACT_RE.test(t.refNo) ? t.refNo : null;
+        const picked = await findInvoiceInList(page, {
+          plateNo: t.plateNo,
+          workDate: t.workDate,
+          total: t.total,
+          marsRefNo: knownSi,
+        });
+        if (picked.ok) {
+          const si = SI_RE.exec(picked.label.replace(/\s+/g, ""))?.[0] ?? null;
+          if (!si) {
+            vague++;
+            log("  ⚠️ 줄에서 송장 번호를 못 읽었습니다 — 건드리지 않습니다");
+          } else if (knownSi && si !== knownSi) {
+            // 아는 번호와 다른 송장이 잡혔다 — 확신이 없으면 안 쓴다
+            vague++;
+            log(`  ⚠️ 기록(${knownSi})과 다른 송장(${si})이 잡혔습니다 — 건드리지 않습니다`);
+          } else if (knownSi) {
+            await cleanMarsFailMemo(t.quoteId);
+            cleaned++;
+            log(`  ✅ 송장 ${si} 실재 확인 — 「전기 실패」 문구를 정정했습니다`);
+          } else {
+            await saveMarsRefNo(t.quoteId, si);
+            fixed++;
+            log(`  ✅ 송장 ${si} 확인 — 번호를 기록에 채웠습니다`);
+          }
+        } else if (/고르지 못했/.test(picked.why)) {
+          vague++;
+          log(`  ⚠️ ${picked.why}`);
+        } else {
+          notFound++;
+          log("  · 송장이 정말 없습니다 — 미전기(감사 배너 대상)로 남겨둡니다");
+        }
+      }
+      log(`
+${"=".repeat(56)}`);
+      log(`  기록 맞추기 — 번호 채움 ${fixed}건 · 문구 정정 ${cleaned}건 · 진짜 미전기 ${notFound}건 · 판단 보류 ${vague}건`);
+      log(`${"=".repeat(56)}
+`);
+      await ctx.close().catch(() => {});
+      process.exit(0);
+    }
+
     if (TRY_ITEM) {
       if (!FALLBACK_ITEM) {
         log("  ⚠️ .env.local 에 MARS_FALLBACK_ITEM 이 없습니다 — 시험할 품번이 없습니다");
