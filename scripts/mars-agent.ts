@@ -65,7 +65,13 @@ async function runOne(id: number, kind: string): Promise<void> {
   log(`  제한 시간 ${Math.round(timeoutMs / 60_000)}분`);
 
   const exit = await new Promise<number>((resolve) => {
-    const child = spawn("npx", args, { shell: true, cwd: process.cwd() });
+    const child = spawn("npx", args, {
+      shell: true,
+      cwd: process.cwd(),
+      // ⏱️ 마감을 자식에게 알려준다 (2026-08-18 단계1) — fill 은 이보다 5분 먼저
+      //    스스로 멈춘다. 두 군데서 따로 계산하다 점검 모드에서 역전됐던 것의 근본 수리.
+      env: { ...process.env, MARS_DEADLINE_TS: String(Date.now() + timeoutMs) },
+    });
     let buf = "";
     const onChunk = (c: Buffer) => {
       buf += c.toString();
@@ -81,6 +87,29 @@ async function runOne(id: number, kind: string): Promise<void> {
     };
     child.stdout.on("data", onChunk);
     child.stderr.on("data", onChunk);
+    /**
+     * 🔴 웹의 「중단 처리」 감지 (2026-08-18 단계1) — cancelMarsRun 은 DB 상태만
+     *    '실패'로 바꿀 뿐 프로세스를 못 죽인다. 화면은 멈췄다는데 로봇은 계속
+     *    입력하는 상태(run#91 계열)를 막기 위해 30초마다 확인해 트리를 끊는다.
+     */
+    const kill = () => {
+      if (process.platform === "win32" && child.pid) {
+        spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"]);
+      } else {
+        child.kill("SIGKILL");
+      }
+    };
+    const watch = setInterval(() => {
+      void sql`SELECT status FROM mars_run WHERE id=${id}`
+        .then((r) => {
+          if (r[0] && r[0].status === "실패") {
+            log(`요청 #${id} — 웹에서 중단 처리됨, 로봇을 멈춥니다`);
+            kill();
+            clearInterval(watch);
+          }
+        })
+        .catch(() => {});
+    }, 30_000);
     const timer = setTimeout(() => {
       /**
        * 🔴 `child.kill()` 은 겉껍데기(cmd)만 죽인다 (2026-08-17 run#91 실측 —
@@ -88,15 +117,12 @@ async function runOne(id: number, kind: string): Promise<void> {
        *    「다시 실행 요청」을 눌렀다면 로봇 두 대가 같은 크롬을 잡았을 것이다).
        *    윈도우에서는 taskkill 로 **프로세스 나무 전체**를 끊는다.
        */
-      if (process.platform === "win32" && child.pid) {
-        spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"]);
-      } else {
-        child.kill("SIGKILL");
-      }
+      kill();
       resolve(124);
     }, timeoutMs);
     child.on("close", (code) => {
       clearTimeout(timer);
+      clearInterval(watch);
       resolve(code ?? 1);
     });
   });

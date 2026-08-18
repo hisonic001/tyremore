@@ -273,6 +273,30 @@ async function fillField(
 const log = (s: string) => console.log(s);
 
 /**
+ * ⭐ 공용 판정 상수 (2026-08-18 단계1) — 같은 정규식이 4~7벌로 흩어져 서로 달랐다.
+ *    (오류 판정 4벌 중 「부족」이 든 것은 한 벌뿐이었고, SI 번호 리터럴은 7벌)
+ */
+/** 전기된 송장 번호 — 자릿수 고정 8-2SI+6 (느슨하면 옆 숫자와 붙어 오염 번호가 된다) */
+const SI_SRC = "\\d{8}-\\d{2}SI\\+\\d{6}";
+const SI_RE = new RegExp(SI_SRC);
+const SI_RE_G = new RegExp(SI_SRC, "g");
+const SI_EXACT_RE = new RegExp("^" + SI_SRC + "$");
+/** MARS 오류 창 판정 — 1벌로 통일 (「부족」 포함) */
+const ERROR_RE = /않습니다|없습니다|제공해야|입력해야|오류|잘못|부족/;
+
+/** 알려진 창 사전 — 창 판정을 한 곳으로. MARS 가 새 창을 보여주면 여기에 한 줄 배운다 */
+type DialogKind = "ship" | "cash" | "zero" | "mileage" | "open" | "error" | "unknown";
+function classifyDialog(said: string): DialogKind {
+  if (/배송 및 송장|출하 및 송장/.test(said)) return "ship";
+  if (/현금 등록기/.test(said)) return "cash";
+  if (/단가 또는 수량|Nevertheless/i.test(said)) return "zero";
+  if (/주행거리를 먼저|주행거리.*입력해야/.test(said)) return "mileage";
+  if (/여시겠습니까|열겠습니까|open/i.test(said)) return "open";
+  if (ERROR_RE.test(said)) return "error";
+  return "unknown";
+}
+
+/**
  * ⭐ 같은 이름이 button 으로도 menuitem 으로도 있다 (2026-08-02 화면 훑어서 확인).
  *   「고객 정보 검색」·「매출 주문」이 그렇다. 어느 쪽이든 되는 것을 누른다.
  */
@@ -842,7 +866,7 @@ async function createCustomer(
       (await f.locator('[controlname="Dialog"]').last().innerText().catch(() => "")) ||
       "";
     const flat = saidBefore.replace(/\s+/g, " ").trim();
-    if (/제공해야|입력해야|않습니다|없습니다|오류|잘못/.test(flat)) {
+    if (ERROR_RE.test(flat)) {
       await second.click().catch(() => {}); // 팝업은 닫아 준다 — 다음 건까지 막으면 안 된다
       throw new Error(`MARS 가 저장을 막았습니다: ${flat.replace(/확인\s*$/, "").slice(0, 120)}`);
     }
@@ -930,10 +954,13 @@ async function createVehicleForContact(
     const dlg = f.locator('[controlname="Dialog"]').last();
     if (!(await dlg.isVisible({ timeout: 1200 }).catch(() => false))) return;
     const said = ((await dlg.innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
-    if (/않습니다|없습니다|제공해야|입력해야|오류|잘못/.test(said)) {
+    if (ERROR_RE.test(said)) {
       await f.locator('button[controlname="Dialog"]', { hasText: "확인" }).last().click().catch(() => {});
       throw new Error(`차량 카드에서 MARS 가 막았습니다 (${what}): ${said.slice(0, 100)}`);
     }
+    // 🔴 모르는 창도 무엇이었는지 남긴다 (2026-08-18 단계1) — 조용히 닫힌 침묵이
+    //    run#91 오진의 원인이었다. 지금은 관찰 모드(기존처럼 확인으로 닫음).
+    if (said) log(`    · 안내 창(닫음, ${what}): ${said.slice(0, 100)}`);
     await f.locator('button[controlname="Dialog"]', { hasText: "확인" }).last().click().catch(() => {});
     await page.waitForTimeout(500);
   };
@@ -1734,7 +1761,7 @@ async function postOrder(
    */
   const scanSIs = async (): Promise<Set<string>> => {
     const body = ((await f.locator("body").innerText().catch(() => "")) || "").replace(/\s+/g, "");
-    return new Set(body.match(/\d{8}-\d{2}SI\+\d{6}/g) ?? []);
+    return new Set(body.match(SI_RE_G) ?? []);
   };
   const beforeSIs = await scanSIs();
 
@@ -1816,23 +1843,25 @@ async function postOrder(
           continue;
         }
         const said = ((await d.innerText().catch(() => "")) || "").replace(/\s+/g, " ");
-        /**
-         * ⭐ 0원 줄 안내 창 (사장님 승인 2026-08-17) — 서비스로 끼워 준 0원 줄이 있으면
-         *    「단가 또는 수량이 "0"과 같습니다. Nevertheless 전기? 예/아니요」가 먼저 뜬다.
-         *    0원 줄은 우리가 의도한 것이고 합계 대조는 이미 끝났으므로 「예」로 계속한다.
-         *    (run#91 — 이영준·김천주·박기선 3건이 이 창에 막혔다)
-         */
-        if (/단가 또는 수량|Nevertheless/i.test(said)) {
-          log(`    · 0원 줄 안내 창 — 「예」로 계속합니다 (${said.slice(0, 70)})`);
-          await d.getByRole("button", { name: /^(예|Yes)$/ }).last().click({ timeout: 5000 }).catch(() => {});
-          await page.waitForTimeout(1200);
-          until = Date.now() + 8000; // 다음 창(배송/송장 선택)을 처음처럼 기다린다
-          continue;
-        }
-        if (/현금 등록기/.test(said)) {
-          cashDlg = d;
-        } else if (!postDlg) {
-          postDlg = d; // 선택지 없는 대화상자라도 기억해 둔다 — 취소할 때 쓴다
+        // ⭐ 창 판정은 사전(classifyDialog) 한 곳으로 (2026-08-18 단계1)
+        switch (classifyDialog(said)) {
+          case "zero":
+            /**
+             * 0원 줄 안내 창 (사장님 승인 2026-08-17) — 서비스로 끼워 준 0원 줄이 있으면
+             * 「단가 또는 수량이 "0". Nevertheless 전기? 예/아니요」가 먼저 뜬다.
+             * 합계 대조는 이미 끝났으므로 「예」로 계속한다 (run#91 이영준·김천주·박기선).
+             */
+            log(`    · 0원 줄 안내 창 — 「예」로 계속합니다 (${said.slice(0, 70)})`);
+            await d.getByRole("button", { name: /^(예|Yes)$/ }).last().click({ timeout: 5000 }).catch(() => {});
+            await page.waitForTimeout(1200);
+            until = Date.now() + 8000; // 다음 창(배송/송장 선택)을 처음처럼 기다린다
+            continue;
+          case "cash":
+            cashDlg = d;
+            continue;
+          default:
+            // mileage·error·unknown — 기억해 뒀다가 선택지를 못 찾으면 !ship 분기가 사유와 함께 처리
+            if (!postDlg) postDlg = d;
         }
       }
       if (!ship && !cashDlg) await page.waitForTimeout(500);
@@ -1960,7 +1989,9 @@ async function postOrder(
     if (!(await dlg.isVisible({ timeout: 2500 }).catch(() => false))) break;
     const said = ((await dlg.innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
 
-    if (/여시겠습니까|열겠습니까|open/i.test(said)) {
+    // ⭐ 창 판정은 사전(classifyDialog) 한 곳으로 (2026-08-18 단계1)
+    const kind = classifyDialog(said);
+    if (kind === "open") {
       // 「전기된 송장을 여시겠습니까?」 → 예 (점검 화면으로 바로 이어진다)
       const yes = f.getByRole("button", { name: /^(예|Yes)$/ }).last();
       if (await yes.isVisible({ timeout: 2000 }).catch(() => false)) await yes.click().catch(() => {});
@@ -1969,13 +2000,13 @@ async function postOrder(
       continue;
     }
     // 0원 줄 안내 창이 여기(선택 창 뒤)서 뜰 수도 있다 — 같은 이유로 「예」 (2026-08-17)
-    if (/단가 또는 수량|Nevertheless/i.test(said)) {
+    if (kind === "zero") {
       log(`    · 0원 줄 안내 창 — 「예」로 계속합니다`);
       await f.getByRole("button", { name: /^(예|Yes)$/ }).last().click().catch(() => {});
       await page.waitForTimeout(2500);
       continue;
     }
-    if (/않습니다|없습니다|제공해야|입력해야|오류|잘못|부족/.test(said)) {
+    if (kind === "mileage" || kind === "error") {
       await f.locator('button[controlname="Dialog"]', { hasText: "확인" }).last().click().catch(() => {});
       return { ok: false, invoiceNo: null, why: said.replace(/확인\s*$/, "").slice(0, 140) };
     }
@@ -2149,7 +2180,7 @@ async function pickInvoiceRow(
    *    같은 날짜·금액 송장이 2장인 건(8/5 이중 전기 의심)도 정확히 고를 수 있다.
    *    번호 검색이 빈손이면(화면에서 번호가 잘려 보이는 등) 번호판으로 되돌아간다.
    */
-  const refNo = c.marsRefNo && /^\d{8}-\d{2}SI\+\d{6}$/.test(c.marsRefNo) ? c.marsRefNo : null;
+  const refNo = c.marsRefNo && SI_EXACT_RE.test(c.marsRefNo) ? c.marsRefNo : null;
   if (refNo) {
     await searchInvoiceList(page, refNo);
     if ((await f.getByRole("row").filter({ hasText: c.plateNo! }).count().catch(() => 0)) === 0 && c.plateNo) {
@@ -2197,6 +2228,21 @@ async function pickInvoiceRow(
 }
 
 /**
+ * ⭐ 완료된 매출 송장 목록을 연다 — 이동 경로의 정본 (2026-08-18 단계1).
+ *    같은 시퀀스가 4벌로 복제돼 있어(smoke·peek·점검 루프·본류) 「목록에 아직
+ *    없을 때 재시도」 같은 배움이 findInvoiceInList 한 곳에만 적용되고 있었다.
+ */
+async function openInvoiceList(page: Page): Promise<void> {
+  await page.goto(HOME);
+  await waitHome(page, 40000);
+  await clickAny(page, "판매완료");
+  await page.waitForTimeout(700);
+  await clickAny(page, "완료된 매출 송장, 완료된 매출 송장 목록을 엽니다.");
+  await page.waitForTimeout(3000);
+  await passBigSearchDialog(page);
+}
+
+/**
  * 송장 목록을 열어 이 판매의 송장 줄을 찾는다 — 전기 확인의 공통 경로.
  *
  * 🔴 방금 전기한 송장이 목록에 **아직 안 보일 때**가 있다 (2026-08-08 run#54,
@@ -2214,13 +2260,7 @@ async function findInvoiceInList(
       log("    · 목록에 아직 없을 수 있어 잠시 뒤 다시 봅니다");
       await page.waitForTimeout(6000);
     }
-    await page.goto(HOME);
-    await waitHome(page, 40000);
-    await clickAny(page, "판매완료");
-    await page.waitForTimeout(700);
-    await clickAny(page, "완료된 매출 송장, 완료된 매출 송장 목록을 엽니다.");
-    await page.waitForTimeout(3000);
-    await passBigSearchDialog(page);
+    await openInvoiceList(page);
     last = await pickInvoiceRow(page, c);
     if (last.ok || !/전기된 송장이 없습니다/.test(last.why)) return last;
   }
@@ -2241,7 +2281,7 @@ async function findInvoiceInList(
 async function openInvoice(page: Page, row: Locator): Promise<boolean> {
   const f = main(page);
   const flat = ((await row.innerText().catch(() => "")) || "").replace(/\s+/g, "");
-  const no = /\d{8}-\d{2}SI\+\d{6}/.exec(flat)?.[0] ?? null;
+  const no = SI_RE.exec(flat)?.[0] ?? null;
 
   await row.scrollIntoViewIfNeeded().catch(() => {});
   // 줄을 먼저 눌러 활성으로 만든다 — 목록에서 다른 줄이 잡혀 있으면 링크가 안 먹는다
@@ -2575,6 +2615,25 @@ async function main_() {
   }
 
   /**
+   * 🔴 이중 실행 잠금 (2026-08-18 단계1) — 실제 사고: 수동 점검 실행과 대리인의
+   *    run#95 가 겹쳐, 아래의 「프로필 잠김 해제」가 상대 브라우저를 죽였다
+   *    (8/5 건 4개가 「browser has been closed」). 대리인의 잠금(748291)은
+   *    대리인 창끼리만 막는다 — 로봇 자신(748292)도 잠근다.
+   *
+   * ⚠️ src/db 의 풀은 max_lifetime 300초로 연결을 갈아치우므로 자문 잠금이
+   *    5분 만에 조용히 풀린다 — **전용 연결 하나**를 프로세스 끝까지 쥔다.
+   *    세션 연결(5432)에서만 유지된다 (mars-agent 와 같은 제약).
+   */
+  const lockConn = (await import("postgres")).default(process.env.DATABASE_URL!, { max: 1 });
+  const [gotLock] = await lockConn<{ ok: boolean }[]>`SELECT pg_try_advisory_lock(748292) AS ok`;
+  if (!gotLock.ok) {
+    log("⛔ 다른 MARS 로봇이 이미 돌고 있습니다 (대리인 실행 포함) — 이 실행은 물러납니다.");
+    log("   두 로봇이 같은 크롬을 잡으면 둘 다 죽습니다. 끝난 뒤 다시 실행해 주세요.");
+    await lockConn.end();
+    process.exit(2);
+  }
+
+  /**
    * ⭐ 전용 Chrome 프로필을 계속 쓴다 — 로그인 상태가 남는다.
    *   사장님이 평소 쓰시는 Chrome 프로필을 그대로 쓰려면 Chrome 을 완전히 닫아야 해서
    *   (프로필이 잠긴다) 일부러 따로 둔다. 처음 한 번만 로그인하시면 된다.
@@ -2637,11 +2696,7 @@ async function main_() {
       log("── MARS 자가점검 ─────────");
       log("  ✅ 로그인·시작 화면");
       try {
-        await clickAny(page, "판매완료");
-        await page.waitForTimeout(700);
-        await clickAny(page, "완료된 매출 송장, 완료된 매출 송장 목록을 엽니다.");
-        await page.waitForTimeout(3000);
-        await passBigSearchDialog(page);
+        await openInvoiceList(page);
         log("  ✅ 완료된 매출 송장 목록");
       } catch (e) {
         bad.push("송장 목록");
@@ -2809,7 +2864,7 @@ async function main_() {
           for (let i = nh - 1; i >= 0; i--) {
             if (!(await heads.nth(i).isVisible().catch(() => false))) continue;
             const t = ((await heads.nth(i).innerText().catch(() => "")) || "").replace(/\s+/g, " ");
-            const m = /\d{8}-\d{2}SI\+\d{6}/.exec(t);
+            const m = SI_RE.exec(t);
             if (m) {
               log(`  · 송장 번호: ${m[0]}  (머리글: ${t.slice(0, 80)})`);
               break;
@@ -2948,7 +3003,7 @@ async function main_() {
           marsRefNo: null,
         });
         if (picked.ok) {
-          const si = /\d{8}-\d{2}SI\+\d{6}/.exec(picked.label.replace(/\s+/g, ""))?.[0] ?? null;
+          const si = SI_RE.exec(picked.label.replace(/\s+/g, ""))?.[0] ?? null;
           posted = { ok: true, invoiceNo: si };
         } else {
           posted = { ok: false, invoiceNo: null, why: picked.why };
@@ -2968,11 +3023,7 @@ async function main_() {
 
     /* 🔍 전기된 송장 확인 — 읽기만 한다 */
     if (PEEK_INV) {
-      await clickAny(page, "판매완료");
-      await page.waitForTimeout(700);
-      await clickAny(page, "완료된 매출 송장, 완료된 매출 송장 목록을 엽니다.");
-      await page.waitForTimeout(3000);
-      await passBigSearchDialog(page);
+      await openInvoiceList(page);
       const f = main(page);
       // 과거 날짜 송장은 검색해야 나온다 (2026-08-17) — 훑기 전에 번호판으로 거른다
       await searchInvoiceList(page, PEEK_INV.plate);
@@ -2993,7 +3044,7 @@ async function main_() {
           // 송장 번호는 목록에서 잘려 보이므로 **연 카드에서** 읽는다 — 자릿수를 못박아
           // 옆 숫자와 붙어 읽히는 것을 막는다 (8-2SI+6 형식)
           const body = ((await f.locator("body").innerText().catch(() => "")) || "").replace(/\s+/g, " ");
-          const no = /\d{8}-\d{2}SI\+\d{6}/.exec(body)?.[0] ?? "(못 읽음)";
+          const no = SI_RE.exec(body)?.[0] ?? "(못 읽음)";
           log(`  송장 번호: ${no}`);
           const sub = f.locator("div[controlname*='Subform']").last();
           const lrs = sub.getByRole("row");
@@ -3100,7 +3151,8 @@ async function main_() {
      */
     if (CHECK) {
       // ⏱️ 점검도 스스로 시간을 관리한다 (건당 1.5분 잡고, 대리인 제한보다 먼저 멈춘다)
-      const checkDeadline = Date.now() + checks.length * 90_000 + 5 * 60_000;
+      const agentDl = Number(process.env.MARS_DEADLINE_TS) || null;
+      const checkDeadline = agentDl ? agentDl - 5 * 60_000 : Date.now() + checks.length * 90_000 + 5 * 60_000;
       let cIdx = -1;
       for (const c of checks) {
         cIdx++;
@@ -3111,13 +3163,8 @@ async function main_() {
         }
         log(`\n── ${c.quoteNo}  ${c.plateNo} ${c.customerName ?? ""} ─────────`);
         try {
-          await clickAny(page, "판매완료");
-          await page.waitForTimeout(700);
-          await clickAny(page, "완료된 매출 송장, 완료된 매출 송장 목록을 엽니다.");
-          await page.waitForTimeout(3000);
-          await passBigSearchDialog(page);
-
-          const picked = await pickInvoiceRow(page, c);
+          // 🔴 정본 경로로 — 「목록에 아직 없으면 재시도」가 여기에도 적용된다 (2026-08-18 단계1)
+          const picked = await findInvoiceInList(page, c);
           if (!picked.ok) {
             log(`  ⚠️ ${picked.why}`);
             skipped++;
@@ -3156,7 +3203,7 @@ async function main_() {
            *    「전기 미확인」 감사가 계속 울린다.
            */
           if (!c.marsRefNo || c.marsRefNo === "수동확인") {
-            const m = /\d{8}-\d{2}SI\+\d{6}/.exec(picked.label);
+            const m = SI_RE.exec(picked.label);
             if (m) {
               const { saveMarsRefNo } = await import("../src/lib/mars-queue");
               await saveMarsRefNo(c.quoteId, m[0]);
@@ -3193,7 +3240,11 @@ async function main_() {
      *    대리인의 제한(건수×2.5분+10분)보다 5분 먼저 **스스로** 멈추고 남은 건수를
      *    알린다 — 남은 건은 미전송 그대로라 「다시 실행 요청」으로 이어서 하면 된다.
      */
-    const fillDeadline = Date.now() + queue.length * 150_000 + 5 * 60_000;
+    // 대리인이 알려준 마감(−5분)이 있으면 그것을 쓴다 — 수동 실행이면 자체 공식
+    const agentDeadline = Number(process.env.MARS_DEADLINE_TS) || null;
+    const fillDeadline = agentDeadline
+      ? agentDeadline - 5 * 60_000
+      : Date.now() + queue.length * 150_000 + 5 * 60_000;
     let qIdx = -1;
     for (const q of queue) {
       qIdx++;
@@ -3412,7 +3463,7 @@ async function main_() {
           if (picked.ok) {
             const flat = picked.label.replace(/\s+/g, "");
             // 🔴 자릿수 고정 — 느슨한 패턴은 옆 숫자(날짜 등)와 붙어 오염 번호가 된다
-            const si = /\d{8}-\d{2}SI\+\d{6}/.exec(flat)?.[0] ?? null;
+            const si = SI_RE.exec(flat)?.[0] ?? null;
             posted = { ok: true, invoiceNo: si };
             verifiedRow = picked.row;
             log(`    · 전기 완료 확인 — 송장 ${si ?? "(번호 미확인)"}`);
@@ -3460,14 +3511,7 @@ async function main_() {
                 .catch(() => false));
             if (!onInvoice) {
               // 송장 카드가 아니면 완료된 매출 송장 목록에서 찾아 들어간다
-              await page.goto(HOME);
-              await waitHome(page, 40000);
-              await clickAny(page, "판매완료");
-              await page.waitForTimeout(700);
-              await clickAny(page, "완료된 매출 송장, 완료된 매출 송장 목록을 엽니다.");
-              await page.waitForTimeout(3000);
-              await passBigSearchDialog(page);
-              const picked = await pickInvoiceRow(page, {
+              const picked = await findInvoiceInList(page, {
                 plateNo: q.plateNo,
                 workDate: iso,
                 total: q.total,
