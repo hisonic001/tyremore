@@ -551,7 +551,13 @@ export const quote = pgTable(
     // --- MARS 연동 공통 필드 (모든 거래성 테이블 공통) ---
     marsStatus: text("mars_status").notNull().default("미전송"),
     marsSyncedAt: timestamp("mars_synced_at", { withTimezone: true }),
-    marsRefNo: text("mars_ref_no"), // MARS 매출주문/송장 번호
+    marsRefNo: text("mars_ref_no"), // MARS 송장(SI) 번호 — 주문 번호는 아래 marsOrderNo 로 (2026-08-18)
+    /**
+     * ⭐ MARS 매출 주문(SO) 번호 (2026-08-18 근본 개선 단계2).
+     *    주문을 만들자마자 기록한다 — 중간에 죽어도 초안 번호가 남아,
+     *    재시도가 새 주문을 또 만들지 않고 그 초안을 이어서 쓴다.
+     */
+    marsOrderNo: text("mars_order_no"),
     marsMemo: text("mars_memo"),
 
     /**
@@ -820,6 +826,33 @@ export const marsRun = pgTable(
     check("mars_run_status", sql`${t.status} IN ('대기','실행중','완료','실패')`),
     index("idx_mars_run_open").on(t.status).where(sql`${t.status} IN ('대기','실행중')`),
   ],
+);
+
+/* ============================================================
+ * mars_attempt — MARS 입력 시도별 단계 이력 ⭐ (2026-08-18 근본 개선 단계2)
+ *
+ * 판매 1건 = 8단계 파이프라인인데 어디까지 갔는지 DB 에 안 남아
+ * 재시도가 항상 처음부터였다. 시도마다 한 줄 — 단계가 나아갈 때마다 갱신.
+ * 상태 기계(quote.mars_status)와 별개의 **부가 기록**이다 — 전이는 여전히
+ * markEntered/holdMars/queueForMars 만 한다.
+ * ========================================================== */
+export const marsAttempt = pgTable(
+  "mars_attempt",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    quoteId: bigint("quote_id", { mode: "number" })
+      .notNull()
+      .references(() => quote.id, { onDelete: "cascade" }),
+    marsRunId: bigint("mars_run_id", { mode: "number" }),
+    /** 시작→고객확인→고객생성→차량생성→주문생성→줄입력→합계검증→전기→송장확인→점검→완료 */
+    stage: text("stage").notNull().default("시작"),
+    orderNo: text("order_no"),
+    invoiceNo: text("invoice_no"),
+    error: text("error"),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => [index("idx_mars_attempt_quote").on(t.quoteId, t.id.desc())],
 );
 
 /* ============================================================

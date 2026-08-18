@@ -2311,6 +2311,106 @@ async function openInvoice(page: Page, row: Locator): Promise<boolean> {
 }
 
 /**
+ * ⭐ 만들다 만/만든 매출 주문 초안을 연다 (2026-08-18 단계2).
+ *    --post-draft 수동 모드의 경로를 함수화한 것 — 재시도가 새 주문을 만들지 않고
+ *    지난 초안을 이어쓰는 본체다 (고아 초안 근절).
+ *
+ * 찾는 순서: 주문 목록 검색(SO 번호 → 번호판 → 이름) → 고객 이력의 「열린 판매
+ * 문서」(갓 만든 차량은 색인 지연으로 목록 검색에 안 잡힌다 — 2026-08-05).
+ * 🔴 SO 번호를 알면 연 카드의 머리글과 **대조**한다 — 같은 손님의 다른 초안을
+ *    여는 것은 남의 송장을 주운 사고(run#86)와 같은 계열의 위험이다.
+ */
+async function openDraft(
+  page: Page,
+  c: { orderNo: string | null; plate: string | null; name: string | null; phone: string | null; total: number },
+): Promise<boolean> {
+  const f = main(page);
+  const confirmCard = async (): Promise<boolean> => {
+    await page.waitForTimeout(1000);
+    if (!c.orderNo) return true; // 번호를 모르면 대조할 수 없다 — 검색 열쇠를 믿는다
+    const want = c.orderNo.replace(/[^0-9A-Za-z+-]/g, "");
+    const heads = f.getByRole("heading");
+    const nh = await heads.count().catch(() => 0);
+    for (let i = nh - 1; i >= 0; i--) {
+      if (!(await heads.nth(i).isVisible().catch(() => false))) continue;
+      const t = (((await heads.nth(i).innerText().catch(() => "")) || "")).replace(/[^0-9A-Za-z+-]/g, "");
+      if (want && t.includes(want)) return true;
+    }
+    log(`    · 연 카드가 ${c.orderNo} 이 아닙니다 — 이 카드로는 진행하지 않습니다`);
+    return false;
+  };
+
+  await page.goto(HOME);
+  await waitHome(page, 40000);
+  await clickAny(page, "매출 주문 목록");
+  await page.waitForTimeout(3000);
+  await passBigSearchDialog(page);
+  const search = f.getByRole("textbox", { name: /번호판|이름|전화/ }).first();
+  for (const key of [c.orderNo, c.plate, c.name].filter(Boolean) as string[]) {
+    if (await search.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await search.fill(key).catch(() => {});
+      await search.press("Enter").catch(() => {});
+      await page.waitForTimeout(2500);
+    }
+    // 목록의 번호는 잘려 보일 수 있어 줄은 번호판(없으면 SO 무늬)으로 잡고, 확정은 카드에서
+    const row = f.getByRole("row").filter({ hasText: c.plate ?? /-23SO[-+]/ }).first();
+    if (!(await row.isVisible({ timeout: 8000 }).catch(() => false))) {
+      log(`    · «${key}» 검색으로는 초안이 안 보입니다`);
+      continue;
+    }
+    await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
+    await page.waitForTimeout(500);
+    await row.locator("a").first().click({ timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(3500);
+    if (await confirmCard()) return true;
+    // 딴 카드였다 — 목록으로 돌아가 다음 열쇠로
+    await page.goto(HOME);
+    await waitHome(page, 40000);
+    await clickAny(page, "매출 주문 목록");
+    await page.waitForTimeout(3000);
+    await passBigSearchDialog(page);
+  }
+  /**
+   * 🔴 갓 만든 차량의 초안은 주문 목록 검색에 안 잡힌다 (색인 지연 — 2026-08-05).
+   *    고객 이력 창의 「열린 판매 문서」로 돌아 들어간다.
+   */
+  if (c.name) {
+    log("    · 고객 이력의 「열린 판매 문서」로 찾아봅니다");
+    await page.goto(HOME);
+    await waitHome(page, 40000);
+    if (await findCustomerByName(page, c.name, c.phone)) {
+      await clickAny(page, "판매 내역");
+      await page.waitForTimeout(3000);
+      await passBigSearchDialog(page);
+      const openDocs = f.getByRole("menuitem", { name: "열린 판매 문서" }).first();
+      if (!(await openDocs.isVisible({ timeout: 3000 }).catch(() => false))) {
+        await clickAny(page, "프로세스", 6000).catch(() => {});
+        await page.waitForTimeout(1200);
+      }
+      await openDocs.click({ timeout: 8000 }).catch(() => {});
+      await page.waitForTimeout(3500);
+      // 초안 줄에는 번호판이 없을 수 있다 — 번호(알면) 또는 금액으로 좁힌다
+      const won = c.total.toLocaleString();
+      let row2 = c.orderNo ? f.getByRole("row").filter({ hasText: c.orderNo }).last() : null;
+      if (!row2 || !(await row2.isVisible({ timeout: 4000 }).catch(() => false))) {
+        row2 = f.getByRole("row").filter({ hasText: /-23SO[-+]/ }).filter({ hasText: won }).last();
+      }
+      if (await row2.isVisible({ timeout: 8000 }).catch(() => false)) {
+        log(`    · 열린 문서 줄: ${(((await row2.innerText().catch(() => "")) || "").replace(/\s+/g, " ")).slice(0, 120)}`);
+        await row2.click({ position: { x: 5, y: 5 } }).catch(() => {});
+        await page.waitForTimeout(500);
+        await row2.locator("a").first().click({ timeout: 8000 }).catch(() => {});
+        await page.waitForTimeout(4500);
+        if (await confirmCard()) return true;
+      } else {
+        log(`    · 열린 판매 문서에서도 못 찾았습니다 (${won}원)`);
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * ⭐ 판매한 **서비스 이름**으로 어떤 항목을 실제로 교환·조정했는지 정한다
  *    (사장님 지시 2026-08-05):
  *
@@ -2580,8 +2680,21 @@ async function fillVehicleCheck(
 }
 
 async function main_() {
-  const { marsQueue, markEntered, pendingVehicleChecks, markVehicleChecked, saveVehicleMarsNo, holdMars } =
-    await import("../src/lib/mars-queue");
+  const {
+    marsQueue,
+    markEntered,
+    pendingVehicleChecks,
+    markVehicleChecked,
+    saveVehicleMarsNo,
+    holdMars,
+    saveMarsOrderNo,
+    clearMarsOrderNo,
+    startMarsAttempt,
+    stageMarsAttempt,
+    endMarsAttempt,
+  } = await import("../src/lib/mars-queue");
+  /** 대리인이 알려주는 실행 번호 — 시도 이력(mars_attempt)에 같이 남긴다 */
+  const RUN_ID = Number(process.env.MARS_RUN_ID) || null;
 
   /** 차량 점검 모드는 대기열이 아니라 「전기까지 끝난 것」을 본다. 자가점검은 둘 다 안 본다 */
   const checks = CHECK && !SMOKE ? (await pendingVehicleChecks()).slice(0, LIMIT) : [];
@@ -2921,75 +3034,21 @@ async function main_() {
 
     /* ⭐ 채워진 초안을 열어 전기만 이어서 한다 */
     if (POST_DRAFT) {
-      const f = main(page);
-      log(`\n── 초안 전기: ${POST_DRAFT.plate} (${POST_DRAFT.total.toLocaleString()}원) ─────────`);
-      await clickAny(page, "매출 주문 목록");
-      await page.waitForTimeout(3000);
-      await passBigSearchDialog(page);
-      const search = f.getByRole("textbox", { name: /번호판|이름|전화/ }).first();
-      let opened = false;
-      for (const key of [POST_DRAFT.plate, POST_DRAFT.name].filter(Boolean) as string[]) {
-        if (await search.isVisible({ timeout: 5000 }).catch(() => false)) {
-          await search.fill(key).catch(() => {});
-          await search.press("Enter").catch(() => {});
-          await page.waitForTimeout(2500);
-        }
-        const row = f.getByRole("row").filter({ hasText: POST_DRAFT.plate }).first();
-        if (!(await row.isVisible({ timeout: 8000 }).catch(() => false))) {
-          log(`  · «${key}» 검색으로는 초안이 안 보입니다`);
-          continue;
-        }
-        await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
-        await page.waitForTimeout(500);
-        await row.locator("a").first().click({ timeout: 8000 }).catch(() => {});
-        await page.waitForTimeout(4500);
-        opened = true;
-        break;
-      }
-
-      /**
-       * 🔴 갓 만든 차량의 초안은 주문 목록 검색에도 안 잡힌다 (색인 지연 — 2026-08-05).
-       *    고객 이력 창의 「열린 판매 문서」로 돌아 들어간다.
-       */
-      if (!opened && POST_DRAFT.name) {
-        log("  · 고객 이력의 「열린 판매 문서」로 찾아봅니다");
-        await page.goto(HOME);
-        await waitHome(page, 40000);
-        if (await findCustomerByName(page, POST_DRAFT.name, POST_DRAFT.phone)) {
-          await clickAny(page, "판매 내역");
-          await page.waitForTimeout(3000);
-          await passBigSearchDialog(page);
-          const openDocs = f.getByRole("menuitem", { name: "열린 판매 문서" }).first();
-          if (!(await openDocs.isVisible({ timeout: 3000 }).catch(() => false))) {
-            await clickAny(page, "프로세스", 6000).catch(() => {});
-            await page.waitForTimeout(1200);
-          }
-          await openDocs.click({ timeout: 8000 }).catch(() => {});
-          await page.waitForTimeout(3500);
-          // 금액(합계)으로 줄을 찾는다 — 초안 줄에는 번호판이 없을 수 있다
-          const won = POST_DRAFT.total.toLocaleString();
-          const row2 = f
-            .getByRole("row")
-            .filter({ hasText: /-23SO[-+]/ })
-            .filter({ hasText: won })
-            .last();
-          if (await row2.isVisible({ timeout: 8000 }).catch(() => false)) {
-            log(`  · 열린 문서 줄: ${(((await row2.innerText().catch(() => "")) || "").replace(/\s+/g, " ")).slice(0, 140)}`);
-            await row2.click({ position: { x: 5, y: 5 } }).catch(() => {});
-            await page.waitForTimeout(500);
-            await row2.locator("a").first().click({ timeout: 8000 }).catch(() => {});
-            await page.waitForTimeout(4500);
-            opened = true;
-          } else {
-            log(`  · 열린 판매 문서에서 ${won}원짜리 주문을 못 찾았습니다`);
-            const shotD = path.resolve(SHOT_DIR, "mars-post-draft.png");
-            await page.screenshot({ path: shotD, fullPage: true }).catch(() => {});
-            log(`     화면: ${shotD}`);
-          }
-        }
-      }
+      log(`
+── 초안 전기: ${POST_DRAFT.plate} (${POST_DRAFT.total.toLocaleString()}원) ─────────`);
+      // 초안 찾기·열기는 openDraft 정본으로 (2026-08-18 단계2 — 자동 이어쓰기와 같은 경로)
+      const opened = await openDraft(page, {
+        orderNo: null,
+        plate: POST_DRAFT.plate,
+        name: POST_DRAFT.name,
+        phone: POST_DRAFT.phone,
+        total: POST_DRAFT.total,
+      });
       if (!opened) {
         log("  ⚠️ 초안을 찾지 못했습니다");
+        const shotD = path.resolve(SHOT_DIR, "mars-post-draft.png");
+        await page.screenshot({ path: shotD, fullPage: true }).catch(() => {});
+        log(`     화면: ${shotD}`);
         await ctx.close().catch(() => {});
         process.exit(1);
       }
@@ -3325,8 +3384,42 @@ async function main_() {
       }
       /** 실패 안내용 — 주문 화면까지 갔다가 죽으면 채우다 만 초안이 MARS 에 남는다 */
       let draftOpened = false;
+      /** 이번 실행에서 알게 된 주문 번호 — 실패 안내와 이어쓰기 안내에 쓴다 */
+      let soKnown: string | null = q.marsOrderNo;
+      /** ⭐ 시도 이력 (단계2) — 어디까지 갔는지 DB 에 남긴다. 실패해도 이 기록은 남는다 */
+      const attemptId = await startMarsAttempt(q.quoteId, RUN_ID).catch(() => 0);
+      const stage = async (st: string, extra?: { orderNo?: string | null; invoiceNo?: string | null }) => {
+        if (attemptId) await stageMarsAttempt(attemptId, st, extra).catch(() => {});
+      };
       try {
+        /**
+         * ⭐ 초안 이어쓰기 (단계2) — 지난 시도가 만든 주문(SO)이 있으면 새로 만들지
+         *    않고 그 초안을 연다. 재시도마다 새 주문을 만들어 MARS 에 고아 초안이
+         *    쌓이던 것(실측: 한 건 2회 실패 → 초안 2개)의 근본 수술.
+         */
+        let resumed = false;
+        if (q.marsOrderNo) {
+          log(`  → 지난 시도의 초안 ${q.marsOrderNo} 이 있습니다 — 이어서 합니다`);
+          resumed = await openDraft(page, {
+            orderNo: q.marsOrderNo,
+            plate: q.plateNo,
+            name: q.customerName,
+            phone: q.phone,
+            total: q.total,
+          });
+          if (resumed) {
+            draftOpened = true;
+            await stage("주문생성", { orderNo: q.marsOrderNo });
+          } else {
+            log("    · 초안을 MARS 에서 못 찾았습니다(지워진 듯) — 처음부터 다시 만듭니다");
+            await clearMarsOrderNo(q.quoteId);
+            await page.goto(HOME);
+            await waitHome(page, 40000);
+          }
+        }
+        if (!resumed) {
         const found = await findCustomer(page, q.plateNo);
+        await stage("고객확인");
 
         /**
          * 🔴 「모르겠다」를 「없다」로 처리하지 않는다 (2026-08-02).
@@ -3362,6 +3455,7 @@ async function main_() {
               });
               if (vehNo) await saveVehicleMarsNo(q.quoteId, vehNo);
               log(`    ✅ 차량 등록 완료${vehNo ? ` (${vehNo})` : ""}`);
+              await stage("차량생성");
             }
             // 번호판 검색은 색인이 늦어 못 믿는다 — 이름+전화로 고객 줄을 잡는다
             if (!(await findCustomerByName(page, q.customerName, q.phone))) {
@@ -3390,14 +3484,17 @@ async function main_() {
             log(`  → MARS 에 없는 손님입니다. 새로 만듭니다 (${c.name} ${c.plateNo})`);
             await createCustomer(page, c);
             log("    ✅ 고객·차량 등록 완료");
+            await stage("고객생성");
           }
         }
+        } // ← if (!resumed) 새로 만들기 (단계2 — 초안 이어쓰기와 갈림)
 
         /** ⭐ 실제로 정비한 날. 사장님이 판매 등록에서 고치실 수 있다 (기본은 오늘) */
         const d = new Date();
         const iso =
           q.workDate ??
           `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        if (!resumed) {
         log(
           `    · 작업일자 ${iso} · 결제 ${q.paymentMethod ?? "-"}` +
             // 전부 CREDITCARD 로 올린다 (사장님 결정 2026-08-15) — 실제 결제와 다르면 티를 낸다
@@ -3418,7 +3515,19 @@ async function main_() {
           PAY_CODE[q.marsPayMethod ?? q.paymentMethod ?? ""] ?? null,
         );
         draftOpened = true;
+        /**
+         * ⭐ 주문 번호를 **만들자마자** 기록한다 (단계2) — 지금까지는 다 채운 뒤에만
+         *    읽어서, 중간에 죽으면 초안 번호가 어디에도 없었다(고아 초안의 직접 원인).
+         */
+        const soNow = await readOrderNo(page);
+        if (soNow) {
+          log(`    · 매출 주문 ${soNow} 생성 — 번호를 기록해 뒀습니다`);
+          soKnown = soNow;
+          await saveMarsOrderNo(q.quoteId, soNow).catch(() => {});
+        }
+        await stage("주문생성", { orderNo: soNow ?? null });
         const put = await fillLines(page, q.lines);
+        await stage("줄입력");
 
         /**
          * 🔴 줄이 다 안 들어갔으면 「입력 완료」로 넘기지 않는다.
@@ -3428,8 +3537,10 @@ async function main_() {
         if (put !== q.lines.length) {
           throw new Error(`${q.lines.length}줄 중 ${put}줄만 들어갔습니다 — MARS 에서 마저 채워 주세요`);
         }
+        } // ← if (!resumed)
 
         const amount = await checkOrder(page, q.total);
+        await stage("합계검증");
         // 🔴 번호 칸과 메모 칸을 섞지 않는다 (2026-08-04) — 번호는 번호 칸에, 사연은 메모에
         const orderNo = await readOrderNo(page);
         if (orderNo) log(`    · 매출 주문 번호 ${orderNo}`);
@@ -3441,7 +3552,9 @@ async function main_() {
          *    금액이 어긋난 주문은 초안으로 남기고 사람에게 넘긴다.
          */
         if (!amount.ok) {
-          await markEntered(q.quoteId, orderNo, `자동입력 ${iso} · ${amount.note} · 전기 보류(금액 불일치)`);
+          // ref(송장 칸)는 비워 둔다 — SI 전용. 주문 번호는 mars_order_no 에 이미 있다 (단계2)
+          await markEntered(q.quoteId, null, `자동입력 ${iso} · ${amount.note} · 전기 보류(금액 불일치)`);
+          if (attemptId) await endMarsAttempt(attemptId, `금액 불일치: ${amount.note}`).catch(() => {});
           ok++;
           log("  ⚠️ 금액이 안 맞아 전기하지 않았습니다 — MARS 에서 확인 후 직접 전기해 주세요");
           await page.goto(HOME);
@@ -3449,6 +3562,7 @@ async function main_() {
           continue;
         }
 
+        await stage("전기");
         let posted = await postOrder(page);
         /** 화면으로 못 정했으면 **송장 목록에서** 확정한다 — 번호판·작업일·금액으로 */
         let verifiedRow: Locator | null = null;
@@ -3472,7 +3586,8 @@ async function main_() {
           }
         }
         if (!posted.ok) {
-          await markEntered(q.quoteId, orderNo, `자동입력 ${iso} · ${amount.note} · 전기 실패: ${posted.why}`);
+          await markEntered(q.quoteId, null, `자동입력 ${iso} · ${amount.note} · 전기 실패: ${posted.why}`);
+          if (attemptId) await endMarsAttempt(attemptId, `전기 실패: ${posted.why}`).catch(() => {});
           ok++;
           log(`  ⚠️ 전기하지 못했습니다: ${posted.why} — 주문은 채워져 있으니 MARS 에서 전기해 주세요`);
           const shot = path.resolve(SHOT_DIR, `mars-전기실패-${q.quoteNo}.png`);
@@ -3482,7 +3597,8 @@ async function main_() {
           continue;
         }
 
-        await markEntered(q.quoteId, posted.invoiceNo ?? orderNo, `자동입력+전기 ${iso} · ${amount.note}`);
+        await stage("송장확인", { invoiceNo: posted.invoiceNo ?? null });
+        await markEntered(q.quoteId, posted.invoiceNo ?? null, `자동입력+전기 ${iso} · ${amount.note}`);
 
         /**
          * 전기 직후 그 자리에서 차량 점검까지.
@@ -3553,18 +3669,25 @@ async function main_() {
         } else {
           log("  ✅ 매출 주문 → 전기까지 끝났습니다 — ⚠️ 차량 점검은 못 했습니다 (위 참고, 웹의 점검 단추로 다시)");
         }
+        await stage(checkDone === "완료" || checkDone === "이미 제출" ? "완료" : "점검대기");
+        if (attemptId) await endMarsAttempt(attemptId, null).catch(() => {});
         await page.goto(HOME);
         await waitHome(page, 40000);
       } catch (e) {
         skipped++;
         log(`  ⚠️ 실패: ${(e as Error).message.split("\n")[0]}`);
+        if (attemptId) await endMarsAttempt(attemptId, (e as Error).message.slice(0, 300)).catch(() => {});
         /**
          * 🔴 주문 화면까지 갔다가 죽으면 **채우다 만 초안이 MARS 에 남는다**
          *    (2026-08-17 확인 — 이영준 건이 run#89·90 두 번 실패하며 초안이 2개 쌓였는데
          *    로그가 아무 말도 안 했다). 다음 실행은 새 초안을 또 만드니 꼭 알려야 한다.
          */
         if (draftOpened) {
-          log(`     ⚠️ 채우다 만 초안이 MARS 에 남았습니다 (${q.plateNo ?? q.quoteNo}) — 매출 주문 목록에서 지워 주세요`);
+          // 단계2 부터는 지울 필요가 없다 — 번호가 기록돼 있어 다음 실행이 이어서 쓴다
+          log(
+            `     ⚠️ 채우다 만 초안이 MARS 에 남았습니다 (${q.plateNo ?? q.quoteNo})` +
+              (soKnown ? ` — 다음 실행이 초안 ${soKnown} 을 이어서 씁니다` : " — 매출 주문 목록에서 지워 주세요"),
+          );
         }
         /**
          * 어디서 막혔는지 나중에 볼 수 있게 남긴다.

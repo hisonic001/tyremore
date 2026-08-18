@@ -86,6 +86,11 @@ export interface MarsEntry {
   fuelType: string | null;
   /** MARS 차량 번호(V583-…) — 있으면 차량 카드를 **다시 만들지 않는다** (중복 방지) */
   marsVehicleNo: string | null;
+  /**
+   * ⭐ 지난 시도가 만들다 만/만든 매출 주문(SO) 번호 (2026-08-18 단계2).
+   *    있으면 새 주문을 만들지 않고 그 초안을 열어 이어서 한다 — 고아 초안 근절.
+   */
+  marsOrderNo: string | null;
   /** 어느 바퀴를 갈았는지 (판매 등록의 체크박스, 사장님 요청 2026-08-05) — 비면 본수로 짐작 */
   tyrePositions: string[];
 
@@ -289,6 +294,7 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     mileage: number | null;
     posted_max: number | null;
     mars_vehicle_no: string | null;
+    mars_order_no: string | null;
     tyre_positions: string | null;
     split_main: string | null;
   }>(sql`
@@ -306,7 +312,7 @@ export async function marsQueue(): Promise<MarsEntry[]> {
            (SELECT max(q2.mileage)::int FROM quote q2
              WHERE q2.vehicle_id = q.vehicle_id AND q2.id <> q.id
                AND q2.mars_status = '전송완료' AND q2.mileage IS NOT NULL) AS posted_max,
-           v.mars_vehicle_no
+           v.mars_vehicle_no, q.mars_order_no
     FROM quote q
     LEFT JOIN customer c ON c.id = q.customer_id
     LEFT JOIN vehicle  v ON v.id = q.vehicle_id
@@ -375,6 +381,7 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     year: h.year,
     fuelType: h.fuel_type,
     marsVehicleNo: h.mars_vehicle_no,
+    marsOrderNo: h.mars_order_no,
     tyrePositions: h.tyre_positions ? h.tyre_positions.split(",").map((s) => s.trim()).filter(Boolean) : [],
     paymentMethod: h.payment_method,
     marsPayMethod: h.payment_method === "혼합" ? (h.split_main ?? null) : h.payment_method,
@@ -435,6 +442,54 @@ export async function markEntered(
 
   refresh("/sales");
   return { ok: true };
+}
+
+/**
+ * ⭐ 매출 주문(SO) 번호를 만들자마자 기록한다 (2026-08-18 단계2).
+ *    중간에 죽어도 초안 번호가 남아 다음 시도가 이어서 쓴다 — 고아 초안 근절.
+ */
+export async function saveMarsOrderNo(quoteId: number, orderNo: string): Promise<void> {
+  await db.execute(sql`
+    UPDATE quote SET mars_order_no = ${orderNo}, updated_at = now() WHERE id = ${quoteId}
+  `);
+}
+
+/** 초안을 MARS 에서 못 찾았을 때(지워졌을 때) 번호를 비운다 — 다음은 처음부터 */
+export async function clearMarsOrderNo(quoteId: number): Promise<void> {
+  await db.execute(sql`
+    UPDATE quote SET mars_order_no = NULL, updated_at = now() WHERE id = ${quoteId}
+  `);
+}
+
+/* ============================================================
+ * ⭐ 시도별 단계 이력 (2026-08-18 단계2) — 상태 기계와 별개의 부가 기록.
+ *    한 시도 = 한 줄. 단계가 나아갈 때마다 갱신한다. 실패하면 error 에 사유.
+ * ========================================================== */
+export async function startMarsAttempt(quoteId: number, marsRunId: number | null): Promise<number> {
+  const [r] = await db.execute<{ id: number }>(sql`
+    INSERT INTO mars_attempt (quote_id, mars_run_id) VALUES (${quoteId}, ${marsRunId}) RETURNING id
+  `);
+  return Number(r.id);
+}
+
+export async function stageMarsAttempt(
+  attemptId: number,
+  stage: string,
+  extra?: { orderNo?: string | null; invoiceNo?: string | null },
+): Promise<void> {
+  await db.execute(sql`
+    UPDATE mars_attempt SET stage = ${stage},
+      order_no = COALESCE(${extra?.orderNo ?? null}, order_no),
+      invoice_no = COALESCE(${extra?.invoiceNo ?? null}, invoice_no)
+    WHERE id = ${attemptId}
+  `);
+}
+
+export async function endMarsAttempt(attemptId: number, error?: string | null): Promise<void> {
+  await db.execute(sql`
+    UPDATE mars_attempt SET finished_at = now(), error = ${error?.slice(0, 500) ?? null}
+    WHERE id = ${attemptId}
+  `);
 }
 
 /**

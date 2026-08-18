@@ -70,7 +70,12 @@ async function runOne(id: number, kind: string): Promise<void> {
       cwd: process.cwd(),
       // ⏱️ 마감을 자식에게 알려준다 (2026-08-18 단계1) — fill 은 이보다 5분 먼저
       //    스스로 멈춘다. 두 군데서 따로 계산하다 점검 모드에서 역전됐던 것의 근본 수리.
-      env: { ...process.env, MARS_DEADLINE_TS: String(Date.now() + timeoutMs) },
+      env: {
+        ...process.env,
+        MARS_DEADLINE_TS: String(Date.now() + timeoutMs),
+        // 시도 이력(mars_attempt)에 어느 실행이었는지 같이 남긴다 (단계2)
+        MARS_RUN_ID: String(id),
+      },
     });
     let buf = "";
     const onChunk = (c: Buffer) => {
