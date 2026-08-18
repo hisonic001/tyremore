@@ -1757,7 +1757,7 @@ async function readOrderNo(page: Page): Promise<string | null> {
  */
 async function postOrder(
   page: Page,
-): Promise<{ ok: boolean; invoiceNo: string | null; why?: string; unsure?: boolean }> {
+): Promise<{ ok: boolean; invoiceNo: string | null; why?: string; unsure?: boolean; fresh?: string[] }> {
   const f = main(page);
 
   /**
@@ -2083,7 +2083,7 @@ async function postOrder(
    *    (2026-08-04 — 그 바람에 같은 주문을 몇 번이나 다시 만들었다).
    *    호출한 쪽이 「완료된 매출 송장 목록」에서 번호판·날짜·금액으로 확인한다.
    */
-  return { ok: false, invoiceNo: null, unsure: true, why: "화면으로는 전기 여부를 확정하지 못했습니다" };
+  return { ok: false, invoiceNo: null, unsure: true, fresh, why: "화면으로는 전기 여부를 확정하지 못했습니다" };
 }
 
 /* ================================================================
@@ -3743,7 +3743,29 @@ ${"=".repeat(56)}`);
             verifiedRow = picked.row;
             log(`    · 전기 완료 확인 — 송장 ${si ?? "(번호 미확인)"}`);
           } else {
-            posted = { ok: false, invoiceNo: null, why: `전기 확인 실패: ${picked.why}` };
+            /**
+             * ⭐ 번호판이 빈 송장 대비 (2026-08-18 사고 — 이름 경로로 만든 주문은 차량
+             *    연결이 빠져 송장에 번호판이 없다. 번호판 검색이 눈뜬장님이 되어
+             *    「전기 실패」 오기록 → 재시도 → **이중 전기**가 노휘재·심억수·박정민·
+             *    렌트카 4건에서 실제로 났다). 전기 후 화면에 새로 나타난 송장 번호를
+             *    **번호로 검색**하고 금액·작업일까지 맞으면 그것으로 확정한다.
+             */
+            const flist = main(page);
+            for (const si of posted.fresh ?? []) {
+              await openInvoiceList(page);
+              await searchInvoiceList(page, si);
+              const row = flist.getByRole("row").filter({ hasText: si }).first();
+              if (!(await row.isVisible({ timeout: 6000 }).catch(() => false))) continue;
+              const t = (((await row.innerText().catch(() => "")) || "")).replace(/\s+/g, " ");
+              const excl = Math.round(q.total / 1.1).toLocaleString();
+              if (!(t.includes(q.total.toLocaleString()) || t.includes(excl))) continue;
+              if (iso && !t.includes(iso)) continue;
+              posted = { ok: true, invoiceNo: si };
+              verifiedRow = row;
+              log(`    · 전기 완료 확인 — 새 번호 ${si} 를 번호로 검색해 맞췄습니다 (번호판 없는 송장)`);
+              break;
+            }
+            if (!posted.ok) posted = { ok: false, invoiceNo: null, why: `전기 확인 실패: ${picked.why}` };
           }
         }
         if (!posted.ok) {
