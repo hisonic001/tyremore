@@ -23,6 +23,7 @@ import {
   type PreviewResult,
 } from "@/lib/invoice";
 import { receivePastedInvoice } from "@/lib/purchase-paste-actions";
+import { deletePurchaseInvoice } from "@/lib/purchase-edit";
 
 const won = (n: number) => n.toLocaleString();
 
@@ -315,21 +316,65 @@ function PendingInvoiceCard({ inv }: { inv: PendingInvoice }) {
           ))}
         </ul>
         {error && <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-        <button
-          type="button"
-          disabled={pending}
-          onClick={() =>
-            start(async () => {
-              setError(null);
-              const r = await receivePastedInvoice(inv.invoiceId);
-              if (!r.ok) return setError(r.error);
-              router.refresh();
-            })
-          }
-          className="mt-3 w-full rounded-xl bg-indigo-700 py-3 font-semibold text-white active:bg-indigo-800 disabled:opacity-50"
-        >
-          {pending ? "입고 중…" : `입고 (${inv.remain}개 재고에 반영)`}
-        </button>
+        <div className="mt-3 flex gap-2">
+          {/* ⭐ 입고 예정도 지울 수 있어야 한다 (사장님 지시 2026-08-19) — 잘못 붙여넣은 주문 */}
+          {confirmDelete ? (
+            <>
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => setConfirmDelete(false)}
+                className="rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-600"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() =>
+                  start(async () => {
+                    setError(null);
+                    const r = await deletePurchaseInvoice(inv.invoiceId);
+                    if (!r.ok) {
+                      setConfirmDelete(false);
+                      return setError(r.error);
+                    }
+                    router.refresh();
+                  })
+                }
+                className="flex-1 rounded-xl bg-red-600 py-3 font-semibold text-white disabled:opacity-50"
+              >
+                {pending ? "지우는 중…" : "정말 지우기 (아직 입고 전이라 재고 변동 없음)"}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => setConfirmDelete(true)}
+                className="rounded-xl border border-red-200 px-4 py-3 text-sm font-medium text-red-600"
+              >
+                지우기
+              </button>
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() =>
+                  start(async () => {
+                    setError(null);
+                    const r = await receivePastedInvoice(inv.invoiceId);
+                    if (!r.ok) return setError(r.error);
+                    router.refresh();
+                  })
+                }
+                className="flex-1 rounded-xl bg-indigo-700 py-3 font-semibold text-white active:bg-indigo-800 disabled:opacity-50"
+              >
+                {pending ? "입고 중…" : `입고 — 도착 확인 (${inv.remain}개)`}
+              </button>
+            </>
+          )}
+        </div>
       </li>
     );
   }

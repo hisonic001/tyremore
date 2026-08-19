@@ -820,9 +820,9 @@ export async function startManualPurchase(
     return { ok: true, invoiceId: Number(dup.id) };
   }
 
-  const now = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  const day = `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}`;
+  // 🔴 Vercel 은 UTC — 밤 9시 전에는 날짜가 하루 어긋난다. KST 로 못박는다 (2026-08-19)
+  const kstDate = new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
+  const day = kstDate.replace(/-/g, "");
 
   // 같은 날 여러 건이 있을 수 있다
   const [seq] = await db.execute<{ n: number }>(sql`
@@ -835,7 +835,7 @@ export async function startManualPurchase(
       {
         supplier: name,
         invoiceNo: `직접-${day}-${String(seq?.n ?? 1).padStart(2, "0")}`,
-        issuedAt: `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`,
+        issuedAt: kstDate,
         status: "입고대기",
         fileName: memo?.trim() || null,
       },

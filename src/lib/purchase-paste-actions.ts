@@ -186,9 +186,11 @@ export async function savePastedPurchase(input: {
   if (lines.length === 0) return { ok: false, error: "담을 품목이 없습니다" };
 
   const now = new Date();
-  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  // 🔴 Vercel 은 UTC — 그대로 쓰면 저녁 6시 붙여넣기가 「09시」로 찍히고, 밤 9시 전엔 날짜도 하루 어긋난다 (2026-08-19 실측)
+  const kst = now.toLocaleString("sv-SE", { timeZone: "Asia/Seoul" }); // '2026-08-19 18:03:05'
+  const today = kst.slice(0, 10);
   /** 장부 번호 — 같은 날 여러 번 붙여넣을 수 있으니 시각까지 넣는다 */
-  const invoiceNo = `붙여넣기-${today.replace(/-/g, "")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
+  const invoiceNo = `붙여넣기-${today.replace(/-/g, "")}-${kst.slice(11).replace(/:/g, "")}`;
 
   const subtotal = lines.reduce((s, l) => s + l.qty * (l.unitCost ?? 0), 0);
   let saved = 0;
