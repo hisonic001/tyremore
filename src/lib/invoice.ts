@@ -824,23 +824,38 @@ export async function startManualPurchase(
   const kstDate = new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
   const day = kstDate.replace(/-/g, "");
 
-  // 같은 날 여러 건이 있을 수 있다
+  /**
+   * 🔴 개수+1 이 아니라 **최대 번호+1** (2026-08-19 실서비스 오류 Digest 3893553580).
+   *    오늘 만든 장부를 하나 지우면 개수가 줄어, 다음 번호가 살아 있는 번호와
+   *    겹쳐 duplicate key 로 죽었다 (직접-20260819-02 중복).
+   */
   const [seq] = await db.execute<{ n: number }>(sql`
-    SELECT count(*)::int + 1 AS n FROM purchase_invoice WHERE invoice_no LIKE ${"직접-" + day + "-%"}
+    SELECT COALESCE(MAX(split_part(invoice_no, '-', 3)::int), 0) + 1 AS n
+    FROM purchase_invoice
+    WHERE invoice_no LIKE ${"직접-" + day + "-%"} AND split_part(invoice_no, '-', 3) ~ '^\\d+$'
   `);
 
-  const [inv] = await db
-    .insert(purchaseInvoice)
-    .values([
-      {
-        supplier: name,
-        invoiceNo: `직접-${day}-${String(seq?.n ?? 1).padStart(2, "0")}`,
-        issuedAt: kstDate,
-        status: "입고대기",
-        fileName: memo?.trim() || null,
-      },
-    ])
-    .returning({ id: purchaseInvoice.id });
+  let inv: { id: number };
+  try {
+    [inv] = await db
+      .insert(purchaseInvoice)
+      .values([
+        {
+          supplier: name,
+          invoiceNo: `직접-${day}-${String(seq?.n ?? 1).padStart(2, "0")}`,
+          issuedAt: kstDate,
+          status: "입고대기",
+          fileName: memo?.trim() || null,
+        },
+      ])
+      .returning({ id: purchaseInvoice.id });
+  } catch (e) {
+    // 동시에 두 기기가 눌렀을 때 등 — 죽지 말고 사람 말로 알린다
+    if (/duplicate key|23505/.test(String(e))) {
+      return { ok: false, error: "장부 번호가 겹쳤습니다 — 한 번만 다시 눌러 주세요" };
+    }
+    throw e;
+  }
 
   await claimDraft(inv.id);
   refresh("/receiving");
