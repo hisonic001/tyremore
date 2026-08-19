@@ -8,7 +8,7 @@ import { searchProducts } from "@/lib/search-actions";
 import { findServices, saveSale, type SaleLine } from "@/lib/sale";
 import { EXCLUSIVE, SPLITTABLE } from "@/lib/payments";
 /** ⭐ 고객·거래처 선택기는 공용으로 뺐다 (2026-08-17) — 정비 내역의 「대상 바꾸기」도 쓴다 */
-import { CustomerPick } from "./customer-pick";
+import { CustomerPick, type NewCustomerDraft } from "./customer-pick";
 import { listSaleDrafts, removeSaleDraft, saveSaleDraft, type SaleDraft, type SaleDraftState } from "./draft-store";
 
 const won = (n: number) => n.toLocaleString();
@@ -201,6 +201,10 @@ export function SaleForm() {
    */
   const [drafts, setDrafts] = useState<SaleDraft[]>([]);
   const [draftNotice, setDraftNotice] = useState<string | null>(null);
+  /** 신규 손님 폼의 중간 입력 — 폼 내부 상태를 여기로 흘려받아 임시 저장에 함께 접는다 */
+  const [newCust, setNewCust] = useState<NewCustomerDraft | null>(null);
+  /** CustomerPick 을 통째로 다시 그리게 하는 열쇠 — 접기/펼치기 때 내부 상태(검색어·폼)를 리셋 */
+  const [formEpoch, setFormEpoch] = useState(0);
   useEffect(() => setDrafts(listSaleDrafts()), []);
 
   const resetForm = () => {
@@ -215,6 +219,8 @@ export function SaleForm() {
     setCombo(false);
     setWheels([]);
     setWorkDate(today);
+    setNewCust(null);
+    setFormEpoch((e) => e + 1);
   };
 
   const stashDraft = () => {
@@ -222,7 +228,9 @@ export function SaleForm() {
       ? `거래처 ${supplierSale}`
       : vehicle
         ? `${vehicle.plateNo}${vehicle.customerName ? ` ${vehicle.customerName}` : ""}`
-        : walkIn.name || walkIn.plateNo || "손님 미지정";
+        : newCust?.f.name || newCust?.f.plateNo
+          ? `신규 ${newCust.f.name || newCust.f.plateNo} (등록 중)`
+          : walkIn.name || walkIn.plateNo || "손님 미지정";
     const label = `${who} · ${rows.length}줄 · ${won(total)}원`;
     saveSaleDraft(label, {
       vehicle,
@@ -236,6 +244,7 @@ export function SaleForm() {
       memo,
       workDate,
       wheels,
+      newCustomer: newCust,
     });
     resetForm();
     setDrafts(listSaleDrafts());
@@ -255,6 +264,8 @@ export function SaleForm() {
     setMemo(st.memo ?? "");
     setWorkDate(st.workDate || today);
     setWheels(st.wheels ?? []);
+    setNewCust((st.newCustomer as NewCustomerDraft | null) ?? null);
+    setFormEpoch((e) => e + 1); // CustomerPick 을 다시 그려 신규 폼이 접힌 그대로 열리게
     removeSaleDraft(d.id); // 펼치면 목록에서 빠진다 — 그대로 두면 이중 등록의 씨앗
     setDrafts(listSaleDrafts());
     setDraftNotice(null);
@@ -406,12 +417,15 @@ ${d.label}`)) return;
         </section>
       )}
       <CustomerPick
+        key={formEpoch}
         vehicle={vehicle}
         onPick={setVehicle}
         walkIn={walkIn}
         onWalkIn={setWalkIn}
         supplier={supplierSale}
         onSupplier={setSupplierSale}
+        newDraft={newCust}
+        onNewDraft={setNewCust}
       />
 
       {vehicle && !supplierSale && (
@@ -643,7 +657,7 @@ ${d.label}`)) return;
           </div>
           <button
             type="button"
-            disabled={pending || (rows.length === 0 && !vehicle && !supplierSale)}
+            disabled={pending || (rows.length === 0 && !vehicle && !supplierSale && !newCust)}
             onClick={stashDraft}
             className="shrink-0 rounded-xl border-2 border-amber-500 bg-white px-4 py-3.5 font-bold text-amber-800 disabled:opacity-40"
           >

@@ -26,6 +26,8 @@ export interface SaleDraftState {
   memo: string;
   workDate: string;
   wheels: string[];
+  /** 신규 손님 폼의 중간 입력 (2026-08-19) — 반쯤 쓰다 접어도 그대로 돌아온다 */
+  newCustomer?: unknown | null;
 }
 
 export interface SaleDraft {

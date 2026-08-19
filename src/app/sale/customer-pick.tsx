@@ -29,6 +29,8 @@ export function CustomerPick({
   onWalkIn,
   supplier,
   onSupplier,
+  newDraft = null,
+  onNewDraft,
   allowNew = true,
 }: {
   vehicle: VehicleHit | null;
@@ -37,12 +39,16 @@ export function CustomerPick({
   onWalkIn: (w: { name: string; phone: string; plateNo: string }) => void;
   supplier: string | null;
   onSupplier: (s: string | null) => void;
+  /** 임시 저장이 접어 둔 신규 손님 폼 — 있으면 폼이 열린 채로 시작 (2026-08-19) */
+  newDraft?: NewCustomerDraft | null;
+  onNewDraft?: (d: NewCustomerDraft | null) => void;
   /** 끄면 「등록 안 된 손님입니다」(새 고객 만들기)가 안 나온다 — 대상 바꾸기용 */
   allowNew?: boolean;
 }) {
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<VehicleHit[]>([]);
-  const [manual, setManual] = useState(false);
+  // 임시 저장을 펼치면(newDraft 있음) 신규 폼이 열린 채로 시작한다 (2026-08-19)
+  const [manual, setManual] = useState(!!newDraft);
   /**
    * ⭐ 고객·차량 ↔ 거래처 — 동등한 탭 전환 (사장님 요청 2026-08-08).
    *    "거래처에 판매의 경우 좀 더 직관적으로 … 동등한 위치에서 버튼을 통해서
@@ -240,13 +246,19 @@ export function CustomerPick({
         </>
       ) : (
         <NewCustomer
+          draft={newDraft}
+          onDraftChange={onNewDraft}
           initialPlate={q}
           onCreated={(v) => {
             onPick(v);
             setManual(false);
             setQ("");
+            onNewDraft?.(null); // 등록됐으니 접어둘 것이 없다
           }}
-          onCancel={() => setManual(false)}
+          onCancel={() => {
+            setManual(false);
+            onNewDraft?.(null); // 취소 = 버리기
+          }}
         />
       )}
     </section>
@@ -260,18 +272,32 @@ export function CustomerPick({
  * 종이 「차량 점검 및 주문 보고서」의 고객·차량 정보 칸과 같은 항목이다.
  * 여기서 다 받아 두면 MARS 에 그대로 넘어간다.
  */
+/**
+ * ⭐ 신규 손님 폼의 중간 상태 (2026-08-19 — 판매 임시저장이 함께 접어 둔다).
+ *    폼은 내부 상태였는데, 반쯤 입력하고 「임시 저장」을 누르면 이름·전화·차량
+ *    정보가 통째로 사라졌다 — 부모(판매 등록)로 올려 보내 함께 저장한다.
+ */
+export interface NewCustomerDraft {
+  f: NewCustomerInput;
+  choices: { privacy: boolean | null; marketing: boolean | null };
+}
+
 function NewCustomer({
   initialPlate,
   onCreated,
   onCancel,
+  draft,
+  onDraftChange,
 }: {
   initialPlate: string;
   onCreated: (v: VehicleHit) => void;
   onCancel: () => void;
+  draft?: NewCustomerDraft | null;
+  onDraftChange?: (d: NewCustomerDraft) => void;
 }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [f, setF] = useState<NewCustomerInput>({
+  const [f, setF] = useState<NewCustomerInput>(draft?.f ?? {
     name: "",
     phone: "",
     address: "속초",
@@ -296,10 +322,16 @@ function NewCustomer({
    *    거부가 아닌데 거부로 — 또는 그 반대로 — MARS 에 올라갈 수 있다.
    *    거부는 MARS 에 「거부된 동의 + 불매치 코드 NONEED」로 그대로 올라간다.
    */
-  const [choices, setChoices] = useState<{ privacy: boolean | null; marketing: boolean | null }>({
+  const [choices, setChoices] = useState<{ privacy: boolean | null; marketing: boolean | null }>(draft?.choices ?? {
     privacy: null,
     marketing: null,
   });
+
+  // 🔴 타이핑을 부모(판매 등록)로 흘려보낸다 — 임시 저장이 이 폼까지 접어 두게 (2026-08-19)
+  useEffect(() => {
+    onDraftChange?.({ f, choices });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [f, choices]);
 
   const IN = "w-full rounded-lg border border-slate-300 px-2.5 py-2.5 text-sm outline-none focus:border-slate-900";
   const LB = "text-xs text-slate-500";
