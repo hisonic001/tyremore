@@ -9,6 +9,7 @@ import { findServices, saveSale, type SaleLine } from "@/lib/sale";
 import { EXCLUSIVE, SPLITTABLE } from "@/lib/payments";
 /** ⭐ 고객·거래처 선택기는 공용으로 뺐다 (2026-08-17) — 정비 내역의 「대상 바꾸기」도 쓴다 */
 import { CustomerPick } from "./customer-pick";
+import { listSaleDrafts, removeSaleDraft, saveSaleDraft, type SaleDraft, type SaleDraftState } from "./draft-store";
 
 const won = (n: number) => n.toLocaleString();
 
@@ -194,6 +195,72 @@ export function SaleForm() {
     setRows((rs) => rs.filter((x) => x.key !== r.key));
   };
 
+  /**
+   * ⭐ 임시 저장 (사장님 요청 2026-08-19) — 손님이 겹칠 때 쓰던 판을 접어 두고
+   *    다른 손님을 먼저 등록한다. 담아둔 타이어와 같은 localStorage 방식.
+   */
+  const [drafts, setDrafts] = useState<SaleDraft[]>([]);
+  const [draftNotice, setDraftNotice] = useState<string | null>(null);
+  useEffect(() => setDrafts(listSaleDrafts()), []);
+
+  const resetForm = () => {
+    setRows([]);
+    setVehicle(null);
+    setSupplierSale(null);
+    setWalkIn({ name: "", phone: "", plateNo: "" });
+    setMileage("");
+    setMemo("");
+    setPayMethods(["카드"]);
+    setPayAmounts({});
+    setCombo(false);
+    setWheels([]);
+    setWorkDate(today);
+  };
+
+  const stashDraft = () => {
+    const who = supplierSale
+      ? `거래처 ${supplierSale}`
+      : vehicle
+        ? `${vehicle.plateNo}${vehicle.customerName ? ` ${vehicle.customerName}` : ""}`
+        : walkIn.name || walkIn.plateNo || "손님 미지정";
+    const label = `${who} · ${rows.length}줄 · ${won(total)}원`;
+    saveSaleDraft(label, {
+      vehicle,
+      supplierSale,
+      walkIn,
+      mileage,
+      rows,
+      payMethods,
+      payAmounts,
+      combo,
+      memo,
+      workDate,
+      wheels,
+    });
+    resetForm();
+    setDrafts(listSaleDrafts());
+    setDraftNotice(`접어 뒀습니다 — ${label}. 아래 「임시 저장된 판매」에서 다시 펼칠 수 있습니다.`);
+  };
+
+  const restoreDraft = (d: SaleDraft) => {
+    const st = d.state as SaleDraftState;
+    setVehicle((st.vehicle as VehicleHit | null) ?? null);
+    setSupplierSale(st.supplierSale ?? null);
+    setWalkIn(st.walkIn ?? { name: "", phone: "", plateNo: "" });
+    setMileage(st.mileage ?? "");
+    setRows((st.rows as Row[]) ?? []);
+    setPayMethods(st.payMethods?.length ? st.payMethods : ["카드"]);
+    setPayAmounts(st.payAmounts ?? {});
+    setCombo(!!st.combo);
+    setMemo(st.memo ?? "");
+    setWorkDate(st.workDate || today);
+    setWheels(st.wheels ?? []);
+    removeSaleDraft(d.id); // 펼치면 목록에서 빠진다 — 그대로 두면 이중 등록의 씨앗
+    setDrafts(listSaleDrafts());
+    setDraftNotice(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   const submit = () => {
     /**
      * ⭐ 고객 미등록 경고 (사장님 요청 2026-08-08).
@@ -298,6 +365,46 @@ export function SaleForm() {
      */
     <div className="mt-5 pb-40 lg:grid lg:grid-cols-3 lg:items-start lg:gap-4">
     <div className="space-y-4 lg:col-span-2">
+      {/* ⭐ 임시 저장된 판매 (사장님 요청 2026-08-19) — 접어둔 판을 다시 펼친다 */}
+      {(drafts.length > 0 || draftNotice) && (
+        <section className="rounded-2xl border border-amber-300 bg-amber-50 p-3">
+          {draftNotice && <p className="mb-2 text-sm font-medium text-amber-900">{draftNotice}</p>}
+          {drafts.length > 0 && (
+            <>
+              <h2 className="text-sm font-bold text-amber-900">임시 저장된 판매 {drafts.length}건</h2>
+              <ul className="mt-1.5 divide-y divide-amber-200">
+                {drafts.map((d) => (
+                  <li key={d.id} className="flex items-center gap-2 py-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium text-amber-950">{d.label}</div>
+                      <div className="text-xs text-amber-700">{d.savedAt} 에 접어 둠</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => restoreDraft(d)}
+                      className="shrink-0 rounded-lg bg-amber-700 px-3 py-2 text-sm font-semibold text-white"
+                    >
+                      펼치기
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!confirm(`지울까요?
+${d.label}`)) return;
+                        removeSaleDraft(d.id);
+                        setDrafts(listSaleDrafts());
+                      }}
+                      className="shrink-0 rounded-lg border border-amber-300 px-2.5 py-2 text-sm text-amber-800"
+                    >
+                      지우기
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </section>
+      )}
       <CustomerPick
         vehicle={vehicle}
         onPick={setVehicle}
@@ -534,6 +641,14 @@ export function SaleForm() {
             <div className="text-xs text-slate-500">합계 (VAT 포함)</div>
             <div className="tabular text-2xl font-bold">{won(total)}원</div>
           </div>
+          <button
+            type="button"
+            disabled={pending || (rows.length === 0 && !vehicle && !supplierSale)}
+            onClick={stashDraft}
+            className="shrink-0 rounded-xl border-2 border-amber-500 bg-white px-4 py-3.5 font-bold text-amber-800 disabled:opacity-40"
+          >
+            임시 저장
+          </button>
           <button
             type="button"
             disabled={pending || rows.length === 0}
