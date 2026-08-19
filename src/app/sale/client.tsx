@@ -272,6 +272,56 @@ export function SaleForm() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  /**
+   * ⭐ 접어둔 판매 카드 — 담아둔 타이어(ComparePanel)와 같은 생김새 (사장님 요청 2026-08-19
+   *    "타이어 담기처럼 오른쪽에 보기 좋게"). PC 는 오른쪽 열 맨 위, 폰은 본문 맨 위.
+   */
+  const draftsCard =
+    drafts.length > 0 || draftNotice ? (
+      <aside className="rounded-xl border border-amber-300 bg-white p-3 shadow-sm">
+        <h2 className="text-sm font-bold text-amber-900">
+          접어둔 판매 <span className="font-normal text-amber-600">{drafts.length}</span>
+        </h2>
+        {draftNotice && <p className="mt-1 text-xs text-amber-700">{draftNotice}</p>}
+        {drafts.length > 0 && (
+          <ul className="mt-1 divide-y divide-amber-100">
+            {drafts.map((d) => (
+              <li key={d.id} className="py-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold">{d.label.split(" · ")[0]}</div>
+                    <div className="tabular text-xs text-slate-500">
+                      {d.label.split(" · ").slice(1).join(" · ")} · {d.savedAt}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label="지우기"
+                    onClick={() => {
+                      if (!confirm(`지울까요?
+${d.label}`)) return;
+                      removeSaleDraft(d.id);
+                      setDrafts(listSaleDrafts());
+                    }}
+                    className="shrink-0 px-1 text-slate-300 active:text-slate-600"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => restoreDraft(d)}
+                  className="mt-1.5 w-full rounded-lg bg-amber-600 py-2 text-sm font-semibold text-white active:bg-amber-700"
+                >
+                  펼치기
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </aside>
+    ) : null;
+
   const submit = () => {
     /**
      * ⭐ 고객 미등록 경고 (사장님 요청 2026-08-08).
@@ -376,46 +426,8 @@ export function SaleForm() {
      */
     <div className="mt-5 pb-40 lg:grid lg:grid-cols-3 lg:items-start lg:gap-4">
     <div className="space-y-4 lg:col-span-2">
-      {/* ⭐ 임시 저장된 판매 (사장님 요청 2026-08-19) — 접어둔 판을 다시 펼친다 */}
-      {(drafts.length > 0 || draftNotice) && (
-        <section className="rounded-2xl border border-amber-300 bg-amber-50 p-3">
-          {draftNotice && <p className="mb-2 text-sm font-medium text-amber-900">{draftNotice}</p>}
-          {drafts.length > 0 && (
-            <>
-              <h2 className="text-sm font-bold text-amber-900">임시 저장된 판매 {drafts.length}건</h2>
-              <ul className="mt-1.5 divide-y divide-amber-200">
-                {drafts.map((d) => (
-                  <li key={d.id} className="flex items-center gap-2 py-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-amber-950">{d.label}</div>
-                      <div className="text-xs text-amber-700">{d.savedAt} 에 접어 둠</div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => restoreDraft(d)}
-                      className="shrink-0 rounded-lg bg-amber-700 px-3 py-2 text-sm font-semibold text-white"
-                    >
-                      펼치기
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!confirm(`지울까요?
-${d.label}`)) return;
-                        removeSaleDraft(d.id);
-                        setDrafts(listSaleDrafts());
-                      }}
-                      className="shrink-0 rounded-lg border border-amber-300 px-2.5 py-2 text-sm text-amber-800"
-                    >
-                      지우기
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-        </section>
-      )}
+      {/* 폰에서는 본문 맨 위 — PC 는 오른쪽 열에 나온다 */}
+      {draftsCard && <div className="lg:hidden">{draftsCard}</div>}
       <CustomerPick
         key={formEpoch}
         vehicle={vehicle}
@@ -529,6 +541,8 @@ ${d.label}`)) return;
 
     {/* 오른쪽 — 결제만 고정(sticky). 스크롤해도 결제·메모가 늘 보인다 */}
     <div className="mt-4 space-y-4 lg:sticky lg:top-4 lg:mt-0">
+      {/* ⭐ 접어둔 판매 — 담기 패널처럼 오른쪽에 (사장님 요청 2026-08-19) */}
+      {draftsCard && <div className="hidden lg:block">{draftsCard}</div>}
       <section className="rounded-2xl border border-slate-300 bg-white p-3">
         <h2 className="font-bold">결제</h2>
 
