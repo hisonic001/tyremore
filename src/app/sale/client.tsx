@@ -200,7 +200,6 @@ export function SaleForm() {
    *    다른 손님을 먼저 등록한다. 담아둔 타이어와 같은 localStorage 방식.
    */
   const [drafts, setDrafts] = useState<SaleDraft[]>([]);
-  const [draftNotice, setDraftNotice] = useState<string | null>(null);
   /** 신규 손님 폼의 중간 입력 — 폼 내부 상태를 여기로 흘려받아 임시 저장에 함께 접는다 */
   const [newCust, setNewCust] = useState<NewCustomerDraft | null>(null);
   /** CustomerPick 을 통째로 다시 그리게 하는 열쇠 — 접기/펼치기 때 내부 상태(검색어·폼)를 리셋 */
@@ -248,7 +247,6 @@ export function SaleForm() {
     });
     resetForm();
     setDrafts(listSaleDrafts());
-    setDraftNotice(`접어 뒀습니다 — ${label}. 아래 「임시 저장된 판매」에서 다시 펼칠 수 있습니다.`);
   };
 
   const restoreDraft = (d: SaleDraft) => {
@@ -268,7 +266,6 @@ export function SaleForm() {
     setFormEpoch((e) => e + 1); // CustomerPick 을 다시 그려 신규 폼이 접힌 그대로 열리게
     removeSaleDraft(d.id); // 펼치면 목록에서 빠진다 — 그대로 두면 이중 등록의 씨앗
     setDrafts(listSaleDrafts());
-    setDraftNotice(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -277,12 +274,11 @@ export function SaleForm() {
    *    "타이어 담기처럼 오른쪽에 보기 좋게"). PC 는 오른쪽 열 맨 위, 폰은 본문 맨 위.
    */
   const draftsCard =
-    drafts.length > 0 || draftNotice ? (
+    drafts.length > 0 ? (
       <aside className="rounded-xl border border-amber-300 bg-white p-3 shadow-sm">
         <h2 className="text-sm font-bold text-amber-900">
           접어둔 판매 <span className="font-normal text-amber-600">{drafts.length}</span>
         </h2>
-        {draftNotice && <p className="mt-1 text-xs text-amber-700">{draftNotice}</p>}
         {drafts.length > 0 && (
           <ul className="mt-1 divide-y divide-amber-100">
             {drafts.map((d) => (
