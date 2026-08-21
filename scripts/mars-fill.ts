@@ -2823,6 +2823,7 @@ async function main_() {
     saveMarsRefNo,
     cleanMarsFailMemo,
     marsReconcileTargets,
+    promoteManualToPosted,
   } = await import("../src/lib/mars-queue");
   /** 대리인이 알려주는 실행 번호 — 시도 이력(mars_attempt)에 같이 남긴다 */
   const RUN_ID = Number(process.env.MARS_RUN_ID) || null;
@@ -3027,6 +3028,7 @@ async function main_() {
     /* ⭐ 아침 대사 — MARS 는 읽기만, 정정은 우리 DB 만 (단계3, 사장님 승인 「매일 자동」) */
     if (RECONCILE) {
       let fixed = 0;
+      let promoted = 0;
       let cleaned = 0;
       let notFound = 0;
       let vague = 0;
@@ -3058,6 +3060,14 @@ async function main_() {
             await cleanMarsFailMemo(t.quoteId);
             cleaned++;
             log(`  ✅ 송장 ${si} 실재 확인 — 「전기 실패」 문구를 정정했습니다`);
+          } else if (t.manual) {
+            /**
+             * ⭐ '수동처리' 건에서 송장이 실재함을 확인했다 (사장님 결정 2026-08-21).
+             *    사람이 MARS 에서 직접 처리한 것이 맞았으니 「전송완료」로 올린다.
+             */
+            await promoteManualToPosted(t.quoteId, si);
+            promoted++;
+            log(`  ✅ 송장 ${si} 확인 — 사람이 직접 처리한 것이 맞아 「전송완료」로 올렸습니다`);
           } else {
             await saveMarsRefNo(t.quoteId, si);
             fixed++;
@@ -3066,6 +3076,10 @@ async function main_() {
         } else if (/고르지 못했/.test(picked.why)) {
           vague++;
           log(`  ⚠️ ${picked.why}`);
+        } else if (t.manual) {
+          // '수동처리' 는 원래 대기열에서 내린 건이다 — 못 찾았다고 상태를 흔들지 않는다
+          notFound++;
+          log("  · 송장을 못 찾았습니다 — '수동처리' 그대로 둡니다 (사람 확인 몫)");
         } else {
           notFound++;
           log("  · 송장이 정말 없습니다 — 미전기(감사 배너 대상)로 남겨둡니다");
@@ -3073,7 +3087,9 @@ async function main_() {
       }
       log(`
 ${"=".repeat(56)}`);
-      log(`  기록 맞추기 — 번호 채움 ${fixed}건 · 문구 정정 ${cleaned}건 · 진짜 미전기 ${notFound}건 · 판단 보류 ${vague}건`);
+      log(
+        `  기록 맞추기 — 번호 채움 ${fixed}건 · 수동처리→전송완료 ${promoted}건 · 문구 정정 ${cleaned}건 · 못 찾음 ${notFound}건 · 판단 보류 ${vague}건`,
+      );
       log(`${"=".repeat(56)}
 `);
       await ctx.close().catch(() => {});

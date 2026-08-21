@@ -470,6 +470,12 @@ export interface ReconcileTarget {
   refNo: string | null;
   /** 메모에 「전기 실패」가 남아 있나 — 송장이 실재하면 문구를 정정한다 */
   staleFailMemo: boolean;
+  /**
+   * ⭐ '수동처리' 건인가 (사장님 결정 2026-08-21 — 「아침 대사가 확인하게 하기」).
+   *    사람이 MARS 에서 직접 처리했다고 표시만 해 둔 건이라 송장 번호가 없다.
+   *    대사가 송장을 찾아내면 「전송완료」로 올린다 — 못 찾으면 그대로 둔다.
+   */
+  manual: boolean;
 }
 
 export async function marsReconcileTargets(): Promise<ReconcileTarget[]> {
@@ -481,16 +487,28 @@ export async function marsReconcileTargets(): Promise<ReconcileTarget[]> {
     total_amount: number;
     mars_ref_no: string | null;
     stale: boolean;
+    manual: boolean;
   }>(sql`
     SELECT q.id, q.quote_no, v.plate_no,
            COALESCE(q.work_date, q.created_at::date)::text work_date,
            q.total_amount, q.mars_ref_no,
-           (q.mars_memo LIKE '%전기 실패%') stale
+           (q.mars_memo LIKE '%전기 실패%') stale,
+           (q.mars_status = '수동처리') manual
     FROM quote q
     LEFT JOIN vehicle v ON v.id = q.vehicle_id
-    WHERE q.status = '성사' AND q.mars_status = '전송완료' AND q.quote_no LIKE 'Q%'
+    WHERE q.status = '성사' AND q.quote_no LIKE 'Q%'
       AND v.plate_no IS NOT NULL
-      AND (q.mars_ref_no IS NULL OR q.mars_ref_no = '수동확인' OR q.mars_memo LIKE '%전기 실패%')
+      AND (
+        (q.mars_status = '전송완료'
+          AND (q.mars_ref_no IS NULL OR q.mars_ref_no = '수동확인' OR q.mars_memo LIKE '%전기 실패%'))
+        /**
+         * ⭐ '수동처리' 도 대사가 본다 (사장님 결정 2026-08-21).
+         *    「대기열에서 뺌 — MARS 직접 처리」라고만 적혀 있고 송장 번호가 없어,
+         *    진짜 MARS 에 올라갔는지 우리 기록만으로는 알 수 없던 8건이다.
+         *    읽기만 해서 사실을 확인하고, 찾으면 「전송완료」로 올린다.
+         */
+        OR q.mars_status = '수동처리'
+      )
     ORDER BY q.id DESC
     LIMIT 60
   `);
@@ -502,7 +520,28 @@ export async function marsReconcileTargets(): Promise<ReconcileTarget[]> {
     total: Number(r.total_amount),
     refNo: r.mars_ref_no,
     staleFailMemo: r.stale === true,
+    manual: r.manual === true,
   }));
+}
+
+/**
+ * ⭐ '수동처리'로 내려 둔 건에서 **송장이 실재함이 확인됐을 때** 「전송완료」로 올린다
+ *    (사장님 결정 2026-08-21 — 대사가 확인하게 하기).
+ *
+ * 🔴 상태를 바꾸는 길은 이름이 있어야 한다. 떠돌이 UPDATE 로 상태를 흔들면
+ *    나중에 누가 왜 바꿨는지 아무도 못 찾는다 — 그래서 함수로 못박고,
+ *    **'수동처리' 인 것만** 건드린다.
+ */
+export async function promoteManualToPosted(quoteId: number, refNo: string): Promise<void> {
+  await db.execute(sql`
+    UPDATE quote
+       SET mars_status = '전송완료', mars_ref_no = ${refNo}, updated_at = now(),
+           mars_memo = COALESCE(mars_memo || ' · ', '')
+             || '대사에서 송장 확인 — 전송완료로 올림 ('
+             || to_char(now() AT TIME ZONE 'Asia/Seoul', 'MM/DD') || ')'
+     WHERE id = ${quoteId} AND mars_status = '수동처리'
+  `);
+  refresh("/sales");
 }
 
 /**
