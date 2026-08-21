@@ -1292,9 +1292,18 @@ async function fillLines(
      * 전에는 건너뛰어서 그 판매 전체가 「줄 부족」으로 실패했다. 무엇을 팔았는지는
      * 설명 2(우리 품목명)에 그대로 남으니 MARS 에서도 알아볼 수 있다.
      */
-    const misc = !l.no;
+    /**
+     * 🔴 'NEW-…' 도 「품번 없음」이다 (2026-08-21). 앱에서 손으로 등록한 상품에
+     *    우리가 붙이는 임시 번호라 MARS 마스터에 없다. 대기열에서 이미 걸러 내지만
+     *    로봇 쪽에도 방어선을 둔다 — 이 번호가 MARS 칸에 들어가면 줄이 조용히 깨지고
+     *    그 다음 「단가를 넣지 못했습니다」로 나타난다 (박옥선 건 4회 반복 실패).
+     */
+    const misc = !l.no || /^NEW-/i.test(l.no);
     const itemNo = misc ? FALLBACK_ITEM : l.no!;
-    if (misc) log(`    · ${l.marsName.slice(0, 34)} — MARS 품목에 없어 범용 품번(${FALLBACK_ITEM})으로 넣습니다`);
+    if (misc)
+      log(
+        `    · ${l.marsName.slice(0, 34)} — ${l.no ? `자체 등록품(${l.no})이라` : "MARS 품목에 없어"} 범용 품번(${FALLBACK_ITEM})으로 넣습니다`,
+      );
     const row = grid.locator("tr.real-current");
 
     /**

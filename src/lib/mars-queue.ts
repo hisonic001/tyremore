@@ -335,7 +335,16 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     list_price: number | null;
   }>(sql`
     SELECT qi.quote_id, qi.id AS item_id,
-           COALESCE(p.mars_item_no, s.mars_service_no) AS no,
+           /**
+            * 🔴 'NEW-…' 는 **우리가 붙인 임시 번호**다 (stock.ts:451 — 앱에서 손으로
+            *    등록한 상품). MARS 마스터에는 없는 번호라 그대로 쳐 넣으면 줄이 깨진다.
+            *    실제로 Q26-0812-008(박옥선)이 NEW-MSK5PTTT 로 **4번 연속 실패**하며
+            *    고아 초안만 쌓았다 (2026-08-21 원인 규명).
+            *    → 「품번 없음」으로 넘겨 사장님 지시(8/15)대로 범용 품번 S001/1290 으로
+            *      들어가게 한다. 무엇을 팔았는지는 설명2(우리 품목명)에 그대로 남는다.
+            */
+           COALESCE(CASE WHEN p.mars_item_no LIKE 'NEW-%' THEN NULL ELSE p.mars_item_no END,
+                    s.mars_service_no) AS no,
            -- ⚠️ MARS 원본 이름이 우선이다. 다듬은 이름으로는 MARS 에서 못 찾는다
            COALESCE(p.raw_name, s.name, qi.description) AS mars_name,
            qi.qty, qi.final_price, qi.line_type, qi.memo, p.list_price
