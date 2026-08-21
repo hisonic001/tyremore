@@ -78,6 +78,11 @@ export function StockExcel() {
         <p className="mt-1 text-sm text-slate-500">
           지금 재고가 그대로 들어 있습니다. <strong>수량 칸만 고쳐서</strong> 다시 올리시면 됩니다.
         </p>
+        {/* ⭐ 2026-08-21 — 거르기용 칸을 붙였다. 늘어난 칸은 올릴 때 무시되니 지우실 필요 없다 */}
+        <p className="mt-1 text-xs text-slate-400">
+          제조사 · 폭 · 편평비 · 인치 · 런플랫 · 연식 · 기표가 칸이 함께 들어갑니다 (엑셀 자동
+          필터가 켜져 있습니다). 이 칸들은 올릴 때 읽지 않으니 그대로 두셔도, 지우셔도 됩니다.
+        </p>
         <a
           href="/stock/export"
           className="mt-3 block w-full rounded-xl bg-slate-900 py-3.5 text-center font-semibold text-white active:bg-slate-700"

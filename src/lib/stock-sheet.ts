@@ -35,7 +35,32 @@ export const COL = {
   season: "계절",
   dot: "DOT",
   qty: "수량",
+  /**
+   * ⭐ 아래는 **거르고 훑어보시라고** 붙인 칸이다 (사장님 요청 2026-08-21 —
+   *    "필터링이 가능하게 제조사 등의 정보들도 엑셀에 추가"). 읽을 때는 쓰지 않는다.
+   *    엑셀에서 자동 필터로 제조사·인치·연식별로 좁혀 보시는 용도.
+   */
+  brand: "제조사",
+  width: "폭",
+  aspect: "편평비",
+  rim: "인치",
+  runflat: "런플랫",
+  year: "연식",
+  listPrice: "기표가",
+  /** 🔴 아래 둘은 **사장님 계정에서 받을 때만** 들어간다 (D-05 5번 — 매입가는 사장님만) */
+  cost: "매입가",
+  amount: "재고금액",
 } as const;
+
+/** 올릴 때 실제로 읽는 칸 — 나머지는 있어도 없어도 그만이다 */
+export const READ_COLS = [COL.itemNo, COL.dot, COL.qty] as const;
+
+/** 내려받는 칸 차례. 앞의 일곱은 **예전 그대로** 둔다 — 손에 익은 자리를 흔들지 않는다 */
+const HEADERS_BASE = [
+  COL.itemNo, COL.spec, COL.model, COL.loadSpeed, COL.season, COL.dot, COL.qty,
+  COL.brand, COL.width, COL.aspect, COL.rim, COL.runflat, COL.year, COL.listPrice,
+] as const;
+const HEADERS_OWNER = [...HEADERS_BASE, COL.cost, COL.amount] as const;
 
 const SHEET_NAME = "재고";
 
@@ -47,6 +72,15 @@ export interface SheetRow {
   [COL.season]: string;
   [COL.dot]: string;
   [COL.qty]: number;
+  [COL.brand]: string;
+  [COL.width]: number | "";
+  [COL.aspect]: number | "";
+  [COL.rim]: number | "";
+  [COL.runflat]: string;
+  [COL.year]: number | "";
+  [COL.listPrice]: number | "";
+  [COL.cost]?: number | "";
+  [COL.amount]?: number | "";
 }
 
 /** 엑셀이 숫자로 바꿔 놓은 DOT 를 4자리로 되돌린다. 빈 값은 null */
@@ -63,29 +97,39 @@ function normalizeItemNo(v: unknown): string {
 }
 
 /** 재고가 있는 타이어를 「상품 + DOT」 로 묶어 엑셀 줄로 만든다 */
-export async function stockSheetRows(): Promise<SheetRow[]> {
+export async function stockSheetRows(money = false): Promise<SheetRow[]> {
   const rows = await db.execute<{
     mars_item_no: string | null;
     raw_name: string;
     pattern: string | null;
     display_name: string | null;
     brand_code: string | null;
+    brand_name: string | null;
     season: string | null;
     width: number | null;
     aspect_ratio: number | null;
     rim_inch: string | null;
     load_index: string | null;
     speed_rating: string | null;
+    is_runflat: boolean | null;
+    list_price: number | null;
     dot: string | null;
     qty: number;
+    cost: number | null;
   }>(sql`
-    SELECT p.mars_item_no, p.raw_name, p.pattern, p.display_name, p.brand_code, p.season,
-           p.width, p.aspect_ratio, p.rim_inch, p.load_index, p.speed_rating,
-           s.dot, SUM(s.qty)::int qty
-    FROM stock_item s JOIN product p ON p.id = s.product_id
+    SELECT p.mars_item_no, p.raw_name, p.pattern, p.display_name, p.brand_code, b.name_ko brand_name,
+           p.season, p.width, p.aspect_ratio, p.rim_inch, p.load_index, p.speed_rating,
+           p.is_runflat, p.list_price,
+           s.dot, SUM(s.qty)::int qty,
+           -- 이 로트의 본당 매입가 (없으면 상품 기본값). 사장님 파일에만 들어간다
+           ROUND(AVG(COALESCE(s.purchase_price, p.purchase_price)))::int cost
+    FROM stock_item s
+    JOIN product p ON p.id = s.product_id
+    LEFT JOIN brand b ON b.code = p.brand_code
     WHERE s.status = '재고' AND s.qty > 0 AND p.item_type = 'tire'
-    GROUP BY p.id, p.mars_item_no, p.raw_name, p.pattern, p.display_name, p.brand_code, p.season,
-             p.width, p.aspect_ratio, p.rim_inch, p.load_index, p.speed_rating, s.dot
+    GROUP BY p.id, p.mars_item_no, p.raw_name, p.pattern, p.display_name, p.brand_code, b.name_ko,
+             p.season, p.width, p.aspect_ratio, p.rim_inch, p.load_index, p.speed_rating,
+             p.is_runflat, p.list_price, s.dot
     ORDER BY p.rim_inch NULLS LAST, p.width NULLS LAST, p.aspect_ratio NULLS LAST, s.dot NULLS FIRST
   `);
 
@@ -96,33 +140,66 @@ export async function stockSheetRows(): Promise<SheetRow[]> {
       rimInch: r.rim_inch,
       brandCode: r.brand_code,
     });
+    // DOT 는 WWYY (0426 = 4주 2026년) — 연식만 따로 뽑아 두면 오래된 재고를 거르기 쉽다
+    const dot = r.dot ?? "";
+    const year = /^\d{4}$/.test(dot) ? 2000 + Number(dot.slice(2)) : "";
+    const qty = Number(r.qty);
+    const cost = r.cost === null ? "" : Number(r.cost);
     return {
       [COL.itemNo]: r.mars_item_no ?? "",
       [COL.spec]: n.spec ?? "",
       [COL.model]: r.display_name?.trim() || n.model,
       [COL.loadSpeed]: n.loadSpeed ?? (r.load_index ? `${r.load_index}${r.speed_rating ?? ""}` : ""),
       [COL.season]: r.season ?? "",
-      [COL.dot]: r.dot ?? "",
-      [COL.qty]: Number(r.qty),
+      [COL.dot]: dot,
+      [COL.qty]: qty,
+      [COL.brand]: r.brand_name ?? r.brand_code ?? "",
+      [COL.width]: r.width ?? "",
+      [COL.aspect]: r.aspect_ratio ?? "",
+      [COL.rim]: r.rim_inch === null ? "" : parseFloat(r.rim_inch),
+      [COL.runflat]: r.is_runflat ? "런플랫" : "",
+      [COL.year]: year,
+      [COL.listPrice]: r.list_price ?? "",
+      ...(money ? { [COL.cost]: cost, [COL.amount]: cost === "" ? "" : cost * qty } : {}),
     };
   });
 }
 
-/** 내려받을 .xlsx 를 만든다 */
-export async function buildStockWorkbook(): Promise<Buffer> {
-  const rows = await stockSheetRows();
-  const ws = XLSX.utils.json_to_sheet(rows, {
-    header: [COL.itemNo, COL.spec, COL.model, COL.loadSpeed, COL.season, COL.dot, COL.qty],
-  });
-  ws["!cols"] = [{ wch: 15 }, { wch: 13 }, { wch: 28 }, { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 7 }];
+/**
+ * 내려받을 .xlsx 를 만든다.
+ *
+ * @param money 매입가·재고금액을 넣을지 — 화면이 `isOwner()` 로 판단해 넘긴다 (D-05 5번).
+ *              서버에서 아예 빼고 내보낸다. 감추기가 아니라 안 담는 것이다.
+ */
+export async function buildStockWorkbook(money = false): Promise<Buffer> {
+  const rows = await stockSheetRows(money);
+  const header = [...(money ? HEADERS_OWNER : HEADERS_BASE)];
+  const ws = XLSX.utils.json_to_sheet(rows, { header });
+  ws["!cols"] = header.map((h) =>
+    h === COL.model ? { wch: 28 } : h === COL.itemNo || h === COL.spec ? { wch: 14 } : { wch: 9 },
+  );
   /**
-   * DOT 를 **글자**로 못 박는다. 안 그러면 엑셀이 `0426` 을 426 으로 만들어
-   * 다시 올릴 때 앞의 0 이 사라진다.
+   * 🔴 **품번과 DOT 는 글자로 못 박는다.**
+   *    엑셀은 `0426` 을 426 으로, 미쉐린 품번 `015692` 를 15692 로 바꿔 놓는다.
+   *    그대로 다시 올리면 앞의 0 이 사라져 「품번을 상품에서 못 찾았습니다」가 된다.
+   *    (2026-08-21 실측 — 0 으로 시작하는 품번의 재고가 31줄 있다.)
    */
-  for (let i = 2; i <= rows.length + 1; i++) {
-    const cell = ws[`F${i}`];
-    if (cell) cell.t = "s";
+  const noCol = header.indexOf(COL.itemNo);
+  const dotCol = header.indexOf(COL.dot);
+  for (let i = 0; i < rows.length; i++) {
+    for (const c of [noCol, dotCol]) {
+      if (c < 0) continue;
+      const cell = ws[XLSX.utils.encode_cell({ c, r: i + 1 })];
+      if (cell) {
+        cell.t = "s";
+        cell.v = String(cell.v ?? "");
+        cell.z = "@"; // 엑셀에서 고쳐도 글자로 남게
+      }
+    }
   }
+  /** ⭐ 자동 필터를 켜 둔다 — 제조사·인치·연식으로 바로 걸러 보실 수 있게 */
+  ws["!autofilter"] = { ref: XLSX.utils.encode_range({ s: { c: 0, r: 0 }, e: { c: header.length - 1, r: rows.length } }) };
+  ws["!freeze"] = { xSplit: "0", ySplit: "1" };
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, SHEET_NAME);
   return XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
@@ -160,16 +237,31 @@ function readSheet(buf: Buffer): { key: string; itemNo: string; dot: string | nu
   if (!name) return [];
   const raw = XLSX.utils.sheet_to_json<Record<string, unknown>>(wb.Sheets[name], { defval: "" });
 
+  /**
+   * 🔴 **칸 이름을 너그럽게 찾는다** (2026-08-21 — 내려받는 칸이 늘면서).
+   *    엑셀에서 만지다 보면 칸 이름에 공백이 붙거나 「수량 」이 되기도 한다.
+   *    우리가 읽는 것은 「품번 · DOT · 수량」 셋뿐이고, 그 밖의 칸(제조사·인치·연식…)은
+   *    **있어도 없어도 그만**이다 — 늘어난 칸 때문에 올리기가 깨지지 않는다.
+   */
+  const pick = (r: Record<string, unknown>, want: string): unknown => {
+    if (want in r) return r[want];
+    const flat = want.replace(/\s/g, "").toUpperCase();
+    for (const k of Object.keys(r)) {
+      if (k.replace(/\s/g, "").toUpperCase() === flat) return r[k];
+    }
+    return "";
+  };
+
   return raw
     .map((r) => {
-      const itemNo = normalizeItemNo(r[COL.itemNo]);
-      const dot = normalizeDot(r[COL.dot]);
+      const itemNo = normalizeItemNo(pick(r, COL.itemNo));
+      const dot = normalizeDot(pick(r, COL.dot));
       /**
        * 🔴 수량은 **엄격하게** 읽는다. 숫자가 아닌 글자를 걸러내면
        *    「네본」 같은 오타가 조용히 0본이 되어 재고가 사라진다 (2026-08-03 시험 중 발견).
        *    쉼표만 봐준다 — 엑셀이 1,000 처럼 넣어 줄 때가 있다.
        */
-      const qtyRaw = String(r[COL.qty] ?? "").trim();
+      const qtyRaw = String(pick(r, COL.qty) ?? "").trim();
       const qs = qtyRaw.replace(/,/g, "");
       const qty = Number(qs);
       let error: string | undefined;

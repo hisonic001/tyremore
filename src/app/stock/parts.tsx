@@ -18,6 +18,12 @@ const GROUP_ORDER = ["배터리", "필터", "브레이크", "오일·유류", "�
 
 export function PartStockList({ parts }: { parts: PartStockRow[] }) {
   const [q, setQ] = useState("");
+  /**
+   * ⭐ 묶음은 **접어 둔다** (사장님 요청 2026-08-21 — "부품재고 목록이 너무 길어서 문제").
+   *    280종이 한 화면에 다 펼쳐져 있었다. 손이 가야 하는 「부족」만 위에 띄우고,
+   *    나머지는 묶음 이름만 보이다가 누르면 펼친다.
+   */
+  const [open, setOpen] = useState<string[]>([]);
   const [hits, setHits] = useState<PartStockRow[] | null>(null);
   const [searching, startSearch] = useTransition();
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -52,7 +58,9 @@ export function PartStockList({ parts }: { parts: PartStockRow[] }) {
     );
   }, [parts]);
 
-  const lowCount = parts.filter((p) => p.minQty !== null && p.qty <= p.minQty).length;
+  const low = useMemo(() => parts.filter((p) => p.minQty !== null && p.qty <= p.minQty), [parts]);
+  const lowCount = low.length;
+  const toggle = (g: string) => setOpen((o) => (o.includes(g) ? o.filter((x) => x !== g) : [...o, g]));
 
   return (
     <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
@@ -117,16 +125,52 @@ export function PartStockList({ parts }: { parts: PartStockRow[] }) {
             등록의 「쓴 부품 담기」로 움직이기 시작하면 여기 나타납니다.
           </p>
         ) : (
-          groups.map(([g, rows]) => (
-            <div key={g} className="mt-3">
-              <h3 className="text-sm font-semibold text-slate-500">{g}</h3>
-              <ul className="mt-1 divide-y divide-slate-100">
-                {rows.map((p) => (
-                  <PartRow key={p.productId} p={p} />
-                ))}
-              </ul>
+          <>
+            {/* ⭐ 채워야 할 것 먼저 — 이것만 보면 되는 날이 대부분이다 */}
+            {lowCount > 0 && (
+              <div className="mt-3 rounded-xl border border-red-200 bg-red-50/50 p-3">
+                <h3 className="text-sm font-bold text-red-700">채워야 할 것 {lowCount}종</h3>
+                <ul className="mt-1 divide-y divide-red-100">
+                  {low.map((p) => (
+                    <PartRow key={p.productId} p={p} />
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* 묶음은 접어 둔다 — 누르면 그 묶음만 펼친다 */}
+            <div className="mt-3 divide-y divide-slate-100 border-t border-slate-100">
+              {groups.map(([g, rows]) => {
+                const gLow = rows.filter((p) => p.minQty !== null && p.qty <= p.minQty).length;
+                const on = open.includes(g);
+                return (
+                  <div key={g}>
+                    <button
+                      type="button"
+                      onClick={() => toggle(g)}
+                      className="flex w-full items-center justify-between py-3 text-left active:bg-slate-50"
+                    >
+                      <span className="font-semibold">
+                        {g} <span className="ml-1 font-normal text-slate-400">{rows.length}종</span>
+                        {gLow > 0 && <strong className="ml-2 text-sm text-red-600">부족 {gLow}</strong>}
+                      </span>
+                      <span className="text-slate-400">{on ? "▼" : "▶"}</span>
+                    </button>
+                    {on && (
+                      <ul className="divide-y divide-slate-100 pb-2">
+                        {rows.map((p) => (
+                          <PartRow key={p.productId} p={p} />
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-          ))
+            <p className="mt-2 text-xs text-slate-400">
+              묶음을 눌러 펼칩니다. 특정 부품은 위 검색이 빠릅니다.
+            </p>
+          </>
         ))}
     </section>
   );
