@@ -1731,14 +1731,42 @@ async function checkOrder(page: Page, expectTotal: number): Promise<AmountCheck>
  */
 async function readOrderNo(page: Page): Promise<string | null> {
   const f = main(page);
+  /**
+   * 🔴 2026-08-21 — 여기가 **43번 시도 내내 한 번도 번호를 못 읽고 있었다**.
+   *    (quote.mars_order_no 0건 / mars_attempt.order_no 0건 → 단계2 초안 이어쓰기가
+   *     통째로 죽어 있었고 고아 초안이 계속 쌓였다.)
+   *
+   *    이유 둘:
+   *      ① 매출 주문은 `…-23SO-003897` **대시**인데 정규식이 `+` 만 받았다
+   *         (송장 `…-23SI+003245` 은 `+` 라서 그쪽만 잘 됐다).
+   *      ② 카드의 번호는 입력칸이 아닐 수 있어 `inputValue()` 가 빈 문자열이었다.
+   *
+   *    그래서 대시·언더바까지 받고, 입력칸이 아니면 **글자를 읽어** 본다.
+   *    그래도 못 읽으면 무엇을 봤는지 로그에 남긴다 — 다음에는 추측하지 않는다.
+   */
+  const seen: string[] = [];
   for (const loc of [
     f.locator('[controlname="No."]').first(),
     f.getByRole("textbox", { name: "번호" }).first(),
+    f.locator('[controlname="번호"]').first(),
   ]) {
-    const v = ((await readField(loc).catch(() => "")) || "").trim();
-    // `61168583-23SO+000123` 같은 모양
-    if (/[A-Z]{2}\+?\d{4,}/i.test(v)) return v;
+    for (const read of [
+      () => readField(loc),
+      () => loc.innerText({ timeout: 1500 }),
+    ]) {
+      const v = ((await read().catch(() => "")) || "").trim();
+      if (!v) continue;
+      if (v.length < 80) seen.push(v);
+      // `61168583-23SO-003897` · `61168583-23SI+003245` 둘 다 받는다
+      const m = v.match(/[A-Z]{2}[-+_]?\d{4,}/i);
+      if (m) {
+        // 줄바꿈이 섞여 들어오면 번호가 있는 조각만 남긴다
+        const line = v.split("\n").map((x) => x.trim()).find((x) => x.includes(m[0]));
+        return (line ?? v).trim();
+      }
+    }
   }
+  if (seen.length) log(`    · (주문 번호를 못 읽었습니다 — 본 값: ${seen.slice(0, 3).join(" / ")})`);
   return null;
 }
 

@@ -74,7 +74,13 @@ export async function marsAudit(): Promise<MarsAudit> {
       LEFT JOIN vehicle v ON v.id = q.vehicle_id
       LEFT JOIN customer c ON c.id = q.customer_id
       WHERE q.status = '성사' AND q.mars_status = '전송완료'
-        AND q.mars_ref_no IS NULL
+        /**
+         * ⭐ '수동확인' 도 「번호 없음」과 같이 본다 (단계3-B, 2026-08-21).
+         *    사람이 MARS 에서 직접 처리했다고 표시만 해 둔 것이라 **송장 번호가 없다** —
+         *    진짜 올라갔는지 우리 기록만 봐서는 알 수 없으니 감사에 걸어 둔다.
+         *    아침 대사가 번호를 찾아 채우면 여기서 저절로 빠진다.
+         */
+        AND (q.mars_ref_no IS NULL OR q.mars_ref_no = '수동확인')
         AND q.quote_no LIKE 'Q%'  -- 이관분(MARS-…)은 이미 MARS 에 있던 것 — 감사 대상 아님
       ORDER BY q.id DESC LIMIT 20
     `);
@@ -84,7 +90,8 @@ export async function marsAudit(): Promise<MarsAudit> {
       LEFT JOIN vehicle v ON v.id = q.vehicle_id
       LEFT JOIN customer c ON c.id = q.customer_id
       WHERE q.status = '성사' AND q.mars_status = '전송완료'
-        AND q.mars_ref_no IS NOT NULL
+        -- '수동확인' 은 위 unposted 가 맡는다 — 한 건이 두 곳에 뜨지 않게
+        AND q.mars_ref_no IS NOT NULL AND q.mars_ref_no <> '수동확인'
         AND q.vehicle_check_at IS NULL
         AND v.plate_no IS NOT NULL
         AND q.quote_no LIKE 'Q%'
