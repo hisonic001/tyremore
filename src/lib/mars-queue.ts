@@ -180,8 +180,9 @@ export async function queueForMars(
     address: string | null;
     consent_signed: boolean | null;
     posted_max: number | null;
+    total_amount: number;
   }>(sql`
-    SELECT q.id, q.quote_no, q.payment_method, q.vehicle_id,
+    SELECT q.id, q.quote_no, q.payment_method, q.vehicle_id, q.total_amount,
            v.mars_vehicle_no, v.maker_name, v.model, v.year, v.fuel_type,
            COALESCE(q.mileage, v.mileage)::int AS eff,
            c.mars_contact_no, c.name customer_name, c.phone, c.address,
@@ -204,6 +205,11 @@ export async function queueForMars(
           ? `${r.quote_no}: 외상은 MARS 에 넣지 않습니다 — 수금 뒤 결제를 실제 수단으로 바꾸고 다시 체크해 주세요`
           : `${r.quote_no}: 서비스(무상)는 MARS 에 넣지 않습니다`,
       );
+      continue;
+    }
+    // 0원·마이너스(환불) 판매는 MARS 자동 입력 대상이 아니다 (2026-08-21) — 반품은 MARS 에서 직접
+    if (Number(r.total_amount) <= 0) {
+      blocked.push(`${r.quote_no}: 0원·마이너스(환불) 판매는 MARS 에 넣지 않습니다 — 반품은 MARS 에서 직접 처리해 주세요`);
       continue;
     }
     const eff = r.eff === null ? null : Number(r.eff);

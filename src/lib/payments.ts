@@ -6,6 +6,9 @@
  *
  * · 분할에 섞을 수 있는 것: 현금 · 카드 · 계좌이체 · 지역화폐
  * · 외상·서비스는 단독으로만 — MARS·대기열 처리가 결제수단 하나를 전제한다
+ * · ⭐ 마이너스 금액도 된다 (사장님 요청 2026-08-21 — 카드 취소·환불). 「카드 −100,000 +
+ *   현금 100,000」처럼 수단을 바꿔 준 경우도, 판매 자체가 환불(합계 마이너스)인 경우도.
+ *   0 은 여전히 안 된다 — 0원 수단은 빼고 적는다.
  * · 지역화폐는 MARS 에 현금으로 들어간다 (사장님 지시 — scripts/mars-fill.ts PAY_CODE)
  */
 
@@ -37,7 +40,7 @@ export function checkSplitPayments(
     }
     if (seen.has(p.method)) return { ok: false, error: `「${p.method}」 가 두 번 들어 있습니다` };
     seen.add(p.method);
-    if (!Number.isInteger(p.amount) || p.amount <= 0) {
+    if (!Number.isInteger(p.amount) || p.amount === 0) {
       return { ok: false, error: `「${p.method}」 금액이 올바르지 않습니다` };
     }
   }

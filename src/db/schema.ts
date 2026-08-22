@@ -643,7 +643,8 @@ export const quotePayment = pgTable(
   },
   (t) => [
     check("quote_payment_method_check", sql`${t.method} IN ('현금','카드','계좌이체','지역화폐')`),
-    check("quote_payment_amount_check", sql`${t.amount} > 0`),
+    // 마이너스 허용 — 카드 취소·환불 (사장님 요청 2026-08-21, scripts/add-negative-payment.ts). 0 만 막는다
+    check("quote_payment_amount_check", sql`${t.amount} <> 0`),
     index("idx_quote_payment_quote").on(t.quoteId),
   ],
 );

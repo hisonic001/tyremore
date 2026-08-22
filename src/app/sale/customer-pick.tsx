@@ -22,6 +22,9 @@ import { isMarsMaker, makerSuggestions, MARS_MAKER_LIST_ID, MarsMakerDatalist } 
 import { listSuppliers } from "@/lib/supplier";
 import { BODY_TYPES, FUEL_TYPES, type NewCustomerInput } from "@/lib/sale-types";
 
+/** 이름 없는 손님을 담는 자리표시 거래처 — 동명 손님을 여기로 묶지 않는다 (2026-08-21) */
+const PLACEHOLDER_SUPPLIERS = ["고객", "관광객"];
+
 export function CustomerPick({
   vehicle,
   onPick,
@@ -61,9 +64,39 @@ export function CustomerPick({
     { id: number; name: string; phone: string | null; memo: string | null }[] | null
   >(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * ⭐ 거래처와 이름이 같은 손님 (사장님 버그 제보 2026-08-21)
+   *
+   *   "거래처와 고객의 이름이 동일할 경우 판매등록이 동시에 되어버리는 버그"
+   *
+   * 강원수산은 거래처이면서 **차량마다 고객 기록이 따로(8명)** 있다. 차량으로 고르면
+   * 고객 판매로 들어가서 — 외상 장부가 거래처 계정과 고객 계정으로 갈라지고, 사장님은
+   * 취소하고 거래처로 다시 등록하셨다 (8/20 · 8/21 실제 흔적, 차량 정보는 잃은 채).
+   *
+   * → 고른 차량의 주인 이름이 **활성 거래처와 같으면 거래처 판매로 묶는다.** 차량은 그대로
+   *   달린다(그 차 기록에 남고, 외상은 거래처 장부 한 곳에 모인다). 되돌리는 단추를 둔다.
+   *
+   * 🔴 「고객」·「관광객」은 이름 없는 손님을 담는 자리표시 거래처다(고객 229명·관광객 4명이
+   *    그 이름으로 있다). 이건 묶지 않고 **개인 손님이 기본** — 안내만 하고 단추로 묶게 둔다.
+   */
+  const [declined, setDeclined] = useState<number | null>(null);
+  const nameKey = (s: string) => s.replace(/\s/g, "").toLowerCase();
+  const matchedSupplier =
+    vehicle && supplierList
+      ? (supplierList.find((s) => nameKey(s.name) === nameKey(vehicle.customerName)) ?? null)
+      : null;
+  const placeholder = matchedSupplier ? PLACEHOLDER_SUPPLIERS.includes(matchedSupplier.name) : false;
 
   useEffect(() => {
-    if (mode !== "supplier" || supplierList !== null) return;
+    if (!vehicle || supplier || !matchedSupplier || placeholder) return;
+    if (declined === vehicle.vehicleId) return;
+    onSupplier(matchedSupplier.name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vehicle, supplier, matchedSupplier, placeholder, declined]);
+
+  useEffect(() => {
+    // 거래처 탭을 열거나 **차량을 골랐을 때** 목록을 불러온다 — 동명 거래처를 알아보려면 필요하다
+    if ((mode !== "supplier" && !vehicle) || supplierList !== null) return;
     void listSuppliers().then((rows) =>
       setSupplierList(
         rows
@@ -71,7 +104,7 @@ export function CustomerPick({
           .map((r) => ({ id: r.id, name: r.name, phone: r.phone ?? null, memo: r.memo ?? null })),
       ),
     );
-  }, [mode, supplierList]);
+  }, [mode, vehicle, supplierList]);
 
   // 거래처 검색 — 설정 > 거래처와 같은 방식 (이름·전화·메모, 공백 무시)
   const norm = (s: string | null | undefined) => (s ?? "").replace(/\s/g, "").toLowerCase();
@@ -97,16 +130,44 @@ export function CustomerPick({
       <section className="rounded-2xl border-2 border-violet-700 bg-violet-50 p-3">
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
-            <div className="font-bold text-violet-900">거래처 판매 · {supplier}</div>
-            <div className="text-sm text-violet-700">MARS 에는 등록하지 않습니다 — 재고와 판매 기록만 남습니다</div>
+            <div className="font-bold text-violet-900">
+              거래처 판매 · {supplier}
+              {vehicle && <span className="ml-2 font-semibold text-violet-800">{vehicle.plateNo}</span>}
+            </div>
+            {vehicle ? (
+              <div className="text-sm text-violet-700">
+                {[vehicle.makerName, vehicle.model].filter(Boolean).join(" · ")}
+                {vehicle.makerName || vehicle.model ? " — " : ""}
+                이 차 기록에 남고, 외상은 거래처 장부 한 곳에 모입니다. MARS 에는 등록하지 않습니다
+              </div>
+            ) : (
+              <div className="text-sm text-violet-700">MARS 에는 등록하지 않습니다 — 재고와 판매 기록만 남습니다</div>
+            )}
           </div>
-          <button
-            type="button"
-            onClick={() => onSupplier(null)}
-            className="shrink-0 text-sm text-violet-700 underline"
-          >
-            바꾸기
-          </button>
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <button
+              type="button"
+              onClick={() => {
+                onSupplier(null);
+                if (vehicle) onPick(null);
+              }}
+              className="text-sm text-violet-700 underline"
+            >
+              바꾸기
+            </button>
+            {vehicle && (
+              <button
+                type="button"
+                onClick={() => {
+                  setDeclined(vehicle.vehicleId);
+                  onSupplier(null);
+                }}
+                className="text-xs text-violet-600 underline"
+              >
+                개인 손님 판매로
+              </button>
+            )}
+          </div>
         </div>
       </section>
     );
@@ -128,6 +189,24 @@ export function CustomerPick({
             바꾸기
           </button>
         </div>
+        {/* 동명 거래처가 있는데 개인 손님으로 두는 중 — 한 번에 묶을 수 있게 */}
+        {matchedSupplier && (
+          <div className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-violet-50 px-2 py-1.5 text-xs text-violet-800">
+            <span>
+              「{matchedSupplier.name}」 거래처로도 등록돼 있습니다 — 지금은 <strong>개인 손님 판매</strong>입니다
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setDeclined(null);
+                onSupplier(matchedSupplier.name);
+              }}
+              className="shrink-0 font-semibold underline"
+            >
+              거래처 판매로 묶기
+            </button>
+          </div>
+        )}
       </section>
     );
   }

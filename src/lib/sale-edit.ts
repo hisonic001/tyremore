@@ -340,7 +340,8 @@ export async function updateSaleLine(input: {
   memo?: string | null;
 }): Promise<{ ok: true; shortage: number; marsWarning: string | null } | { ok: false; error: string }> {
   if (!Number.isInteger(input.qty) || input.qty <= 0) return { ok: false, error: "수량은 1 이상이어야 합니다" };
-  if (!Number.isFinite(input.unitPrice) || input.unitPrice < 0) return { ok: false, error: "단가가 올바르지 않습니다" };
+  // 마이너스 단가 허용 — 환불·카드 취소 줄 (사장님 요청 2026-08-21)
+  if (!Number.isFinite(input.unitPrice)) return { ok: false, error: "단가가 올바르지 않습니다" };
   const desc = input.description?.trim();
   if (input.description !== undefined && !desc) return { ok: false, error: "품목 이름은 비울 수 없습니다" };
 

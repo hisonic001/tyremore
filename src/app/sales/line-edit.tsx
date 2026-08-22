@@ -12,6 +12,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { RateBox } from "../rate-box";
 import { addSaleLine, removeSaleLine, updateSaleLine } from "@/lib/sale-edit";
+import { signedStr, showSigned } from "@/lib/signed-input";
 import { findServices } from "@/lib/sale";
 import { searchProducts } from "@/lib/search-actions";
 import type { ProductHit } from "@/lib/search";
@@ -118,8 +119,8 @@ export function EditableLine({ line: l, onMessage }: { line: SaleLine; onMessage
         </div>
         <label className="ml-auto flex items-center gap-1">
           <input
-            value={price === "" ? "" : Number(price).toLocaleString()}
-            onChange={(e) => setPrice(e.target.value.replace(/\D/g, ""))}
+            value={showSigned(price)}
+            onChange={(e) => setPrice(signedStr(e.target.value))} // '-' 허용 — 환불 줄 (2026-08-21)
             inputMode="numeric"
             className="tabular h-9 w-28 rounded-lg border border-slate-300 px-2 text-right text-sm"
           />

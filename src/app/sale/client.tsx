@@ -1,5 +1,6 @@
 "use client";
 
+import { signedInt, signedStr, showSigned } from "@/lib/signed-input";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { RateBox } from "../rate-box";
@@ -147,7 +148,7 @@ export function SaleForm() {
         const used = cur.reduce((s, m) => s + Number(a[m] || "0"), 0);
         return cur.length === 0
           ? { [p]: String(total) }
-          : { ...a, [p]: String(Math.max(0, total - used)) };
+          : { ...a, [p]: String(total - used) }; // 마이너스 판매면 나머지도 마이너스 (2026-08-21)
       });
       return cur.length === 0 ? [p] : [...cur, p];
     });
@@ -224,7 +225,7 @@ export function SaleForm() {
 
   const stashDraft = () => {
     const who = supplierSale
-      ? `거래처 ${supplierSale}`
+      ? `거래처 ${supplierSale}${vehicle ? ` · ${vehicle.plateNo}` : ""}`
       : vehicle
         ? `${vehicle.plateNo}${vehicle.customerName ? ` ${vehicle.customerName}` : ""}`
         : newCust?.f.name || newCust?.f.plateNo
@@ -343,8 +344,12 @@ ${d.label}`)) return;
     start(async () => {
       setError(null);
       const res = await saveSale({
-        vehicleId: supplierSale ? null : (vehicle?.vehicleId ?? null),
-        customerId: supplierSale ? null : (vehicle?.customerId ?? null),
+        /**
+         * ⭐ 거래처 판매에도 차량이 같이 간다 (2026-08-21 — 거래처와 이름이 같은 손님).
+         *    전에는 거래처면 차량을 지웠다. 이제 거래처 장부에 모이면서 그 차 기록에도 남는다.
+         */
+        vehicleId: vehicle?.vehicleId ?? null,
+        customerId: vehicle?.customerId ?? null,
         walkIn: supplierSale || vehicle ? null : walkIn.name || walkIn.phone || walkIn.plateNo ? walkIn : null,
         supplierName: supplierSale,
         lines: rows.map(({ key, rimInch, ...l }) => l),
@@ -436,7 +441,7 @@ ${d.label}`)) return;
         onNewDraft={setNewCust}
       />
 
-      {vehicle && !supplierSale && (
+      {vehicle && (
         <label className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2">
           <span className="text-sm text-slate-500">주행거리</span>
           <input
@@ -606,8 +611,8 @@ ${d.label}`)) return;
               <label key={m} className="flex items-center gap-2">
                 <span className="w-16 shrink-0 text-sm text-slate-600">{m}</span>
                 <input
-                  value={payAmounts[m] ? Number(payAmounts[m]).toLocaleString() : ""}
-                  onChange={(e) => setPayAmounts((a) => ({ ...a, [m]: e.target.value.replace(/\D/g, "") }))}
+                  value={showSigned(payAmounts[m] ?? "")}
+                  onChange={(e) => setPayAmounts((a) => ({ ...a, [m]: signedStr(e.target.value) }))}
                   inputMode="numeric"
                   className="tabular min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-right text-sm"
                 />
@@ -625,6 +630,13 @@ ${d.label}`)) return;
               </p>
             )}
           </div>
+        )}
+        {/* ⭐ 마이너스 판매 (사장님 요청 2026-08-21 — 카드 취소·환불) */}
+        {total < 0 && (
+          <p className="mt-1.5 rounded-lg bg-rose-50 px-2 py-1.5 text-xs text-rose-900">
+            <strong>마이너스 판매(환불·카드 취소)</strong>로 저장됩니다 — 돌려준 돈의 수단을 고르세요.
+            재고는 되돌리지 않고(타이어 반품은 재고 화면에서), MARS 에는 올라가지 않습니다.
+          </p>
         )}
         {payMethods[0] === "외상" && (
           <p className="mt-1.5 rounded-lg bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
@@ -704,6 +716,8 @@ function LineRow({
    *    전에는 담을 때의 기본 할인율이 스냅샷으로 남아, 30% 로 깎아 팔아도
    *    기록에는 25% 로 남았다 — 나중의 마진·할인 분석이 거짓 근거를 읽는다.
    */
+  /** 단가 칸 초안 — '-' 를 치는 순간 숫자로 굳히면 '-' 가 사라진다 (마이너스 결제, 2026-08-21) */
+  const [unitDraft, setUnitDraft] = useState<string | null>(null);
   const priceChange = (n: number): Partial<Row> => ({
     unitPrice: n,
     salesRate:
@@ -742,8 +756,14 @@ function LineRow({
             <label className="ml-auto flex items-center gap-1">
               <span className="text-xs text-slate-500">단가</span>
               <input
-                value={won(row.unitPrice)}
-                onChange={(e) => onChange(priceChange(Number(e.target.value.replace(/\D/g, "")) || 0))}
+                value={unitDraft ?? won(row.unitPrice)}
+                onFocus={() => setUnitDraft(won(row.unitPrice))}
+                onChange={(e) => {
+                  const s = signedStr(e.target.value);
+                  setUnitDraft(showSigned(s));
+                  onChange(priceChange(signedInt(s)));
+                }}
+                onBlur={() => setUnitDraft(null)}
                 inputMode="numeric"
                 className="tabular h-9 w-24 rounded-lg border border-slate-300 px-2 text-right"
               />
@@ -807,9 +827,10 @@ function AmountBox({
       className="tabular h-9 w-24 rounded-lg border border-slate-300 px-2 text-right text-sm font-semibold"
       onFocus={() => setDraft(won(unitPrice * qty))}
       onChange={(e) => {
-        const raw = e.target.value.replace(/[^0-9]/g, "");
-        setDraft(raw === "" ? "" : Number(raw).toLocaleString());
-        const total = Number(raw) || 0;
+        // '-' 허용 — 환불·카드 취소 줄 (2026-08-21)
+        const raw = signedStr(e.target.value);
+        setDraft(showSigned(raw));
+        const total = signedInt(raw);
         onUnit(qty > 0 ? Math.round(total / qty) : total);
       }}
       onBlur={() => setDraft(null)}

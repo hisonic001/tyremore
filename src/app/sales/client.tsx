@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { cancelSale, updateSaleHead } from "@/lib/sale-edit";
 import type { SaleRow } from "@/lib/sale-history";
 import { EXCLUSIVE, SPLITTABLE, splitLabel } from "@/lib/payments";
+import { signedStr, showSigned } from "@/lib/signed-input";
 import { CollectionPanel } from "./collections";
 import { AddLine, EditableLine } from "./line-edit";
 import { ReassignPanel } from "./reassign";
@@ -63,8 +64,9 @@ export function SaleCard({
 
   const canceled = s.status === "취소";
   /** ⭐ 거래처는 제 컬럼에서 (2026-08-17) — 전에는 walkIn 글자에 뭉뚱그려져 있었다 */
+  // 거래처가 먼저 — 거래처 판매에 차량이 달린 건(2026-08-21)은 거래처 이름으로 보이고 번호판은 옆에 붙는다
   const who =
-    s.customerName ?? (s.supplierName ? `거래처 ${s.supplierName}` : null) ?? s.walkIn ?? "손님 미지정";
+    (s.supplierName ? `거래처 ${s.supplierName}` : null) ?? s.customerName ?? s.walkIn ?? "손님 미지정";
 
   const splitPay = SPLITTABLE as readonly string[];
   const paySum = payM.reduce((sum, m) => sum + Number(payA[m] || "0"), 0);
@@ -115,7 +117,7 @@ export function SaleCard({
         const used = cur.reduce((sum, m) => sum + Number(a[m] || "0"), 0);
         return cur.length === 0
           ? { [p]: String(s.totalAmount) }
-          : { ...a, [p]: String(Math.max(0, s.totalAmount - used)) };
+          : { ...a, [p]: String(s.totalAmount - used) }; // 마이너스 판매면 나머지도 마이너스 (2026-08-21)
       });
       return [...cur, p];
     });
@@ -243,9 +245,18 @@ export function SaleCard({
                 {l.description}
                 {l.spec && <span className="tabular ml-1 text-slate-500">{l.spec}</span>}
               </span>
+              {/* ⭐ 「4 × 142,000 = 568,000원」 — 총액이 맨 끝에 (사장님 요청 2026-08-21). 1개면 금액만 */}
               <span className="tabular shrink-0">
-                {l.qty > 1 && `${l.qty} × `}
-                {won(l.finalPrice)}원
+                {l.qty > 1 ? (
+                  <>
+                    <span className="text-slate-500">
+                      {l.qty} × {won(l.finalPrice)} =
+                    </span>{" "}
+                    <span className="font-semibold text-slate-800">{won(l.finalPrice * l.qty)}원</span>
+                  </>
+                ) : (
+                  <>{won(l.finalPrice)}원</>
+                )}
               </span>
             </div>
           ))}
@@ -422,8 +433,8 @@ export function SaleCard({
                         <label key={m} className="flex items-center gap-2">
                           <span className="w-16 shrink-0 text-xs text-slate-600">{m}</span>
                           <input
-                            value={payA[m] ? Number(payA[m]).toLocaleString() : ""}
-                            onChange={(e) => setPayA((a) => ({ ...a, [m]: e.target.value.replace(/\D/g, "") }))}
+                            value={showSigned(payA[m] ?? "")}
+                            onChange={(e) => setPayA((a) => ({ ...a, [m]: signedStr(e.target.value) }))}
                             inputMode="numeric"
                             className="tabular min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-right text-sm"
                           />

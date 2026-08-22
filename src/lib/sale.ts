@@ -204,6 +204,16 @@ export async function saveSale(
   const split = splitCheck.split;
   const payMethod = split ? "혼합" : (input.paymentMethod ?? null);
 
+  /**
+   * ⭐ 마이너스 판매 (사장님 요청 2026-08-21 — "카드결제를 취소하거나 하는 경우").
+   *    단가에 '-' 를 허용하므로 합계가 음수일 수 있다 = 환불. 돌려준 돈은 실제 수단으로
+   *    적어야 하니 외상·서비스로는 못 둔다. 재고는 건드리지 않는다(수량은 여전히 양수,
+   *    타이어 반품은 재고 화면에서). MARS 는 queueForMars 문지기가 0 이하를 거른다.
+   */
+  if (total < 0 && (payMethod === "외상" || payMethod === "서비스")) {
+    return { ok: false, error: "마이너스(환불) 판매는 외상·서비스로 둘 수 없습니다 — 돌려준 수단(카드·현금…)을 고르세요" };
+  }
+
   /** 회원이 아닌 손님도 이름·전화가 있으면 남겨 둔다 — 다음에 오시면 이어진다 */
   let customerId = input.customerId ?? null;
   if (!customerId && input.walkIn?.phone?.replace(/\D/g, "").length) {
