@@ -968,3 +968,74 @@ export const importIssue = pgTable(
     index("idx_import_issue_open").on(t.kind).where(sql`${t.status} = '대기'`),
   ],
 );
+
+/* ============================================================
+ * 3-13. 돈 관리 (ERP 1단계, 사장님 승인 2026-08-24)
+ * fin_upload — 업로드 배치(원본 CSV 보존) · cash_txn — 자금 움직임
+ * (법인카드 사용 + 통장 입출금). 실제 생성은 scripts/add-fin-tables.ts.
+ * 세금계산서·카드매출 표는 ERP 2~3단계에서 추가된다.
+ * ========================================================== */
+export const finUpload = pgTable(
+  "fin_upload",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    source: text("source").notNull(),
+    accountLabel: text("account_label"),
+    fileName: text("file_name").notNull(),
+    /** 원본 시트 CSV — 파서를 고쳐 다시 읽을 수 있게 (purchase_invoice.raw_text 전례) */
+    rawText: text("raw_text").notNull(),
+    rowCount: integer("row_count").notNull().default(0),
+    newCount: integer("new_count").notNull().default(0),
+    dupCount: integer("dup_count").notNull().default(0),
+    periodFrom: date("period_from"),
+    periodTo: date("period_to"),
+    status: text("status").notNull().default("반영"),
+    createdBy: bigint("created_by", { mode: "number" }).references(() => appUser.id),
+    createdAt,
+  },
+  (t) => [
+    check(
+      "fin_upload_source",
+      sql`${t.source} IN ('홈택스매출','홈택스매입','법인카드','통장','카드매출승인','카드매출입금')`,
+    ),
+    check("fin_upload_status", sql`${t.status} IN ('반영','취소')`),
+  ],
+);
+
+export const cashTxn = pgTable(
+  "cash_txn",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    /** '법인카드'(사용 = 지출) | '통장'(입출금) */
+    source: text("source").notNull(),
+    accountLabel: text("account_label").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    /** 가맹점명 / 「[적요] 내용」 원문 보존 */
+    description: text("description").notNull(),
+    inAmount: integer("in_amount").notNull().default(0),
+    outAmount: integer("out_amount").notNull().default(0),
+    /** 통장만 — 거래 후 잔액 (중복 방지 열쇠의 핵심) */
+    balance: bigint("balance", { mode: "number" }),
+    approvalNo: text("approval_no"),
+    /** 가맹점 사업자번호 (KB 확인서에 있음 — 매입 대조용) */
+    bizNo: text("biz_no"),
+    installment: text("installment"),
+    branch: text("branch"),
+    /** 통장 입금인코드 — 카드 정산 식별용 */
+    payerCode: text("payer_code"),
+    dedupKey: text("dedup_key").notNull(),
+    /** 경비 분류 (ERP 6단계에서 쓴다) */
+    category: text("category"),
+    reconStatus: text("recon_status").notNull().default("미대조"),
+    isActive: boolean("is_active").notNull().default(true),
+    uploadId: bigint("upload_id", { mode: "number" }).references(() => finUpload.id),
+    memo: text("memo"),
+    createdAt,
+  },
+  (t) => [
+    uniqueIndex("cash_txn_dedup_key_key").on(t.dedupKey),
+    check("cash_txn_source", sql`${t.source} IN ('법인카드','통장')`),
+    check("cash_txn_recon", sql`${t.reconStatus} IN ('미대조','제안','확정','무시')`),
+    index("idx_cash_txn_month").on(t.source, t.occurredAt).where(sql`${t.isActive}`),
+  ],
+);

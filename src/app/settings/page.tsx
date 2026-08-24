@@ -61,6 +61,12 @@ export default async function SettingsPage() {
             title: "계정 관리",
             desc: "계정 만들기 · 사장님/정비사 권한 · 비밀번호 재설정 (사장님 전용)",
           },
+          /* ⭐ 돈 관리 (ERP 1단계, 사장님 승인 2026-08-24) — 통장·법인카드 업로드와 자금 흐름 */
+          {
+            href: "/finance",
+            title: "돈 관리",
+            desc: "통장·법인카드 내역 올리기 · 월 자금 흐름 (사장님 전용)",
+          },
         ]
       : []),
     ...(techMarsLink
