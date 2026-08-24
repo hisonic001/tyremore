@@ -3,8 +3,10 @@ import { redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession } from "@/lib/auth";
-import { kstToday, ymAdd } from "@/lib/ym";
+import { pickYm, ymAdd } from "@/lib/ym";
 import { CARD_SETTLE_PATTERN_SQL } from "@/lib/expense-cats";
+import { FinShell } from "@/components/fin/shell";
+import { won } from "@/components/fin/money";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +21,6 @@ export const dynamic = "force-dynamic";
  * 🔴 질의 순차 — Promise.all 금지.
  */
 
-const won = (n: number) => n.toLocaleString("ko-KR");
 // 감사 L3: 달 계산은 lib/ym 정본
 
 export default async function FinanceCardPage({
@@ -31,9 +32,8 @@ export default async function FinanceCardPage({
   if (!session) redirect("/login");
   if (session.role !== "owner") redirect("/");
 
-  const thisYm = kstToday().slice(0, 7);
   const sp = await searchParams;
-  const ym = typeof sp.ym === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(sp.ym) && sp.ym <= thisYm ? sp.ym : thisYm;
+  const ym = pickYm(sp.ym);
   const start = `${ym}-01`;
   const nextStart = `${ymAdd(ym, 1)}-01`;
   /** 앱 판매의 「판 날」 — 리포트와 같은 기준 */
@@ -138,27 +138,7 @@ export default async function FinanceCardPage({
   const sumSale = deposits.reduce((s, r) => s + Number(r.sale_amount), 0);
 
   return (
-    <main className="mx-auto min-h-dvh max-w-3xl px-4 py-5 pb-24">
-      <header className="mb-2 flex items-center justify-between">
-        <h1 className="text-xl font-bold">카드 매출 대사</h1>
-        <Link href="/finance" className="text-sm text-slate-600 underline underline-offset-4">
-          ← 돈 관리로
-        </Link>
-      </header>
-
-      <nav className="tabular mt-2 flex items-center justify-center gap-4 text-sm">
-        <Link href={`/finance/card?ym=${ymAdd(ym, -1)}`} className="rounded-lg px-3 py-1.5 active:bg-slate-200">
-          ◀ {ymAdd(ym, -1)}
-        </Link>
-        <span className="font-bold">{ym}</span>
-        {ym < thisYm ? (
-          <Link href={`/finance/card?ym=${ymAdd(ym, 1)}`} className="rounded-lg px-3 py-1.5 active:bg-slate-200">
-            {ymAdd(ym, 1)} ▶
-          </Link>
-        ) : (
-          <span className="px-3 py-1.5 text-slate-300">다음 달</span>
-        )}
-      </nav>
+    <FinShell tab="card" monthNav={{ ym, basePath: "/finance/card" }}>
 
       {dayRows.length === 0 ? (
         <section className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
@@ -367,6 +347,6 @@ export default async function FinanceCardPage({
           </p>
         </section>
       )}
-    </main>
+    </FinShell>
   );
 }

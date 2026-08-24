@@ -1,8 +1,8 @@
-import Link from "@/lib/link";
 import { redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession } from "@/lib/auth";
+import { FinShell } from "@/components/fin/shell";
 import { taxReconV2 } from "@/lib/tax-recon";
 import { TaxRecon } from "./tax-ui";
 
@@ -46,14 +46,8 @@ export default async function FinanceTaxPage() {
   `);
 
   return (
-    <main className="mx-auto min-h-dvh max-w-3xl px-4 py-5 pb-24">
-      <header className="mb-2 flex items-center justify-between">
-        <h1 className="text-xl font-bold">세금계산서 대조</h1>
-        <Link href="/finance" className="text-sm text-slate-600 underline underline-offset-4">
-          ← 돈 관리로
-        </Link>
-      </header>
-      <p className="text-sm text-slate-500">
+    <FinShell tab="tax">
+      <p className="mt-2 text-sm text-slate-500">
         홈택스 계산서를 통장·앱 기록과 잇습니다. 대형 거래처 계산서는 보통 월말 일괄 발행이라
         매입 기록이 먼저 있어도 정상입니다.
       </p>
@@ -77,6 +71,6 @@ export default async function FinanceTaxPage() {
           reason: r.reason,
         }))}
       />
-    </main>
+    </FinShell>
   );
 }

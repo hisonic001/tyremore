@@ -5,9 +5,11 @@ import { db } from "@/db";
 import { getSession } from "@/lib/auth";
 import { EXPENSE_IN_PL } from "@/lib/expense-cats";
 import { finHealth } from "@/lib/fin-health";
-import { kstToday, ymAdd } from "@/lib/ym";
+import { kstToday, ymAdd, pickYm } from "@/lib/ym";
 import { TAX_APP_START } from "@/lib/tax-recon";
 import { cancelFinUpload } from "@/lib/fin-upload";
+import { FinShell } from "@/components/fin/shell";
+import { won } from "@/components/fin/money";
 
 export const dynamic = "force-dynamic";
 
@@ -19,8 +21,6 @@ export const dynamic = "force-dynamic";
  *
  * 🔴 사장님 전용 (reports 와 같은 가드). 질의는 순차 — Promise.all 금지.
  */
-
-const won = (n: number) => n.toLocaleString("ko-KR");
 
 /** 폼에서 부르는 배치 취소 — 폼 액션은 반환값이 없어야 해서 얇게 감싼다 */
 async function cancelBatch(id: number, _fd: FormData): Promise<void> {
@@ -43,7 +43,7 @@ export default async function FinancePage({
 
   const thisYm = kstToday().slice(0, 7);
   const sp = await searchParams;
-  const ym = typeof sp.ym === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(sp.ym) && sp.ym <= thisYm ? sp.ym : thisYm;
+  const ym = pickYm(sp.ym);
   const start = `${ym}-01`;
   const nextStart = `${ymAdd(ym, 1)}-01`;
   /** 이번 달 조건 — 모든 질의가 글자 그대로 같은 조건을 쓴다 */
@@ -214,21 +214,7 @@ export default async function FinancePage({
   const noData = sums.length === 0 && uploads.length === 0;
 
   return (
-    <main className="mx-auto min-h-dvh max-w-3xl px-4 py-5 pb-24">
-      <header className="mb-2 flex items-center justify-between">
-        <h1 className="text-xl font-bold">돈 관리</h1>
-        <div className="flex items-center gap-2">
-          <Link
-            href="/finance/upload"
-            className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white"
-          >
-            내역 올리기
-          </Link>
-          <Link href="/settings" className="text-sm text-slate-500 underline underline-offset-4">
-            설정으로
-          </Link>
-        </div>
-      </header>
+    <FinShell tab="home" monthNav={{ ym, basePath: "/finance" }}>
 
       <div
         className={`tabular mt-2 rounded-lg px-3 py-1.5 text-[11px] ${health.allOk ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900"}`}
@@ -236,21 +222,6 @@ export default async function FinancePage({
         {(health.allOk ? "자료 검증 ✓  " : "자료 확인 필요 ⚠  ") +
           health.lines.map((l) => (l.ok ? l.text : `⚠ ${l.text}`)).join("  ·  ")}
       </div>
-
-      {/* 달 넘기기 — 리포트와 같은 방식 */}
-      <nav className="tabular mt-2 flex items-center justify-center gap-4 text-sm">
-        <Link href={`/finance?ym=${ymAdd(ym, -1)}`} className="rounded-lg px-3 py-1.5 active:bg-slate-200">
-          ◀ {ymAdd(ym, -1)}
-        </Link>
-        <span className="font-bold">{ym}</span>
-        {ym < thisYm ? (
-          <Link href={`/finance?ym=${ymAdd(ym, 1)}`} className="rounded-lg px-3 py-1.5 active:bg-slate-200">
-            {ymAdd(ym, 1)} ▶
-          </Link>
-        ) : (
-          <span className="px-3 py-1.5 text-slate-300">다음 달</span>
-        )}
-      </nav>
 
       {/* ── 월 손익 (5단계) — 회계어 없이, 이중 계산 없이 ── */}
       <section className="mt-4 rounded-2xl border-2 border-slate-800 bg-white p-4">
@@ -488,6 +459,6 @@ export default async function FinancePage({
           </ul>
         </section>
       )}
-    </main>
+    </FinShell>
   );
 }

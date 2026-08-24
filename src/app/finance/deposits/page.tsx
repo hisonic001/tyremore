@@ -1,7 +1,7 @@
-import Link from "@/lib/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
-import { kstToday, ymAdd } from "@/lib/ym";
+import { pickYm } from "@/lib/ym";
+import { FinShell } from "@/components/fin/shell";
 import { depositReconData } from "@/lib/recon-data";
 import { DepositsRecon } from "./deposits-ui";
 
@@ -24,36 +24,14 @@ export default async function FinanceDepositsPage({
   if (!session) redirect("/login");
   if (session.role !== "owner") redirect("/");
 
-  const thisYm = kstToday().slice(0, 7);
   const sp = await searchParams;
-  const ym = typeof sp.ym === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(sp.ym) && sp.ym <= thisYm ? sp.ym : thisYm;
+  const ym = pickYm(sp.ym);
 
   const data = await depositReconData(ym);
 
   return (
-    <main className="mx-auto min-h-dvh max-w-3xl px-4 py-5 pb-24">
-      <header className="mb-2 flex items-center justify-between">
-        <h1 className="text-xl font-bold">통장 입금 대조</h1>
-        <Link href="/finance" className="text-sm text-slate-600 underline underline-offset-4">
-          ← 돈 관리로
-        </Link>
-      </header>
-
-      <nav className="tabular mt-2 flex items-center justify-center gap-4 text-sm">
-        <Link href={`/finance/deposits?ym=${ymAdd(ym, -1)}`} className="rounded-lg px-3 py-1.5 active:bg-slate-200">
-          ◀ {ymAdd(ym, -1)}
-        </Link>
-        <span className="font-bold">{ym}</span>
-        {ym < thisYm ? (
-          <Link href={`/finance/deposits?ym=${ymAdd(ym, 1)}`} className="rounded-lg px-3 py-1.5 active:bg-slate-200">
-            {ymAdd(ym, 1)} ▶
-          </Link>
-        ) : (
-          <span className="px-3 py-1.5 text-slate-300">다음 달</span>
-        )}
-      </nav>
-
+    <FinShell tab="deposits" monthNav={{ ym, basePath: "/finance/deposits" }}>
       <DepositsRecon data={data} ym={ym} />
-    </main>
+    </FinShell>
   );
 }
