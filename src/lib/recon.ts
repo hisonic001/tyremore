@@ -13,7 +13,8 @@ import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, isOwner } from "@/lib/auth";
-import { normName, taxReconData } from "./recon-data";
+import { normName } from "./recon-data";
+import { TAX_APP_START, taxReconV2 } from "./tax-recon";
 
 export interface MatchRef {
   table: "purchase_invoice" | "quote";
@@ -181,9 +182,9 @@ export async function autoConfirmTax(): Promise<{ ok: true; confirmed: number } 
   const g = await guard();
   if (!g.ok) return g;
   // 🔴 화면이 보낸 목록을 믿지 않는다 — 서버가 같은 규칙으로 다시 계산한다
-  const data = await taxReconData();
+  const data = await taxReconV2();
   let confirmed = 0;
-  for (const s of data.open) {
+  for (const s of data.groups.flatMap((g) => g.items)) {
     if (!s.auto) continue;
     const r = await confirmTaxMatch({
       taxInvoiceId: s.inv.id,
@@ -203,11 +204,18 @@ export async function undoTaxMatch(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  await db.execute(sql`
+  // 입금과 이어져 있었다면 그 입금도 미대조로 되돌린다 (v2 — 입금 직접 연결)
+  const gone = await db.execute<{ ref_table: string; ref_id: number }>(sql`
     DELETE FROM recon_match WHERE src_table = 'tax_invoice' AND src_id = ${taxInvoiceId}
       AND kind IN ('매입계산서', '매출계산서')
+    RETURNING ref_table, ref_id
   `);
-  await db.execute(sql`UPDATE tax_invoice SET recon_status = '미대조' WHERE id = ${taxInvoiceId}`);
+  for (const g of gone) {
+    if (g.ref_table === "cash_txn") {
+      await db.execute(sql`UPDATE cash_txn SET recon_status = '미대조' WHERE id = ${g.ref_id}`);
+    }
+  }
+  await db.execute(sql`UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL WHERE id = ${taxInvoiceId}`);
   revalidatePath("/finance/tax");
   return { ok: true };
 }
@@ -220,9 +228,98 @@ export async function ignoreTaxInvoice(
   const g = await guard();
   if (!g.ok) return g;
   await db.execute(sql`
-    UPDATE tax_invoice SET recon_status = ${back ? "미대조" : "무시"}
+    UPDATE tax_invoice SET recon_status = ${back ? "미대조" : "무시"},
+           recon_reason = ${back ? null : "직접"}
     WHERE id = ${taxInvoiceId} AND recon_status <> '확정'
   `);
   revalidatePath("/finance/tax");
+  return { ok: true };
+}
+
+/* ================================================================== */
+/* 대조 v2 — 상대 유형·과거분·입금 연결 (사장님 승인 2026-08-25)          */
+
+/**
+ * 상대(사업자번호) 유형 지정 — 한 번 정하면 과거·미래 계산서가 계속 자동 처리된다.
+ * '경비'·'무시' = 열린 계산서를 전부 무시(사유 포함), '대행정산' = 라벨만 (입금 연결로 확정).
+ */
+export async function setTaxPartyRule(input: {
+  bizNo: string;
+  nameRaw: string;
+  kind: "경비" | "대행정산" | "무시";
+}): Promise<{ ok: true; applied: number } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  const bizNo = input.bizNo.replace(/\D/g, "");
+  if (bizNo.length < 5) return { ok: false, error: "사업자번호가 올바르지 않습니다" };
+  await db.execute(sql`
+    INSERT INTO tax_party_rule (biz_no, name_raw, kind)
+    VALUES (${bizNo}, ${input.nameRaw}, ${input.kind})
+    ON CONFLICT (biz_no) DO UPDATE SET kind = EXCLUDED.kind, name_raw = EXCLUDED.name_raw, updated_at = now()
+  `);
+  let applied = 0;
+  if (input.kind !== "대행정산") {
+    const rows = await db.execute<{ id: number }>(sql`
+      UPDATE tax_invoice SET recon_status = '무시', recon_reason = ${input.kind}
+      WHERE is_active AND recon_status IN ('미대조', '제안') AND counterparty_biz_no = ${bizNo}
+      RETURNING id
+    `);
+    applied = rows.length;
+  }
+  revalidatePath("/finance/tax");
+  revalidatePath("/finance");
+  return { ok: true, applied };
+}
+
+/** 과거분(앱 도입 전) 일괄 처리 — 재업로드로 되살아난 것 포함 */
+export async function markPastTax(): Promise<{ ok: true; applied: number } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  const rows = await db.execute<{ id: number }>(sql`
+    UPDATE tax_invoice SET recon_status = '무시', recon_reason = '과거분'
+    WHERE is_active AND recon_status IN ('미대조', '제안') AND write_date < ${TAX_APP_START}::date
+    RETURNING id
+  `);
+  revalidatePath("/finance/tax");
+  return { ok: true, applied: rows.length };
+}
+
+/**
+ * 매출 계산서 ↔ 통장 입금 직접 연결 (대행 정산사의 실질 — "이 월합계 계산서 = 이 입금").
+ * 판매 개별 건과 억지로 잇지 않는다. 입금 대조 화면에서도 그 입금은 정리된 것으로 보인다.
+ */
+export async function confirmTaxToBank(
+  taxInvoiceId: number,
+  cashTxnId: number,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  const [inv] = await db.execute<{ id: number; direction: string; recon_status: string; total: number }>(sql`
+    SELECT id, direction, recon_status, total FROM tax_invoice WHERE id = ${taxInvoiceId} AND is_active
+  `);
+  if (!inv) return { ok: false, error: "세금계산서를 찾을 수 없습니다" };
+  if (inv.direction !== "매출") return { ok: false, error: "입금 연결은 매출 계산서만 가능합니다" };
+  if (inv.recon_status === "확정") return { ok: false, error: "이미 확정된 계산서입니다 — 먼저 되돌려 주세요" };
+  const [dep] = await db.execute<{ id: number; in_amount: number }>(sql`
+    SELECT id, in_amount FROM cash_txn
+    WHERE id = ${cashTxnId} AND source = '통장' AND is_active AND in_amount > 0
+  `);
+  if (!dep) return { ok: false, error: "입금 줄을 찾을 수 없습니다" };
+  const dupe = await db.execute<{ id: number }>(sql`
+    SELECT id FROM recon_match WHERE ref_table = 'cash_txn' AND ref_id = ${cashTxnId}
+      AND kind = '매출계산서' LIMIT 1
+  `);
+  if (dupe.length > 0) return { ok: false, error: "그 입금은 이미 다른 계산서와 이어져 있습니다" };
+
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`
+      INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
+      VALUES ('매출계산서', 'tax_invoice', ${taxInvoiceId}, 'cash_txn', ${cashTxnId}, ${inv.total}, '확정', '수동', ${g.uid}, now())
+    `);
+    await tx.execute(sql`UPDATE tax_invoice SET recon_status = '확정', recon_reason = '입금연결' WHERE id = ${taxInvoiceId}`);
+    await tx.execute(sql`UPDATE cash_txn SET recon_status = '확정' WHERE id = ${cashTxnId}`);
+  });
+  revalidatePath("/finance/tax");
+  revalidatePath("/finance/deposits");
   return { ok: true };
 }

@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession } from "@/lib/auth";
-import { taxReconData } from "@/lib/recon-data";
+import { taxReconV2 } from "@/lib/tax-recon";
 import { TaxRecon } from "./tax-ui";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +19,7 @@ export default async function FinanceTaxPage() {
   if (!session) redirect("/login");
   if (session.role !== "owner") redirect("/");
 
-  const data = await taxReconData();
+  const data = await taxReconV2();
 
   // 최근 확정 — 잘못 이었으면 여기서 되돌린다
   const recent = await db.execute<{ id: number; direction: string; d: string; name: string; total: number; refs: number }>(sql`
@@ -40,8 +40,8 @@ export default async function FinanceTaxPage() {
         </Link>
       </header>
       <p className="text-sm text-slate-500">
-        홈택스 세금계산서가 앱의 매입·판매 기록과 같은 건인지 잇는 화면입니다. 확실한 것만 자동으로
-        잇고, 애매한 것은 사장님이 정하십니다.
+        상대별로 묶어 보여줍니다 — 유형(경비·정산사·거래처)을 한 번 정하면 그 상대는 계속 자동으로
+        처리됩니다. 매출 계산서는 판매 기록뿐 아니라 <strong>통장 입금과 직접</strong> 이을 수 있습니다.
       </p>
       <TaxRecon
         data={data}
