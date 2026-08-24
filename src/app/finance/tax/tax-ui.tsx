@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { TaxReconData, TaxSuggestion } from "@/lib/recon-data";
-import { autoConfirmTax, confirmTaxMatch, ignoreTaxInvoice, undoTaxMatch } from "@/lib/recon";
+import { autoConfirmTax, confirmTaxMatch, ignoreTaxInvoice, linkCounterpartyToSupplier, undoTaxMatch } from "@/lib/recon";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
 const bizFmt = (d: string) => (d.length === 10 ? `${d.slice(0, 3)}-${d.slice(3, 5)}-${d.slice(5)}` : d);
@@ -23,6 +23,8 @@ export function TaxRecon({ data, recent }: { data: TaxReconData; recent: RecentR
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** 계산서마다 「이 상호 = 이 거래처」 직접 지정 (이름이 아예 다를 때) */
+  const [supPick, setSupPick] = useState<Record<number, string>>({});
 
   const act = (fn: () => Promise<{ ok: boolean } & Record<string, unknown>>, okMsg: (r: never) => string) =>
     start(async () => {
@@ -174,6 +176,38 @@ export function TaxRecon({ data, recent }: { data: TaxReconData; recent: RecentR
               <p className="mt-2 text-xs text-slate-400">
                 이을 만한 앱 기록을 못 찾았습니다 — 앱에 안 적힌 거래(광고비·수수료 등)면 무시를 누르세요
               </p>
+            )}
+
+            {/* ⭐ 앱 거래처 이름이 아예 달라 못 찾을 때 — 직접 지정하면 기억한다 (2026-08-25) */}
+            {!s.auto && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <select
+                  value={supPick[s.inv.id] ?? ""}
+                  onChange={(e) => setSupPick((p) => ({ ...p, [s.inv.id]: e.target.value }))}
+                  className="rounded-lg border border-slate-300 px-2 py-1.5 text-xs"
+                >
+                  <option value="">앱 거래처 이름이 다르면 고르기…</option>
+                  {data.supplierOptions.map((sp) => (
+                    <option key={sp.id} value={sp.id}>
+                      {sp.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={pending || !supPick[s.inv.id]}
+                  onClick={() =>
+                    act(
+                      () => linkCounterpartyToSupplier(s.inv.id, Number(supPick[s.inv.id])),
+                      (r: { learned: string; warning: string | null }) =>
+                        `「${s.inv.counterName}」 = ${r.learned} 거래처로 기억했습니다 — 후보를 다시 찾았습니다.${r.warning ? ` ⚠️ ${r.warning}` : ""}`,
+                    )
+                  }
+                  className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium disabled:opacity-40"
+                >
+                  이 거래처로 기억
+                </button>
+              </div>
             )}
 
             <div className="mt-2 flex items-center justify-between">

@@ -132,6 +132,50 @@ export async function confirmTaxMatch(input: {
   return { ok: true, warning };
 }
 
+/**
+ * ⭐ 거래처 직접 지정 (사장님 제보 2026-08-25 — "앱 거래처 이름이 달라 매칭이 안 됨").
+ *    계산서 상호와 앱 거래처 이름이 아예 달라도, 한 번 지정하면
+ *    사업자번호(매입)·별명을 기억해 다음부터 후보·자동확정에 잡힌다.
+ */
+export async function linkCounterpartyToSupplier(
+  taxInvoiceId: number,
+  supplierId: number,
+): Promise<{ ok: true; learned: string; warning: string | null } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  const [inv] = await db.execute<{ id: number; direction: string; counterparty_biz_no: string; counterparty_name: string }>(sql`
+    SELECT id, direction, counterparty_biz_no, counterparty_name FROM tax_invoice
+    WHERE id = ${taxInvoiceId} AND is_active
+  `);
+  if (!inv) return { ok: false, error: "세금계산서를 찾을 수 없습니다" };
+  const [sup] = await db.execute<{ id: number; name: string; biz_no: string | null }>(sql`
+    SELECT id, name, biz_no FROM supplier WHERE id = ${supplierId} AND is_active
+  `);
+  if (!sup) return { ok: false, error: "거래처를 찾을 수 없습니다" };
+
+  let warning: string | null = null;
+  if (inv.direction === "매입" && !sup.biz_no) {
+    try {
+      await db.execute(sql`
+        UPDATE supplier SET biz_no = ${inv.counterparty_biz_no} WHERE id = ${sup.id} AND biz_no IS NULL
+      `);
+    } catch {
+      warning = "그 사업자번호는 이미 다른 거래처에 기억되어 있어 별명만 기억했습니다";
+    }
+  }
+  const aliasKey = normName(inv.counterparty_name);
+  if (aliasKey.length >= 2) {
+    await db.execute(sql`
+      INSERT INTO party_alias (alias_key, alias_raw, party_key, party_label)
+      VALUES (${aliasKey}, ${inv.counterparty_name}, ${"S:" + sup.name}, ${"거래처 " + sup.name})
+      ON CONFLICT (alias_key) DO UPDATE SET party_key = EXCLUDED.party_key,
+        party_label = EXCLUDED.party_label, updated_at = now()
+    `);
+  }
+  revalidatePath("/finance/tax");
+  return { ok: true, learned: sup.name, warning };
+}
+
 /** 자동확정 가능한 것(정확 일치·유일·사업자번호 확실)을 서버가 다시 계산해 한꺼번에 확정 */
 export async function autoConfirmTax(): Promise<{ ok: true; confirmed: number } | { ok: false; error: string }> {
   const g = await guard();

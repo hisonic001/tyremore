@@ -62,6 +62,8 @@ export interface TaxReconData {
   autoCount: number;
   doneCount: number;
   ignoredCount: number;
+  /** 거래처 직접 지정용 — 이름이 아예 달라 못 찾을 때 (사장님 제보 2026-08-25) */
+  supplierOptions: { id: number; name: string }[];
 }
 
 const won = (n: number) => n.toLocaleString("ko-KR");
@@ -230,7 +232,13 @@ export async function taxReconData(): Promise<TaxReconData> {
     }
   }
 
-  return { open, autoCount: open.filter((s) => s.auto).length, doneCount, ignoredCount };
+  return {
+    open,
+    autoCount: open.filter((s) => s.auto).length,
+    doneCount,
+    ignoredCount,
+    supplierOptions: suppliers.map((s) => ({ id: Number(s.id), name: s.name })),
+  };
 }
 
 /* ================================================================== */

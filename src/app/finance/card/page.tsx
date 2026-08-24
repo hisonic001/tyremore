@@ -81,6 +81,19 @@ export default async function FinanceCardPage({
     ORDER BY q.total_amount DESC LIMIT 600
   `);
 
+  // 건별 승인 (세부내역이 올라온 달) — 차이 난 날 펼침에 그날 승인 목록까지 (2026-08-25)
+  const monthTxns = await db.execute<{
+    d: string; t: string; card_co: string; approval_no: string; amount: number; is_cancel: boolean;
+  }>(sql`
+    SELECT to_char(approved_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') d,
+           to_char(approved_at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') t,
+           card_co, approval_no, amount, is_cancel
+    FROM card_txn WHERE is_active
+      AND (approved_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
+      AND (approved_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date
+    ORDER BY approved_at LIMIT 800
+  `);
+
   // ③ 카드사별 월 정산 (여신협회 입금내역)
   const deposits = await db.execute<{ card_co: string; sale_amount: number; vat_agency: number; deposit_amount: number; sale_cnt: number }>(sql`
     SELECT card_co, sale_amount, vat_agency, deposit_amount, sale_cnt
@@ -113,6 +126,12 @@ export default async function FinanceCardPage({
   const sumAssoc = dayRows.reduce((s, [, r]) => s + r.assoc, 0);
   const sumApp = dayRows.reduce((s, [, r]) => s + r.app, 0);
   const diffDays = dayRows.filter(([, r]) => r.assoc !== r.app).length;
+  const txnsByDay = new Map<string, { t: string; card_co: string; approval_no: string; amount: number; is_cancel: boolean }[]>();
+  for (const x of monthTxns) {
+    const arr = txnsByDay.get(x.d) ?? [];
+    arr.push(x);
+    txnsByDay.set(x.d, arr);
+  }
   const quotesByDay = new Map<string, { quote_no: string; total: number; pm: string | null; who: string | null }[]>();
   for (const q of monthQuotes) {
     const arr = quotesByDay.get(q.d) ?? [];
@@ -231,6 +250,9 @@ export default async function FinanceCardPage({
                        카드 연동형 → 여신협회 승인에 잡힘 / 앱·QR형 → 승인 없이 「속초정산」 입금만.
                        그래서 차이 난 날엔 그날 지역화폐 판매를 같이 보여준다. */
                     const localQ = dayQ.filter((q) => q.pm === "지역화폐");
+                    const dayTxns = txnsByDay.get(d) ?? [];
+                    // 그날 앱 카드·혼합 판매 금액 집합 — 여신 승인 중 짝 없는 금액에 표시
+                    const appAmts = new Set(dayQ.filter((q) => q.pm === "카드" || q.pm === "혼합").map((q) => Number(q.total)));
                     const suspects = dayQ.filter(
                       (q) => q.pm !== "카드" && q.pm !== "혼합" && Number(q.total) === Math.abs(diff),
                     );
@@ -274,6 +296,24 @@ export default async function FinanceCardPage({
                                   {q.quote_no} · {won(Number(q.total))}원 · 지역화폐{q.who ? ` · ${q.who}` : ""}
                                 </p>
                               ))}
+                            </div>
+                          )}
+                          {dayTxns.length > 0 && (
+                            <div className="mt-1 border-t border-slate-100 pt-1">
+                              <p className="text-slate-400">
+                                여신협회 건별 승인 {dayTxns.length}건 — ● 표시는 그날 앱 카드 판매에 같은
+                                금액이 없는 승인(등록 누락·수단 착오 후보)
+                              </p>
+                              {dayTxns.slice(0, 25).map((x, i) => {
+                                const orphan = !x.is_cancel && x.amount > 0 && !appAmts.has(x.amount);
+                                return (
+                                  <p key={i} className={orphan ? "font-medium text-red-700" : "text-slate-500"}>
+                                    {orphan ? "● " : ""}
+                                    {x.t} · {x.card_co} · {won(x.amount)}원{x.is_cancel ? " (취소)" : ""}
+                                  </p>
+                                );
+                              })}
+                              {dayTxns.length > 25 && <p className="text-slate-400">… 외 {dayTxns.length - 25}건</p>}
                             </div>
                           )}
                         </div>

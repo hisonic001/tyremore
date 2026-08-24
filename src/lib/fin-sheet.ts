@@ -296,6 +296,7 @@ export type AnyFinParse =
   | ({ kind: "cash" } & FinParseResult)
   | ({ kind: "tax" } & TaxParseResult)
   | ({ kind: "cardday" } & CardDayParseResult)
+  | ({ kind: "cardtxn" } & CardTxnParseResult)
   | ({ kind: "carddeposit" } & CardDepositParseResult);
 
 /**
@@ -312,6 +313,10 @@ export function parseAnyFin(buf: Buffer, myBizNo: string | null): AnyFinParse {
       return { kind: "tax", ...parseHometaxSheet(wb.Sheets[name], rows, headText, myBizNo) };
     }
     // ERP 3단계 — 여신금융협회 카드매출 (실파일이 합계 형식)
+    // 건별 세부내역이 일별 요약보다 먼저 — 제목에 「세부내역」이 들어간다 (2026-08-25)
+    if (headText.includes("승인내역") && headText.includes("세부내역")) {
+      return { kind: "cardtxn", ...parseCardTxnSheet(wb.Sheets[name], rows) };
+    }
     if (headText.includes("일별승인내역")) {
       return { kind: "cardday", ...parseCardDaySheet(wb.Sheets[name], rows) };
     }
@@ -538,5 +543,73 @@ function parseCardDepositSheet(ws: XLSX.WorkSheet, rows: unknown[][]): CardDepos
     periodFrom: months[0] ? months[0] + "-01" : null,
     periodTo: months[months.length - 1] ? months[months.length - 1] + "-01" : null,
     sumTotal: out.reduce((s, r) => s + r.depositAmount, 0),
+  };
+}
+
+/* ================================================================== */
+/* 카드 매출 건별 승인 — 여신협회 「기간별 승인내역 - 세부내역」 (2026-08-25) */
+
+export interface NormalizedCardTxn {
+  /** KST "YYYY-MM-DD HH:mm:ss" */
+  approvedAt: string;
+  cardCo: string;
+  cardNoMasked: string | null;
+  approvalNo: string;
+  /** 취소는 음수 (파일 그대로) */
+  amount: number;
+  isCancel: boolean;
+  installment: string | null;
+}
+
+export interface CardTxnParseResult {
+  source: "카드매출승인";
+  formatName: string;
+  rows: NormalizedCardTxn[];
+  skipped: { line: number; reason: string }[];
+  rawCsv: string;
+  periodFrom: string | null;
+  periodTo: string | null;
+  sumTotal: number;
+}
+
+function parseCardTxnSheet(ws: XLSX.WorkSheet, rows: unknown[][]): CardTxnParseResult {
+  const h = findHeader(rows, ["거래일자", "승인번호", "승인금액", "구분"]);
+  if (!h) throw new Error("여신협회 세부 승인내역의 머리행을 찾지 못했습니다");
+  const out: NormalizedCardTxn[] = [];
+  const skipped: { line: number; reason: string }[] = [];
+  for (let i = h.at + 1; i < rows.length; i++) {
+    const r = rows[i];
+    const kind = String(cell(r, h.col, "구분") ?? "").trim();
+    if (kind !== "승인" && kind !== "취소") continue; // 위 요약·아래 합계 줄
+    const date = toKstDateTime(cell(r, h.col, "거래일자"))?.slice(0, 10) ?? null;
+    const approvalNo = String(cell(r, h.col, "승인번호") ?? "").trim();
+    const amount = toWon(cell(r, h.col, "승인금액"));
+    if (!date || !approvalNo || amount === null) {
+      skipped.push({ line: i + 1, reason: "일자·승인번호·금액을 못 읽음" });
+      continue;
+    }
+    const time = String(cell(r, h.col, "거래시간") ?? "").trim();
+    const inst = String(cell(r, h.col, "할부기간") ?? "").trim();
+    out.push({
+      approvedAt: `${date} ${/^\d{1,2}:\d{2}(:\d{2})?$/.test(time) ? time.padStart(8, "0") : "00:00:00"}`,
+      cardCo: String(cell(r, h.col, "카드사") ?? "").trim() || "(카드사 미상)",
+      cardNoMasked: String(cell(r, h.col, "카드번호") ?? "").trim() || null,
+      approvalNo,
+      amount,
+      isCancel: kind === "취소",
+      installment: inst && inst !== "일시불" && inst !== "0 개월" && inst !== "00개월" ? inst : null,
+    });
+  }
+  if (out.length === 0) throw new Error("읽을 수 있는 승인 줄이 없습니다");
+  const dates = out.map((r) => r.approvedAt.slice(0, 10)).sort();
+  return {
+    source: "카드매출승인",
+    formatName: "여신협회 승인내역 세부(건별)",
+    rows: out,
+    skipped,
+    rawCsv: XLSX.utils.sheet_to_csv(ws),
+    periodFrom: dates[0] ?? null,
+    periodTo: dates[dates.length - 1] ?? null,
+    sumTotal: out.reduce((s, r) => s + r.amount, 0),
   };
 }

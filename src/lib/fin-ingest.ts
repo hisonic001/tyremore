@@ -13,7 +13,7 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import type { CardDayParseResult, CardDepositParseResult, FinParseResult, NormalizedCashTxn, TaxParseResult } from "./fin-sheet";
+import type { CardDayParseResult, CardDepositParseResult, CardTxnParseResult, FinParseResult, NormalizedCashTxn, TaxParseResult } from "./fin-sheet";
 
 export interface IngestResult {
   uploadId: number;
@@ -274,6 +274,81 @@ export async function ingestCardDeposits(
     `);
     newCount += ins.filter((r) => r.inserted).length;
   }
+  const dupCount = parsed.rows.length - newCount;
+  await db.execute(sql`UPDATE fin_upload SET new_count = ${newCount}, dup_count = ${dupCount} WHERE id = ${uploadId}`);
+  return { uploadId, rowCount: parsed.rows.length, newCount, dupCount };
+}
+
+/* ================================================================== */
+/* 카드 매출 건별 승인 반영 (2026-08-25)                                */
+
+/** 건별 승인 — card_txn 에 넣고, 일별 합계(card_day)도 세부에서 집계해 같이 얹는다 */
+export async function ingestCardTxns(
+  parsed: CardTxnParseResult,
+  userId: number | null,
+  fileName: string,
+): Promise<IngestResult> {
+  const [up] = await db.execute<{ id: number }>(sql`
+    INSERT INTO fin_upload (source, file_name, raw_text, row_count, period_from, period_to, created_by)
+    VALUES (${parsed.source}, ${fileName}, ${parsed.rawCsv.slice(0, 2_000_000)},
+            ${parsed.rows.length}, ${parsed.periodFrom}, ${parsed.periodTo}, ${userId})
+    RETURNING id
+  `);
+  const uploadId = Number(up.id);
+
+  let newCount = 0;
+  for (let i = 0; i < parsed.rows.length; i += 100) {
+    const chunk = parsed.rows.slice(i, i + 100);
+    const keys = chunk.map(
+      (r) => `카드승인|${r.cardCo}|${r.approvalNo}|${r.approvedAt}|${r.amount}`,
+    );
+    const values = chunk.map(
+      (r, j) => sql`(${r.approvedAt + "+09"}::timestamptz, ${r.cardCo}, ${r.cardNoMasked},
+        ${r.approvalNo}, ${r.amount}, ${r.isCancel}, ${r.installment}, ${keys[j]}, ${uploadId})`,
+    );
+    const ins = await db.execute<{ id: number }>(sql`
+      INSERT INTO card_txn (approved_at, card_co, card_no_masked, approval_no, amount,
+                            is_cancel, installment, dedup_key, upload_id)
+      VALUES ${sql.join(values, sql`, `)}
+      ON CONFLICT (dedup_key) DO NOTHING
+      RETURNING id
+    `);
+    newCount += ins.length;
+    await db.execute(sql`
+      UPDATE card_txn SET is_active = true
+      WHERE is_active = false AND dedup_key IN (${sql.join(keys.map((k) => sql`${k}`), sql`, `)})
+    `);
+  }
+
+  // 일별 합계도 세부에서 만든다 — 요약 파일 없이 세부만 올려도 대사 화면이 돈다
+  const byDay = new Map<string, { total: number; cnt: number; ok: number; okCnt: number; cx: number; cxCnt: number }>();
+  for (const r of parsed.rows) {
+    const day = r.approvedAt.slice(0, 10);
+    const a = byDay.get(day) ?? { total: 0, cnt: 0, ok: 0, okCnt: 0, cx: 0, cxCnt: 0 };
+    a.total += r.amount;
+    a.cnt++;
+    if (r.isCancel) {
+      a.cx += r.amount;
+      a.cxCnt++;
+    } else {
+      a.ok += r.amount;
+      a.okCnt++;
+    }
+    byDay.set(day, a);
+  }
+  for (const [day, a] of byDay) {
+    await db.execute(sql`
+      INSERT INTO card_day (day, total_amount, total_cnt, approved_amount, approved_cnt,
+                            cancelled_amount, cancelled_cnt, upload_id)
+      VALUES (${day}::date, ${a.total}, ${a.cnt}, ${a.ok}, ${a.okCnt}, ${a.cx}, ${a.cxCnt}, ${uploadId})
+      ON CONFLICT (day) DO UPDATE SET
+        total_amount = EXCLUDED.total_amount, total_cnt = EXCLUDED.total_cnt,
+        approved_amount = EXCLUDED.approved_amount, approved_cnt = EXCLUDED.approved_cnt,
+        cancelled_amount = EXCLUDED.cancelled_amount, cancelled_cnt = EXCLUDED.cancelled_cnt,
+        is_active = true, upload_id = EXCLUDED.upload_id
+    `);
+  }
+
   const dupCount = parsed.rows.length - newCount;
   await db.execute(sql`UPDATE fin_upload SET new_count = ${newCount}, dup_count = ${dupCount} WHERE id = ${uploadId}`);
   return { uploadId, rowCount: parsed.rows.length, newCount, dupCount };
