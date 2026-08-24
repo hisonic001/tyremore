@@ -287,6 +287,29 @@ export async function saveSale(
           await tx.insert(quotePayment).values(split.map((p) => ({ quoteId: q.id, method: p.method, amount: p.amount })));
         }
 
+        /**
+         * ⭐ 원가 스냅샷 (마진 리포트, 사장님 지시 2026-08-25) — 파는 순간의 매입원가를
+         *    줄에 박아 둔다: ①그 상품의 최근 매입 단가 ②없으면 상품의 매입가.
+         *    못 찾으면 빈 칸 — 거짓 원가보다 빈 칸이 낫다. margin = (판매가 − 원가) × 수량.
+         */
+        const costIds = [...new Set(lines.map((l) => l.productId).filter((v): v is number => !!v))].slice(0, 100);
+        const costMap = new Map<number, number>();
+        if (costIds.length > 0) {
+          const inCost = sql.join(costIds.map((i) => sql`${i}`), sql`, `);
+          const recent = await tx.execute<{ product_id: number; unit_cost: number }>(sql`
+            SELECT DISTINCT ON (pii.product_id) pii.product_id, pii.unit_cost
+            FROM purchase_invoice_item pii
+            JOIN purchase_invoice pi ON pi.id = pii.invoice_id
+            WHERE pi.status <> '취소' AND pii.unit_cost IS NOT NULL AND pii.product_id IN (${inCost})
+            ORDER BY pii.product_id, pii.id DESC
+          `);
+          for (const r of recent) costMap.set(Number(r.product_id), Number(r.unit_cost));
+          const base = await tx.execute<{ id: number; purchase_price: number }>(sql`
+            SELECT id, purchase_price FROM product WHERE purchase_price IS NOT NULL AND id IN (${inCost})
+          `);
+          for (const r of base) if (!costMap.has(Number(r.id))) costMap.set(Number(r.id), Number(r.purchase_price));
+        }
+
         await tx.insert(quoteItem).values(
           lines.map((l) => ({
             quoteId: q.id,
@@ -299,6 +322,11 @@ export async function saveSale(
             listPrice: l.listPrice ?? null,
             salesDiscountRate: l.salesRate !== null && l.salesRate !== undefined ? String(l.salesRate) : null,
             finalPrice: l.unitPrice,
+            purchaseCost: l.productId ? (costMap.get(l.productId) ?? null) : null,
+            margin:
+              l.productId && costMap.has(l.productId)
+                ? (l.unitPrice - costMap.get(l.productId)!) * l.qty
+                : null,
           })),
         );
 

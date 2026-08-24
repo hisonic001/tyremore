@@ -129,10 +129,26 @@ export async function ingestCashTxns(
   return { uploadId, rowCount: parsed.rows.length, newCount, dupCount };
 }
 
-/** 배치 취소 — 그 배치가 새로 넣었던 줄만 잠재운다 (겹친 줄은 다른 배치 소속이라 그대로) */
+/**
+ * 배치 취소 — 그 배치가 새로 넣었던 줄만 잠재운다 (겹친 줄은 다른 배치 소속이라 그대로).
+ * 🔴 원천별로 제 표를 잠재워야 한다 (2026-08-25 감사에서 발견 — 전에는 cash_txn 만
+ *    처리해서 세금계산서·카드매출 배치는 취소해도 줄이 살아 있었다).
+ */
 export async function cancelFinUploadBatch(uploadId: number): Promise<number> {
+  const [up] = await db.execute<{ source: string }>(sql`
+    SELECT source FROM fin_upload WHERE id = ${uploadId}
+  `);
+  if (!up) return 0;
+  const table =
+    up.source === "홈택스매출" || up.source === "홈택스매입"
+      ? sql.raw("tax_invoice")
+      : up.source === "카드매출승인"
+        ? sql.raw("card_day")
+        : up.source === "카드매출입금"
+          ? sql.raw("card_deposit")
+          : sql.raw("cash_txn");
   const rows = await db.execute<{ id: number }>(sql`
-    UPDATE cash_txn SET is_active = false WHERE upload_id = ${uploadId} AND is_active RETURNING id
+    UPDATE ${table} SET is_active = false WHERE upload_id = ${uploadId} AND is_active RETURNING id
   `);
   await db.execute(sql`UPDATE fin_upload SET status = '취소' WHERE id = ${uploadId}`);
   return rows.length;

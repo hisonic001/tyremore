@@ -74,6 +74,25 @@ export default async function FinancePage({
     LEFT JOIN LATERAL (SELECT SUM(amount)::int paid FROM receivable_payment x WHERE x.quote_id = q.id) rp ON true
     WHERE q.status = '성사' AND q.payment_method = '외상' AND q.total_amount > COALESCE(rp.paid, 0)
   `);
+  /* ⭐ 자료 커버리지 (감사 개선 2026-08-25) — 원천별 마지막 날짜.
+   *    "이 달 손익에 무엇이 빠졌나"를 모든 달에서 정직하게 보여준다. */
+  const [cov] = await db.execute<{
+    card_last: string | null; dep_last: string | null; buy_first: string | null;
+  }>(sql`
+    SELECT (SELECT max((occurred_at AT TIME ZONE 'Asia/Seoul')::date)::text FROM cash_txn WHERE source = '법인카드' AND is_active) card_last,
+           (SELECT max(month) FROM card_deposit WHERE is_active) dep_last,
+           (SELECT min(COALESCE(issued_at, to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')))
+              FROM purchase_invoice WHERE status <> '취소') buy_first
+  `);
+  const assocMonth = await db.execute<{ s: string }>(sql`
+    SELECT COALESCE(SUM(total_amount), 0)::bigint s FROM card_day
+    WHERE is_active AND day >= ${start}::date AND day < ${nextStart}::date
+  `);
+  const avgRateRows = await db.execute<{ r: string | null }>(sql`
+    SELECT (SUM(sale_amount - vat_agency - deposit_amount)::numeric / NULLIF(SUM(sale_amount), 0))::text r
+    FROM card_deposit WHERE is_active
+  `);
+
   // ⭐ 미지급 잔액 (ERP ⑦, 2026-08-25) — 매입 인보이스 − 지급 합
   const payableRows = await db.execute<{ s: string }>(sql`
     SELECT COALESCE(SUM(pi.total - COALESCE(pp.paid, 0)), 0)::bigint s
@@ -152,7 +171,30 @@ export default async function FinancePage({
   const gCardOut = Number(card?.out_sum ?? 0);
   const gFee = Number(cardFeeRows[0].fee);
   const gBankExp = Number(bankExp[0].s);
-  const gSpent = gBought + gCardOut + gFee + gBankExp;
+  /* 정산 자료가 없는 달은 카드 수수료를 평균 요율로 추정한다 (감사 개선 2026-08-25 —
+     8월처럼 정산이 아직 안 나온 달에 수수료 0원으로 두면 손익이 후해 보인다) */
+  const gAssocMonth = Number(assocMonth[0].s);
+  const feeRate = avgRateRows[0].r ? Number(avgRateRows[0].r) : null;
+  const feeEstimated = gFee === 0 && gAssocMonth > 0 && feeRate ? Math.round(gAssocMonth * feeRate) : 0;
+  const gFeeShown = gFee > 0 ? gFee : feeEstimated;
+  const gSpent = gBought + gCardOut + gFeeShown + gBankExp;
+  /* 이 달 손익에서 빠져 있는 것 — 모든 달에 같은 규칙으로 */
+  const lastDay = new Date(new Date(nextStart + "T00:00:00").getTime() - 86400000).toISOString().slice(0, 10);
+  const endShown = ym === thisYm ? kstToday() : lastDay;
+  const covWarnings: string[] = [];
+  if (!cov.card_last || cov.card_last < start) {
+    covWarnings.push(
+      `법인카드 내역이 이 달에 없습니다 (마지막 자료 ${cov.card_last ?? "없음"}) — 카드로 쓴 돈이 0원으로 계산됩니다`,
+    );
+  } else if (cov.card_last < endShown) {
+    covWarnings.push(`법인카드 내역이 ${cov.card_last}까지만 올라와 있습니다`);
+  }
+  if (feeEstimated > 0 && feeRate) {
+    covWarnings.push(`카드 수수료는 정산 자료가 아직 없어 평균 요율(${(feeRate * 100).toFixed(2)}%)로 추정한 값입니다`);
+  }
+  if (gBought === 0 && cov.buy_first && start < cov.buy_first.slice(0, 8) + "01") {
+    covWarnings.push(`이 달 매입 기록이 없습니다 (앱 매입 기록은 ${cov.buy_first}부터) — 매출만 잡혀 남은 돈이 실제보다 커 보입니다`);
+  }
   const gRecv = Number(recvRows[0].s);
   const gTaxBuyOpen = Number(taxBuyOpenRows[0].s);
   const gPayable = Number(payableRows[0].s);
@@ -213,8 +255,8 @@ export default async function FinancePage({
             <span>{won(gCardOut)}원</span>
           </p>
           <p className="flex justify-between pl-3 text-xs text-slate-500">
-            <span>· 카드 수수료</span>
-            <span>{won(gFee)}원</span>
+            <span>· 카드 수수료{feeEstimated > 0 && " (추정)"}</span>
+            <span>{won(gFeeShown)}원</span>
           </p>
           <p className="flex justify-between pl-3 text-xs text-slate-500">
             <span>· 통장 경비 (임차료·인건비 등 분류된 것)</span>
@@ -227,6 +269,13 @@ export default async function FinancePage({
             </span>
           </p>
         </div>
+        {covWarnings.length > 0 && (
+          <div className="mt-3 space-y-0.5 rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800">
+            {covWarnings.map((w) => (
+              <p key={w}>⚠️ {w}</p>
+            ))}
+          </div>
+        )}
         <div className="tabular mt-3 space-y-0.5 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
           <p>받을 돈 (외상 잔액 전체): {won(gRecv)}원</p>
           <p>
@@ -278,6 +327,14 @@ export default async function FinancePage({
           </div>
         </section>
       )}
+
+      {/* ── 마진 리포트 바로가기 (2026-08-25) ── */}
+      <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+        <Link href="/reports/margin" className="flex items-center justify-between">
+          <span className="font-semibold">마진 리포트</span>
+          <span className="text-sm text-slate-500">품목·제조사별 남는 장사인가 →</span>
+        </Link>
+      </section>
 
       {/* ── 세금계산서 대조 바로가기 (2단계) ── */}
       <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
