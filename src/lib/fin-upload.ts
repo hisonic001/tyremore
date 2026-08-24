@@ -16,7 +16,7 @@ import { db } from "@/db";
 import { getSession, isOwner } from "@/lib/auth";
 import { getShopInfo } from "@/lib/shop";
 import { parseAnyFin } from "./fin-sheet";
-import { cancelFinUploadBatch, ingestCashTxns, ingestTaxInvoices } from "./fin-ingest";
+import { cancelFinUploadBatch, ingestCardDays, ingestCardDeposits, ingestCashTxns, ingestTaxInvoices } from "./fin-ingest";
 
 const MAX_BYTES = 8 * 1024 * 1024;
 
@@ -32,7 +32,7 @@ async function toBuffer(fd: FormData): Promise<Taken> {
 
 export interface FinPreview {
   /** cash = 통장·법인카드(계정 이름 필요), tax = 세금계산서(계정 이름 불필요) */
-  kind: "cash" | "tax";
+  kind: "cash" | "tax" | "cardday" | "carddeposit";
   source: string;
   formatName: string;
   rowCount: number;
@@ -81,6 +81,39 @@ export async function previewFinUpload(
             inAmount: r.direction === "매출" ? r.total : 0,
             outAmount: r.direction === "매입" ? r.total : 0,
           })),
+          labels: [],
+        },
+      };
+    }
+    if (p.kind === "cardday" || p.kind === "carddeposit") {
+      return {
+        ok: true,
+        preview: {
+          kind: p.kind,
+          source: p.source,
+          formatName: p.formatName,
+          rowCount: p.rows.length,
+          skippedCount: p.skipped.length,
+          skippedSample: p.skipped.slice(0, 5).map((s) => `${s.line}줄: ${s.reason}`),
+          periodFrom: p.periodFrom,
+          periodTo: p.periodTo,
+          sumIn: 0,
+          sumOut: 0,
+          sumTotal: p.sumTotal,
+          sample:
+            p.kind === "cardday"
+              ? p.rows.slice(0, 6).map((r) => ({
+                  when: r.date,
+                  desc: `승인 ${r.approvedCnt}건 · 취소 ${r.cancelledCnt}건`,
+                  inAmount: r.totalAmount,
+                  outAmount: 0,
+                }))
+              : p.rows.slice(0, 6).map((r) => ({
+                  when: r.month,
+                  desc: `${r.cardCo} · 매출 ${r.saleAmount.toLocaleString()}원`,
+                  inAmount: r.depositAmount,
+                  outAmount: 0,
+                })),
           labels: [],
         },
       };
@@ -136,6 +169,16 @@ export async function applyFinUpload(
       const r = await ingestTaxInvoices(p, session?.uid ?? null, t.name);
       revalidatePath("/finance");
       revalidatePath("/finance/tax");
+      return { ok: true, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount };
+    }
+
+    if (p.kind === "cardday" || p.kind === "carddeposit") {
+      const r =
+        p.kind === "cardday"
+          ? await ingestCardDays(p, session?.uid ?? null, t.name)
+          : await ingestCardDeposits(p, session?.uid ?? null, t.name);
+      revalidatePath("/finance");
+      revalidatePath("/finance/card");
       return { ok: true, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount };
     }
 

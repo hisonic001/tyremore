@@ -1105,3 +1105,47 @@ export const reconMatch = pgTable(
     index("idx_recon_ref").on(t.refTable, t.refId),
   ],
 );
+
+/* ============================================================
+ * 3-15. 돈 관리 — 카드 매출 (ERP 3단계, 2026-08-24)
+ * 🔴 여신금융협회 실파일이 합계 형식이라 표도 합계 단위다:
+ *    card_day 일별 승인·취소 합계 / card_deposit 월별·카드사별 정산.
+ * 실제 생성은 scripts/add-card-sales.ts. 재업로드는 덮어쓰기(최신이 정답).
+ * ========================================================== */
+export const cardDay = pgTable(
+  "card_day",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    day: date("day").notNull(),
+    totalAmount: integer("total_amount").notNull(),
+    totalCnt: integer("total_cnt").notNull().default(0),
+    approvedAmount: integer("approved_amount").notNull().default(0),
+    approvedCnt: integer("approved_cnt").notNull().default(0),
+    /** 파일 그대로 — 취소는 음수 */
+    cancelledAmount: integer("cancelled_amount").notNull().default(0),
+    cancelledCnt: integer("cancelled_cnt").notNull().default(0),
+    isActive: boolean("is_active").notNull().default(true),
+    uploadId: bigint("upload_id", { mode: "number" }).references(() => finUpload.id),
+    createdAt,
+  },
+  (t) => [uniqueIndex("card_day_day_key").on(t.day)],
+);
+
+export const cardDeposit = pgTable(
+  "card_deposit",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    /** 'YYYY-MM' (매출월) */
+    month: text("month").notNull(),
+    cardCo: text("card_co").notNull(),
+    saleCnt: integer("sale_cnt").notNull().default(0),
+    saleAmount: integer("sale_amount").notNull(),
+    /** 부가세 대리납부 — 수수료 = 매출 − 대리납부 − 입금 */
+    vatAgency: integer("vat_agency").notNull().default(0),
+    depositAmount: integer("deposit_amount").notNull(),
+    isActive: boolean("is_active").notNull().default(true),
+    uploadId: bigint("upload_id", { mode: "number" }).references(() => finUpload.id),
+    createdAt,
+  },
+  (t) => [uniqueIndex("card_deposit_month_card_co_key").on(t.month, t.cardCo)],
+);

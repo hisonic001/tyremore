@@ -168,6 +168,14 @@ export default async function FinancePage({
         </Link>
       </section>
 
+      {/* ── 카드 매출 대사 바로가기 (3단계) ── */}
+      <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+        <Link href="/finance/card" className="flex items-center justify-between">
+          <span className="font-semibold">카드 매출 대사</span>
+          <span className="text-sm text-slate-500">여신협회 승인 vs 앱 · 수수료 →</span>
+        </Link>
+      </section>
+
       {/* ── 계좌·카드별 ── */}
       {accounts.length > 0 && (
         <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">

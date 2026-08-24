@@ -292,7 +292,11 @@ export interface TaxParseResult {
   sumTotal: number;
 }
 
-export type AnyFinParse = ({ kind: "cash" } & FinParseResult) | ({ kind: "tax" } & TaxParseResult);
+export type AnyFinParse =
+  | ({ kind: "cash" } & FinParseResult)
+  | ({ kind: "tax" } & TaxParseResult)
+  | ({ kind: "cardday" } & CardDayParseResult)
+  | ({ kind: "carddeposit" } & CardDepositParseResult);
 
 /**
  * 파일 종류를 가리지 않는 입구 — 업로드 화면은 이것만 부른다.
@@ -306,6 +310,13 @@ export function parseAnyFin(buf: Buffer, myBizNo: string | null): AnyFinParse {
     const headText = rows.slice(0, 10).flat().map(normHead).join("|");
     if (headText.includes("세금계산서목록")) {
       return { kind: "tax", ...parseHometaxSheet(wb.Sheets[name], rows, headText, myBizNo) };
+    }
+    // ERP 3단계 — 여신금융협회 카드매출 (실파일이 합계 형식)
+    if (headText.includes("일별승인내역")) {
+      return { kind: "cardday", ...parseCardDaySheet(wb.Sheets[name], rows) };
+    }
+    if (headText.includes("월별입금내역")) {
+      return { kind: "carddeposit", ...parseCardDepositSheet(wb.Sheets[name], rows) };
     }
   }
   return { kind: "cash", ...parseFinFile(buf) };
@@ -402,5 +413,130 @@ function parseHometaxSheet(
     periodFrom: dates[0] ?? null,
     periodTo: dates[dates.length - 1] ?? null,
     sumTotal: out.reduce((s, r) => s + r.total, 0),
+  };
+}
+
+/* ================================================================== */
+/* ERP 3단계 — 여신금융협회 카드 매출 (2026-08-24)                       */
+/* 🔴 실파일 실측: 승인내역은 **일별 합계**, 입금내역은 **월별·카드사별 합계** */
+
+export interface NormalizedCardDay {
+  /** YYYY-MM-DD */
+  date: string;
+  totalAmount: number;
+  totalCnt: number;
+  approvedAmount: number;
+  approvedCnt: number;
+  /** 파일 그대로 — 취소는 음수 */
+  cancelledAmount: number;
+  cancelledCnt: number;
+}
+
+export interface CardDayParseResult {
+  source: "카드매출승인";
+  formatName: string;
+  rows: NormalizedCardDay[];
+  skipped: { line: number; reason: string }[];
+  rawCsv: string;
+  periodFrom: string | null;
+  periodTo: string | null;
+  sumTotal: number;
+}
+
+function parseCardDaySheet(ws: XLSX.WorkSheet, rows: unknown[][]): CardDayParseResult {
+  const h = findHeader(rows, ["거래일자", "승인소계", "취소소계"]);
+  if (!h) throw new Error("여신협회 승인내역의 머리행을 찾지 못했습니다");
+  const toInt = (v: unknown) => toWon(v) ?? 0;
+  const out: NormalizedCardDay[] = [];
+  const skipped: { line: number; reason: string }[] = [];
+  for (let i = h.at + 1; i < rows.length; i++) {
+    const r = rows[i];
+    const raw = String(cell(r, h.col, "거래일자") ?? "").trim();
+    if (raw === "") continue;
+    const date = toKstDateTime(raw)?.slice(0, 10) ?? null;
+    if (!date) {
+      if (!/합계|소계/.test(raw)) skipped.push({ line: i + 1, reason: `거래일자 「${raw}」를 못 읽음` });
+      continue;
+    }
+    out.push({
+      date,
+      totalAmount: toInt(cell(r, h.col, "거래합계")),
+      totalCnt: toInt(cell(r, h.col, "거래건수")),
+      approvedAmount: toInt(cell(r, h.col, "승인소계")),
+      approvedCnt: toInt(cell(r, h.col, "승인건수")),
+      cancelledAmount: toInt(cell(r, h.col, "취소소계")),
+      cancelledCnt: toInt(cell(r, h.col, "취소건수")),
+    });
+  }
+  if (out.length === 0) throw new Error("읽을 수 있는 날짜 줄이 없습니다");
+  const dates = out.map((r) => r.date).sort();
+  return {
+    source: "카드매출승인",
+    formatName: "여신협회 일별 승인내역",
+    rows: out,
+    skipped,
+    rawCsv: XLSX.utils.sheet_to_csv(ws),
+    periodFrom: dates[0] ?? null,
+    periodTo: dates[dates.length - 1] ?? null,
+    sumTotal: out.reduce((s, r) => s + r.totalAmount, 0),
+  };
+}
+
+export interface NormalizedCardDeposit {
+  /** YYYY-MM */
+  month: string;
+  cardCo: string;
+  saleCnt: number;
+  saleAmount: number;
+  vatAgency: number;
+  depositAmount: number;
+}
+
+export interface CardDepositParseResult {
+  source: "카드매출입금";
+  formatName: string;
+  rows: NormalizedCardDeposit[];
+  skipped: { line: number; reason: string }[];
+  rawCsv: string;
+  periodFrom: string | null;
+  periodTo: string | null;
+  sumTotal: number;
+}
+
+function parseCardDepositSheet(ws: XLSX.WorkSheet, rows: unknown[][]): CardDepositParseResult {
+  const h = findHeader(rows, ["월", "카드사", "입금합계"]);
+  if (!h) throw new Error("여신협회 입금내역의 머리행을 찾지 못했습니다");
+  const toInt = (v: unknown) => toWon(v) ?? 0;
+  const out: NormalizedCardDeposit[] = [];
+  const skipped: { line: number; reason: string }[] = [];
+  for (let i = h.at + 1; i < rows.length; i++) {
+    const r = rows[i];
+    const month = String(cell(r, h.col, "월") ?? "").trim();
+    const cardCo = String(cell(r, h.col, "카드사") ?? "").trim();
+    if (month === "" && cardCo === "") continue;
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      if (!/합계|소계/.test(month + cardCo)) skipped.push({ line: i + 1, reason: `월 「${month}」을 못 읽음` });
+      continue;
+    }
+    out.push({
+      month,
+      cardCo: cardCo || "(카드사 미상)",
+      saleCnt: toInt(cell(r, h.col, "매출건수")),
+      saleAmount: toInt(cell(r, h.col, "매출합계")),
+      vatAgency: toInt(cell(r, h.col, "부가세대리납부금액")),
+      depositAmount: toInt(cell(r, h.col, "입금합계")),
+    });
+  }
+  if (out.length === 0) throw new Error("읽을 수 있는 월 줄이 없습니다");
+  const months = out.map((r) => r.month).sort();
+  return {
+    source: "카드매출입금",
+    formatName: "여신협회 월별 입금내역",
+    rows: out,
+    skipped,
+    rawCsv: XLSX.utils.sheet_to_csv(ws),
+    periodFrom: months[0] ? months[0] + "-01" : null,
+    periodTo: months[months.length - 1] ? months[months.length - 1] + "-01" : null,
+    sumTotal: out.reduce((s, r) => s + r.depositAmount, 0),
   };
 }

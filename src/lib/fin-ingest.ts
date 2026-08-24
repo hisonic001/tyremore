@@ -13,7 +13,7 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import type { FinParseResult, NormalizedCashTxn, TaxParseResult } from "./fin-sheet";
+import type { CardDayParseResult, CardDepositParseResult, FinParseResult, NormalizedCashTxn, TaxParseResult } from "./fin-sheet";
 
 export interface IngestResult {
   uploadId: number;
@@ -153,5 +153,81 @@ export async function ingestTaxInvoices(
   await db.execute(sql`
     UPDATE fin_upload SET new_count = ${newCount}, dup_count = ${dupCount} WHERE id = ${uploadId}
   `);
+  return { uploadId, rowCount: parsed.rows.length, newCount, dupCount };
+}
+
+/* ================================================================== */
+/* ERP 3단계 — 여신협회 카드매출 반영 (2026-08-24)                       */
+/* 합계 자료라 「덮어쓰기」가 맞다 — 같은 날/월을 다시 올리면 최신 값이 정답 */
+
+export async function ingestCardDays(
+  parsed: CardDayParseResult,
+  userId: number | null,
+  fileName: string,
+): Promise<IngestResult> {
+  const [up] = await db.execute<{ id: number }>(sql`
+    INSERT INTO fin_upload (source, file_name, raw_text, row_count, period_from, period_to, created_by)
+    VALUES (${parsed.source}, ${fileName}, ${parsed.rawCsv.slice(0, 2_000_000)},
+            ${parsed.rows.length}, ${parsed.periodFrom}, ${parsed.periodTo}, ${userId})
+    RETURNING id
+  `);
+  const uploadId = Number(up.id);
+  let newCount = 0;
+  for (let i = 0; i < parsed.rows.length; i += 100) {
+    const chunk = parsed.rows.slice(i, i + 100);
+    const values = chunk.map(
+      (r) => sql`(${r.date}::date, ${r.totalAmount}, ${r.totalCnt}, ${r.approvedAmount},
+        ${r.approvedCnt}, ${r.cancelledAmount}, ${r.cancelledCnt}, ${uploadId})`,
+    );
+    const ins = await db.execute<{ inserted: boolean }>(sql`
+      INSERT INTO card_day (day, total_amount, total_cnt, approved_amount, approved_cnt,
+                            cancelled_amount, cancelled_cnt, upload_id)
+      VALUES ${sql.join(values, sql`, `)}
+      ON CONFLICT (day) DO UPDATE SET
+        total_amount = EXCLUDED.total_amount, total_cnt = EXCLUDED.total_cnt,
+        approved_amount = EXCLUDED.approved_amount, approved_cnt = EXCLUDED.approved_cnt,
+        cancelled_amount = EXCLUDED.cancelled_amount, cancelled_cnt = EXCLUDED.cancelled_cnt,
+        is_active = true, upload_id = EXCLUDED.upload_id
+      RETURNING (xmax = 0) AS inserted
+    `);
+    newCount += ins.filter((r) => r.inserted).length;
+  }
+  const dupCount = parsed.rows.length - newCount;
+  await db.execute(sql`UPDATE fin_upload SET new_count = ${newCount}, dup_count = ${dupCount} WHERE id = ${uploadId}`);
+  return { uploadId, rowCount: parsed.rows.length, newCount, dupCount };
+}
+
+export async function ingestCardDeposits(
+  parsed: CardDepositParseResult,
+  userId: number | null,
+  fileName: string,
+): Promise<IngestResult> {
+  const [up] = await db.execute<{ id: number }>(sql`
+    INSERT INTO fin_upload (source, file_name, raw_text, row_count, period_from, period_to, created_by)
+    VALUES (${parsed.source}, ${fileName}, ${parsed.rawCsv.slice(0, 2_000_000)},
+            ${parsed.rows.length}, ${parsed.periodFrom}, ${parsed.periodTo}, ${userId})
+    RETURNING id
+  `);
+  const uploadId = Number(up.id);
+  let newCount = 0;
+  for (let i = 0; i < parsed.rows.length; i += 100) {
+    const chunk = parsed.rows.slice(i, i + 100);
+    const values = chunk.map(
+      (r) => sql`(${r.month}, ${r.cardCo}, ${r.saleCnt}, ${r.saleAmount}, ${r.vatAgency},
+        ${r.depositAmount}, ${uploadId})`,
+    );
+    const ins = await db.execute<{ inserted: boolean }>(sql`
+      INSERT INTO card_deposit (month, card_co, sale_cnt, sale_amount, vat_agency, deposit_amount, upload_id)
+      VALUES ${sql.join(values, sql`, `)}
+      ON CONFLICT (month, card_co) DO UPDATE SET
+        sale_cnt = EXCLUDED.sale_cnt, sale_amount = EXCLUDED.sale_amount,
+        vat_agency = EXCLUDED.vat_agency, deposit_amount = EXCLUDED.deposit_amount,
+        is_active = true, upload_id = EXCLUDED.upload_id
+      RETURNING (xmax = 0) AS inserted
+    `);
+    newCount += ins.filter((r) => r.inserted).length;
+  }
+  const dupCount = parsed.rows.length - newCount;
+  await db.execute(sql`UPDATE fin_upload SET new_count = ${newCount}, dup_count = ${dupCount} WHERE id = ${uploadId}`);
   return { uploadId, rowCount: parsed.rows.length, newCount, dupCount };
 }
