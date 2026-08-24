@@ -397,3 +397,105 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
     ignoredCount: counts.find((c) => c.st === "무시")?.n ?? 0,
   };
 }
+
+/* ================================================================== */
+/* ERP ⑥ 경비 분류 (사장님 지시 2026-08-25)                             */
+
+/** 지출 분류 목록 — 화면 칩·검증·손익이 같은 목록을 쓴다 */
+export const EXPENSE_CATS = [
+  "매입대금",
+  "카드대금",
+  "내부이체",
+  "임차료",
+  "인건비",
+  "공과금",
+  "세금·보험",
+  "수수료",
+  "기타경비",
+] as const;
+
+/** 손익의 「쓴 돈」에 들어가는 분류 — 매입대금·카드대금·내부이체는 이중 계산이라 제외 */
+export const EXPENSE_IN_PL = ["임차료", "인건비", "공과금", "세금·보험", "수수료", "기타경비"] as const;
+
+/** 통장 「[적요] 내용」/카드 가맹점명 → 상대명 원문 (expense_rule 의 key) */
+export const payerKeyOf = (source: string, description: string): string =>
+  source === "통장" ? description.replace(/^\[[^\]]*\]\s*/, "").trim() : description.trim();
+
+export interface ExpenseRow {
+  id: number;
+  source: string;
+  label: string;
+  at: string;
+  amount: number;
+  payer: string;
+  description: string;
+  category: string | null;
+  /** 규칙 사전이 제안하는 분류 */
+  suggest: string | null;
+}
+
+export interface ExpenseData {
+  /** 분류 안 된 지출 (통장 출금 + 법인카드) — 금액 큰 것부터 */
+  unclassified: ExpenseRow[];
+  unclassifiedSum: number;
+  unclassifiedTotal: number;
+  /** 이 달 분류별 지출 합 */
+  sums: { category: string; amount: number; n: number }[];
+}
+
+export async function expenseData(ym: string): Promise<ExpenseData> {
+  const start = `${ym}-01`;
+  const [y, m] = ym.split("-").map(Number);
+  const t = y * 12 + (m - 1) + 1;
+  const nextStart = `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}-01`;
+  const inMonth = sql`is_active AND out_amount > 0
+    AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
+    AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date`;
+
+  const rules = await db.execute<{ key: string; category: string }>(sql`
+    SELECT key, category FROM expense_rule LIMIT 1000
+  `);
+  const ruleMap = new Map(rules.map((r) => [r.key, r.category]));
+
+  const rows = await db.execute<{
+    id: number; source: string; l: string; at: string; out_amount: number; description: string;
+  }>(sql`
+    SELECT id, source, account_label l,
+           to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at,
+           out_amount, description
+    FROM cash_txn
+    WHERE ${inMonth} AND category IS NULL
+    ORDER BY out_amount DESC, id DESC LIMIT 80
+  `);
+  const totalRow = await db.execute<{ s: string; n: number }>(sql`
+    SELECT COALESCE(SUM(out_amount), 0)::bigint s, count(*)::int n FROM cash_txn
+    WHERE ${inMonth} AND category IS NULL
+  `);
+  const sums = await db.execute<{ category: string; s: string; n: number }>(sql`
+    SELECT category, COALESCE(SUM(out_amount), 0)::bigint s, count(*)::int n
+    FROM cash_txn WHERE ${inMonth} AND category IS NOT NULL
+    GROUP BY 1 ORDER BY 2 DESC LIMIT 20
+  `);
+
+  const unclassified = rows.map((r) => {
+    const payer = payerKeyOf(r.source, r.description);
+    return {
+      id: Number(r.id),
+      source: r.source,
+      label: r.l,
+      at: r.at,
+      amount: Number(r.out_amount),
+      payer,
+      description: r.description,
+      category: null,
+      suggest: ruleMap.get(payer) ?? null,
+    };
+  });
+
+  return {
+    unclassified,
+    unclassifiedSum: unclassified.reduce((s, r) => s + r.amount, 0),
+    unclassifiedTotal: Number(totalRow[0]?.s ?? 0),
+    sums: sums.map((r) => ({ category: r.category, amount: Number(r.s), n: Number(r.n) })),
+  };
+}

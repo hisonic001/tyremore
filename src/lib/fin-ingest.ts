@@ -91,6 +91,24 @@ export async function ingestCashTxns(
     `);
   }
 
+  /**
+   * ⭐ 분류 자동 적용 (경비 분류, 2026-08-25) — 한 번 배운 상대(expense_rule)는
+   *    새로 올린 파일에도 바로 붙는다. 내부이체(우리 상호)도 자동.
+   */
+  await db.execute(sql`
+    UPDATE cash_txn c SET category = r.category
+    FROM expense_rule r
+    WHERE c.upload_id = ${uploadId} AND c.category IS NULL AND c.out_amount > 0
+      AND r.key = (CASE WHEN c.source = '통장'
+                    THEN trim(regexp_replace(c.description, '^\[[^\]]*\] *', ''))
+                    ELSE trim(c.description) END)
+  `);
+  await db.execute(sql`
+    UPDATE cash_txn SET category = '내부이체'
+    WHERE upload_id = ${uploadId} AND category IS NULL AND source = '통장'
+      AND description LIKE '%싸이오토모%'
+  `);
+
   const dupCount = parsed.rows.length - newCount;
   await db.execute(sql`
     UPDATE fin_upload SET new_count = ${newCount}, dup_count = ${dupCount} WHERE id = ${uploadId}

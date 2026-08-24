@@ -79,10 +79,16 @@ export default async function FinancePage({
     WHERE is_active AND direction = '매입' AND recon_status IN ('미대조', '제안')
       AND write_date >= ${start}::date AND write_date < ${nextStart}::date
   `);
-  // 계좌끼리 옮긴 돈(내부이체) — 우리 상호가 적힌 입출금은 수입도 지출도 아니다
-  const internal = await db.execute<{ o: string }>(sql`
-    SELECT COALESCE(SUM(out_amount), 0)::bigint o FROM cash_txn
-    WHERE ${inMonth} AND source = '통장' AND description LIKE '%싸이오토모%'
+  // ⭐ 경비 분류 (ERP ⑥, 2026-08-25) — 분류된 통장 경비는 「쓴 돈」에 들어간다.
+  //    내부이체(㈜싸이오토모티브 = 우리 법인 계좌끼리)는 분류가 '내부이체'로 자동 처리됨.
+  const bankExp = await db.execute<{ s: string }>(sql`
+    SELECT COALESCE(SUM(out_amount), 0)::bigint s FROM cash_txn
+    WHERE ${inMonth} AND source = '통장'
+      AND category IN ('임차료', '인건비', '공과금', '세금·보험', '수수료', '기타경비')
+  `);
+  const unclassOut = await db.execute<{ s: string }>(sql`
+    SELECT COALESCE(SUM(out_amount), 0)::bigint s FROM cash_txn
+    WHERE ${inMonth} AND source = '통장' AND out_amount > 0 AND category IS NULL
   `);
 
   // ① 월 요약 — 통장 들어옴/나감, 카드로 쓴 돈 (순차)
@@ -138,10 +144,11 @@ export default async function FinancePage({
   const gBought = Number(bought[0].s);
   const gCardOut = Number(card?.out_sum ?? 0);
   const gFee = Number(cardFeeRows[0].fee);
-  const gSpent = gBought + gCardOut + gFee;
+  const gBankExp = Number(bankExp[0].s);
+  const gSpent = gBought + gCardOut + gFee + gBankExp;
   const gRecv = Number(recvRows[0].s);
   const gTaxBuyOpen = Number(taxBuyOpenRows[0].s);
-  const bankOutExt = Math.max(0, Number(bank?.out_sum ?? 0) - Number(internal[0].o));
+  const gUnclassOut = Number(unclassOut[0].s);
 
   const noData = sums.length === 0 && uploads.length === 0;
 
@@ -201,6 +208,10 @@ export default async function FinancePage({
             <span>· 카드 수수료</span>
             <span>{won(gFee)}원</span>
           </p>
+          <p className="flex justify-between pl-3 text-xs text-slate-500">
+            <span>· 통장 경비 (임차료·인건비 등 분류된 것)</span>
+            <span>{won(gBankExp)}원</span>
+          </p>
           <p className="flex justify-between border-t border-slate-200 pt-1 text-base font-bold">
             <span>남은 돈</span>
             <span className={gEarned - gSpent >= 0 ? "text-emerald-700" : "text-red-600"}>
@@ -216,16 +227,17 @@ export default async function FinancePage({
               <Link href="/finance/tax" className="underline">세금계산서 대조</Link>에서 확인
             </p>
           )}
-          {bankOutExt > 0 && (
+          {gUnclassOut > 0 && (
             <p>
-              통장 출금(계좌끼리 옮긴 돈 제외): {won(bankOutExt)}원 — 매입 대금·카드값이 대부분이라
-              「쓴 돈」에 다시 넣지 않습니다 (이중 계산 방지)
+              분류 안 된 통장 출금: {won(gUnclassOut)}원 —{" "}
+              <Link href="/finance/expenses" className="underline">지출 분류</Link>에서 나누면 손익이
+              정확해집니다
             </p>
           )}
         </div>
         <p className="mt-1 text-[11px] text-slate-400">
-          임차료·인건비처럼 통장으로만 나가는 지출은 아직 「쓴 돈」에 없습니다 — 다음 단계(경비
-          분류)를 붙이면 정확해집니다
+          통장 경비는 「지출 분류」에서 나눈 것만 들어갑니다 — 매입대금·카드대금·내부이체(우리
+          법인 계좌끼리)는 이중 계산이라 뺍니다
         </p>
       </section>
 
@@ -277,6 +289,16 @@ export default async function FinancePage({
         <Link href="/finance/deposits" className="flex items-center justify-between">
           <span className="font-semibold">통장 입금 대조</span>
           <span className="text-sm text-slate-500">카드 정산·이체 판매·외상 수금 정리 →</span>
+        </Link>
+      </section>
+
+      {/* ── 지출 분류 바로가기 (⑥) ── */}
+      <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+        <Link href="/finance/expenses" className="flex items-center justify-between">
+          <span className="font-semibold">지출 분류</span>
+          <span className={`text-sm ${gUnclassOut > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
+            {gUnclassOut > 0 ? `분류 안 된 출금 ${won(gUnclassOut)}원 →` : "열어 보기 →"}
+          </span>
         </Link>
       </section>
 
