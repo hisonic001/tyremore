@@ -74,6 +74,13 @@ export default async function FinancePage({
     LEFT JOIN LATERAL (SELECT SUM(amount)::int paid FROM receivable_payment x WHERE x.quote_id = q.id) rp ON true
     WHERE q.status = '성사' AND q.payment_method = '외상' AND q.total_amount > COALESCE(rp.paid, 0)
   `);
+  // ⭐ 미지급 잔액 (ERP ⑦, 2026-08-25) — 매입 인보이스 − 지급 합
+  const payableRows = await db.execute<{ s: string }>(sql`
+    SELECT COALESCE(SUM(pi.total - COALESCE(pp.paid, 0)), 0)::bigint s
+    FROM purchase_invoice pi
+    LEFT JOIN LATERAL (SELECT SUM(amount)::int paid FROM purchase_payment x WHERE x.invoice_id = pi.id) pp ON true
+    WHERE pi.status <> '취소' AND pi.total IS NOT NULL AND pi.total > COALESCE(pp.paid, 0)
+  `);
   const taxBuyOpenRows = await db.execute<{ s: string }>(sql`
     SELECT COALESCE(SUM(total), 0)::bigint s FROM tax_invoice
     WHERE is_active AND direction = '매입' AND recon_status IN ('미대조', '제안')
@@ -148,6 +155,7 @@ export default async function FinancePage({
   const gSpent = gBought + gCardOut + gFee + gBankExp;
   const gRecv = Number(recvRows[0].s);
   const gTaxBuyOpen = Number(taxBuyOpenRows[0].s);
+  const gPayable = Number(payableRows[0].s);
   const gUnclassOut = Number(unclassOut[0].s);
 
   const noData = sums.length === 0 && uploads.length === 0;
@@ -221,6 +229,11 @@ export default async function FinancePage({
         </div>
         <div className="tabular mt-3 space-y-0.5 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
           <p>받을 돈 (외상 잔액 전체): {won(gRecv)}원</p>
+          <p>
+            줄 돈 (매입 미지급 잔액): {won(gPayable)}원 —{" "}
+            <Link href="/finance/payables" className="underline">미지급 장부</Link>에서 지급을 넣어
+            맞춰 주세요
+          </p>
           {gTaxBuyOpen > 0 && (
             <p>
               이 달 매입 세금계산서 중 대조 안 됨: {won(gTaxBuyOpen)}원 —{" "}
@@ -298,6 +311,16 @@ export default async function FinancePage({
           <span className="font-semibold">지출 분류</span>
           <span className={`text-sm ${gUnclassOut > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
             {gUnclassOut > 0 ? `분류 안 된 출금 ${won(gUnclassOut)}원 →` : "열어 보기 →"}
+          </span>
+        </Link>
+      </section>
+
+      {/* ── 미지급 장부 바로가기 (⑦) ── */}
+      <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+        <Link href="/finance/payables" className="flex items-center justify-between">
+          <span className="font-semibold">미지급 장부</span>
+          <span className={`text-sm ${gPayable > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
+            {gPayable > 0 ? `줄 돈 ${won(gPayable)}원 →` : "열어 보기 →"}
           </span>
         </Link>
       </section>

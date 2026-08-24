@@ -299,7 +299,7 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
            to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at,
            in_amount, description, account_label l
     FROM cash_txn
-    WHERE ${inMonth} AND recon_status = '미대조' AND NOT ${CARD_PAT}
+    WHERE ${inMonth} AND recon_status = '미대조' AND category IS NULL AND NOT ${CARD_PAT}
     ORDER BY occurred_at DESC, id DESC LIMIT 60
   `);
 
@@ -482,5 +482,100 @@ export async function expenseData(ym: string): Promise<ExpenseData> {
     unclassifiedSum: unclassified.reduce((s, r) => s + r.amount, 0),
     unclassifiedTotal: Number(totalRow[0]?.s ?? 0),
     sums: sums.map((r) => ({ category: r.category, amount: Number(r.s), n: Number(r.n) })),
+  };
+}
+
+/* ================================================================== */
+/* ERP ⑦ 미지급금 (사장님 지시 2026-08-25)                              */
+
+export interface PayableInvoice {
+  invoiceId: number;
+  invoiceNo: string;
+  d: string | null;
+  total: number;
+  paid: number;
+  remain: number;
+}
+
+export interface PayableSupplier {
+  supplier: string;
+  count: number;
+  total: number;
+  paid: number;
+  remain: number;
+  oldestD: string | null;
+  invoices: PayableInvoice[];
+}
+
+export interface PayablesData {
+  suppliers: PayableSupplier[];
+  totalRemain: number;
+  /** 최근 지급 — 잘못 넣었으면 지운다 */
+  recent: { id: number; supplier: string; invoiceNo: string; amount: number; method: string; paidOn: string }[];
+}
+
+/** 거래처별 미지급 장부 — 외상 장부(receivable-book)의 거울상 */
+export async function payablesData(): Promise<PayablesData> {
+  const rows = await db.execute<{
+    id: number; supplier: string; invoice_no: string; d: string | null; total: number; paid: string;
+  }>(sql`
+    SELECT pi.id, pi.supplier, pi.invoice_no,
+           COALESCE(pi.issued_at, to_char(pi.created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')) d,
+           pi.total,
+           COALESCE((SELECT SUM(pp.amount)::int FROM purchase_payment pp WHERE pp.invoice_id = pi.id), 0) paid
+    FROM purchase_invoice pi
+    WHERE pi.status <> '취소' AND pi.total IS NOT NULL AND pi.total > 0
+    ORDER BY d ASC, pi.id ASC LIMIT 400
+  `);
+
+  const bySup = new Map<string, PayableSupplier>();
+  for (const r of rows) {
+    const total = Number(r.total);
+    const paid = Number(r.paid);
+    const remain = total - paid;
+    let s = bySup.get(r.supplier);
+    if (!s) {
+      s = { supplier: r.supplier, count: 0, total: 0, paid: 0, remain: 0, oldestD: null, invoices: [] };
+      bySup.set(r.supplier, s);
+    }
+    s.count++;
+    s.total += total;
+    s.paid += paid;
+    s.remain += remain;
+    if (remain > 0) {
+      if (!s.oldestD) s.oldestD = r.d;
+      if (s.invoices.length < 30) {
+        s.invoices.push({
+          invoiceId: Number(r.id),
+          invoiceNo: r.invoice_no,
+          d: r.d,
+          total,
+          paid,
+          remain,
+        });
+      }
+    }
+  }
+  const suppliers = [...bySup.values()].filter((s) => s.remain > 0).sort((a, b) => b.remain - a.remain);
+
+  const recent = await db.execute<{
+    id: number; supplier: string; invoice_no: string; amount: number; method: string; paid_on: string;
+  }>(sql`
+    SELECT pp.id, pi.supplier, pi.invoice_no, pp.amount, pp.method, to_char(pp.paid_on, 'YYYY-MM-DD') paid_on
+    FROM purchase_payment pp JOIN purchase_invoice pi ON pi.id = pp.invoice_id
+    ORDER BY pp.id DESC LIMIT 15
+  `);
+
+  return {
+    suppliers,
+    totalRemain: suppliers.reduce((s, x) => s + x.remain, 0),
+    recent: recent.map((r) => ({
+      id: Number(r.id),
+      supplier: r.supplier,
+      invoiceNo: r.invoice_no,
+      amount: Number(r.amount),
+      method: r.method,
+      paidOn: r.paid_on,
+    })),
   };
 }

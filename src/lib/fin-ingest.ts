@@ -108,6 +108,12 @@ export async function ingestCashTxns(
     WHERE upload_id = ${uploadId} AND category IS NULL AND source = '통장'
       AND description LIKE '%싸이오토모%'
   `);
+  // 주주거래 — 조준호·이현숙(내부 관계자·주주, 사장님 확인 2026-08-25)의 입출금은 매출·경비가 아니다
+  await db.execute(sql`
+    UPDATE cash_txn SET category = '주주거래'
+    WHERE upload_id = ${uploadId} AND category IS NULL AND source = '통장'
+      AND (description LIKE '%조준호%' OR description LIKE '%이현숙%')
+  `);
 
   const dupCount = parsed.rows.length - newCount;
   await db.execute(sql`
