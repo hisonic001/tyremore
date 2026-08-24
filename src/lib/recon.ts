@@ -13,7 +13,7 @@ import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, isOwner } from "@/lib/auth";
-import { taxReconData } from "./recon-data";
+import { normName, taxReconData } from "./recon-data";
 
 export interface MatchRef {
   table: "purchase_invoice" | "quote";
@@ -41,9 +41,10 @@ export async function confirmTaxMatch(input: {
   if (refs.length === 0) return { ok: false, error: "이을 기록을 골라 주세요" };
 
   const [inv] = await db.execute<{
-    id: number; direction: string; recon_status: string; counterparty_biz_no: string; total: number;
+    id: number; direction: string; recon_status: string; counterparty_biz_no: string;
+    counterparty_name: string; total: number;
   }>(sql`
-    SELECT id, direction, recon_status, counterparty_biz_no, total FROM tax_invoice
+    SELECT id, direction, recon_status, counterparty_biz_no, counterparty_name, total FROM tax_invoice
     WHERE id = ${input.taxInvoiceId} AND is_active
   `);
   if (!inv) return { ok: false, error: "세금계산서를 찾을 수 없습니다" };
@@ -87,6 +88,43 @@ export async function confirmTaxMatch(input: {
     } catch {
       warning = "그 사업자번호는 이미 다른 거래처에 기억되어 있습니다";
     }
+  }
+
+  /**
+   * ⭐ 이름 별명 학습 (사장님 요청 2026-08-24) — 계산서 상호(미쉐린코리아(주))가
+   *    앱 이름(미쉐린)과 달라도, 한 번 이어주면 다음부터 확실한 상대로 알아본다.
+   */
+  try {
+    let partyKey: string | null = null;
+    let partyLabel = "";
+    if (inv.direction === "매입") {
+      const [pi] = await db.execute<{ supplier: string }>(sql`
+        SELECT supplier FROM purchase_invoice WHERE id = ${refs[0].id}
+      `);
+      if (pi?.supplier) {
+        partyKey = `S:${pi.supplier}`;
+        partyLabel = `거래처 ${pi.supplier}`;
+      }
+    } else {
+      const [q] = await db.execute<{ supplier_name: string | null }>(sql`
+        SELECT supplier_name FROM quote WHERE id = ${refs[0].id}
+      `);
+      if (q?.supplier_name) {
+        partyKey = `S:${q.supplier_name}`;
+        partyLabel = `거래처 ${q.supplier_name}`;
+      }
+    }
+    const aliasKey = normName(inv.counterparty_name);
+    if (partyKey && aliasKey.length >= 2) {
+      await db.execute(sql`
+        INSERT INTO party_alias (alias_key, alias_raw, party_key, party_label)
+        VALUES (${aliasKey}, ${inv.counterparty_name}, ${partyKey}, ${partyLabel})
+        ON CONFLICT (alias_key) DO UPDATE SET party_key = EXCLUDED.party_key,
+          party_label = EXCLUDED.party_label, updated_at = now()
+      `);
+    }
+  } catch {
+    // 별명 학습 실패는 확정 자체를 막지 않는다
   }
 
   revalidatePath("/finance/tax");

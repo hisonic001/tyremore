@@ -16,6 +16,9 @@ const norm = (s: string | null | undefined): string =>
     .replace(/㈜|\(주\)|주식회사|\s/g, "")
     .toLowerCase();
 
+/** ⭐ 별명 사전이 쓰는 이름 정규화 — 학습(recon·fin-deposits)과 조회가 같은 규칙 */
+export const normName = norm;
+
 export interface TaxRow {
   id: number;
   direction: "매출" | "매입";
@@ -91,6 +94,12 @@ export async function taxReconData(): Promise<TaxReconData> {
     SELECT id, name, biz_no FROM supplier WHERE is_active ORDER BY id LIMIT 200
   `);
 
+  // ⭐ 이름 별명 사전 (사장님 요청 2026-08-24) — 한 번 이어준 상호는 확실한 상대로 본다
+  const aliases = await db.execute<{ alias_key: string; party_key: string }>(sql`
+    SELECT alias_key, party_key FROM party_alias LIMIT 500
+  `);
+  const aliasMap = new Map(aliases.map((a) => [a.alias_key, a.party_key]));
+
   // ③ 매입 인보이스 (앱의 매입 기록)
   const purchases = await db.execute<{
     id: number; supplier: string; invoice_no: string; d: string | null; total: number | null;
@@ -138,8 +147,14 @@ export async function taxReconData(): Promise<TaxReconData> {
     if (inv.direction === "매입") {
       // 거래처 찾기 — ① 사업자번호 학습분 ② 이름 유사
       const byBiz = suppliers.find((s) => s.biz_no && s.biz_no.replace(/\D/g, "") === inv.counterBizNo);
+      // 별명 사전 — 사장님이 전에 이 상호를 어느 거래처로 이었는지
+      const aliasParty = aliasMap.get(norm(inv.counterName)) ?? null;
+      const byAlias = aliasParty?.startsWith("S:")
+        ? (suppliers.find((s) => s.name === aliasParty.slice(2)) ?? null)
+        : null;
       const byName =
         byBiz ??
+        byAlias ??
         suppliers.find((s) => {
           const a = norm(s.name);
           const b = norm(inv.counterName);
@@ -160,7 +175,7 @@ export async function taxReconData(): Promise<TaxReconData> {
 
       const exact = pool.filter((p) => Number(p.total) === inv.total && dayDiff(p.d, inv.writeDate) <= 7);
       // 자동확정은 사업자번호로 **확실히** 이어진 거래처일 때만 (이름 짐작만으로는 제안까지)
-      const auto = byBiz && exact.length === 1 ? toRef(exact[0]) : null;
+      const auto = (byBiz ?? byAlias) && exact.length === 1 ? toRef(exact[0]) : null;
 
       const monthPool = pool.filter((p) => sameMonth(p.d, inv.writeDate));
       const monthSum = monthPool.reduce((s, p) => s + Number(p.total), 0);
@@ -182,7 +197,10 @@ export async function taxReconData(): Promise<TaxReconData> {
       });
     } else {
       // 매출 — 상대 = 거래처 판매 (supplier_name)
+      const aliasSell = aliasMap.get(norm(inv.counterName)) ?? null;
+      const aliasName = aliasSell?.startsWith("S:") ? aliasSell.slice(2) : null;
       const pool = freeQuotes.filter((q) => {
+        if (aliasName && q.supplier_name === aliasName) return true;
         const a = norm(q.supplier_name);
         const b = norm(inv.counterName);
         return a.length >= 2 && (b.includes(a) || a.includes(b));
@@ -322,6 +340,12 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
   const { receivableBook } = await import("./receivable-book");
   const book = await receivableBook();
 
+  // ⭐ 별명 사전 — 입금자명을 한 번 이어주면 다음부터 바로 알아본다
+  const aliases2 = await db.execute<{ alias_key: string; party_key: string }>(sql`
+    SELECT alias_key, party_key FROM party_alias LIMIT 500
+  `);
+  const aliasMap = new Map(aliases2.map((a) => [a.alias_key, a.party_key]));
+
   const dayDiff3 = (a: string, b: string) => Math.abs((new Date(a).getTime() - new Date(b).getTime()) / 86400000) <= 3;
 
   const open: DepositSuggestion[] = deps.map((r) => {
@@ -337,11 +361,16 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
         amount: Number(q.total),
         date: q.d,
       }));
-    const parties = book.targets
-      .filter((tg) => {
+    const aliasParty = aliasMap.get(pn) ?? null;
+    const aliasTarget = aliasParty ? (book.targets.find((tg) => tg.key === aliasParty) ?? null) : null;
+    const parties = [
+      ...(aliasTarget ? [aliasTarget] : []),
+      ...book.targets.filter((tg) => {
+        if (aliasTarget && tg.key === aliasTarget.key) return false;
         const a = norm(tg.label.replace(/^거래처\s*/, ""));
         return pn.length >= 2 && a.length >= 2 && (a.includes(pn) || pn.includes(a));
-      })
+      }),
+    ]
       .slice(0, 3)
       .map((tg) => ({ key: tg.key, label: tg.label, remain: tg.remain, count: tg.count }));
     return {

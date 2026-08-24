@@ -1149,3 +1149,24 @@ export const cardDeposit = pgTable(
   },
   (t) => [uniqueIndex("card_deposit_month_card_co_key").on(t.month, t.cardCo)],
 );
+
+/* ============================================================
+ * 3-16. party_alias — 이름 별명 사전 (사장님 요청 2026-08-24)
+ * 계산서 상호·통장 입금자명이 앱 이름과 달라도, 한 번 이어주면 기억한다.
+ * 실제 생성은 scripts/add-party-alias.ts.
+ * ========================================================== */
+export const partyAlias = pgTable(
+  "party_alias",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    /** 정규화된 외부 이름 (공백·㈜ 등 제거, 소문자) — normName(recon-data) 규칙 */
+    aliasKey: text("alias_key").notNull(),
+    aliasRaw: text("alias_raw").notNull(),
+    /** 'S:미쉐린' (거래처) · 'C:123' (고객) */
+    partyKey: text("party_key").notNull(),
+    partyLabel: text("party_label").notNull(),
+    createdAt,
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("party_alias_alias_key_key").on(t.aliasKey)],
+);

@@ -13,6 +13,7 @@ import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, isOwner } from "@/lib/auth";
+import { normName } from "./recon-data";
 import { planSettlement } from "./receivable-plan";
 import { settleReceivables } from "./receivable";
 
@@ -21,6 +22,24 @@ async function guard(): Promise<{ ok: true; uid: number | null } | { ok: false; 
   const s = await getSession();
   return { ok: true, uid: s?.uid ?? null };
 }
+
+/** ⭐ 이름 별명 학습 (사장님 요청 2026-08-24) — 한 번 이어준 입금자명은 다음부터 바로 알아본다 */
+async function learnAlias(aliasRaw: string, partyKey: string, partyLabel: string): Promise<void> {
+  const key = normName(aliasRaw);
+  if (key.length < 2) return;
+  try {
+    await db.execute(sql`
+      INSERT INTO party_alias (alias_key, alias_raw, party_key, party_label)
+      VALUES (${key}, ${aliasRaw}, ${partyKey}, ${partyLabel})
+      ON CONFLICT (alias_key) DO UPDATE SET party_key = EXCLUDED.party_key,
+        party_label = EXCLUDED.party_label, updated_at = now()
+    `);
+  } catch {
+    // 학습 실패는 본 동작을 막지 않는다
+  }
+}
+
+const payerOf = (description: string): string => description.replace(/^\[[^\]]*\]\s*/, "").trim();
 
 async function getDeposit(id: number) {
   const [d] = await db.execute<{
@@ -83,6 +102,16 @@ export async function linkDepositToQuote(
     `);
     await tx.execute(sql`UPDATE cash_txn SET recon_status = '확정' WHERE id = ${cashTxnId}`);
   });
+
+  // 별명 학습 — 이 입금자명이 누구였는지 기억한다
+  const [qp] = await db.execute<{ supplier_name: string | null; customer_id: number | null; cname: string | null }>(sql`
+    SELECT q.supplier_name, q.customer_id, c.name cname
+    FROM quote q LEFT JOIN customer c ON c.id = q.customer_id WHERE q.id = ${quoteId}
+  `);
+  const payer = payerOf(dep.description);
+  if (qp?.supplier_name) await learnAlias(payer, `S:${qp.supplier_name}`, `거래처 ${qp.supplier_name}`);
+  else if (qp?.customer_id) await learnAlias(payer, `C:${qp.customer_id}`, qp.cname ?? `고객 ${qp.customer_id}`);
+
   revalidatePath("/finance/deposits");
   return { ok: true };
 }
@@ -143,6 +172,21 @@ export async function collectFromDeposit(
     `);
   }
   await db.execute(sql`UPDATE cash_txn SET recon_status = '확정' WHERE id = ${cashTxnId}`);
+
+  // 별명 학습 — 다음부터 이 입금자명이 오면 이 외상 대상을 맨 위에 보여준다
+  {
+    const payer = payerOf(dep.description);
+    let label = partyKey;
+    if (partyKey.startsWith("S:")) label = `거래처 ${partyKey.slice(2)}`;
+    else {
+      const [c] = await db.execute<{ name: string }>(sql`
+        SELECT name FROM customer WHERE id = ${Number(partyKey.slice(2))}
+      `);
+      label = c?.name ?? partyKey;
+    }
+    await learnAlias(payer, partyKey, label);
+  }
+
   revalidatePath("/finance/deposits");
   revalidatePath("/receivables");
   revalidatePath("/sales");
