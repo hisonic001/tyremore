@@ -66,7 +66,7 @@ export async function markCardSettlements(
   const rows = await db.execute<{ id: number }>(sql`
     UPDATE cash_txn SET recon_status = '확정', category = '카드정산'
     WHERE source = '통장' AND is_active AND in_amount > 0 AND recon_status = '미대조'
-      AND (description LIKE '%FB자금%' OR description LIKE '%매출표%')
+      AND (description LIKE '%FB자금%' OR description LIKE '%매출표%' OR description ~ '\] ?(KB|NH|하나|현|우|삼성|롯데|신한|비씨|BC|SHC)[0-9]')
       AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
       AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date
     RETURNING id

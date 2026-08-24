@@ -288,7 +288,8 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
   const inMonth = sql`source = '통장' AND is_active AND in_amount > 0
     AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
     AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date`;
-  const CARD_PAT = sql`(description LIKE '%FB자금%' OR description LIKE '%매출표%')`;
+  // 카드 정산 두 얼굴: 적요 FB자금·매출표 + 카드사 코드형 입금자명(KB1169…·NH1752…) — 실측 2026-08-24
+  const CARD_PAT = sql`(description LIKE '%FB자금%' OR description LIKE '%매출표%' OR description ~ '\] ?(KB|NH|하나|현|우|삼성|롯데|신한|비씨|BC|SHC)[0-9]')`;
 
   // ① 이 달 미대조 입금 (카드 정산 패턴은 따로 묶는다)
   const deps = await db.execute<{

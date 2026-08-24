@@ -82,7 +82,7 @@ export default async function FinanceCardPage({
     SELECT COALESCE(SUM(in_amount), 0)::bigint s, count(*)::int n
     FROM cash_txn
     WHERE source = '통장' AND is_active AND in_amount > 0
-      AND (description LIKE '%FB자금%' OR description LIKE '%매출표%')
+      AND (description LIKE '%FB자금%' OR description LIKE '%매출표%' OR description ~ '\] ?(KB|NH|하나|현|우|삼성|롯데|신한|비씨|BC|SHC)[0-9]')
       AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
       AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date
   `);
