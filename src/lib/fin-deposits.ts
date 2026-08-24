@@ -13,6 +13,7 @@ import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, isOwner } from "@/lib/auth";
+import { CARD_SETTLE_PATTERN_SQL } from "./expense-cats";
 import { normName } from "./recon-data";
 import { planSettlement } from "./receivable-plan";
 import { settleReceivables } from "./receivable";
@@ -66,7 +67,7 @@ export async function markCardSettlements(
   const rows = await db.execute<{ id: number }>(sql`
     UPDATE cash_txn SET recon_status = '확정', category = '카드정산'
     WHERE source = '통장' AND is_active AND in_amount > 0 AND recon_status = '미대조'
-      AND (description LIKE '%FB자금%' OR description LIKE '%매출표%' OR description ~ '\] ?(KB|NH|하나|현|우|삼성|롯데|신한|비씨|BC|SHC)[0-9]')
+      AND ${sql.raw(CARD_SETTLE_PATTERN_SQL)}
       AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
       AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date
     RETURNING id
@@ -155,11 +156,14 @@ export async function collectFromDeposit(
   );
   if (plan.plan.length === 0) return { ok: false, error: "배분할 금액이 없습니다" };
 
+  /* 🔴 감사 H5(2026-08-25): 입금이 외상 잔액보다 크면(합산·선입금) settleReceivables 가
+     잔액 초과로 거부했다 — 배분된 만큼만 넘긴다. 남는 돈은 leftover 로 안내 */
+  const planned = plan.plan.reduce((s, p) => s + p.amount, 0);
   const r = await settleReceivables({
     quoteIds: plan.plan.map((p) => p.quoteId),
     method: "계좌이체",
     paidOn: dep.date,
-    received: dep.in_amount,
+    received: Math.min(dep.in_amount, planned),
     memo: `통장 입금 대조 (${dep.l} ${dep.date})`,
   });
   if (!r.ok) return r;

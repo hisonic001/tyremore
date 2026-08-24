@@ -59,7 +59,8 @@ export async function previewFinUpload(
   if (!t.ok) return t;
   try {
     const shop = await getShopInfo();
-    const p = parseAnyFin(t.buf, shop.bizNo);
+    // 🔴 감사 H1(2026-08-25): fileName 을 안 넘겨 우리카드 청구서(연도 추론)가 무조건 실패했다
+    const p = parseAnyFin(t.buf, shop.bizNo, t.name);
     if (p.kind === "tax") {
       return {
         ok: true,
@@ -186,7 +187,7 @@ export async function applyFinUpload(
   if (!t.ok) return t;
   try {
     const shop = await getShopInfo();
-    const p = parseAnyFin(t.buf, shop.bizNo);
+    const p = parseAnyFin(t.buf, shop.bizNo, t.name);
     if (p.rows.length === 0) return { ok: false, error: "읽을 수 있는 줄이 없습니다 — 파일을 확인해 주세요" };
     const session = await getSession();
 

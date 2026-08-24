@@ -13,6 +13,7 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
+import { CARD_SETTLE_PATTERN_SQL } from "./expense-cats";
 import { normName } from "./recon-data";
 import type { CardDayParseResult, CardDepositParseResult, CardTxnParseResult, FinParseResult, NormalizedCashTxn, TaxParseResult } from "./fin-sheet";
 
@@ -110,17 +111,25 @@ export async function ingestCashTxns(
     WHERE upload_id = ${uploadId} AND category IS NULL AND source = '통장'
       AND description LIKE '%싸이오토모%'
   `);
-  // 지역화폐 정산 — 「속초정산」 = 속초 지역상품권(모바일) 정산 입금 (사장님 설명 2026-08-25).
-  //   매출은 앱 판매(지역화폐)에서 이미 세므로 여기서 또 세지 않는다 — 분류만 붙여 정리
+  /* 🔴 감사 P1(2026-08-25): 카드정산 자동 분류가 업로드 시점에 빠져 미분류 입금
+     205건 1.15억이 쌓였다 — 이제 여기서 바로 붙는다 (패턴 정본: expense-cats) */
+  await db.execute(sql`
+    UPDATE cash_txn SET category = '카드정산'
+    WHERE upload_id = ${uploadId} AND category IS NULL AND source = '통장'
+      AND in_amount > 0 AND ${sql.raw(CARD_SETTLE_PATTERN_SQL)}
+  `);
+  // 지역화폐 정산 — 「속초정산」 = 속초 지역상품권(모바일) 정산 **입금** (사장님 설명 2026-08-25)
   await db.execute(sql`
     UPDATE cash_txn SET category = '지역화폐정산'
     WHERE upload_id = ${uploadId} AND category IS NULL AND source = '통장'
-      AND description LIKE '%속초정산%'
+      AND in_amount > 0 AND description LIKE '%속초정산%'
   `);
-  // 주주거래 — 조준호·이현숙(내부 관계자·주주, 사장님 확인 2026-08-25)의 입출금은 매출·경비가 아니다
+  /* 주주거래 — 조준호·이현숙(내부 관계자·주주). 🔴 감사 M20: **출금만** 자동으로 —
+     입금까지 자동 잠그면 혹시 모를 동명 손님 입금이 대조 화면에서 사라진다 */
   await db.execute(sql`
     UPDATE cash_txn SET category = '주주거래'
     WHERE upload_id = ${uploadId} AND category IS NULL AND source = '통장'
+      AND out_amount > 0
       AND (description LIKE '%조준호%' OR description LIKE '%이현숙%')
   `);
 

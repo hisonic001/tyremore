@@ -206,7 +206,11 @@ function parseKbCard(rows: unknown[][], h: { at: number; col: Map<string, number
   for (let i = h.at + 1; i < rows.length; i++) {
     const r = rows[i];
     const when = toKstDateTime(cell(r, h.col, "거래일"));
-    if (!when) continue; // 확인서에는 구역 제목·빈 줄이 많다 — 날짜 없는 줄은 자료가 아니다
+    if (!when) {
+      // 🔴 감사 M12: 승인번호가 있는데 날짜를 못 읽으면 자료 줄이다 — 조용히 버리지 않는다
+      if (String(cell(r, h.col, "승인번호") ?? "").trim()) skipped.push({ line: i + 1, reason: "거래일을 못 읽음" });
+      continue; // 구역 제목·빈 줄
+    }
     const amt = toWon(cell(r, h.col, "매출금액"));
     if (amt === null) {
       skipped.push({ line: i + 1, reason: "매출금액을 못 읽음" });
@@ -597,12 +601,14 @@ function parseCardTxnSheet(ws: XLSX.WorkSheet, rows: unknown[][]): CardTxnParseR
     }
     const time = String(cell(r, h.col, "거래시간") ?? "").trim();
     const inst = String(cell(r, h.col, "할부기간") ?? "").trim();
+    // 🔴 감사 M11(2026-08-25): 취소가 양수로 오는 파일 대비 — 다른 파서와 같은 부호 규칙
+    const signed = kind === "취소" && amount > 0 ? -amount : amount;
     out.push({
       approvedAt: `${date} ${/^\d{1,2}:\d{2}(:\d{2})?$/.test(time) ? time.padStart(8, "0") : "00:00:00"}`,
       cardCo: String(cell(r, h.col, "카드사") ?? "").trim() || "(카드사 미상)",
       cardNoMasked: String(cell(r, h.col, "카드번호") ?? "").trim() || null,
       approvalNo,
-      amount,
+      amount: signed,
       isCancel: kind === "취소",
       installment: inst && inst !== "일시불" && inst !== "0 개월" && inst !== "00개월" ? inst : null,
     });
@@ -691,7 +697,11 @@ function parseWooriBill(rows: unknown[][], rawCsv: string, fileName?: string): F
     const r = rows[i];
     const dateRaw = String(cell(r, col, "이용일자") ?? "").trim();
     const dm = /^(\d{1,2})[./](\d{1,2})$/.exec(dateRaw);
-    if (!dm) continue; // 빈 줄·합계 줄
+    if (!dm) {
+      // 🔴 감사 M12: 값이 있는데 못 읽으면 기록한다 (빈 줄·합계는 제외)
+      if (dateRaw !== "" && !/합계|소계|총/.test(dateRaw)) skipped.push({ line: i + 1, reason: `이용일자 「${dateRaw}」를 못 읽음` });
+      continue;
+    }
     const mm = Number(dm[1]);
     const dd = Number(dm[2]);
     const year = mm > billM ? billY - 1 : billY; // 1월 청구서의 12월 이용분

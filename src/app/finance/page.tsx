@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession } from "@/lib/auth";
+import { EXPENSE_IN_PL } from "@/lib/expense-cats";
 import { cancelFinUpload } from "@/lib/fin-upload";
 
 export const dynamic = "force-dynamic";
@@ -110,7 +111,14 @@ export default async function FinancePage({
   const bankExp = await db.execute<{ s: string }>(sql`
     SELECT COALESCE(SUM(out_amount), 0)::bigint s FROM cash_txn
     WHERE ${inMonth} AND source = '통장'
-      AND category IN ('임차료', '인건비', '공과금', '세금·보험', '수수료', '기타경비')
+      AND category IN (${sql.join(EXPENSE_IN_PL.map((c) => sql`${c}`), sql`, `)})
+  `);
+  /* 🔴 감사 H2(2026-08-25): 법인카드 지출이 분류를 무시하고 전액 「쓴 돈」에 들어갔다 —
+     카드로 낸 매입대금이 매입과 두 번 계산됨. 통장과 같은 규칙(미분류 또는 경비 분류만). */
+  const cardOutRows = await db.execute<{ s: string }>(sql`
+    SELECT COALESCE(SUM(out_amount), 0)::bigint s FROM cash_txn
+    WHERE ${inMonth} AND source = '법인카드'
+      AND (category IS NULL OR category IN (${sql.join(EXPENSE_IN_PL.map((c) => sql`${c}`), sql`, `)}))
   `);
   const unclassOut = await db.execute<{ s: string }>(sql`
     SELECT COALESCE(SUM(out_amount), 0)::bigint s FROM cash_txn
@@ -168,7 +176,7 @@ export default async function FinancePage({
 
   const gEarned = Number(earned[0].s);
   const gBought = Number(bought[0].s);
-  const gCardOut = Number(card?.out_sum ?? 0);
+  const gCardOut = Number(cardOutRows[0].s);
   const gFee = Number(cardFeeRows[0].fee);
   const gBankExp = Number(bankExp[0].s);
   /* 정산 자료가 없는 달은 카드 수수료를 평균 요율로 추정한다 (감사 개선 2026-08-25 —
@@ -323,7 +331,7 @@ export default async function FinancePage({
           </div>
           <div className="rounded-2xl border border-slate-200 bg-white p-3 text-center">
             <p className="text-xs text-slate-500">카드로 쓴 돈</p>
-            <p className="tabular mt-1 font-bold text-red-600">{won(Number(card?.out_sum ?? 0))}원</p>
+            <p className="tabular mt-1 font-bold text-red-600">{won(gCardOut)}원</p>
           </div>
         </section>
       )}
