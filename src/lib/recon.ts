@@ -285,8 +285,9 @@ export async function markPastTax(): Promise<{ ok: true; applied: number } | { o
 }
 
 /**
- * 매출 계산서 ↔ 통장 입금 직접 연결 (대행 정산사의 실질 — "이 월합계 계산서 = 이 입금").
- * 판매 개별 건과 억지로 잇지 않는다. 입금 대조 화면에서도 그 입금은 정리된 것으로 보인다.
+ * 계산서 ↔ 통장 직접 연결 (사장님 통찰 2026-08-25 — "앱 내역보다 입출금 대조가 정확").
+ *   매출 계산서 ↔ 입금 (대행 정산사) · 매입 계산서 ↔ 출금 (지급).
+ *   매입-출금을 이으면 그 출금은 자동으로 '매입대금' 분류까지 된다.
  */
 export async function confirmTaxToBank(
   taxInvoiceId: number,
@@ -302,26 +303,39 @@ export async function confirmTaxToBank(
     FROM tax_invoice WHERE id = ${taxInvoiceId} AND is_active
   `);
   if (!inv) return { ok: false, error: "세금계산서를 찾을 수 없습니다" };
-  if (inv.direction !== "매출") return { ok: false, error: "입금 연결은 매출 계산서만 가능합니다" };
   if (inv.recon_status === "확정") return { ok: false, error: "이미 확정된 계산서입니다 — 먼저 되돌려 주세요" };
-  const [dep] = await db.execute<{ id: number; in_amount: number; description: string }>(sql`
-    SELECT id, in_amount, description FROM cash_txn
-    WHERE id = ${cashTxnId} AND source = '통장' AND is_active AND in_amount > 0
+  const [dep] = await db.execute<{ id: number; in_amount: number; out_amount: number; description: string }>(sql`
+    SELECT id, in_amount, out_amount, description FROM cash_txn
+    WHERE id = ${cashTxnId} AND source = '통장' AND is_active
   `);
-  if (!dep) return { ok: false, error: "입금 줄을 찾을 수 없습니다" };
+  if (!dep) return { ok: false, error: "통장 줄을 찾을 수 없습니다" };
+  if (inv.direction === "매출" && Number(dep.in_amount) <= 0)
+    return { ok: false, error: "매출 계산서는 입금과만 이을 수 있습니다" };
+  if (inv.direction === "매입" && Number(dep.out_amount) <= 0)
+    return { ok: false, error: "매입 계산서는 출금과만 이을 수 있습니다" };
   const dupe = await db.execute<{ id: number }>(sql`
     SELECT id FROM recon_match WHERE ref_table = 'cash_txn' AND ref_id = ${cashTxnId}
-      AND kind = '매출계산서' LIMIT 1
+      AND kind IN ('매출계산서', '매입계산서') LIMIT 1
   `);
-  if (dupe.length > 0) return { ok: false, error: "그 입금은 이미 다른 계산서와 이어져 있습니다" };
+  if (dupe.length > 0) return { ok: false, error: "그 통장 줄은 이미 다른 계산서와 이어져 있습니다" };
 
+  const kind = inv.direction === "매출" ? "매출계산서" : "매입계산서";
+  const reason = inv.direction === "매출" ? "입금연결" : "출금연결";
   await db.transaction(async (tx) => {
     await tx.execute(sql`
       INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
-      VALUES ('매출계산서', 'tax_invoice', ${taxInvoiceId}, 'cash_txn', ${cashTxnId}, ${inv.total}, '확정', '수동', ${g.uid}, now())
+      VALUES (${kind}, 'tax_invoice', ${taxInvoiceId}, 'cash_txn', ${cashTxnId}, ${inv.total}, '확정', '수동', ${g.uid}, now())
     `);
-    await tx.execute(sql`UPDATE tax_invoice SET recon_status = '확정', recon_reason = '입금연결' WHERE id = ${taxInvoiceId}`);
-    await tx.execute(sql`UPDATE cash_txn SET recon_status = '확정' WHERE id = ${cashTxnId}`);
+    await tx.execute(sql`UPDATE tax_invoice SET recon_status = '확정', recon_reason = ${reason} WHERE id = ${taxInvoiceId}`);
+    if (inv.direction === "매입") {
+      // 지급 출금과 이었으니 지출 분류도 '매입대금'으로 — 이중 계산 방지 규칙과 정합
+      await tx.execute(sql`
+        UPDATE cash_txn SET recon_status = '확정', category = COALESCE(category, '매입대금')
+        WHERE id = ${cashTxnId}
+      `);
+    } else {
+      await tx.execute(sql`UPDATE cash_txn SET recon_status = '확정' WHERE id = ${cashTxnId}`);
+    }
   });
 
   /**
@@ -334,7 +348,8 @@ export async function confirmTaxToBank(
     if (key.length >= 2) {
       await db.execute(sql`
         INSERT INTO party_alias (alias_key, alias_raw, party_key, party_label)
-        VALUES (${key}, ${payer}, ${"T:" + inv.counterparty_biz_no}, ${"정산입금 " + inv.counterparty_name})
+        VALUES (${key}, ${payer}, ${"T:" + inv.counterparty_biz_no},
+                ${(inv.direction === "매출" ? "정산입금 " : "지급출금 ") + inv.counterparty_name})
         ON CONFLICT (alias_key) DO UPDATE SET party_key = EXCLUDED.party_key,
           party_label = EXCLUDED.party_label, updated_at = now()
       `);

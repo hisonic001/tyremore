@@ -275,7 +275,9 @@ export function TaxRecon({ data, recent }: { data: TaxReconV2; recent: RecentRow
                   {/* 통장 입금 직접 연결 — 대행 정산사의 실질 */}
                   {s.bankCands.length > 0 && (
                     <div className="mt-1.5 rounded bg-sky-50 p-1.5 text-xs">
-                      <p className="text-sky-900">같은 금액의 통장 입금 — 정산 입금이면 이으세요</p>
+                      <p className="text-sky-900">
+                        같은 금액의 통장 {s.inv.direction === "매입" ? "출금 — 이 매입의 지급이면" : "입금 — 정산 입금이면"} 이으세요
+                      </p>
                       <ul className="mt-0.5 space-y-1">
                         {s.bankCands.map((b) => (
                           <li key={b.id} className="flex items-center justify-between gap-2">
@@ -286,7 +288,7 @@ export function TaxRecon({ data, recent }: { data: TaxReconV2; recent: RecentRow
                               onClick={() => act(() => confirmTaxToBank(s.inv.id, b.id), () => "입금과 이었습니다.")}
                               className="shrink-0 rounded bg-sky-700 px-2 py-0.5 font-semibold text-white disabled:opacity-40"
                             >
-                              이 입금과 잇기
+                              이 {s.inv.direction === "매입" ? "출금" : "입금"}과 잇기
                             </button>
                           </li>
                         ))}

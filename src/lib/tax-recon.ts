@@ -174,6 +174,19 @@ export async function taxReconV2(): Promise<TaxReconV2> {
   `);
   const freeDeposits = deposits.filter((x) => !linkedSet.has(`cash_txn|${x.id}`));
 
+  /* ⑦-2 통장 출금 후보 (매입 계산서 ↔ 출금 직접 연결) — 사장님 통찰 2026-08-25:
+   *   "앱 내역과 대조하는 것보다 입출금 내역에서 대조하는 것이 더 정확함" */
+  const withdrawals = await db.execute<{ id: number; date: string; description: string; out_amount: number; l: string }>(sql`
+    SELECT id, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') date,
+           description, out_amount, account_label l
+    FROM cash_txn
+    WHERE source = '통장' AND is_active AND out_amount > 0
+      AND (category IS NULL OR category = '매입대금')
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${TAX_APP_START}::date
+    ORDER BY id DESC LIMIT 400
+  `);
+  const freeWithdrawals = withdrawals.filter((x) => !linkedSet.has(`cash_txn|${x.id}`));
+
   const norm = normName;
   const suggestions: TaxSuggestion[] = [];
   for (const r of invs) {
@@ -225,12 +238,34 @@ export async function taxReconV2(): Promise<TaxReconV2> {
         .filter((p) => sameMonth(p.d, inv.writeDate) || Math.abs(Number(p.total) - inv.total) <= Math.max(1000, inv.total * 0.01))
         .slice(0, 6)
         .map(toRef);
+      /* 통장 출금 직접 연결 후보 — 지급은 계산서보다 늦을 수 있어 +90일(기억된 상대 +150일).
+       *   ★ = 기억된 지급처(내 출금 이름이 계산서 상호와 달라도 한 번 이으면 기억) */
+      const buyBank = freeWithdrawals
+        .map((x) => {
+          const payer = x.description.replace(/^\[[^\]]*\]\s*/, "").trim();
+          const known = aliasMap.get(norm(payer)) === `T:${inv.counterBizNo}`;
+          return { x, known };
+        })
+        .filter(({ x, known }) => {
+          if (Number(x.out_amount) !== inv.total) return false;
+          const t = new Date(x.date).getTime();
+          const w = new Date(inv.writeDate).getTime();
+          return t >= w - 7 * 86400000 && t <= w + (known ? 150 : 90) * 86400000;
+        })
+        .sort((a, b) => Number(b.known) - Number(a.known))
+        .slice(0, 4)
+        .map(({ x, known }) => ({
+          id: Number(x.id),
+          label: `${known ? "★ " : ""}${x.date.slice(5)} · ${x.description.slice(0, 24)} · −${won(Number(x.out_amount))}원 (${x.l})`,
+          amount: Number(x.out_amount),
+          date: x.date,
+        }));
       suggestions.push({
         inv,
         auto,
         bundle,
         candidates: auto ? [] : near,
-        bankCands: [],
+        bankCands: buyBank,
         supplierId: sup ? Number(sup.id) : null,
         supplierName: sup?.name ?? null,
         learnable: !!sup && !sup.biz_no,
