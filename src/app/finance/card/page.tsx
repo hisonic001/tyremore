@@ -71,6 +71,16 @@ export default async function FinanceCardPage({
     GROUP BY 1 LIMIT 40
   `);
 
+  /* ⭐ 차이 난 날 펼쳐보기 (사장님 승인 2026-08-25) — 그날 카드·혼합 판매와
+   *    「차이와 같은 금액」의 다른 수단 판매(수단 착오 후보)를 바로 보여준다 */
+  const monthQuotes = await db.execute<{ d: string; quote_no: string; total: number; pm: string | null; who: string | null }>(sql`
+    SELECT to_char(${D}, 'YYYY-MM-DD') d, q.quote_no, q.total_amount total, q.payment_method pm,
+           COALESCE(q.supplier_name, c.name) who
+    FROM quote q LEFT JOIN customer c ON c.id = q.customer_id
+    WHERE q.status = '성사' AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
+    ORDER BY q.total_amount DESC LIMIT 600
+  `);
+
   // ③ 카드사별 월 정산 (여신협회 입금내역)
   const deposits = await db.execute<{ card_co: string; sale_amount: number; vat_agency: number; deposit_amount: number; sale_cnt: number }>(sql`
     SELECT card_co, sale_amount, vat_agency, deposit_amount, sale_cnt
@@ -103,6 +113,12 @@ export default async function FinanceCardPage({
   const sumAssoc = dayRows.reduce((s, [, r]) => s + r.assoc, 0);
   const sumApp = dayRows.reduce((s, [, r]) => s + r.app, 0);
   const diffDays = dayRows.filter(([, r]) => r.assoc !== r.app).length;
+  const quotesByDay = new Map<string, { quote_no: string; total: number; pm: string | null; who: string | null }[]>();
+  for (const q of monthQuotes) {
+    const arr = quotesByDay.get(q.d) ?? [];
+    arr.push(q);
+    quotesByDay.set(q.d, arr);
+  }
   const sumDeposit = deposits.reduce((s, r) => s + Number(r.deposit_amount), 0);
   const sumSale = deposits.reduce((s, r) => s + Number(r.sale_amount), 0);
 
@@ -195,6 +211,61 @@ export default async function FinanceCardPage({
               </tfoot>
             </table>
           </section>
+
+          {/* ⭐ 차이 난 날 펼쳐보기 — 하루 1분 확인 (사장님 승인 2026-08-25) */}
+          {diffDays > 0 && (
+            <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+              <h2 className="font-semibold">차이 난 날 자세히 보기</h2>
+              <p className="mt-1 text-xs text-slate-400">
+                빨간 줄(차이와 같은 금액의 다른 수단 판매)이 있으면 그 판매의 결제수단이 잘못
+                적혔을 가능성이 큽니다 — 정비 내역의 「날짜·결제 고치기」로 바로잡으세요
+              </p>
+              <div className="mt-2 space-y-1">
+                {dayRows
+                  .filter(([, r]) => r.assoc !== r.app)
+                  .map(([d, r]) => {
+                    const diff = r.assoc - r.app;
+                    const dayQ = quotesByDay.get(d) ?? [];
+                    const cardQ = dayQ.filter((q) => q.pm === "카드" || q.pm === "혼합");
+                    const suspects = dayQ.filter(
+                      (q) => q.pm !== "카드" && q.pm !== "혼합" && Number(q.total) === Math.abs(diff),
+                    );
+                    return (
+                      <details key={d} className="rounded-lg border border-slate-200 p-2">
+                        <summary className="tabular cursor-pointer text-sm">
+                          {d.slice(5)} — 여신 {won(r.assoc)} vs 앱 {won(r.app)}{" "}
+                          <span className="font-semibold text-amber-700">
+                            ({diff > 0 ? "+" : ""}
+                            {won(diff)})
+                          </span>
+                          {suspects.length > 0 && (
+                            <span className="ml-1 text-xs font-semibold text-red-600">수단 착오 후보 있음</span>
+                          )}
+                        </summary>
+                        <div className="tabular mt-2 space-y-0.5 text-xs">
+                          {suspects.map((q) => (
+                            <p key={q.quote_no} className="rounded bg-red-50 px-1.5 py-0.5 text-red-700">
+                              {q.quote_no} · {won(Number(q.total))}원 · {q.pm}
+                              {q.who ? ` · ${q.who}` : ""} ← 차이와 같은 금액 — 실제는 카드가 아니었는지
+                            </p>
+                          ))}
+                          {cardQ.length > 0 ? (
+                            cardQ.map((q) => (
+                              <p key={q.quote_no} className="text-slate-600">
+                                {q.quote_no} · {won(Number(q.total))}원 · {q.pm}
+                                {q.who ? ` · ${q.who}` : ""}
+                              </p>
+                            ))
+                          ) : (
+                            <p className="text-slate-400">그날 앱에 카드 판매가 없습니다 — 통째 누락일 수 있습니다</p>
+                          )}
+                        </div>
+                      </details>
+                    );
+                  })}
+              </div>
+            </section>
+          )}
         </>
       )}
 

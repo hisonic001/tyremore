@@ -4,7 +4,7 @@
  *   은행·카드사에서 내려받은 엑셀을 읽어 「자금 움직임」 정규화 행으로 만든다.
  *   실파일 실측(2026-08-24, 통합자동화\회계 폴더) 기준:
  *     · 통장: 머리행 0행 — No·거래일시·적요·입금액·출금액·내용·잔액·거래점명·입금인코드
- *     · KB국민 「법인 거래 확인서」: 머리행 ~12행, 병합 셀 — 거래일·카드번호·승인번호·
+ *     · 신한카드 「법인 거래 확인서」: 머리행 ~12행, 병합 셀 — 거래일·카드번호·승인번호·
  *       상품구분·사업자번호·가맹점명·매출금액·공급가액·부가세
  *     · 우리카드 「거래내역(회원별)」: 머리행 ~10행 — 매출일자·이용카드·매출금액(원)·
  *       부가세(원)·매출종류·할부개월·가맹점명·사업자번호. 🔴 "2026년04월소계" 소계 행 끼어 있음
@@ -125,7 +125,7 @@ export function parseFinFile(buf: Buffer): FinParseResult {
     return parseBank(rows, bank, rawCsv);
   }
 
-  // ── KB국민 「법인 거래 확인서」
+  // ── 신한카드 「법인 거래 확인서」 (사장님 확인 2026-08-25 — 파일명 「신한카드들」)
   const kb = findHeader(rows, ["거래일", "승인번호", "가맹점명"]);
   if (kb) return parseKbCard(rows, kb, rawCsv);
 
@@ -222,7 +222,7 @@ function parseKbCard(rows: unknown[][], h: { at: number; col: Map<string, number
       payerCode: null,
     });
   }
-  return finish("법인카드", "KB국민 법인 거래 확인서", out, skipped, rawCsv);
+  return finish("법인카드", "신한카드 법인 거래 확인서", out, skipped, rawCsv);
 }
 
 function parseWooriCard(rows: unknown[][], h: { at: number; col: Map<string, number> }, rawCsv: string): FinParseResult {
