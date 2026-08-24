@@ -59,6 +59,8 @@ export function TaxRecon({
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [supPick, setSupPick] = useState<Record<string, string>>({});
+  /** 계산서별 통장 직접 검색어 (선입금·적립 등 금액이 다른 경우) */
+  const [bankQ, setBankQ] = useState<Record<number, string>>({});
 
   const act = (fn: () => Promise<{ ok: boolean } & Record<string, unknown>>, okMsg: (r: never) => string) =>
     start(async () => {
@@ -80,6 +82,18 @@ export function TaxRecon({
           learnSupplierId: s.learnable ? s.supplierId : null,
         }),
       (r: { warning: string | null }) => `이었습니다.${r.warning ? ` ⚠️ ${r.warning}` : ""}`,
+    );
+
+  /** 통장 잇기 공통 — 남은 금액·차액을 그대로 알려준다 */
+  const bankLink = (s: TaxSuggestion, cashId: number) =>
+    act(
+      () => confirmTaxToBank(s.inv.id, cashId),
+      (r: { remaining: number }) =>
+        r.remaining > 0
+          ? `이었습니다 — 이 통장 줄에 ${won(r.remaining)}원이 남았습니다 (적립·다른 계산서 몫이면 이어서 잇기)`
+          : r.remaining < 0
+            ? `이었습니다 — 계산서가 통장 금액보다 ${won(-r.remaining)}원 큽니다 (수수료 차감 등이면 정상)`
+            : "이었습니다 — 금액이 정확히 맞습니다.",
     );
 
   const kindBadge = (g: PartyGroup) =>
@@ -342,17 +356,7 @@ export function TaxRecon({
                             <button
                               type="button"
                               disabled={pending}
-                              onClick={() =>
-                                act(
-                                  () => confirmTaxToBank(s.inv.id, b.id),
-                                  (r: { remaining: number }) =>
-                                    r.remaining > 0
-                                      ? `이었습니다 — 이 통장 줄에 ${won(r.remaining)}원이 남았습니다 (다른 계산서 몫이면 이어서 잇기)`
-                                      : r.remaining < 0
-                                        ? `이었습니다 — 계산서가 통장 금액보다 ${won(-r.remaining)}원 큽니다 (수수료 차감 등이면 정상)`
-                                        : "이었습니다 — 금액이 정확히 맞습니다.",
-                                )
-                              }
+                              onClick={() => bankLink(s, b.id)}
                               className="shrink-0 rounded bg-sky-700 px-2 py-0.5 font-semibold text-white disabled:opacity-40"
                             >
                               이 {s.inv.direction === "매입" ? "출금" : "입금"}과 잇기
@@ -362,6 +366,49 @@ export function TaxRecon({
                       </ul>
                     </div>
                   )}
+
+                  {/* ⭐ 통장 직접 검색 (사장님 제보 2026-08-25) — 선입금·적립은 금액이 아예
+                        달라 후보에 안 뜬다. 거래처 찾듯 검색해서 잇는다 (부분 연결 = 적립 소진) */}
+                  <details className="mt-1.5">
+                    <summary className="cursor-pointer text-xs text-slate-500 underline">
+                      통장에서 직접 찾기 (선입금·적립 등 금액이 다른 경우)
+                    </summary>
+                    <input
+                      value={bankQ[s.inv.id] ?? ""}
+                      onChange={(e) => setBankQ((p) => ({ ...p, [s.inv.id]: e.target.value }))}
+                      placeholder="입금자·내용·금액으로 검색"
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-xs"
+                    />
+                    <ul className="mt-1 space-y-1 text-xs">
+                      {(() => {
+                        const q = (bankQ[s.inv.id] ?? "").trim();
+                        if (!q) return <li className="text-slate-400">검색어를 치면 통장 줄이 나옵니다</li>;
+                        const pool = s.inv.direction === "매출" ? data.bankPool.in : data.bankPool.out;
+                        const hits = pool
+                          .filter(
+                            (b) =>
+                              b.label.includes(q) ||
+                              b.payer.includes(q) ||
+                              String(b.remain).includes(q.replace(/,/g, "")),
+                          )
+                          .slice(0, 6);
+                        if (hits.length === 0) return <li className="text-slate-400">맞는 통장 줄이 없습니다</li>;
+                        return hits.map((b) => (
+                          <li key={b.id} className="flex items-center justify-between gap-2">
+                            <span className="min-w-0 truncate">{b.label}</span>
+                            <button
+                              type="button"
+                              disabled={pending}
+                              onClick={() => bankLink(s, b.id)}
+                              className="shrink-0 rounded border border-slate-300 bg-white px-2 py-0.5 font-medium"
+                            >
+                              잇기
+                            </button>
+                          </li>
+                        ));
+                      })()}
+                    </ul>
+                  </details>
 
                   <div className="mt-1 flex items-center justify-end gap-2 text-xs">
                     {s.inv.direction === "매입" && (

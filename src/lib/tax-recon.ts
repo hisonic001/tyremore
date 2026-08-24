@@ -75,8 +75,19 @@ export interface PartyGroup {
   items: TaxSuggestion[];
 }
 
+/** 통장 직접 검색용 줄 — 선입금·적립처럼 금액이 아예 다른 경우 사장님이 찾아 잇는다 */
+export interface BankPick {
+  id: number;
+  date: string;
+  payer: string;
+  label: string;
+  remain: number;
+}
+
 export interface TaxReconV2 {
   groups: PartyGroup[];
+  /** 직접 검색 풀 — in: 입금(매출 계산서용) · out: 출금(매입 계산서용). 남은 금액 있는 줄만 */
+  bankPool: { in: BankPick[]; out: BankPick[] };
   openCount: number;
   autoCount: number;
   doneCount: number;
@@ -203,6 +214,22 @@ export async function taxReconV2(): Promise<TaxReconV2> {
     .filter((x) => x.remain > 0);
 
   const norm = normName;
+
+  /* 직접 검색 풀 (사장님 제보 2026-08-25 — 선입금·적립은 금액이 아예 달라 후보에 못 뜬다.
+   *  거래처 검색하듯 통장 줄을 찾아 잇게 한다. 부분 연결 덕에 「적립 소진」도 그대로 담긴다) */
+  const payerOf = (desc: string) => desc.replace(/^\[[^\]]*\]\s*/, "").trim();
+  const toPick = (x: { id: number; date: string; description: string; l: string; remain: number }, sign: string): BankPick => ({
+    id: Number(x.id),
+    date: x.date,
+    payer: payerOf(x.description),
+    remain: x.remain,
+    label: `${x.date.slice(5)} · ${x.description.slice(0, 26)} · ${sign}${won(x.remain)}원 (${x.l})`,
+  });
+  const bankPool = {
+    in: freeDeposits.slice(0, 200).map((x) => toPick(x, "+")),
+    out: freeWithdrawals.slice(0, 200).map((x) => toPick(x, "−")),
+  };
+
   const suggestions: TaxSuggestion[] = [];
   for (const r of invs) {
     const inv: TaxRow = {
@@ -411,6 +438,7 @@ export async function taxReconV2(): Promise<TaxReconV2> {
 
   return {
     groups,
+    bankPool,
     openCount: suggestions.length,
     autoCount: suggestions.filter((s) => s.auto).length,
     doneCount: counts.find((c) => c.s === "확정")?.n ?? 0,
