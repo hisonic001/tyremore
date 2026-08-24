@@ -108,6 +108,13 @@ export async function ingestCashTxns(
     WHERE upload_id = ${uploadId} AND category IS NULL AND source = '통장'
       AND description LIKE '%싸이오토모%'
   `);
+  // 지역화폐 정산 — 「속초정산」 = 속초 지역상품권(모바일) 정산 입금 (사장님 설명 2026-08-25).
+  //   매출은 앱 판매(지역화폐)에서 이미 세므로 여기서 또 세지 않는다 — 분류만 붙여 정리
+  await db.execute(sql`
+    UPDATE cash_txn SET category = '지역화폐정산'
+    WHERE upload_id = ${uploadId} AND category IS NULL AND source = '통장'
+      AND description LIKE '%속초정산%'
+  `);
   // 주주거래 — 조준호·이현숙(내부 관계자·주주, 사장님 확인 2026-08-25)의 입출금은 매출·경비가 아니다
   await db.execute(sql`
     UPDATE cash_txn SET category = '주주거래'

@@ -227,6 +227,10 @@ export default async function FinanceCardPage({
                     const diff = r.assoc - r.app;
                     const dayQ = quotesByDay.get(d) ?? [];
                     const cardQ = dayQ.filter((q) => q.pm === "카드" || q.pm === "혼합");
+                    /* 지역화폐(속초상품권)는 두 갈래다 (사장님 설명 2026-08-25):
+                       카드 연동형 → 여신협회 승인에 잡힘 / 앱·QR형 → 승인 없이 「속초정산」 입금만.
+                       그래서 차이 난 날엔 그날 지역화폐 판매를 같이 보여준다. */
+                    const localQ = dayQ.filter((q) => q.pm === "지역화폐");
                     const suspects = dayQ.filter(
                       (q) => q.pm !== "카드" && q.pm !== "혼합" && Number(q.total) === Math.abs(diff),
                     );
@@ -258,6 +262,19 @@ export default async function FinanceCardPage({
                             ))
                           ) : (
                             <p className="text-slate-400">그날 앱에 카드 판매가 없습니다 — 통째 누락일 수 있습니다</p>
+                          )}
+                          {localQ.length > 0 && (
+                            <div className="mt-1 border-t border-slate-100 pt-1">
+                              <p className="text-sky-700">
+                                그날 지역화폐 판매 {localQ.length}건 — 손님이 카드 연동형 상품권으로 냈다면
+                                여신협회 승인에 잡혀 차이의 원인일 수 있습니다
+                              </p>
+                              {localQ.map((q) => (
+                                <p key={q.quote_no} className="text-slate-500">
+                                  {q.quote_no} · {won(Number(q.total))}원 · 지역화폐{q.who ? ` · ${q.who}` : ""}
+                                </p>
+                              ))}
+                            </div>
                           )}
                         </div>
                       </details>
