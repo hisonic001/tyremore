@@ -2,7 +2,8 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { EXPENSE_CATS, type ExpenseData, type ExpenseRow } from "@/lib/recon-data";
+import { EXPENSE_CATS } from "@/lib/expense-cats";
+import type { ExpenseData, ExpenseRow } from "@/lib/recon-data";
 import { setExpenseCategory } from "@/lib/fin-expense";
 
 const won = (n: number) => n.toLocaleString("ko-KR");

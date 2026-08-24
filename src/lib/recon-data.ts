@@ -401,25 +401,10 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
 /* ================================================================== */
 /* ERP ⑥ 경비 분류 (사장님 지시 2026-08-25)                             */
 
-/** 지출 분류 목록 — 화면 칩·검증·손익이 같은 목록을 쓴다 */
-export const EXPENSE_CATS = [
-  "매입대금",
-  "카드대금",
-  "내부이체",
-  "임차료",
-  "인건비",
-  "공과금",
-  "세금·보험",
-  "수수료",
-  "기타경비",
-] as const;
-
-/** 손익의 「쓴 돈」에 들어가는 분류 — 매입대금·카드대금·내부이체는 이중 계산이라 제외 */
-export const EXPENSE_IN_PL = ["임차료", "인건비", "공과금", "세금·보험", "수수료", "기타경비"] as const;
-
-/** 통장 「[적요] 내용」/카드 가맹점명 → 상대명 원문 (expense_rule 의 key) */
-export const payerKeyOf = (source: string, description: string): string =>
-  source === "통장" ? description.replace(/^\[[^\]]*\]\s*/, "").trim() : description.trim();
+// 🔴 분류 상수는 expense-cats.ts (순수 모듈) — 클라이언트 화면이 값으로 쓰기 때문
+//    (여기서 내보내면 DB 모듈이 브라우저 번들에 끌려가 빌드가 깨진다, 2026-08-25 실사고)
+import { payerKeyOf } from "./expense-cats";
+export { payerKeyOf };
 
 export interface ExpenseRow {
   id: number;

@@ -12,7 +12,7 @@ import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { isOwner } from "@/lib/auth";
-import { EXPENSE_CATS, payerKeyOf } from "./recon-data";
+import { EXPENSE_CATS, payerKeyOf } from "./expense-cats";
 
 export async function setExpenseCategory(
   cashTxnId: number,
