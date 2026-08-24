@@ -103,7 +103,7 @@ const cell = (row: unknown[], col: Map<string, number>, name: string): unknown =
  * 지원하지 않는 파일(세금계산서·여신협회 등)은 **무엇인지 알려주는 에러**를 던진다 —
  * "못 읽음"보다 "이건 ○단계 자료"가 사장님께 훨씬 낫다.
  */
-export function parseFinFile(buf: Buffer): FinParseResult {
+export function parseFinFile(buf: Buffer, fileName?: string): FinParseResult {
   const wb = XLSX.read(buf, { type: "buffer" });
   const name = wb.SheetNames[0];
   if (!name) throw new Error("빈 파일입니다");
@@ -132,6 +132,13 @@ export function parseFinFile(buf: Buffer): FinParseResult {
   // ── 우리카드 「거래내역(회원별)」
   const woori = findHeader(rows, ["매출일자", "매출금액", "가맹점명"]);
   if (woori) return parseWooriCard(rows, woori, rawCsv);
+
+  // ── 신한카드 「법인이용내역(전체)」 (2026-08-25) — 국내·해외 통합, 음수 = 취소·환불
+  const shinhan = findHeader(rows, ["이용일시", "승인번호", "가맹점명", "이용금액"]);
+  if (shinhan) return parseShinhanCard(rows, shinhan, rawCsv);
+
+  // ── 우리카드 「이용대금 상세내역」(청구서) — 연도가 파일 안에 없어 파일 이름에서 읽는다
+  if (headText.includes("이용대금상세내역")) return parseWooriBill(rows, rawCsv, fileName);
 
   throw new Error(
     "어느 형식인지 알아보지 못했습니다 — 통장 거래내역·법인카드 이용내역(KB 확인서·우리카드) 엑셀만 지원합니다. " +
@@ -303,7 +310,7 @@ export type AnyFinParse =
  * 파일 종류를 가리지 않는 입구 — 업로드 화면은 이것만 부른다.
  * 홈택스 목록이면 세금계산서로, 아니면 자금 움직임(통장·법인카드)으로.
  */
-export function parseAnyFin(buf: Buffer, myBizNo: string | null): AnyFinParse {
+export function parseAnyFin(buf: Buffer, myBizNo: string | null, fileName?: string): AnyFinParse {
   const wb = XLSX.read(buf, { type: "buffer" });
   const name = wb.SheetNames.find((n) => normHead(n) === "세금계산서") ?? wb.SheetNames[0];
   if (name) {
@@ -324,7 +331,7 @@ export function parseAnyFin(buf: Buffer, myBizNo: string | null): AnyFinParse {
       return { kind: "carddeposit", ...parseCardDepositSheet(wb.Sheets[name], rows) };
     }
   }
-  return { kind: "cash", ...parseFinFile(buf) };
+  return { kind: "cash", ...parseFinFile(buf, fileName) };
 }
 
 /**
@@ -612,4 +619,99 @@ function parseCardTxnSheet(ws: XLSX.WorkSheet, rows: unknown[][]): CardTxnParseR
     periodTo: dates[dates.length - 1] ?? null,
     sumTotal: out.reduce((s, r) => s + r.amount, 0),
   };
+}
+
+/* ================================================================== */
+/* 법인카드 새 형식 2종 (2026-08-25 사장님 파일 갱신)                     */
+
+/** 신한 「법인이용내역(전체)」 — 머리행 0행, 국내·해외 통합, 음수 = 취소·환불.
+ *  🔴 같은 승인번호로 +/− 취소쌍이 온다 (실측) — 중복 키에 금액이 들어가야 한다 */
+function parseShinhanCard(rows: unknown[][], h: { at: number; col: Map<string, number> }, rawCsv: string): FinParseResult {
+  const out: NormalizedCashTxn[] = [];
+  const skipped: { line: number; reason: string }[] = [];
+  for (let i = h.at + 1; i < rows.length; i++) {
+    const r = rows[i];
+    const when = toKstDateTime(cell(r, h.col, "이용일시"));
+    if (!when) continue;
+    const amt = toWon(cell(r, h.col, "이용금액"));
+    if (amt === null) {
+      skipped.push({ line: i + 1, reason: "이용금액을 못 읽음" });
+      continue;
+    }
+    if (amt === 0) continue; // 안내 수수료 0원 줄
+    const inst = String(cell(r, h.col, "할부개월수") ?? "").trim();
+    out.push({
+      source: "법인카드",
+      occurredAt: when,
+      description: String(cell(r, h.col, "가맹점명") ?? "").trim() || "(가맹점 미상)",
+      inAmount: 0,
+      outAmount: amt,
+      balance: null,
+      approvalNo: String(cell(r, h.col, "승인번호") ?? "").trim() || null,
+      bizNo: null,
+      installment: inst && inst !== "0" ? `${inst}개월` : null,
+      branch: String(cell(r, h.col, "이용지역") ?? "").trim() || null,
+      payerCode: null,
+    });
+  }
+  return finish("법인카드", "신한카드 법인이용내역(전체)", out, skipped, rawCsv);
+}
+
+/** 우리 「이용대금 상세내역」(청구서) — 이용일자가 MM.DD 뿐이라 연도는 파일 이름(2026.8)에서.
+ *  ⚠️ 승인번호가 없어 「거래내역(회원별)」과 같은 기간을 둘 다 올리면 중복이 된다 —
+ *     우리카드는 한 형식만 쓰는 것이 안전하다 (중복 키가 서로 다른 글자라 못 걸러냄) */
+function parseWooriBill(rows: unknown[][], rawCsv: string, fileName?: string): FinParseResult {
+  const m = /(20\d{2})[.\-년 ]*(\d{1,2})/.exec(fileName ?? "");
+  if (!m) throw new Error("우리카드 청구서에는 연도가 없습니다 — 파일 이름에 「2026.8」처럼 연·월을 넣어 주세요");
+  const billY = Number(m[1]);
+  const billM = Number(m[2]);
+
+  let at = -1;
+  const col = new Map<string, number>();
+  for (let i = 0; i < Math.min(6, rows.length); i++) {
+    const c = new Map<string, number>();
+    rows[i].forEach((v, j) => {
+      const hh = normHead(v);
+      if (hh && !c.has(hh)) c.set(hh, j);
+    });
+    if (c.has("이용일자") && [...c.keys()].some((k) => k.startsWith("이용금액"))) {
+      at = i;
+      c.forEach((v, k) => col.set(k, v));
+      break;
+    }
+  }
+  if (at < 0) throw new Error("우리카드 청구서의 머리행을 찾지 못했습니다");
+  const amtKey = [...col.keys()].find((k) => k.startsWith("이용금액"))!;
+  const merKey = [...col.keys()].find((k) => k.startsWith("이용가맹점")) ?? "이용가맹점(은행)명";
+
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const out: NormalizedCashTxn[] = [];
+  const skipped: { line: number; reason: string }[] = [];
+  for (let i = at + 1; i < rows.length; i++) {
+    const r = rows[i];
+    const dateRaw = String(cell(r, col, "이용일자") ?? "").trim();
+    const dm = /^(\d{1,2})[./](\d{1,2})$/.exec(dateRaw);
+    if (!dm) continue; // 빈 줄·합계 줄
+    const mm = Number(dm[1]);
+    const dd = Number(dm[2]);
+    const year = mm > billM ? billY - 1 : billY; // 1월 청구서의 12월 이용분
+    const amt = toWon(cell(r, col, amtKey));
+    if (amt === null || amt === 0) continue;
+    const inst = String(cell(r, col, "할부개월") ?? "").trim();
+    out.push({
+      source: "법인카드",
+      occurredAt: `${year}-${pad(mm)}-${pad(dd)} 00:00:00`,
+      description: String(cell(r, col, merKey) ?? "").trim() || "(가맹점 미상)",
+      inAmount: 0,
+      outAmount: amt,
+      balance: null,
+      approvalNo: null,
+      bizNo: null,
+      installment: inst && inst !== "일시불" ? inst : null,
+      branch: null,
+      payerCode: null,
+    });
+  }
+  if (out.length === 0) throw new Error("읽을 수 있는 이용 줄이 없습니다");
+  return finish("법인카드", `우리카드 이용대금 상세내역 (${billY}.${billM} 청구분)`, out, skipped, rawCsv);
 }

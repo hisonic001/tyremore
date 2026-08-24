@@ -30,7 +30,8 @@ function dedupKeys(rows: NormalizedCashTxn[], label: string): string[] {
     if (r.source === "통장") {
       base = `통장|${label}|${r.occurredAt}|${r.inAmount}|${r.outAmount}|${r.balance ?? ""}`;
     } else if (r.approvalNo) {
-      base = `카드|${label}|${r.approvalNo}|${r.occurredAt.slice(0, 10)}`;
+      // 🔴 금액 포함 (2026-08-25 실측) — 취소·환불이 같은 승인번호로 +/− 두 줄 온다 (신한 전체내역)
+      base = `카드|${label}|${r.approvalNo}|${r.occurredAt.slice(0, 10)}|${r.outAmount}`;
     } else {
       base = `카드|${label}|${r.occurredAt.slice(0, 10)}|${r.outAmount}|${r.description}`;
     }
