@@ -72,6 +72,12 @@ export default async function FinancePage({
     ORDER BY account_label, occurred_at DESC, id DESC LIMIT 10
   `);
 
+  // ⭐ 2단계 — 확인 기다리는 세금계산서 (미대조·제안)
+  const taxOpenRows = await db.execute<{ n: number }>(sql`
+    SELECT count(*)::int n FROM tax_invoice WHERE is_active AND recon_status IN ('미대조', '제안')
+  `);
+  const taxOpen = Number(taxOpenRows[0]?.n ?? 0);
+
   // ③ 최근 올린 파일 (배치)
   const uploads = await db.execute<{
     id: number; source: string; l: string | null; file_name: string;
@@ -151,6 +157,16 @@ export default async function FinancePage({
           </div>
         </section>
       )}
+
+      {/* ── 세금계산서 대조 바로가기 (2단계) ── */}
+      <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+        <Link href="/finance/tax" className="flex items-center justify-between">
+          <span className="font-semibold">세금계산서 대조</span>
+          <span className={`text-sm ${taxOpen > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
+            {taxOpen > 0 ? `확인할 것 ${taxOpen}건 →` : "열어 보기 →"}
+          </span>
+        </Link>
+      </section>
 
       {/* ── 계좌·카드별 ── */}
       {accounts.length > 0 && (

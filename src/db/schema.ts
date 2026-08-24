@@ -1039,3 +1039,69 @@ export const cashTxn = pgTable(
     index("idx_cash_txn_month").on(t.source, t.occurredAt).where(sql`${t.isActive}`),
   ],
 );
+
+/* ============================================================
+ * 3-14. 돈 관리 — 세금계산서·대조 (ERP 2단계, 2026-08-24)
+ * tax_invoice — 홈택스 전자세금계산서 목록, recon_match — 외부 자료 ↔ 앱 기록 연결.
+ * 실제 생성은 scripts/add-tax-invoice.ts · add-recon-match.ts.
+ * ⚠️ supplier.biz_no 컬럼도 add-tax-invoice.ts 가 더한다 (여기 supplier 정의에는
+ *    아직 없음 — 접근은 전부 raw SQL. 다음 스키마 정리 때 정의에 흡수).
+ * ========================================================== */
+export const taxInvoice = pgTable(
+  "tax_invoice",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    /** '매출' | '매입' */
+    direction: text("direction").notNull(),
+    /** 국세청 승인번호 — 재업로드 중복 방지의 전부 */
+    approvalNo: text("approval_no").notNull(),
+    writeDate: date("write_date").notNull(),
+    issueDate: date("issue_date"),
+    /** 상대방 사업자번호 (숫자만; 매입=공급자, 매출=공급받는자) */
+    counterpartyBizNo: text("counterparty_biz_no").notNull(),
+    counterpartyName: text("counterparty_name").notNull(),
+    supplyAmount: integer("supply_amount").notNull(),
+    vat: integer("vat").notNull().default(0),
+    total: integer("total").notNull(),
+    itemSummary: text("item_summary"),
+    reconStatus: text("recon_status").notNull().default("미대조"),
+    isActive: boolean("is_active").notNull().default(true),
+    uploadId: bigint("upload_id", { mode: "number" }).references(() => finUpload.id),
+    memo: text("memo"),
+    createdAt,
+  },
+  (t) => [
+    uniqueIndex("tax_invoice_approval_no_key").on(t.approvalNo),
+    check("tax_invoice_direction", sql`${t.direction} IN ('매출','매입')`),
+    check("tax_invoice_recon", sql`${t.reconStatus} IN ('미대조','제안','확정','무시')`),
+    index("idx_tax_invoice_biz").on(t.counterpartyBizNo),
+  ],
+);
+
+export const reconMatch = pgTable(
+  "recon_match",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    /** '매입계산서'|'매출계산서'|'이체입금'|'카드정산입금'|'카드승인' */
+    kind: text("kind").notNull(),
+    /** FK 없는 범용 참조 (import_issue 전례) — 확정 액션이 코드로 검증 */
+    srcTable: text("src_table").notNull(),
+    srcId: bigint("src_id", { mode: "number" }).notNull(),
+    refTable: text("ref_table").notNull(),
+    refId: bigint("ref_id", { mode: "number" }).notNull(),
+    /** 이 연결에 배분된 금액 (월합계 계산서 1:N 대비) */
+    amount: integer("amount").notNull(),
+    status: text("status").notNull().default("제안"),
+    confidence: text("confidence"),
+    method: text("method").notNull().default("자동"),
+    confirmedBy: bigint("confirmed_by", { mode: "number" }).references(() => appUser.id),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+    createdAt,
+  },
+  (t) => [
+    check("recon_match_kind", sql`${t.kind} IN ('매입계산서','매출계산서','이체입금','카드정산입금','카드승인')`),
+    check("recon_match_status", sql`${t.status} IN ('제안','확정')`),
+    index("idx_recon_src").on(t.srcTable, t.srcId),
+    index("idx_recon_ref").on(t.refTable, t.refId),
+  ],
+);

@@ -13,7 +13,7 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import type { FinParseResult, NormalizedCashTxn } from "./fin-sheet";
+import type { FinParseResult, NormalizedCashTxn, TaxParseResult } from "./fin-sheet";
 
 export interface IngestResult {
   uploadId: number;
@@ -105,4 +105,53 @@ export async function cancelFinUploadBatch(uploadId: number): Promise<number> {
   `);
   await db.execute(sql`UPDATE fin_upload SET status = '취소' WHERE id = ${uploadId}`);
   return rows.length;
+}
+
+/* ================================================================== */
+/* ERP 2단계 — 세금계산서 반영 (2026-08-24)                             */
+
+
+/** 홈택스 목록을 한 배치로 반영 — 승인번호가 중복 방지의 전부라 페이지 분할 파일이 겹쳐도 안전 */
+export async function ingestTaxInvoices(
+  parsed: TaxParseResult,
+  userId: number | null,
+  fileName: string,
+): Promise<IngestResult> {
+  const [up] = await db.execute<{ id: number }>(sql`
+    INSERT INTO fin_upload (source, file_name, raw_text, row_count, period_from, period_to, created_by)
+    VALUES (${parsed.source}, ${fileName}, ${parsed.rawCsv.slice(0, 2_000_000)},
+            ${parsed.rows.length}, ${parsed.periodFrom}, ${parsed.periodTo}, ${userId})
+    RETURNING id
+  `);
+  const uploadId = Number(up.id);
+
+  let newCount = 0;
+  for (let i = 0; i < parsed.rows.length; i += 100) {
+    const chunk = parsed.rows.slice(i, i + 100);
+    const values = chunk.map(
+      (r) => sql`(${r.direction}, ${r.approvalNo}, ${r.writeDate}::date, ${r.issueDate}::date,
+        ${r.counterBizNo}, ${r.counterName}, ${r.supplyAmount}, ${r.vat}, ${r.total},
+        ${r.itemSummary}, ${uploadId})`,
+    );
+    const ins = await db.execute<{ id: number }>(sql`
+      INSERT INTO tax_invoice (direction, approval_no, write_date, issue_date,
+                               counterparty_biz_no, counterparty_name, supply_amount, vat, total,
+                               item_summary, upload_id)
+      VALUES ${sql.join(values, sql`, `)}
+      ON CONFLICT (approval_no) DO NOTHING
+      RETURNING id
+    `);
+    newCount += ins.length;
+    await db.execute(sql`
+      UPDATE tax_invoice SET is_active = true
+      WHERE is_active = false
+        AND approval_no IN (${sql.join(chunk.map((r) => sql`${r.approvalNo}`), sql`, `)})
+    `);
+  }
+
+  const dupCount = parsed.rows.length - newCount;
+  await db.execute(sql`
+    UPDATE fin_upload SET new_count = ${newCount}, dup_count = ${dupCount} WHERE id = ${uploadId}
+  `);
+  return { uploadId, rowCount: parsed.rows.length, newCount, dupCount };
 }

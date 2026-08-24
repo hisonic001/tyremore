@@ -262,3 +262,145 @@ function parseWooriCard(rows: unknown[][], h: { at: number; col: Map<string, num
   }
   return finish("법인카드", "우리카드 거래내역(회원별)", out, skipped, rawCsv);
 }
+
+/* ================================================================== */
+/* ERP 2단계 — 홈택스 전자세금계산서 목록 (2026-08-24)                   */
+
+export interface NormalizedTaxInvoice {
+  direction: "매출" | "매입";
+  approvalNo: string;
+  /** 작성일자 YYYY-MM-DD */
+  writeDate: string;
+  issueDate: string | null;
+  /** 상대방 사업자번호 — 숫자만 (매입=공급자, 매출=공급받는자) */
+  counterBizNo: string;
+  counterName: string;
+  supplyAmount: number;
+  vat: number;
+  total: number;
+  itemSummary: string | null;
+}
+
+export interface TaxParseResult {
+  source: "홈택스매출" | "홈택스매입";
+  formatName: string;
+  rows: NormalizedTaxInvoice[];
+  skipped: { line: number; reason: string }[];
+  rawCsv: string;
+  periodFrom: string | null;
+  periodTo: string | null;
+  sumTotal: number;
+}
+
+export type AnyFinParse = ({ kind: "cash" } & FinParseResult) | ({ kind: "tax" } & TaxParseResult);
+
+/**
+ * 파일 종류를 가리지 않는 입구 — 업로드 화면은 이것만 부른다.
+ * 홈택스 목록이면 세금계산서로, 아니면 자금 움직임(통장·법인카드)으로.
+ */
+export function parseAnyFin(buf: Buffer, myBizNo: string | null): AnyFinParse {
+  const wb = XLSX.read(buf, { type: "buffer" });
+  const name = wb.SheetNames.find((n) => normHead(n) === "세금계산서") ?? wb.SheetNames[0];
+  if (name) {
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[name], { header: 1, raw: false, defval: "" });
+    const headText = rows.slice(0, 10).flat().map(normHead).join("|");
+    if (headText.includes("세금계산서목록")) {
+      return { kind: "tax", ...parseHometaxSheet(wb.Sheets[name], rows, headText, myBizNo) };
+    }
+  }
+  return { kind: "cash", ...parseFinFile(buf) };
+}
+
+/**
+ * 홈택스 「전자(수정) 세금계산서 목록」 시트.
+ * 실측(2026-08-24): 머리행 5행 — 작성일자·승인번호·발급일자·전송일자·
+ * 공급자사업자등록번호·상호·대표자명·주소·공급받는자사업자등록번호·상호(둘째)·…·
+ * 합계금액·공급가액·세액. 「상호」가 두 번 나온다(공급자/공급받는자).
+ * 방향은 **줄마다 사업자번호로 판정**한다 — 제목 문구는 확인용.
+ */
+function parseHometaxSheet(
+  ws: XLSX.WorkSheet,
+  rows: unknown[][],
+  headText: string,
+  myBizNo: string | null,
+): TaxParseResult {
+  const my = (myBizNo ?? "").replace(/\D/g, "");
+  if (!my) {
+    throw new Error("설정 → 가게 정보에 사업자등록번호가 없습니다 — 먼저 넣어 주셔야 매출/매입을 구분할 수 있습니다");
+  }
+  const h = findHeader(rows, ["작성일자", "승인번호", "공급자사업자등록번호", "합계금액"]);
+  if (!h) throw new Error("홈택스 목록의 머리행을 찾지 못했습니다 — 「목록조회」 화면의 엑셀인지 확인해 주세요");
+
+  // 「상호」·「대표자명」이 공급자/공급받는자 순으로 두 번 — 나온 자리 전부 모은다
+  const nameCols: number[] = [];
+  rows[h.at].forEach((c, j) => {
+    if (normHead(c) === "상호") nameCols.push(j);
+  });
+
+  const titleSaysBuy = headText.includes("매입");
+  const titleSaysSell = headText.includes("매출");
+
+  const out: NormalizedTaxInvoice[] = [];
+  const skipped: { line: number; reason: string }[] = [];
+  for (let i = h.at + 1; i < rows.length; i++) {
+    const r = rows[i];
+    const approvalNo = String(cell(r, h.col, "승인번호") ?? "").trim();
+    const writeDate = toKstDateTime(cell(r, h.col, "작성일자"))?.slice(0, 10) ?? null;
+    if (!approvalNo || !writeDate) {
+      if (r.some((c) => String(c ?? "").trim() !== "")) skipped.push({ line: i + 1, reason: "승인번호·작성일자를 못 읽음" });
+      continue;
+    }
+    const sellerBiz = String(cell(r, h.col, "공급자사업자등록번호") ?? "").replace(/\D/g, "");
+    const buyerBiz = String(cell(r, h.col, "공급받는자사업자등록번호") ?? "").replace(/\D/g, "");
+    let direction: "매출" | "매입";
+    if (sellerBiz === my) direction = "매출";
+    else if (buyerBiz === my) direction = "매입";
+    else {
+      skipped.push({ line: i + 1, reason: "우리 사업자번호가 공급자에도 공급받는자에도 없음" });
+      continue;
+    }
+    // 제목과 어긋나면 알린다 — 파일이 섞였을 수 있다
+    if ((direction === "매입" && titleSaysSell && !titleSaysBuy) || (direction === "매출" && titleSaysBuy && !titleSaysSell)) {
+      skipped.push({ line: i + 1, reason: `제목은 ${titleSaysBuy ? "매입" : "매출"}인데 이 줄은 ${direction}` });
+      continue;
+    }
+    const total = toWon(cell(r, h.col, "합계금액"));
+    const supply = toWon(cell(r, h.col, "공급가액"));
+    if (total === null || supply === null) {
+      skipped.push({ line: i + 1, reason: "금액을 못 읽음" });
+      continue;
+    }
+    const vat = toWon(cell(r, h.col, "세액")) ?? total - supply;
+    const counterIdx = direction === "매입" ? 0 : 1;
+    out.push({
+      direction,
+      approvalNo,
+      writeDate,
+      issueDate: toKstDateTime(cell(r, h.col, "발급일자"))?.slice(0, 10) ?? null,
+      counterBizNo: direction === "매입" ? sellerBiz : buyerBiz,
+      counterName: String(r[nameCols[counterIdx] ?? -1] ?? "").trim() || "(상호 미상)",
+      supplyAmount: supply,
+      vat,
+      total,
+      itemSummary: String(cell(r, h.col, "품목명") ?? "").trim() || null,
+    });
+  }
+
+  const buys = out.filter((r) => r.direction === "매입").length;
+  const sells = out.length - buys;
+  if (buys > 0 && sells > 0) {
+    throw new Error(`한 파일에 매입 ${buys}건·매출 ${sells}건이 섞여 있습니다 — 홈택스에서 따로 내려받아 주세요`);
+  }
+  if (out.length === 0) throw new Error("읽을 수 있는 세금계산서 줄이 없습니다");
+  const dates = out.map((r) => r.writeDate).sort();
+  return {
+    source: buys > 0 ? "홈택스매입" : "홈택스매출",
+    formatName: `홈택스 전자세금계산서 목록 (${buys > 0 ? "매입" : "매출"})`,
+    rows: out,
+    skipped,
+    rawCsv: XLSX.utils.sheet_to_csv(ws),
+    periodFrom: dates[0] ?? null,
+    periodTo: dates[dates.length - 1] ?? null,
+    sumTotal: out.reduce((s, r) => s + r.total, 0),
+  };
+}
