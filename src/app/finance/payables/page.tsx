@@ -1,7 +1,7 @@
 import Link from "@/lib/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
-import { payLinkData, payablesData } from "@/lib/recon-data";
+import { payLinkData, payablesData, taxPayableData } from "@/lib/recon-data";
 import { PayablesUi } from "./payables-ui";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +19,7 @@ export default async function FinancePayablesPage() {
 
   const data = await payablesData();
   const links = await payLinkData();
+  const taxPay = await taxPayableData();
 
   return (
     <main className="mx-auto min-h-dvh max-w-3xl px-4 py-5 pb-24">
@@ -29,10 +30,11 @@ export default async function FinancePayablesPage() {
         </Link>
       </header>
       <p className="text-sm text-slate-500">
-        매입 인보이스 금액에서 지급한 만큼을 뺀 잔액입니다. 이미 다 준 매입이면 지급을 넣어 장부를
+        ⭐ 정본은 <strong>세금계산서 ↔ 통장 출금</strong>입니다 (사장님 방침 2026-08-25) — 계산서가
+        출금으로 확인되면 그 매입은 준 것입니다. 아래 앱 매입 장부는 보조 참고입니다. 이미 다 준 매입이면 지급을 넣어 장부를
         맞춰 주세요 — 처음에는 과거 매입이 전부 「안 준 돈」으로 보이는 게 정상입니다. 아래 「출금에서 지급 잡기」로 이미 준 출금을 이어 주면 장부가 진실이 됩니다 (7월 이전 지급은 도입 전이라 이을 매입이 없습니다).
       </p>
-      <PayablesUi data={data} links={links.rows} />
+      <PayablesUi data={data} links={links.rows} taxPay={taxPay} />
     </main>
   );
 }

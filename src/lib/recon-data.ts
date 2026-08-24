@@ -505,3 +505,56 @@ export async function payLinkData(): Promise<{ rows: PayLinkRow[] }> {
   });
   return { rows };
 }
+
+/* ================================================================== */
+/* 미지급 — 세금계산서 기준 (사장님 지시 2026-08-25:                     */
+/*   "앱보다 세금계산서만 따져 달라 — 입출금과 계산서 일치가 더 중요")     */
+
+export interface TaxPayRow {
+  id: number;
+  d: string;
+  name: string;
+  total: number;
+  status: string;
+}
+
+export interface TaxPayableData {
+  /** 출금 확인 안 된 매입 계산서 (실사용 기간) */
+  open: TaxPayRow[];
+  openSum: number;
+  /** 출금·매입과 이어져 확인된 매입 계산서 합 */
+  confirmedSum: number;
+  /** 지급 잡기용 거래처 이름 — 인보이스에 실제로 쓰인 이름 전체 (검색 자동완성) */
+  supplierNames: string[];
+}
+
+export async function taxPayableData(): Promise<TaxPayableData> {
+  const open = await db.execute<{ id: number; d: string; name: string; total: number; status: string }>(sql`
+    SELECT id, to_char(write_date, 'MM-DD') d, counterparty_name name, total, recon_status status
+    FROM tax_invoice
+    WHERE is_active AND direction = '매입' AND write_date >= '2026-08-01'
+      AND recon_status IN ('미대조', '제안')
+    ORDER BY write_date DESC, id DESC LIMIT 100
+  `);
+  const [sums] = await db.execute<{ o: string; c: string }>(sql`
+    SELECT COALESCE(SUM(total) FILTER (WHERE recon_status IN ('미대조', '제안')), 0)::bigint o,
+           COALESCE(SUM(total) FILTER (WHERE recon_status = '확정'), 0)::bigint c
+    FROM tax_invoice
+    WHERE is_active AND direction = '매입' AND write_date >= '2026-08-01'
+  `);
+  const names = await db.execute<{ s: string }>(sql`
+    SELECT DISTINCT supplier s FROM purchase_invoice WHERE status <> '취소' ORDER BY 1 LIMIT 100
+  `);
+  return {
+    open: open.map((r) => ({
+      id: Number(r.id),
+      d: r.d,
+      name: r.name,
+      total: Number(r.total),
+      status: r.status,
+    })),
+    openSum: Number(sums.o),
+    confirmedSum: Number(sums.c),
+    supplierNames: names.map((r) => r.s),
+  };
+}

@@ -2,7 +2,8 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import type { PayLinkRow, PayablesData, PayableSupplier } from "@/lib/recon-data";
+import type { PayLinkRow, PayablesData, PayableSupplier, TaxPayableData } from "@/lib/recon-data";
+import { confirmTaxToBank, searchBankLines } from "@/lib/recon";
 import { payFromWithdrawal, payToSupplier, removePurchasePayment } from "@/lib/purchase-pay";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
@@ -10,7 +11,15 @@ const kstToday = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/
 const METHODS = ["계좌이체", "현금", "카드", "기타"];
 
 /** ⭐ 미지급 장부 — 거래처별 잔액 + 지급 등록 (ERP ⑦, 2026-08-25) */
-export function PayablesUi({ data, links }: { data: PayablesData; links: PayLinkRow[] }) {
+export function PayablesUi({
+  data,
+  links,
+  taxPay,
+}: {
+  data: PayablesData;
+  links: PayLinkRow[];
+  taxPay: TaxPayableData;
+}) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
@@ -20,6 +29,33 @@ export function PayablesUi({ data, links }: { data: PayablesData; links: PayLink
 
   /** 출금 → 거래처 직접 선택 (제안이 없거나 다를 때) */
   const [linkPick, setLinkPick] = useState<Record<number, string>>({});
+  /** 계산서별 출금 검색 (사장님 지시 — 계산서 기준이 정본) */
+  const [taxQ, setTaxQ] = useState<Record<number, string>>({});
+  const [taxHits, setTaxHits] = useState<Record<number, { id: number; label: string }[]>>({});
+
+  const searchTax = (invId: number) =>
+    start(async () => {
+      setError(null);
+      const r = await searchBankLines("매입", taxQ[invId] ?? "");
+      if (!r.ok) return setError(r.error);
+      setTaxHits((p) => ({ ...p, [invId]: r.rows }));
+    });
+
+  const linkTaxBank = (invId: number, cashId: number) =>
+    start(async () => {
+      setMsg(null);
+      setError(null);
+      const r = await confirmTaxToBank(invId, cashId);
+      if (!r.ok) return setError(r.error);
+      setMsg(
+        r.remaining > 0
+          ? `계산서를 출금과 이었습니다 — 그 출금에 ${won(r.remaining)}원이 남았습니다 (다른 계산서 몫이면 이어서)`
+          : r.remaining < 0
+            ? `이었습니다 — 계산서가 출금보다 ${won(-r.remaining)}원 큽니다 (선입금·적립 소진이면 정상)`
+            : "계산서를 출금과 이었습니다 — 금액이 정확히 맞습니다.",
+      );
+      router.refresh();
+    });
 
   const linkPay = (row: PayLinkRow, supplier: string) => {
     if (!confirm(`${row.at} 출금 ${won(row.amount)}원을 「${supplier}」 지급으로 잡을까요?\n(오래된 매입부터 차례로 채웁니다)`)) return;
@@ -65,6 +101,72 @@ export function PayablesUi({ data, links }: { data: PayablesData; links: PayLink
         <p className="tabular mt-1 text-xl font-bold text-red-600">{won(data.totalRemain)}원</p>
       </section>
 
+      {/* ⭐ 정본 — 세금계산서 기준 출금 확인 (사장님 지시 2026-08-25) */}
+      <section className="mt-4 rounded-2xl border-2 border-emerald-700 bg-white p-4">
+        <h2 className="font-semibold text-emerald-900">세금계산서 기준 — 출금 확인 (정본)</h2>
+        <p className="tabular mt-1 text-xs text-slate-500">
+          출금 확인 안 된 매입 계산서 <strong>{taxPay.open.length}건 · {won(taxPay.openSum)}원</strong> ·
+          확인됨 {won(taxPay.confirmedSum)}원 — 이름이 달라도(주식회사 위즈↔위즈오토) 출금을 검색해
+          이으면 다음부터 자동으로 알아봅니다
+        </p>
+        {taxPay.open.length === 0 ? (
+          <p className="mt-2 rounded-lg bg-emerald-50 p-2 text-sm text-emerald-800">
+            모든 매입 계산서가 확인됐습니다 🎉
+          </p>
+        ) : (
+          <ul className="mt-2 space-y-2">
+            {taxPay.open.map((t) => (
+              <li key={t.id} className="rounded-lg border border-slate-100 bg-slate-50 p-2.5 text-sm">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="tabular min-w-0 truncate">
+                    <span className="text-xs text-slate-400">{t.d}</span> {t.name}
+                  </span>
+                  <span className="tabular shrink-0 font-bold">{won(t.total)}원</span>
+                </div>
+                <div className="mt-1.5 flex gap-1.5">
+                  <input
+                    value={taxQ[t.id] ?? ""}
+                    onChange={(e) => setTaxQ((p) => ({ ...p, [t.id]: e.target.value }))}
+                    placeholder="출금 검색 (이름·금액 — 예: 위즈, 500940)"
+                    className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-xs"
+                  />
+                  <button
+                    type="button"
+                    disabled={pending || !(taxQ[t.id] ?? "").trim()}
+                    onClick={() => searchTax(t.id)}
+                    className="shrink-0 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium disabled:opacity-40"
+                  >
+                    검색
+                  </button>
+                </div>
+                <ul className="mt-1 space-y-1 text-xs">
+                  {(taxHits[t.id] ?? []).map((b) => (
+                    <li key={b.id} className="flex items-center justify-between gap-2">
+                      <span className="min-w-0 truncate">{b.label}</span>
+                      <button
+                        type="button"
+                        disabled={pending}
+                        onClick={() => linkTaxBank(t.id, b.id)}
+                        className="shrink-0 rounded bg-emerald-700 px-2 py-0.5 font-semibold text-white disabled:opacity-40"
+                      >
+                        이 출금과 잇기
+                      </button>
+                    </li>
+                  ))}
+                  {taxHits[t.id] !== undefined && (taxHits[t.id] ?? []).length === 0 && (
+                    <li className="text-slate-400">맞는 출금이 없습니다 (전체 기간 검색)</li>
+                  )}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="mt-2 text-xs text-slate-400">
+          자동 후보·상대 유형 지정은 <a href="/finance/tax" className="underline">세금계산서 대조</a>에서 —
+          여기는 출금 확인 전용입니다
+        </p>
+      </section>
+
       {/* 🔴 감사 P2 — 출금에서 지급 잡기: 이미 준 돈을 장부가 알게 하는 고리 */}
       {links.length > 0 && (
         <section className="mt-4 rounded-2xl border border-sky-300 bg-sky-50 p-4">
@@ -90,22 +192,17 @@ export function PayablesUi({ data, links }: { data: PayablesData; links: PayLink
                   </button>
                 ) : (
                   <span className="flex shrink-0 items-center gap-1">
-                    <select
+                    <input
                       value={linkPick[row.id] ?? ""}
                       onChange={(e) => setLinkPick((p) => ({ ...p, [row.id]: e.target.value }))}
-                      className="rounded-lg border border-slate-300 px-1.5 py-1 text-xs"
-                    >
-                      <option value="">거래처…</option>
-                      {data.suppliers.map((s) => (
-                        <option key={s.supplier} value={s.supplier}>
-                          {s.supplier}
-                        </option>
-                      ))}
-                    </select>
+                      list="pay-supplier-names"
+                      placeholder="거래처 검색…"
+                      className="w-28 rounded-lg border border-slate-300 px-1.5 py-1 text-xs"
+                    />
                     <button
                       type="button"
-                      disabled={pending || !linkPick[row.id]}
-                      onClick={() => linkPay(row, linkPick[row.id])}
+                      disabled={pending || !taxPay.supplierNames.includes((linkPick[row.id] ?? "").trim())}
+                      onClick={() => linkPay(row, (linkPick[row.id] ?? "").trim())}
                       className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium disabled:opacity-40"
                     >
                       지급
@@ -192,6 +289,12 @@ export function PayablesUi({ data, links }: { data: PayablesData; links: PayLink
           );
         })}
       </ul>
+
+      <datalist id="pay-supplier-names">
+        {taxPay.supplierNames.map((s) => (
+          <option key={s} value={s} />
+        ))}
+      </datalist>
 
       {/* 최근 지급 — 잘못 넣었으면 지우기 */}
       {data.recent.length > 0 && (
