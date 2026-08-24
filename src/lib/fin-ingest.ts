@@ -13,6 +13,7 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
+import { normName } from "./recon-data";
 import type { CardDayParseResult, CardDepositParseResult, CardTxnParseResult, FinParseResult, NormalizedCashTxn, TaxParseResult } from "./fin-sheet";
 
 export interface IngestResult {
@@ -212,6 +213,25 @@ export async function ingestTaxInvoices(
     WHERE t.upload_id = ${uploadId} AND t.recon_status = '미대조'
       AND r.biz_no = t.counterparty_biz_no AND r.kind IN ('경비', '무시')
   `);
+  // 품목 단위 규칙 (미쉐린 digital module 같은 혼합 상대) — 품목 정규화가 JS 라 여기서 맞춘다
+  const itemRules = await db.execute<{ biz_no: string; item_key: string; kind: string }>(sql`
+    SELECT biz_no, item_key, kind FROM tax_item_rule LIMIT 500
+  `);
+  if (itemRules.length > 0) {
+    const rmap = new Map(itemRules.map((r) => [`${r.biz_no}|${r.item_key}`, r.kind]));
+    const fresh = await db.execute<{ id: number; counterparty_biz_no: string; item_summary: string | null }>(sql`
+      SELECT id, counterparty_biz_no, item_summary FROM tax_invoice
+      WHERE upload_id = ${uploadId} AND recon_status = '미대조' LIMIT 500
+    `);
+    for (const row of fresh) {
+      const k = rmap.get(`${row.counterparty_biz_no}|${normName(row.item_summary ?? "")}`);
+      if (k) {
+        await db.execute(sql`
+          UPDATE tax_invoice SET recon_status = '무시', recon_reason = ${k} WHERE id = ${row.id}
+        `);
+      }
+    }
+  }
 
   const dupCount = parsed.rows.length - newCount;
   await db.execute(sql`

@@ -294,14 +294,18 @@ export async function confirmTaxToBank(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  const [inv] = await db.execute<{ id: number; direction: string; recon_status: string; total: number }>(sql`
-    SELECT id, direction, recon_status, total FROM tax_invoice WHERE id = ${taxInvoiceId} AND is_active
+  const [inv] = await db.execute<{
+    id: number; direction: string; recon_status: string; total: number;
+    counterparty_biz_no: string; counterparty_name: string;
+  }>(sql`
+    SELECT id, direction, recon_status, total, counterparty_biz_no, counterparty_name
+    FROM tax_invoice WHERE id = ${taxInvoiceId} AND is_active
   `);
   if (!inv) return { ok: false, error: "세금계산서를 찾을 수 없습니다" };
   if (inv.direction !== "매출") return { ok: false, error: "입금 연결은 매출 계산서만 가능합니다" };
   if (inv.recon_status === "확정") return { ok: false, error: "이미 확정된 계산서입니다 — 먼저 되돌려 주세요" };
-  const [dep] = await db.execute<{ id: number; in_amount: number }>(sql`
-    SELECT id, in_amount FROM cash_txn
+  const [dep] = await db.execute<{ id: number; in_amount: number; description: string }>(sql`
+    SELECT id, in_amount, description FROM cash_txn
     WHERE id = ${cashTxnId} AND source = '통장' AND is_active AND in_amount > 0
   `);
   if (!dep) return { ok: false, error: "입금 줄을 찾을 수 없습니다" };
@@ -319,7 +323,78 @@ export async function confirmTaxToBank(
     await tx.execute(sql`UPDATE tax_invoice SET recon_status = '확정', recon_reason = '입금연결' WHERE id = ${taxInvoiceId}`);
     await tx.execute(sql`UPDATE cash_txn SET recon_status = '확정' WHERE id = ${cashTxnId}`);
   });
+
+  /**
+   * ⭐ 입금자명 학습 (사장님 제보 2026-08-25 — 한국타이어 정산이 「이관우」 개인 이름으로 온다).
+   *    한 번 이으면 그 입금자명 = 이 계산서 상대의 정산 입금으로 기억한다 ('T:'+사업자번호).
+   */
+  try {
+    const payer = dep.description.replace(/^\[[^\]]*\]\s*/, "").trim();
+    const key = normName(payer);
+    if (key.length >= 2) {
+      await db.execute(sql`
+        INSERT INTO party_alias (alias_key, alias_raw, party_key, party_label)
+        VALUES (${key}, ${payer}, ${"T:" + inv.counterparty_biz_no}, ${"정산입금 " + inv.counterparty_name})
+        ON CONFLICT (alias_key) DO UPDATE SET party_key = EXCLUDED.party_key,
+          party_label = EXCLUDED.party_label, updated_at = now()
+      `);
+    }
+  } catch {
+    // 학습 실패는 확정을 막지 않는다
+  }
+
   revalidatePath("/finance/tax");
   revalidatePath("/finance/deposits");
   return { ok: true };
+}
+
+/**
+ * ⭐ 계산서 한 건을 「경비」로 — 품목까지 기억한다 (사장님 제보 2026-08-25).
+ *    미쉐린처럼 타이어 매입과 수수료(digital module)가 섞인 상대는 상대 전체가 아니라
+ *    (상대 + 품목명) 조합으로 배운다: 같은 품목의 열린 계산서 일괄 + 새 업로드 자동.
+ */
+export async function markTaxExpense(
+  taxInvoiceId: number,
+): Promise<{ ok: true; applied: number; item: string | null } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  const [inv] = await db.execute<{
+    id: number; recon_status: string; counterparty_biz_no: string; item_summary: string | null;
+  }>(sql`
+    SELECT id, recon_status, counterparty_biz_no, item_summary FROM tax_invoice
+    WHERE id = ${taxInvoiceId} AND is_active
+  `);
+  if (!inv) return { ok: false, error: "세금계산서를 찾을 수 없습니다" };
+  if (inv.recon_status === "확정") return { ok: false, error: "이미 확정된 계산서입니다 — 먼저 되돌려 주세요" };
+
+  const itemKey = normName(inv.item_summary ?? "");
+  let applied = 0;
+  if (itemKey.length >= 2) {
+    await db.execute(sql`
+      INSERT INTO tax_item_rule (biz_no, item_key, item_raw, kind)
+      VALUES (${inv.counterparty_biz_no}, ${itemKey}, ${inv.item_summary}, '경비')
+      ON CONFLICT (biz_no, item_key) DO UPDATE SET kind = '경비', updated_at = now()
+    `);
+    // 같은 상대 + 같은 품목의 열린 계산서 일괄 (품목 정규화가 JS 라 id 로 모아서)
+    const opens = await db.execute<{ id: number; item_summary: string | null }>(sql`
+      SELECT id, item_summary FROM tax_invoice
+      WHERE is_active AND recon_status IN ('미대조', '제안')
+        AND counterparty_biz_no = ${inv.counterparty_biz_no} LIMIT 300
+    `);
+    const ids = opens.filter((o) => normName(o.item_summary ?? "") === itemKey).map((o) => Number(o.id));
+    if (ids.length > 0) {
+      await db.execute(sql`
+        UPDATE tax_invoice SET recon_status = '무시', recon_reason = '경비'
+        WHERE id IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})
+      `);
+      applied = ids.length;
+    }
+  } else {
+    await db.execute(sql`
+      UPDATE tax_invoice SET recon_status = '무시', recon_reason = '경비' WHERE id = ${taxInvoiceId}
+    `);
+    applied = 1;
+  }
+  revalidatePath("/finance/tax");
+  return { ok: true, applied, item: itemKey.length >= 2 ? inv.item_summary : null };
 }

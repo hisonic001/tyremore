@@ -10,6 +10,7 @@ import {
   ignoreTaxInvoice,
   linkCounterpartyToSupplier,
   markPastTax,
+  markTaxExpense,
   setTaxPartyRule,
   undoTaxMatch,
 } from "@/lib/recon";
@@ -169,27 +170,25 @@ export function TaxRecon({ data, recent }: { data: TaxReconV2; recent: RecentRow
                 >
                   무시 (계속)
                 </button>
-                <select
+                {/* 거래처가 많아 목록 대신 검색 자동완성 (사장님 요청 2026-08-25) */}
+                <input
                   value={supPick[g.bizNo] ?? ""}
                   onChange={(e) => setSupPick((p) => ({ ...p, [g.bizNo]: e.target.value }))}
-                  className="rounded-lg border border-slate-300 px-2 py-1.5"
-                >
-                  <option value="">거래처면 고르기…</option>
-                  {data.supplierOptions.map((sp) => (
-                    <option key={sp.id} value={sp.id}>
-                      {sp.name}
-                    </option>
-                  ))}
-                </select>
+                  list="tax-sup-options"
+                  placeholder="거래처면 검색…"
+                  className="w-32 rounded-lg border border-slate-300 px-2 py-1.5"
+                />
                 <button
                   type="button"
-                  disabled={pending || !supPick[g.bizNo]}
-                  onClick={() =>
+                  disabled={pending || !data.supplierOptions.some((sp) => sp.name === (supPick[g.bizNo] ?? "").trim())}
+                  onClick={() => {
+                    const sp = data.supplierOptions.find((o) => o.name === (supPick[g.bizNo] ?? "").trim());
+                    if (!sp) return;
                     act(
-                      () => linkCounterpartyToSupplier(g.items[0].inv.id, Number(supPick[g.bizNo])),
+                      () => linkCounterpartyToSupplier(g.items[0].inv.id, sp.id),
                       (r: { learned: string }) => `${r.learned} 거래처로 기억했습니다 — 후보를 다시 찾았습니다.`,
-                    )
-                  }
+                    );
+                  }}
                   className="rounded-lg border border-slate-300 px-2.5 py-1.5 font-medium disabled:opacity-40"
                 >
                   거래처로 기억
@@ -295,12 +294,31 @@ export function TaxRecon({ data, recent }: { data: TaxReconV2; recent: RecentRow
                     </div>
                   )}
 
-                  <div className="mt-1 text-right">
+                  <div className="mt-1 flex items-center justify-end gap-2 text-xs">
+                    {s.inv.direction === "매입" && (
+                      <button
+                        type="button"
+                        disabled={pending}
+                        onClick={() =>
+                          act(
+                            () => markTaxExpense(s.inv.id),
+                            (r: { applied: number; item: string | null }) =>
+                              r.item
+                                ? `「${r.item}」 품목은 경비로 기억 — ${r.applied}건 정리, 앞으로 자동입니다.`
+                                : "경비로 정리했습니다.",
+                          )
+                        }
+                        className="text-slate-500 underline"
+                        title="미쉐린 digital module 처럼 매입과 수수료가 섞인 상대는 품목 단위로 배웁니다"
+                      >
+                        경비로 (이 품목 계속 자동)
+                      </button>
+                    )}
                     <button
                       type="button"
                       disabled={pending}
                       onClick={() => act(() => ignoreTaxInvoice(s.inv.id), () => "무시했습니다.")}
-                      className="text-xs text-slate-400 underline"
+                      className="text-slate-400 underline"
                     >
                       이 건만 무시
                     </button>
@@ -311,6 +329,12 @@ export function TaxRecon({ data, recent }: { data: TaxReconV2; recent: RecentRow
           </li>
         ))}
       </ul>
+
+      <datalist id="tax-sup-options">
+        {data.supplierOptions.map((sp) => (
+          <option key={sp.id} value={sp.name} />
+        ))}
+      </datalist>
 
       {/* 정리된 것 요약 */}
       {data.reasonCounts.length > 0 && (

@@ -265,18 +265,26 @@ export async function taxReconV2(): Promise<TaxReconV2> {
           .slice(0, 5)
           .map(toRef);
       }
-      // 통장 입금 직접 연결 후보 — 대행 정산사의 실질 (금액 일치, 작성일 −7일 ~ +60일)
+      /* 통장 입금 직접 연결 후보 — 금액 일치, 작성일 −7 ~ +60일.
+       * ⭐ 기억된 입금자(★)는 우선·기간 +120일 (사장님 제보 — 「이관우」처럼 개인 이름으로
+       *   정산이 와도 한 번 이으면 'T:사업자번호' 별명으로 기억돼 바로 알아본다) */
       const bankCands = freeDeposits
-        .filter(
-          (x) =>
-            Number(x.in_amount) === inv.total &&
-            new Date(x.date).getTime() >= new Date(inv.writeDate).getTime() - 7 * 86400000 &&
-            new Date(x.date).getTime() <= new Date(inv.writeDate).getTime() + 60 * 86400000,
-        )
+        .map((x) => {
+          const payer = x.description.replace(/^\[[^\]]*\]\s*/, "").trim();
+          const known = aliasMap.get(norm(payer)) === `T:${inv.counterBizNo}`;
+          return { x, known };
+        })
+        .filter(({ x, known }) => {
+          if (Number(x.in_amount) !== inv.total) return false;
+          const t = new Date(x.date).getTime();
+          const w = new Date(inv.writeDate).getTime();
+          return t >= w - 7 * 86400000 && t <= w + (known ? 120 : 60) * 86400000;
+        })
+        .sort((a, b) => Number(b.known) - Number(a.known))
         .slice(0, 4)
-        .map((x) => ({
+        .map(({ x, known }) => ({
           id: Number(x.id),
-          label: `${x.date.slice(5)} · ${x.description.slice(0, 24)} · +${won(Number(x.in_amount))}원 (${x.l})`,
+          label: `${known ? "★ " : ""}${x.date.slice(5)} · ${x.description.slice(0, 24)} · +${won(Number(x.in_amount))}원 (${x.l})`,
           amount: Number(x.in_amount),
           date: x.date,
         }));

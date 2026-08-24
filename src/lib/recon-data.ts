@@ -277,6 +277,8 @@ export interface DepositSuggestion {
   quotes: DepositQuoteRef[];
   /** 입금자명과 이름이 닮은 외상 대상 — [수금 등록]으로 바로 턴다 */
   parties: DepositPartyRef[];
+  /** 기억된 정산 입금자(세금계산서 상대) — 「이관우 = 한국타이어 정산」 안내 */
+  taxHint: string | null;
 }
 
 export interface DepositReconData {
@@ -350,10 +352,11 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
   const book = await receivableBook();
 
   // ⭐ 별명 사전 — 입금자명을 한 번 이어주면 다음부터 바로 알아본다
-  const aliases2 = await db.execute<{ alias_key: string; party_key: string }>(sql`
-    SELECT alias_key, party_key FROM party_alias LIMIT 500
+  const aliases2 = await db.execute<{ alias_key: string; party_key: string; party_label: string }>(sql`
+    SELECT alias_key, party_key, party_label FROM party_alias LIMIT 500
   `);
   const aliasMap = new Map(aliases2.map((a) => [a.alias_key, a.party_key]));
+  const aliasLabel = new Map(aliases2.map((a) => [a.alias_key, a.party_label]));
 
   const dayDiff3 = (a: string, b: string) => Math.abs((new Date(a).getTime() - new Date(b).getTime()) / 86400000) <= 3;
 
@@ -371,7 +374,9 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
         date: q.d,
       }));
     const aliasParty = aliasMap.get(pn) ?? null;
-    const aliasTarget = aliasParty ? (book.targets.find((tg) => tg.key === aliasParty) ?? null) : null;
+    const taxHint = aliasParty?.startsWith("T:") ? (aliasLabel.get(pn) ?? "정산 입금으로 기억됨") : null;
+    const aliasTarget =
+      aliasParty && !aliasParty.startsWith("T:") ? (book.targets.find((tg) => tg.key === aliasParty) ?? null) : null;
     const parties = [
       ...(aliasTarget ? [aliasTarget] : []),
       ...book.targets.filter((tg) => {
@@ -394,6 +399,7 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
       },
       quotes,
       parties,
+      taxHint,
     };
   });
 

@@ -95,6 +95,11 @@ export function DepositsRecon({ data, ym }: { data: DepositReconData; ym: string
               <span className="tabular shrink-0 font-bold text-emerald-700">+{won(s.dep.amount)}원</span>
             </div>
 
+            {s.taxHint && (
+              <p className="mt-2 rounded-lg bg-violet-50 p-2 text-xs text-violet-800">
+                ★ {s.taxHint} — 세금계산서 대조 화면에서 그 계산서와 이으면 정리됩니다
+              </p>
+            )}
             {s.parties.length > 0 && (
               <div className="mt-2 rounded-lg bg-amber-50 p-2 text-sm">
                 <p className="text-xs text-amber-900">이름이 닮은 외상 대상 — 수금이면 바로 등록하세요</p>
