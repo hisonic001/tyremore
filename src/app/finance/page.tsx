@@ -50,6 +50,41 @@ export default async function FinancePage({
     AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
     AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date`;
 
+  /* ⭐ 5단계 — 월 손익 재료 (전부 순차). 이중 계산 방지 원칙:
+   *    「쓴 돈」= 상품 매입 + 법인카드 + 카드 수수료.
+   *    통장 출금은 매입 대금·카드값이 대부분이라 다시 넣지 않는다 — 참고로만 보여준다. */
+  const D = sql`COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)`;
+  const earned = await db.execute<{ s: string }>(sql`
+    SELECT COALESCE(SUM(q.total_amount), 0)::bigint s FROM quote q
+    WHERE q.status = '성사' AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
+  `);
+  const bought = await db.execute<{ s: string }>(sql`
+    SELECT COALESCE(SUM(total), 0)::bigint s FROM purchase_invoice
+    WHERE status <> '취소' AND total IS NOT NULL
+      AND COALESCE(issued_at, to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')) >= ${start}
+      AND COALESCE(issued_at, to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')) < ${nextStart}
+  `);
+  const cardFeeRows = await db.execute<{ fee: string }>(sql`
+    SELECT COALESCE(SUM(sale_amount - vat_agency - deposit_amount), 0)::bigint fee
+    FROM card_deposit WHERE is_active AND month = ${ym}
+  `);
+  const recvRows = await db.execute<{ s: string }>(sql`
+    SELECT COALESCE(SUM(q.total_amount - COALESCE(rp.paid, 0)), 0)::bigint s
+    FROM quote q
+    LEFT JOIN LATERAL (SELECT SUM(amount)::int paid FROM receivable_payment x WHERE x.quote_id = q.id) rp ON true
+    WHERE q.status = '성사' AND q.payment_method = '외상' AND q.total_amount > COALESCE(rp.paid, 0)
+  `);
+  const taxBuyOpenRows = await db.execute<{ s: string }>(sql`
+    SELECT COALESCE(SUM(total), 0)::bigint s FROM tax_invoice
+    WHERE is_active AND direction = '매입' AND recon_status IN ('미대조', '제안')
+      AND write_date >= ${start}::date AND write_date < ${nextStart}::date
+  `);
+  // 계좌끼리 옮긴 돈(내부이체) — 우리 상호가 적힌 입출금은 수입도 지출도 아니다
+  const internal = await db.execute<{ o: string }>(sql`
+    SELECT COALESCE(SUM(out_amount), 0)::bigint o FROM cash_txn
+    WHERE ${inMonth} AND source = '통장' AND description LIKE '%싸이오토모%'
+  `);
+
   // ① 월 요약 — 통장 들어옴/나감, 카드로 쓴 돈 (순차)
   const sums = await db.execute<{ source: string; in_sum: string; out_sum: string }>(sql`
     SELECT source, COALESCE(SUM(in_amount), 0)::bigint in_sum, COALESCE(SUM(out_amount), 0)::bigint out_sum
@@ -99,6 +134,15 @@ export default async function FinancePage({
     ORDER BY occurred_at DESC, id DESC LIMIT 60
   `);
 
+  const gEarned = Number(earned[0].s);
+  const gBought = Number(bought[0].s);
+  const gCardOut = Number(card?.out_sum ?? 0);
+  const gFee = Number(cardFeeRows[0].fee);
+  const gSpent = gBought + gCardOut + gFee;
+  const gRecv = Number(recvRows[0].s);
+  const gTaxBuyOpen = Number(taxBuyOpenRows[0].s);
+  const bankOutExt = Math.max(0, Number(bank?.out_sum ?? 0) - Number(internal[0].o));
+
   const noData = sums.length === 0 && uploads.length === 0;
 
   return (
@@ -132,6 +176,58 @@ export default async function FinancePage({
           <span className="px-3 py-1.5 text-slate-300">다음 달</span>
         )}
       </nav>
+
+      {/* ── 월 손익 (5단계) — 회계어 없이, 이중 계산 없이 ── */}
+      <section className="mt-4 rounded-2xl border-2 border-slate-800 bg-white p-4">
+        <h2 className="font-bold">{ym} 손익</h2>
+        <div className="tabular mt-2 space-y-1 text-sm">
+          <p className="flex justify-between">
+            <span>번 돈 (판매)</span>
+            <strong className="text-emerald-700">{won(gEarned)}원</strong>
+          </p>
+          <p className="flex justify-between">
+            <span>쓴 돈</span>
+            <strong className="text-red-600">{won(gSpent)}원</strong>
+          </p>
+          <p className="flex justify-between pl-3 text-xs text-slate-500">
+            <span>· 상품 매입</span>
+            <span>{won(gBought)}원</span>
+          </p>
+          <p className="flex justify-between pl-3 text-xs text-slate-500">
+            <span>· 법인카드로 쓴 돈</span>
+            <span>{won(gCardOut)}원</span>
+          </p>
+          <p className="flex justify-between pl-3 text-xs text-slate-500">
+            <span>· 카드 수수료</span>
+            <span>{won(gFee)}원</span>
+          </p>
+          <p className="flex justify-between border-t border-slate-200 pt-1 text-base font-bold">
+            <span>남은 돈</span>
+            <span className={gEarned - gSpent >= 0 ? "text-emerald-700" : "text-red-600"}>
+              {won(gEarned - gSpent)}원
+            </span>
+          </p>
+        </div>
+        <div className="tabular mt-3 space-y-0.5 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
+          <p>받을 돈 (외상 잔액 전체): {won(gRecv)}원</p>
+          {gTaxBuyOpen > 0 && (
+            <p>
+              이 달 매입 세금계산서 중 대조 안 됨: {won(gTaxBuyOpen)}원 —{" "}
+              <Link href="/finance/tax" className="underline">세금계산서 대조</Link>에서 확인
+            </p>
+          )}
+          {bankOutExt > 0 && (
+            <p>
+              통장 출금(계좌끼리 옮긴 돈 제외): {won(bankOutExt)}원 — 매입 대금·카드값이 대부분이라
+              「쓴 돈」에 다시 넣지 않습니다 (이중 계산 방지)
+            </p>
+          )}
+        </div>
+        <p className="mt-1 text-[11px] text-slate-400">
+          임차료·인건비처럼 통장으로만 나가는 지출은 아직 「쓴 돈」에 없습니다 — 다음 단계(경비
+          분류)를 붙이면 정확해집니다
+        </p>
+      </section>
 
       {noData && (
         <section className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
