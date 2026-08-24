@@ -214,3 +214,156 @@ export async function taxReconData(): Promise<TaxReconData> {
 
   return { open, autoCount: open.filter((s) => s.auto).length, doneCount, ignoredCount };
 }
+
+/* ================================================================== */
+/* ERP 4단계 — 통장 입금 대조 (2026-08-24)                              */
+
+export interface DepositRow {
+  id: number;
+  /** YYYY-MM-DD */
+  date: string;
+  at: string;
+  amount: number;
+  description: string;
+  /** 「[적요] 내용」에서 뽑은 입금자명 어림 */
+  payerName: string;
+  label: string;
+}
+
+export interface DepositQuoteRef {
+  quoteId: number;
+  label: string;
+  amount: number;
+  date: string;
+}
+
+export interface DepositPartyRef {
+  /** receivable-book 의 대상 열쇠 — 'S:금호' · 'C:123' */
+  key: string;
+  label: string;
+  remain: number;
+  count: number;
+}
+
+export interface DepositSuggestion {
+  dep: DepositRow;
+  /** 같은 금액·±3일의 계좌이체 판매 — 항상 제안(자동확정 없음, 동명 금액 위험) */
+  quotes: DepositQuoteRef[];
+  /** 입금자명과 이름이 닮은 외상 대상 — [수금 등록]으로 바로 턴다 */
+  parties: DepositPartyRef[];
+}
+
+export interface DepositReconData {
+  open: DepositSuggestion[];
+  /** 적요 패턴(FB자금·매출표)으로 카드 정산으로 보이는 미대조 입금 */
+  cardPatternCount: number;
+  cardPatternSum: number;
+  doneCount: number;
+  ignoredCount: number;
+}
+
+export async function depositReconData(ym: string): Promise<DepositReconData> {
+  const start = `${ym}-01`;
+  const [y, m] = ym.split("-").map(Number);
+  const t = y * 12 + (m - 1) + 1;
+  const nextStart = `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}-01`;
+  const inMonth = sql`source = '통장' AND is_active AND in_amount > 0
+    AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
+    AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date`;
+  const CARD_PAT = sql`(description LIKE '%FB자금%' OR description LIKE '%매출표%')`;
+
+  // ① 이 달 미대조 입금 (카드 정산 패턴은 따로 묶는다)
+  const deps = await db.execute<{
+    id: number; date: string; at: string; in_amount: number; description: string; l: string;
+  }>(sql`
+    SELECT id, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') date,
+           to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at,
+           in_amount, description, account_label l
+    FROM cash_txn
+    WHERE ${inMonth} AND recon_status = '미대조' AND NOT ${CARD_PAT}
+    ORDER BY occurred_at DESC, id DESC LIMIT 60
+  `);
+
+  const pat = await db.execute<{ n: number; s: string }>(sql`
+    SELECT count(*)::int n, COALESCE(SUM(in_amount), 0)::bigint s FROM cash_txn
+    WHERE ${inMonth} AND recon_status = '미대조' AND ${CARD_PAT}
+  `);
+
+  const counts = await db.execute<{ st: string; n: number }>(sql`
+    SELECT recon_status st, count(*)::int n FROM cash_txn WHERE ${inMonth} GROUP BY 1 LIMIT 5
+  `);
+
+  // ② 이을 만한 계좌이체 판매 (±3일 여유)
+  const startPad = new Date(new Date(start + "T00:00:00").getTime() - 3 * 86400000).toISOString().slice(0, 10);
+  const endPad = new Date(new Date(nextStart + "T00:00:00").getTime() + 3 * 86400000).toISOString().slice(0, 10);
+  const transfers = await db.execute<{
+    id: number; quote_no: string; total: number; d: string; who: string; plate_no: string | null;
+  }>(sql`
+    SELECT q.id, q.quote_no, q.total_amount total,
+           to_char(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date), 'YYYY-MM-DD') d,
+           COALESCE(q.supplier_name, c.name, '손님') who, v.plate_no
+    FROM quote q
+    LEFT JOIN customer c ON c.id = q.customer_id
+    LEFT JOIN vehicle  v ON v.id = q.vehicle_id
+    WHERE q.status = '성사' AND q.payment_method = '계좌이체' AND q.total_amount > 0
+      AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${startPad}::date
+      AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${endPad}::date
+    ORDER BY q.id DESC LIMIT 200
+  `);
+
+  // ③ 이미 이은 판매는 후보에서 뺀다
+  const linked = await db.execute<{ ref_id: number }>(sql`
+    SELECT ref_id FROM recon_match WHERE kind = '이체입금' AND ref_table = 'quote' LIMIT 1000
+  `);
+  const linkedQ = new Set(linked.map((l) => Number(l.ref_id)));
+  const freeTransfers = transfers.filter((q) => !linkedQ.has(Number(q.id)));
+
+  // ④ 외상 대상 (잔액 있는 것만) — receivable-book 과 같은 정의를 그 모듈로 얻는다
+  const { receivableBook } = await import("./receivable-book");
+  const book = await receivableBook();
+
+  const dayDiff3 = (a: string, b: string) => Math.abs((new Date(a).getTime() - new Date(b).getTime()) / 86400000) <= 3;
+
+  const open: DepositSuggestion[] = deps.map((r) => {
+    // 「[적요] 내용」 → 내용 부분이 대개 입금자명이다
+    const payerName = r.description.replace(/^\[[^\]]*\]\s*/, "").trim();
+    const pn = norm(payerName);
+    const quotes = freeTransfers
+      .filter((q) => Number(q.total) === Number(r.in_amount) && dayDiff3(q.d, r.date))
+      .slice(0, 5)
+      .map((q) => ({
+        quoteId: Number(q.id),
+        label: `${q.quote_no} · ${q.who}${q.plate_no ? ` ${q.plate_no}` : ""} · ${Number(q.total).toLocaleString()}원 (${q.d.slice(5)})`,
+        amount: Number(q.total),
+        date: q.d,
+      }));
+    const parties = book.targets
+      .filter((tg) => {
+        const a = norm(tg.label.replace(/^거래처\s*/, ""));
+        return pn.length >= 2 && a.length >= 2 && (a.includes(pn) || pn.includes(a));
+      })
+      .slice(0, 3)
+      .map((tg) => ({ key: tg.key, label: tg.label, remain: tg.remain, count: tg.count }));
+    return {
+      dep: {
+        id: Number(r.id),
+        date: r.date,
+        at: r.at,
+        amount: Number(r.in_amount),
+        description: r.description,
+        payerName,
+        label: r.l,
+      },
+      quotes,
+      parties,
+    };
+  });
+
+  return {
+    open,
+    cardPatternCount: Number(pat[0]?.n ?? 0),
+    cardPatternSum: Number(pat[0]?.s ?? 0),
+    doneCount: counts.find((c) => c.st === "확정")?.n ?? 0,
+    ignoredCount: counts.find((c) => c.st === "무시")?.n ?? 0,
+  };
+}

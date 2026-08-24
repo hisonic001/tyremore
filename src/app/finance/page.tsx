@@ -176,6 +176,14 @@ export default async function FinancePage({
         </Link>
       </section>
 
+      {/* ── 통장 입금 대조 바로가기 (4단계) ── */}
+      <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+        <Link href="/finance/deposits" className="flex items-center justify-between">
+          <span className="font-semibold">통장 입금 대조</span>
+          <span className="text-sm text-slate-500">카드 정산·이체 판매·외상 수금 정리 →</span>
+        </Link>
+      </section>
+
       {/* ── 계좌·카드별 ── */}
       {accounts.length > 0 && (
         <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
