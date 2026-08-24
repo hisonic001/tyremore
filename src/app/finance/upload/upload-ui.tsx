@@ -19,6 +19,9 @@ export function FinUpload() {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<FinPreview | null>(null);
   const [label, setLabel] = useState("");
+  /** 🔴 감사 M15: 계정 이름 오타(신한주거래/신한 주거래)가 같은 파일을 통째로 중복시킨다 —
+      기존 계정은 고르게 하고, 새 계정만 직접 입력 */
+  const [newLabel, setNewLabel] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [doneMsg, setDoneMsg] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -127,18 +130,33 @@ export function FinUpload() {
           {needLabel && (
             <label className="mt-3 block">
               <span className="text-sm font-medium">어느 {preview.source === "통장" ? "통장" : "카드"}인가요?</span>
-              <input
-                value={label}
-                onChange={(e) => setLabel(e.target.value)}
-                list="fin-labels"
-                placeholder={preview.source === "통장" ? "예: 신한주거래" : "예: 국민법인카드"}
-                className="mt-1 w-full rounded-xl border border-slate-300 p-3"
-              />
-              <datalist id="fin-labels">
-                {preview.labels.map((l) => (
-                  <option key={l} value={l} />
-                ))}
-              </datalist>
+              {preview.labels.length > 0 && !newLabel ? (
+                <select
+                  value={label}
+                  onChange={(e) => {
+                    if (e.target.value === "__new__") {
+                      setNewLabel(true);
+                      setLabel("");
+                    } else setLabel(e.target.value);
+                  }}
+                  className="mt-1 w-full rounded-xl border border-slate-300 p-3"
+                >
+                  <option value="">계정 고르기…</option>
+                  {preview.labels.map((l) => (
+                    <option key={l} value={l}>
+                      {l}
+                    </option>
+                  ))}
+                  <option value="__new__">+ 새 계좌·카드…</option>
+                </select>
+              ) : (
+                <input
+                  value={label}
+                  onChange={(e) => setLabel(e.target.value)}
+                  placeholder={preview.source === "통장" ? "예: 신한주거래" : "예: 국민법인카드"}
+                  className="mt-1 w-full rounded-xl border border-slate-300 p-3"
+                />
+              )}
               <span className="mt-1 block text-xs text-slate-500">
                 전에 쓴 이름 그대로 골라 주세요 — 이름이 다르면 다른 계좌로 셉니다
               </span>

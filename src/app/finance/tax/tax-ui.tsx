@@ -9,6 +9,7 @@ import {
   confirmTaxToBank,
   ignoreTaxInvoice,
   linkCounterpartyToSupplier,
+  searchBankLines,
   markPastTax,
   markTaxExpense,
   markTaxFixPair,
@@ -61,6 +62,7 @@ export function TaxRecon({
   const [supPick, setSupPick] = useState<Record<string, string>>({});
   /** 계산서별 통장 직접 검색어 (선입금·적립 등 금액이 다른 경우) */
   const [bankQ, setBankQ] = useState<Record<number, string>>({});
+  const [bankHits, setBankHits] = useState<Record<number, { id: number; label: string }[]>>({});
 
   const act = (fn: () => Promise<{ ok: boolean } & Record<string, unknown>>, okMsg: (r: never) => string) =>
     start(async () => {
@@ -373,40 +375,46 @@ export function TaxRecon({
                     <summary className="cursor-pointer text-xs text-slate-500 underline">
                       통장에서 직접 찾기 (선입금·적립 등 금액이 다른 경우)
                     </summary>
-                    <input
-                      value={bankQ[s.inv.id] ?? ""}
-                      onChange={(e) => setBankQ((p) => ({ ...p, [s.inv.id]: e.target.value }))}
-                      placeholder="입금자·내용·금액으로 검색"
-                      className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-xs"
-                    />
+                    <div className="mt-1 flex gap-1.5">
+                      <input
+                        value={bankQ[s.inv.id] ?? ""}
+                        onChange={(e) => setBankQ((p) => ({ ...p, [s.inv.id]: e.target.value }))}
+                        placeholder="입금자·내용·금액으로 검색"
+                        className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-xs"
+                      />
+                      <button
+                        type="button"
+                        disabled={pending || !(bankQ[s.inv.id] ?? "").trim()}
+                        onClick={() =>
+                          start(async () => {
+                            setError(null);
+                            const r = await searchBankLines(s.inv.direction, bankQ[s.inv.id] ?? "");
+                            if (!r.ok) return setError(r.error);
+                            setBankHits((p) => ({ ...p, [s.inv.id]: r.rows }));
+                          })
+                        }
+                        className="shrink-0 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium disabled:opacity-40"
+                      >
+                        검색
+                      </button>
+                    </div>
                     <ul className="mt-1 space-y-1 text-xs">
-                      {(() => {
-                        const q = (bankQ[s.inv.id] ?? "").trim();
-                        if (!q) return <li className="text-slate-400">검색어를 치면 통장 줄이 나옵니다</li>;
-                        const pool = s.inv.direction === "매출" ? data.bankPool.in : data.bankPool.out;
-                        const hits = pool
-                          .filter(
-                            (b) =>
-                              b.label.includes(q) ||
-                              b.payer.includes(q) ||
-                              String(b.remain).includes(q.replace(/,/g, "")),
-                          )
-                          .slice(0, 6);
-                        if (hits.length === 0) return <li className="text-slate-400">맞는 통장 줄이 없습니다</li>;
-                        return hits.map((b) => (
-                          <li key={b.id} className="flex items-center justify-between gap-2">
-                            <span className="min-w-0 truncate">{b.label}</span>
-                            <button
-                              type="button"
-                              disabled={pending}
-                              onClick={() => bankLink(s, b.id)}
-                              className="shrink-0 rounded border border-slate-300 bg-white px-2 py-0.5 font-medium"
-                            >
-                              잇기
-                            </button>
-                          </li>
-                        ));
-                      })()}
+                      {(bankHits[s.inv.id] ?? []).map((b) => (
+                        <li key={b.id} className="flex items-center justify-between gap-2">
+                          <span className="min-w-0 truncate">{b.label}</span>
+                          <button
+                            type="button"
+                            disabled={pending}
+                            onClick={() => bankLink(s, b.id)}
+                            className="shrink-0 rounded border border-slate-300 bg-white px-2 py-0.5 font-medium"
+                          >
+                            잇기
+                          </button>
+                        </li>
+                      ))}
+                      {bankHits[s.inv.id] !== undefined && (bankHits[s.inv.id] ?? []).length === 0 && (
+                        <li className="text-slate-400">맞는 통장 줄이 없습니다 (전체 기간 검색)</li>
+                      )}
                     </ul>
                   </details>
 

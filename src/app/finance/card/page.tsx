@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession } from "@/lib/auth";
+import { kstToday, ymAdd } from "@/lib/ym";
 import { CARD_SETTLE_PATTERN_SQL } from "@/lib/expense-cats";
 
 export const dynamic = "force-dynamic";
@@ -19,13 +20,7 @@ export const dynamic = "force-dynamic";
  */
 
 const won = (n: number) => n.toLocaleString("ko-KR");
-const kstToday = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
-
-function ymAdd(ym: string, delta: number): string {
-  const [y, m] = ym.split("-").map(Number);
-  const t = y * 12 + (m - 1) + delta;
-  return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`;
-}
+// 감사 L3: 달 계산은 lib/ym 정본
 
 export default async function FinanceCardPage({
   searchParams,
@@ -79,7 +74,7 @@ export default async function FinanceCardPage({
            COALESCE(q.supplier_name, c.name) who
     FROM quote q LEFT JOIN customer c ON c.id = q.customer_id
     WHERE q.status = '성사' AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
-    ORDER BY q.total_amount DESC LIMIT 600
+    ORDER BY ${D} ASC LIMIT 1200 -- 감사 M18: 금액순 600 컷이 가짜 ● 누락 표시를 만들었다
   `);
 
   // 건별 승인 (세부내역이 올라온 달) — 차이 난 날 펼침에 그날 승인 목록까지 (2026-08-25)

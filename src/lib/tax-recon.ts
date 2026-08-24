@@ -16,6 +16,7 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
+import { payerKeyOf } from "./expense-cats";
 import { normName } from "./recon-data";
 
 /** 앱 실사용 시작 — 이전 계산서는 대조가 원리적으로 불가능하다 */
@@ -75,19 +76,8 @@ export interface PartyGroup {
   items: TaxSuggestion[];
 }
 
-/** 통장 직접 검색용 줄 — 선입금·적립처럼 금액이 아예 다른 경우 사장님이 찾아 잇는다 */
-export interface BankPick {
-  id: number;
-  date: string;
-  payer: string;
-  label: string;
-  remain: number;
-}
-
 export interface TaxReconV2 {
   groups: PartyGroup[];
-  /** 직접 검색 풀 — in: 입금(매출 계산서용) · out: 출금(매입 계산서용). 남은 금액 있는 줄만 */
-  bankPool: { in: BankPick[]; out: BankPick[] };
   openCount: number;
   autoCount: number;
   doneCount: number;
@@ -135,14 +125,14 @@ export async function taxReconV2(): Promise<TaxReconV2> {
 
   // ③ 거래처·별명·상대 유형 사전
   const suppliers = await db.execute<{ id: number; name: string; biz_no: string | null }>(sql`
-    SELECT id, name, biz_no FROM supplier WHERE is_active ORDER BY id LIMIT 200
+    SELECT id, name, biz_no FROM supplier WHERE is_active ORDER BY id LIMIT 500
   `);
   const aliases = await db.execute<{ alias_key: string; party_key: string }>(sql`
-    SELECT alias_key, party_key FROM party_alias LIMIT 500
+    SELECT alias_key, party_key FROM party_alias LIMIT 2000
   `);
   const aliasMap = new Map(aliases.map((a) => [a.alias_key, a.party_key]));
   const rules = await db.execute<{ biz_no: string; kind: string }>(sql`
-    SELECT biz_no, kind FROM tax_party_rule LIMIT 300
+    SELECT biz_no, kind FROM tax_party_rule LIMIT 1000
   `);
   const ruleMap = new Map(rules.map((r) => [r.biz_no, r.kind]));
 
@@ -164,13 +154,15 @@ export async function taxReconV2(): Promise<TaxReconV2> {
            COALESCE(q.supplier_name, c.name) who, q.payment_method pm
     FROM quote q LEFT JOIN customer c ON c.id = q.customer_id
     WHERE q.status = '성사' AND q.total_amount > 0
-    ORDER BY q.id DESC LIMIT 600
+      -- 🔴 감사 M6: 최신순 컷이 아니라 날짜창 — 계산서(8월~) ±창을 다 덮게
+      AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${TAX_APP_START}::date - 75
+    ORDER BY q.id DESC LIMIT 1000
   `);
 
   // ⑥ 이미 이어진 기록 제외
   const linked = await db.execute<{ ref_table: string; ref_id: number; amount: number }>(sql`
     SELECT ref_table, ref_id, amount FROM recon_match
-    WHERE kind IN ('매입계산서', '매출계산서') LIMIT 2000
+    WHERE kind IN ('매입계산서', '매출계산서') LIMIT 10000
   `);
   const linkedSet = new Set(
     linked.filter((l) => l.ref_table !== "cash_txn").map((l) => `${l.ref_table}|${l.ref_id}`),
@@ -215,21 +207,6 @@ export async function taxReconV2(): Promise<TaxReconV2> {
     .filter((x) => x.remain > 0);
 
   const norm = normName;
-
-  /* 직접 검색 풀 (사장님 제보 2026-08-25 — 선입금·적립은 금액이 아예 달라 후보에 못 뜬다.
-   *  거래처 검색하듯 통장 줄을 찾아 잇게 한다. 부분 연결 덕에 「적립 소진」도 그대로 담긴다) */
-  const payerOf = (desc: string) => desc.replace(/^\[[^\]]*\]\s*/, "").trim();
-  const toPick = (x: { id: number; date: string; description: string; l: string; remain: number }, sign: string): BankPick => ({
-    id: Number(x.id),
-    date: x.date,
-    payer: payerOf(x.description),
-    remain: x.remain,
-    label: `${x.date.slice(5)} · ${x.description.slice(0, 26)} · ${sign}${won(x.remain)}원 (${x.l})`,
-  });
-  const bankPool = {
-    in: freeDeposits.slice(0, 200).map((x) => toPick(x, "+")),
-    out: freeWithdrawals.slice(0, 200).map((x) => toPick(x, "−")),
-  };
 
   const suggestions: TaxSuggestion[] = [];
   for (const r of invs) {
@@ -289,7 +266,7 @@ export async function taxReconV2(): Promise<TaxReconV2> {
        *   ★ = 기억된 지급처(내 출금 이름이 계산서 상호와 달라도 한 번 이으면 기억) */
       const buyBank = freeWithdrawals
         .map((x) => {
-          const payer = x.description.replace(/^\[[^\]]*\]\s*/, "").trim();
+          const payer = payerKeyOf("통장", x.description);
           const known = aliasMap.has(`${norm(payer)}@${inv.counterBizNo}`);
           return { x, known, exact: x.remain === inv.total };
         })
@@ -363,7 +340,7 @@ export async function taxReconV2(): Promise<TaxReconV2> {
       const partyKind = ruleMap.get(inv.counterBizNo) ?? null;
       const bankCands = freeDeposits
         .map((x) => {
-          const payer = x.description.replace(/^\[[^\]]*\]\s*/, "").trim();
+          const payer = payerKeyOf("통장", x.description);
           const known = aliasMap.has(`${norm(payer)}@${inv.counterBizNo}`);
           return { x, known, exact: x.remain === inv.total };
         })
@@ -442,7 +419,6 @@ export async function taxReconV2(): Promise<TaxReconV2> {
 
   return {
     groups,
-    bankPool,
     openCount: suggestions.length,
     autoCount: suggestions.filter((s) => s.auto).length,
     doneCount: counts.find((c) => c.s === "확정")?.n ?? 0,

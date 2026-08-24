@@ -13,6 +13,7 @@ import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, isOwner } from "@/lib/auth";
+import { payerKeyOf } from "./expense-cats";
 import { normName } from "./recon-data";
 import { TAX_APP_START, taxReconV2 } from "./tax-recon";
 
@@ -549,4 +550,44 @@ export async function markTaxFixPair(
   `);
   revalidatePath("/finance/tax");
   return { ok: true };
+}
+
+/**
+ * 🔴 감사 M17(2026-08-25): 「통장에서 직접 찾기」를 서버 검색으로 — 최신 200줄 풀이
+ *   아니라 DB 전체에서 찾는다 (선입금·적립은 오래된 줄일 수 있다). 남은 금액 있는 줄만.
+ */
+export async function searchBankLines(
+  direction: "매출" | "매입",
+  query: string,
+): Promise<{ ok: true; rows: { id: number; label: string }[] } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  const q = query.trim();
+  if (q.length < 1) return { ok: false, error: "검색어를 입력해 주세요" };
+  const amt = Number(q.replace(/[^0-9]/g, "")) || 0;
+  const isIn = direction === "매출";
+  const rows = await db.execute<{
+    id: number; date: string; description: string; amount: number; l: string; linked: string;
+  }>(sql`
+    SELECT c.id, to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') date,
+           c.description, ${isIn ? sql.raw("c.in_amount") : sql.raw("c.out_amount")} amount, c.account_label l,
+           COALESCE((SELECT SUM(m.amount)::int FROM recon_match m
+             WHERE m.ref_table = 'cash_txn' AND m.ref_id = c.id
+               AND m.kind IN ('매출계산서', '매입계산서', '매입지급')), 0) linked
+    FROM cash_txn c
+    WHERE c.source = '통장' AND c.is_active
+      AND ${isIn ? sql.raw("c.in_amount > 0") : sql.raw("c.out_amount > 0")}
+      AND (c.description ILIKE ${"%" + q + "%"}
+           OR (${amt} > 0 AND ${isIn ? sql.raw("c.in_amount") : sql.raw("c.out_amount")} = ${amt}))
+    ORDER BY c.occurred_at DESC LIMIT 20
+  `);
+  const out = rows
+    .map((r) => ({ ...r, remain: Number(r.amount) - Number(r.linked) }))
+    .filter((r) => r.remain > 0)
+    .slice(0, 12)
+    .map((r) => ({
+      id: Number(r.id),
+      label: `${r.date.slice(5)} · ${payerKeyOf("통장", r.description).slice(0, 20)} · ${isIn ? "+" : "−"}${r.remain.toLocaleString()}원 (${r.l})`,
+    }));
+  return { ok: true, rows: out };
 }

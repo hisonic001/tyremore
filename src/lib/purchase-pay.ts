@@ -12,6 +12,7 @@ import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, isOwner } from "@/lib/auth";
+import { normName } from "./recon-data";
 import { planSettlement } from "./receivable-plan";
 
 const METHODS = ["계좌이체", "현금", "카드", "기타"];
@@ -89,4 +90,100 @@ export async function removePurchasePayment(
   revalidatePath("/finance/payables");
   revalidatePath("/finance");
   return { ok: true };
+}
+
+/**
+ * 🔴 감사 P2(2026-08-25): 「출금에서 지급 잡기」 — '매입대금' 통장 출금 한 건으로
+ *   거래처 미지급을 선입선출로 턴다. 지급 기록 + 연결 자국('매입지급') + 출금 확정 + 별명 학습.
+ *   미지급 장부가 "이미 준 돈"을 알게 되는 핵심 고리.
+ */
+export async function payFromWithdrawal(input: {
+  cashTxnId: number;
+  supplier: string;
+}): Promise<
+  | { ok: true; applied: number; settled: number; leftover: number }
+  | { ok: false; error: string }
+> {
+  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  const session = await getSession();
+  const supplier = input.supplier?.trim();
+  if (!supplier) return { ok: false, error: "거래처를 골라 주세요" };
+
+  const [dep] = await db.execute<{
+    id: number; out_amount: number; recon_status: string; date: string; l: string; description: string;
+  }>(sql`
+    SELECT id, out_amount, recon_status,
+           to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') date,
+           account_label l, description
+    FROM cash_txn WHERE id = ${input.cashTxnId} AND source = '통장' AND is_active AND out_amount > 0
+  `);
+  if (!dep) return { ok: false, error: "출금 줄을 찾을 수 없습니다" };
+  const dupe = await db.execute<{ id: number }>(sql`
+    SELECT id FROM recon_match WHERE src_table = 'cash_txn' AND src_id = ${input.cashTxnId}
+      AND kind = '매입지급' LIMIT 1
+  `);
+  if (dupe.length > 0) return { ok: false, error: "이미 지급으로 이어진 출금입니다" };
+
+  try {
+    return await db.transaction(async (tx) => {
+      const rows = await tx.execute<{ id: number; invoice_no: string; total: number; paid: string }>(sql`
+        SELECT pi.id, pi.invoice_no, pi.total,
+               COALESCE((SELECT SUM(pp.amount)::int FROM purchase_payment pp WHERE pp.invoice_id = pi.id), 0) paid
+        FROM purchase_invoice pi
+        WHERE pi.status <> '취소' AND pi.supplier = ${supplier} AND pi.total IS NOT NULL AND pi.total > 0
+        ORDER BY COALESCE(pi.issued_at, to_char(pi.created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')) ASC, pi.id ASC
+        LIMIT 200
+        FOR UPDATE OF pi
+      `);
+      const open = rows
+        .map((r) => ({ quoteId: Number(r.id), quoteNo: r.invoice_no, remain: Number(r.total) - Number(r.paid) }))
+        .filter((r) => r.remain > 0);
+      if (open.length === 0) return { ok: false as const, error: "그 거래처의 미지급 매입이 없습니다" };
+      const plan = planSettlement(open, Number(dep.out_amount));
+      if (plan.plan.length === 0) return { ok: false as const, error: "배분할 금액이 없습니다" };
+
+      for (const p of plan.plan) {
+        await tx.execute(sql`
+          INSERT INTO purchase_payment (invoice_id, amount, method, paid_on, memo, created_by)
+          VALUES (${p.quoteId}, ${p.amount}, '계좌이체', ${dep.date},
+                  ${"통장 출금 연결 (" + dep.l + " " + dep.date + ")"}, ${session?.uid ?? null})
+        `);
+        await tx.execute(sql`
+          INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
+          VALUES ('매입지급', 'cash_txn', ${input.cashTxnId}, 'purchase_invoice', ${p.quoteId}, ${p.amount},
+                  '확정', '수동', ${session?.uid ?? null}, now())
+        `);
+      }
+      await tx.execute(sql`
+        UPDATE cash_txn SET recon_status = '확정', category = COALESCE(category, '매입대금')
+        WHERE id = ${input.cashTxnId}
+      `);
+
+      const applied = plan.plan.reduce((s, p) => s + p.amount, 0);
+      const settled = plan.plan.filter((p) => p.amount === open.find((o) => o.quoteId === p.quoteId)?.remain).length;
+
+      // 별명 학습 — 이 출금 상대명 = 이 거래처 (다음부터 자동 제안)
+      try {
+        const payer = dep.description.replace(/^\[[^\]]*\]\s*/, "").trim();
+        const key = normName(payer);
+        if (key.length >= 2) {
+          await tx.execute(sql`
+            INSERT INTO party_alias (alias_key, alias_raw, party_key, party_label)
+            VALUES (${key}, ${payer}, ${"S:" + supplier}, ${"거래처 " + supplier})
+            ON CONFLICT (alias_key) DO UPDATE SET party_key = EXCLUDED.party_key,
+              party_label = EXCLUDED.party_label, updated_at = now()
+          `);
+        }
+      } catch {
+        // 학습 실패는 지급을 막지 않는다
+      }
+
+      revalidatePath("/finance/payables");
+      revalidatePath("/finance/expenses");
+      revalidatePath("/finance");
+      return { ok: true as const, applied, settled, leftover: Number(dep.out_amount) - applied };
+    });
+  } catch (e) {
+    return { ok: false, error: `지급을 넣지 못했습니다: ${e instanceof Error ? e.message : String(e)}` };
+  }
 }

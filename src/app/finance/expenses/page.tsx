@@ -1,18 +1,13 @@
 import Link from "@/lib/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
+import { kstToday, ymAdd } from "@/lib/ym";
 import { expenseData } from "@/lib/recon-data";
 import { ExpensesUi } from "./expenses-ui";
 
 export const dynamic = "force-dynamic";
 
-const kstToday = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
-
-function ymAdd(ym: string, delta: number): string {
-  const [y, m] = ym.split("-").map(Number);
-  const t = y * 12 + (m - 1) + delta;
-  return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`;
-}
+// 감사 L3: 달 계산은 lib/ym 정본
 
 /**
  * ⭐ 지출 분류 (ERP ⑥, 사장님 지시 2026-08-25) — 사장님 전용

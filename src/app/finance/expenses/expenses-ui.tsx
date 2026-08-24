@@ -49,6 +49,58 @@ export function ExpensesUi({ data }: { data: ExpenseData }) {
         </section>
       )}
 
+      {/* 🔴 감사 M5 — 상대별 묶어 붙이기: 한 상대를 붙이면 그 상대 전체(과거 포함)에 전파된다 */}
+      {data.byPayer.length > 0 && (
+        <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+          <h2 className="font-semibold">상대별 묶어 붙이기</h2>
+          <ul className="mt-2 space-y-1.5 text-sm">
+            {data.byPayer.slice(0, 20).map((g) => (
+              <li key={g.payer} className="flex flex-wrap items-center justify-between gap-1.5">
+                <span className="tabular min-w-0 truncate text-xs">
+                  {g.payer} · {g.n}건 · <strong>−{won(g.sum)}원</strong>
+                </span>
+                <span className="flex shrink-0 items-center gap-1">
+                  {g.suggest && (
+                    <button
+                      type="button"
+                      disabled={pending}
+                      onClick={() =>
+                        classify({ id: g.anyId, payer: g.payer } as unknown as ExpenseRow, g.suggest!)
+                      }
+                      className="rounded-lg bg-emerald-700 px-2 py-1 text-xs font-semibold text-white disabled:opacity-40"
+                    >
+                      {g.suggest} ✓
+                    </button>
+                  )}
+                  <select
+                    value={pick[g.anyId] ?? ""}
+                    onChange={(e) => setPick((p) => ({ ...p, [g.anyId]: e.target.value }))}
+                    className="rounded-lg border border-slate-300 px-1.5 py-1 text-xs"
+                  >
+                    <option value="">분류…</option>
+                    {EXPENSE_CATS.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={pending || !pick[g.anyId]}
+                    onClick={() =>
+                      classify({ id: g.anyId, payer: g.payer } as unknown as ExpenseRow, pick[g.anyId])
+                    }
+                    className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium disabled:opacity-40"
+                  >
+                    붙이기
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section className="mt-4 flex items-center justify-between text-sm">
         <span className="tabular">
           분류 안 된 지출 <strong>{won(data.unclassifiedTotal)}원</strong>

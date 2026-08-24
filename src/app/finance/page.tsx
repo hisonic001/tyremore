@@ -4,6 +4,8 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession } from "@/lib/auth";
 import { EXPENSE_IN_PL } from "@/lib/expense-cats";
+import { finHealth } from "@/lib/fin-health";
+import { kstToday, ymAdd } from "@/lib/ym";
 import { TAX_APP_START } from "@/lib/tax-recon";
 import { cancelFinUpload } from "@/lib/fin-upload";
 
@@ -25,13 +27,7 @@ async function cancelBatch(id: number, _fd: FormData): Promise<void> {
   "use server";
   await cancelFinUpload(id);
 }
-const kstToday = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
-
-function ymAdd(ym: string, delta: number): string {
-  const [y, m] = ym.split("-").map(Number);
-  const t = y * 12 + (m - 1) + delta;
-  return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`;
-}
+// 감사 L3: 달 계산은 lib/ym 정본
 
 export default async function FinancePage({
   searchParams,
@@ -41,6 +37,9 @@ export default async function FinancePage({
   const session = await getSession();
   if (!session) redirect("/login");
   if (session.role !== "owner") redirect("/");
+
+  // ⭐ 자료 건강 (감사 P3) — 전면 감사의 검증식을 화면이 상시 수행
+  const health = await finHealth();
 
   const thisYm = kstToday().slice(0, 7);
   const sp = await searchParams;
@@ -231,6 +230,13 @@ export default async function FinancePage({
         </div>
       </header>
 
+      <div
+        className={`tabular mt-2 rounded-lg px-3 py-1.5 text-[11px] ${health.allOk ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900"}`}
+      >
+        {(health.allOk ? "자료 검증 ✓  " : "자료 확인 필요 ⚠  ") +
+          health.lines.map((l) => (l.ok ? l.text : `⚠ ${l.text}`)).join("  ·  ")}
+      </div>
+
       {/* 달 넘기기 — 리포트와 같은 방식 */}
       <nav className="tabular mt-2 flex items-center justify-center gap-4 text-sm">
         <Link href={`/finance?ym=${ymAdd(ym, -1)}`} className="rounded-lg px-3 py-1.5 active:bg-slate-200">
@@ -309,6 +315,9 @@ export default async function FinancePage({
             </p>
           )}
         </div>
+        <p className="tabular mt-1 text-[11px] text-slate-400">
+          기준: 번 돈=판매일 · 매입=발행일 · 카드·경비=사용일 · 수수료=정산월 (감사 L5)
+        </p>
         <p className="mt-1 text-[11px] text-slate-400">
           통장 경비는 「지출 분류」에서 나눈 것만 들어갑니다 — 매입대금·카드대금·내부이체(우리
           법인 계좌끼리)는 이중 계산이라 뺍니다

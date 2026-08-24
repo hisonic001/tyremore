@@ -10,7 +10,8 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { CARD_SETTLE_PATTERN_SQL } from "./expense-cats";
+import { CARD_SETTLE_PATTERN_SQL, payerKeyOf } from "./expense-cats";
+import { monthRange } from "./ym";
 
 const norm = (s: string | null | undefined): string =>
   String(s ?? "")
@@ -74,10 +75,7 @@ export interface DepositReconData {
 }
 
 export async function depositReconData(ym: string): Promise<DepositReconData> {
-  const start = `${ym}-01`;
-  const [y, m] = ym.split("-").map(Number);
-  const t = y * 12 + (m - 1) + 1;
-  const nextStart = `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}-01`;
+  const { start, nextStart } = monthRange(ym); // 감사 L3: 월 경계 정본(lib/ym)
   const inMonth = sql`source = '통장' AND is_active AND in_amount > 0
     AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
     AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date`;
@@ -136,7 +134,7 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
 
   // ⭐ 별명 사전 — 입금자명을 한 번 이어주면 다음부터 바로 알아본다
   const aliases2 = await db.execute<{ alias_key: string; party_key: string; party_label: string }>(sql`
-    SELECT alias_key, party_key, party_label FROM party_alias LIMIT 500
+    SELECT alias_key, party_key, party_label FROM party_alias LIMIT 2000
   `);
   const aliasMap = new Map(aliases2.map((a) => [a.alias_key, a.party_key]));
   const aliasLabel = new Map(aliases2.map((a) => [a.alias_key, a.party_label]));
@@ -145,7 +143,7 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
 
   const open: DepositSuggestion[] = deps.map((r) => {
     // 「[적요] 내용」 → 내용 부분이 대개 입금자명이다
-    const payerName = r.description.replace(/^\[[^\]]*\]\s*/, "").trim();
+    const payerName = payerKeyOf("통장", r.description); // 감사 L2: 추출 규칙 정본
     const pn = norm(payerName);
     const quotes = freeTransfers
       .filter((q) => Number(q.total) === Number(r.in_amount) && dayDiff3(q.d, r.date))
@@ -207,7 +205,7 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
       id: Number(r.id),
       at: r.at,
       amount: Number(r.in_amount),
-      payer: r.description.replace(/^\[[^\]]*\]\s*/, "").trim(),
+      payer: payerKeyOf("통장", r.description),
     })),
     cardPatternCount: Number(pat[0]?.n ?? 0),
     cardPatternSum: Number(pat[0]?.s ?? 0),
@@ -221,8 +219,7 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
 
 // 🔴 분류 상수는 expense-cats.ts (순수 모듈) — 클라이언트 화면이 값으로 쓰기 때문
 //    (여기서 내보내면 DB 모듈이 브라우저 번들에 끌려가 빌드가 깨진다, 2026-08-25 실사고)
-import { payerKeyOf } from "./expense-cats";
-export { payerKeyOf };
+export { payerKeyOf }; // 상단 import 재수출 (중복 import 정리 — 감사수리 C)
 
 export interface ExpenseRow {
   id: number;
@@ -240,6 +237,8 @@ export interface ExpenseRow {
 export interface ExpenseData {
   /** 분류 안 된 지출 (통장 출금 + 법인카드) — 금액 큰 것부터 */
   unclassified: ExpenseRow[];
+  /** 🔴 감사 M5: 같은 상대끼리 묶음 — 한 번에 분류(한 건 분류=같은 상대 전파를 그대로 씀) */
+  byPayer: { payer: string; n: number; sum: number; anyId: number; suggest: string | null }[];
   /** 분류된 지출(이 달) — 잘못 붙였으면 해제 (감사 H10 계열) */
   classified: ExpenseRow[];
   unclassifiedSum: number;
@@ -249,16 +248,13 @@ export interface ExpenseData {
 }
 
 export async function expenseData(ym: string): Promise<ExpenseData> {
-  const start = `${ym}-01`;
-  const [y, m] = ym.split("-").map(Number);
-  const t = y * 12 + (m - 1) + 1;
-  const nextStart = `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}-01`;
+  const { start, nextStart } = monthRange(ym); // 감사 L3: 월 경계 정본(lib/ym)
   const inMonth = sql`is_active AND out_amount > 0
     AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
     AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date`;
 
   const rules = await db.execute<{ key: string; category: string }>(sql`
-    SELECT key, category FROM expense_rule LIMIT 1000
+    SELECT key, category FROM expense_rule LIMIT 5000
   `);
   const ruleMap = new Map(rules.map((r) => [r.key, r.category]));
 
@@ -297,6 +293,23 @@ export async function expenseData(ym: string): Promise<ExpenseData> {
     };
   });
 
+  // 감사 M5 — 상대별 묶음 (전체 미분류 대상, LIMIT 없는 집계)
+  const byPayerRows = await db.execute<{ p: string; n: number; s: string; any_id: number }>(sql`
+    SELECT CASE WHEN source = '통장'
+             THEN trim(regexp_replace(description, '^\[[^\]]*\] *', ''))
+             ELSE trim(description) END p,
+           count(*)::int n, COALESCE(SUM(out_amount), 0)::bigint s, min(id)::int any_id
+    FROM cash_txn WHERE ${inMonth} AND category IS NULL
+    GROUP BY 1 ORDER BY 3 DESC LIMIT 60
+  `);
+  const byPayer = byPayerRows.map((r) => ({
+    payer: r.p,
+    n: Number(r.n),
+    sum: Number(r.s),
+    anyId: Number(r.any_id),
+    suggest: ruleMap.get(r.p) ?? null,
+  }));
+
   const classifiedRows = await db.execute<{
     id: number; source: string; l: string; at: string; out_amount: number; description: string; category: string;
   }>(sql`
@@ -321,6 +334,7 @@ export async function expenseData(ym: string): Promise<ExpenseData> {
 
   return {
     unclassified,
+    byPayer,
     classified,
     unclassifiedSum: unclassified.reduce((s, r) => s + r.amount, 0),
     unclassifiedTotal: Number(totalRow[0]?.s ?? 0),
@@ -409,9 +423,17 @@ export async function payablesData(): Promise<PayablesData> {
     ORDER BY pp.id DESC LIMIT 15
   `);
 
+  // 🔴 감사 M8: 총액은 목록(400건)이 아니라 SQL 전체 집계로 — 첫 화면 「줄 돈」과 일치
+  const [totalRow] = await db.execute<{ s: string }>(sql`
+    SELECT COALESCE(SUM(pi.total - COALESCE(pp.paid, 0)), 0)::bigint s
+    FROM purchase_invoice pi
+    LEFT JOIN LATERAL (SELECT SUM(amount)::int paid FROM purchase_payment x WHERE x.invoice_id = pi.id) pp ON true
+    WHERE pi.status <> '취소' AND pi.total IS NOT NULL AND pi.total > COALESCE(pp.paid, 0)
+  `);
+
   return {
     suppliers,
-    totalRemain: suppliers.reduce((s, x) => s + x.remain, 0),
+    totalRemain: Number(totalRow.s),
     recent: recent.map((r) => ({
       id: Number(r.id),
       supplier: r.supplier,
@@ -421,4 +443,65 @@ export async function payablesData(): Promise<PayablesData> {
       paidOn: r.paid_on,
     })),
   };
+}
+
+/* ================================================================== */
+/* 감사 P2 — 「출금에서 지급 잡기」 후보 (2026-08-25)                     */
+
+export interface PayLinkRow {
+  id: number;
+  at: string;
+  payer: string;
+  amount: number;
+  /** 별명·이름으로 짐작한 거래처 (미지급 잔액 있는 것만) */
+  suggest: { supplier: string; remain: number } | null;
+}
+
+export async function payLinkData(): Promise<{ rows: PayLinkRow[] }> {
+  // '매입대금' 출금 중 지급 기록과 안 이어진 것 — 실사용 기간(8월~)만
+  const outs = await db.execute<{ id: number; at: string; description: string; out_amount: number }>(sql`
+    SELECT c.id, to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD') at, c.description, c.out_amount
+    FROM cash_txn c
+    WHERE c.source = '통장' AND c.is_active AND c.out_amount > 0 AND c.category = '매입대금'
+      AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date >= '2026-08-01'
+      AND NOT EXISTS (
+        SELECT 1 FROM recon_match m
+        WHERE m.src_table = 'cash_txn' AND m.src_id = c.id AND m.kind = '매입지급'
+      )
+    ORDER BY c.occurred_at DESC LIMIT 60
+  `);
+  // 거래처별 미지급 잔액
+  const remains = await db.execute<{ supplier: string; remain: string }>(sql`
+    SELECT pi.supplier, SUM(pi.total - COALESCE(pp.paid, 0))::bigint remain
+    FROM purchase_invoice pi
+    LEFT JOIN LATERAL (SELECT SUM(amount)::int paid FROM purchase_payment x WHERE x.invoice_id = pi.id) pp ON true
+    WHERE pi.status <> '취소' AND pi.total IS NOT NULL AND pi.total > COALESCE(pp.paid, 0)
+    GROUP BY 1 LIMIT 100
+  `);
+  const remainMap = new Map(remains.map((r) => [r.supplier, Number(r.remain)]));
+  const aliases3 = await db.execute<{ alias_key: string; party_key: string }>(sql`
+    SELECT alias_key, party_key FROM party_alias WHERE party_key LIKE 'S:%' LIMIT 2000
+  `);
+  const aliasMap3 = new Map(aliases3.map((a) => [a.alias_key, a.party_key.slice(2)]));
+
+  const rows: PayLinkRow[] = outs.map((o) => {
+    const payer = payerKeyOf("통장", o.description);
+    const pn = normName(payer);
+    let sup = aliasMap3.get(pn) ?? null;
+    if (!sup || !remainMap.has(sup)) {
+      sup =
+        [...remainMap.keys()].find((name) => {
+          const a = normName(name);
+          return a.length >= 2 && pn.length >= 2 && (pn.includes(a) || a.includes(pn));
+        }) ?? null;
+    }
+    return {
+      id: Number(o.id),
+      at: o.at,
+      payer,
+      amount: Number(o.out_amount),
+      suggest: sup && remainMap.has(sup) ? { supplier: sup, remain: remainMap.get(sup)! } : null,
+    };
+  });
+  return { rows };
 }

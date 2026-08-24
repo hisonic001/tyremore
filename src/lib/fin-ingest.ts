@@ -243,7 +243,7 @@ export async function ingestTaxInvoices(
   `);
   // 품목 단위 규칙 (미쉐린 digital module 같은 혼합 상대) — 품목 정규화가 JS 라 여기서 맞춘다
   const itemRules = await db.execute<{ biz_no: string; item_key: string; kind: string }>(sql`
-    SELECT biz_no, item_key, kind FROM tax_item_rule LIMIT 500
+    SELECT biz_no, item_key, kind FROM tax_item_rule LIMIT 2000
   `);
   if (itemRules.length > 0) {
     const rmap = new Map(itemRules.map((r) => [`${r.biz_no}|${r.item_key}`, r.kind]));

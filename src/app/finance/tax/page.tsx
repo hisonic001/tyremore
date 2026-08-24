@@ -55,7 +55,7 @@ export default async function FinanceTaxPage() {
       </header>
       <p className="text-sm text-slate-500">
         상대별로 묶어 보여줍니다 — 유형(경비·정산사·거래처)을 한 번 정하면 그 상대는 계속 자동으로
-        처리됩니다. 매출 계산서는 판매 기록뿐 아니라 <strong>통장 입금과 직접</strong> 이을 수 있습니다.
+        처리됩니다. 매출 계산서는 판매 기록뿐 아니라 <strong>통장 입금과 직접</strong> 이을 수 있습니다. 대형 거래처 계산서는 보통 월말에 일괄 발행됩니다 — 매입 기록이 먼저 있어도 정상입니다.
       </p>
       <TaxRecon
         data={data}

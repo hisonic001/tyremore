@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession } from "@/lib/auth";
+import { kstToday, ymAdd } from "@/lib/ym";
 
 export const dynamic = "force-dynamic";
 
@@ -17,13 +18,7 @@ export const dynamic = "force-dynamic";
  */
 
 const won = (n: number) => n.toLocaleString("ko-KR");
-const kstToday = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
-
-function ymAdd(ym: string, delta: number): string {
-  const [y, m] = ym.split("-").map(Number);
-  const t = y * 12 + (m - 1) + delta;
-  return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`;
-}
+// 감사 L3: 달 계산은 lib/ym 정본
 
 export default async function MarginReportPage({
   searchParams,

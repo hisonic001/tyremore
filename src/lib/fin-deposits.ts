@@ -13,7 +13,8 @@ import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, isOwner } from "@/lib/auth";
-import { CARD_SETTLE_PATTERN_SQL } from "./expense-cats";
+import { CARD_SETTLE_PATTERN_SQL, payerKeyOf } from "./expense-cats";
+import { monthRange } from "./ym";
 import { normName } from "./recon-data";
 import { planSettlement } from "./receivable-plan";
 import { settleReceivables } from "./receivable";
@@ -40,7 +41,7 @@ async function learnAlias(aliasRaw: string, partyKey: string, partyLabel: string
   }
 }
 
-const payerOf = (description: string): string => description.replace(/^\[[^\]]*\]\s*/, "").trim();
+const payerOf = (description: string): string => payerKeyOf("통장", description); // 감사 L2: 정본
 
 async function getDeposit(id: number) {
   const [d] = await db.execute<{
@@ -60,10 +61,7 @@ export async function markCardSettlements(
   const g = await guard();
   if (!g.ok) return g;
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return { ok: false, error: "달이 올바르지 않습니다" };
-  const start = `${ym}-01`;
-  const [y, m] = ym.split("-").map(Number);
-  const t = y * 12 + (m - 1) + 1;
-  const nextStart = `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}-01`;
+  const { start, nextStart } = monthRange(ym); // 감사 L3
   const rows = await db.execute<{ id: number }>(sql`
     UPDATE cash_txn SET recon_status = '확정', category = '카드정산'
     WHERE source = '통장' AND is_active AND in_amount > 0 AND recon_status = '미대조'
