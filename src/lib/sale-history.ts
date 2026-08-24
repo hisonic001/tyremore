@@ -63,6 +63,8 @@ export interface SaleRow {
   paymentMemo: string | null;
   marsStatus: string;
   marsRefNo: string | null;
+  /** ⭐ 마지막 자동입력 시도 (단계2 mars_attempt, 카드 표시 2026-08-24) — 「MM-DD HH:MM 단계 — 오류」 */
+  marsLastTry: string | null;
   /** 갈아 끼운 바퀴 (판매 등록의 체크박스) */
   tyrePositions: string[];
   /** 등록한 시각 'HH:MM' — 작업일과 별개다 */
@@ -188,6 +190,7 @@ export async function saleHistory(opts: {
     payment_memo: string | null;
     mars_status: string;
     mars_ref_no: string | null;
+    mars_last_try: string | null;
     item_id: number | null;
     line_type: string | null;
     description: string | null;
@@ -222,6 +225,10 @@ export async function saleHistory(opts: {
            (c.consent_signed_at IS NOT NULL) consent_signed,
            q.mars_memo, q.total_amount, q.payment_method, q.payment_memo,
            q.mars_status, q.mars_ref_no, q.tyre_positions,
+           -- ⭐ 마지막 자동입력 시도 (2026-08-24) — 어디까지 갔고 왜 멈췄는지 카드에서 보인다
+           (SELECT to_char(COALESCE(a.finished_at, a.started_at) AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI')
+                   || ' ' || a.stage || COALESCE(' — ' || left(a.error, 140), '')
+              FROM mars_attempt a WHERE a.quote_id = q.id ORDER BY a.id DESC LIMIT 1) mars_last_try,
            to_char(q.created_at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') created_hm,
            qi.id item_id, qi.line_type, qi.description, qi.qty, qi.final_price, qi.memo line_memo,
            -- ⭐ 규격은 저장된 폭/편평비/인치로 조립한다 (225/45R17 · 145R13)
@@ -302,6 +309,7 @@ export async function saleHistory(opts: {
         })),
         marsStatus: r.mars_status,
         marsRefNo: r.mars_ref_no,
+        marsLastTry: r.mars_last_try,
         tyrePositions: r.tyre_positions ? r.tyre_positions.split(",").map((x) => x.trim()).filter(Boolean) : [],
         createdAt: r.created_hm,
         lines: [],

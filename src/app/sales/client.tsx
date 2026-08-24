@@ -338,6 +338,12 @@ export function SaleCard({
                 {s.marsRefNo && ` · ${s.marsRefNo}`}
               </p>
             )}
+            {/* ⭐ 마지막 자동입력 시도 (2026-08-24) — 안 올라간 건이 어디서 멈췄는지.
+                  전송완료·해당없음은 결과가 위에 이미 있으니 안 적는다 */}
+            {s.marsLastTry &&
+              (s.marsStatus === "보류" || s.marsStatus === "미전송" || s.marsStatus === "수동처리") && (
+                <p className="tabular text-amber-700">MARS 마지막 시도: {s.marsLastTry}</p>
+              )}
           </div>
 
           {/* ⭐ 외상 수금 (사장님 선택 2026-08-11) */}

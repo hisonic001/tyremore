@@ -1081,7 +1081,15 @@ async function createVehicleForContact(
  *    갓 만든 차량은 번호판 검색 색인에 늦게 잡힌다 — 이름 검색은 바로 된다.
  *    줄을 클릭해 두면 「판매 내역」이 그 손님 기준으로 열린다.
  */
-async function findCustomerByName(page: Page, name: string, phone: string | null): Promise<boolean> {
+async function findCustomerByName(
+  page: Page,
+  name: string,
+  phone: string | null,
+  /** ⭐ 단계4 (2026-08-24): 번호판을 주면 검색 결과에서 **차량 줄**을 우선 고른다 —
+   *  연락처 줄로 주문을 만들면 차량 연결이 빠져 송장에 번호판이 없고, 그 송장은
+   *  확인·점검이 안 된다 (8/18 이중 전기 4건의 뿌리). 차량 줄이 안 보이면 종전대로. */
+  plate?: string | null,
+): Promise<boolean> {
   const f = main(page);
   const box = f.getByRole("textbox", { name: "이름/번호판 번호" });
   // 직전에 번호판 검색을 하고 왔으면 이미 검색 화면이다 — 링크를 또 누르면 실패한다
@@ -1097,6 +1105,16 @@ async function findCustomerByName(page: Page, name: string, phone: string | null
   let rows = f.locator("tr").filter({ hasText: name });
   const digits = phone?.replace(/\D/g, "") ?? "";
   if (digits) rows = rows.filter({ hasText: digits });
+  if (plate) {
+    const vrow = rows.filter({ hasText: plate }).first();
+    if (await vrow.isVisible({ timeout: 5000 }).catch(() => false)) {
+      log(`    · 이름+번호판(${plate}) 차량 줄을 골랐습니다 — 주문에 차량이 연결됩니다`);
+      await vrow.click({ position: { x: 5, y: 5 } }).catch(() => {});
+      await page.waitForTimeout(800);
+      return true;
+    }
+    log(`    · 검색 결과에 번호판 ${plate} 줄이 안 보입니다 — 연락처 줄로 진행합니다 (송장에 번호판이 빠질 수 있음)`);
+  }
   const row = rows.first();
   if (!(await row.isVisible({ timeout: 10000 }).catch(() => false))) return false;
   log(`    · 이름 검색: ${(((await row.innerText().catch(() => "")) || "").replace(/\s+/g, " ")).slice(0, 100)}`);
@@ -2440,7 +2458,7 @@ async function openDraft(
   if (c.name) {
     await page.goto(HOME);
     await waitHome(page, 40000);
-    if (await findCustomerByName(page, c.name, c.phone)) {
+    if (await findCustomerByName(page, c.name, c.phone, c.plate)) {
       await clickAny(page, "판매 내역");
       await page.waitForTimeout(3000);
       await passBigSearchDialog(page);
@@ -3684,7 +3702,7 @@ ${"=".repeat(56)}`);
               await stage("차량생성");
             }
             // 번호판 검색은 색인이 늦어 못 믿는다 — 이름+전화로 고객 줄을 잡는다
-            if (!(await findCustomerByName(page, q.customerName, q.phone))) {
+            if (!(await findCustomerByName(page, q.customerName, q.phone, q.plateNo))) {
               throw new Error("이름으로도 고객을 찾지 못했습니다 — MARS 에서 확인해 주세요");
             }
           } else if (!c || !c.consentSigned) {
