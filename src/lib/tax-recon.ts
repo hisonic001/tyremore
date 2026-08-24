@@ -191,6 +191,7 @@ export async function taxReconV2(): Promise<TaxReconV2> {
            description, in_amount, account_label l
     FROM cash_txn
     WHERE source = '통장' AND is_active AND in_amount > 0 AND category IS NULL
+      AND recon_status <> '확정' -- 🔴 감사 H7: 외상 수금 등으로 이미 정리된 입금은 후보에서 뺀다
       AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${TAX_APP_START}::date
     ORDER BY id DESC LIMIT 400
   `);
@@ -337,7 +338,10 @@ export async function taxReconV2(): Promise<TaxReconV2> {
         amount: Number(q.total),
       });
       const exact = namePool.filter((q) => Number(q.total) === inv.total && sameMonth(q.d, inv.writeDate));
-      const auto = exact.length === 1 ? toRef(exact[0]) : null;
+      /* 🔴 감사 H4(2026-08-25): 자동확정은 **기억된 상대(별명)**일 때만 — 부분포함 이름
+         매칭만으로 자동으로 이으면 「김철」↔「김철수산업」 같은 오연결이 난다.
+         이름 짐작 건은 후보(사람 확정)로만 */
+      const auto = aliasName && exact.length === 1 ? toRef(exact[0]) : null;
       const monthName = namePool.filter((q) => sameMonth(q.d, inv.writeDate));
       const monthSum = monthName.reduce((s, q) => s + Number(q.total), 0);
       const bundle = !auto && monthName.length > 1 && monthSum === inv.total ? monthName.map(toRef) : null;

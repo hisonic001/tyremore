@@ -62,6 +62,17 @@ export async function confirmTaxMatch(input: {
         ? await db.execute<{ id: number }>(sql`SELECT id FROM purchase_invoice WHERE id = ${r.id} AND status <> '취소'`)
         : await db.execute<{ id: number }>(sql`SELECT id FROM quote WHERE id = ${r.id} AND status = '성사'`);
     if (found.length === 0) return { ok: false, error: `기록 ${r.table}#${r.id} 을(를) 찾을 수 없습니다` };
+    // 🔴 감사 H3(2026-08-25): 같은 매입·판매가 두 계산서에 이어지는 것을 서버가 막는다
+    const taken = await db.execute<{ id: number }>(sql`
+      SELECT id FROM recon_match WHERE ref_table = ${r.table} AND ref_id = ${r.id}
+        AND kind IN ('매입계산서', '매출계산서') LIMIT 1
+    `);
+    if (taken.length > 0) return { ok: false, error: `기록 ${r.table}#${r.id} 은(는) 이미 다른 계산서와 이어져 있습니다` };
+  }
+  // 🔴 감사 L8: 묶음 확정은 배분 합이 계산서 금액과 맞아야 한다
+  if (refs.length > 1) {
+    const sum = refs.reduce((s, r) => s + r.amount, 0);
+    if (sum !== inv.total) return { ok: false, error: `묶음 배분 합(${sum.toLocaleString()}원)이 계산서(${inv.total.toLocaleString()}원)와 다릅니다` };
   }
 
   const kind = inv.direction === "매입" ? "매입계산서" : "매출계산서";
@@ -98,7 +109,10 @@ export async function confirmTaxMatch(input: {
   try {
     let partyKey: string | null = null;
     let partyLabel = "";
-    if (inv.direction === "매입") {
+    if (refs.length > 1) {
+      // 🔴 감사 L7: 여러 기록 묶음에서는 어느 상대인지 확실치 않아 배우지 않는다
+      partyKey = null;
+    } else if (inv.direction === "매입") {
       const [pi] = await db.execute<{ supplier: string }>(sql`
         SELECT supplier FROM purchase_invoice WHERE id = ${refs[0].id}
       `);
@@ -205,8 +219,8 @@ export async function undoTaxMatch(
   const g = await guard();
   if (!g.ok) return g;
   // 입금·출금과 이어져 있었다면 그 통장 줄도 미대조로 되돌린다 (v2 — 직접 연결)
-  const [invRow] = await db.execute<{ recon_reason: string | null }>(sql`
-    SELECT recon_reason FROM tax_invoice WHERE id = ${taxInvoiceId}
+  const [invRow] = await db.execute<{ recon_reason: string | null; counterparty_name: string; counterparty_biz_no: string }>(sql`
+    SELECT recon_reason, counterparty_name, counterparty_biz_no FROM tax_invoice WHERE id = ${taxInvoiceId}
   `);
   const gone = await db.execute<{ ref_table: string; ref_id: number }>(sql`
     DELETE FROM recon_match WHERE src_table = 'tax_invoice' AND src_id = ${taxInvoiceId}
@@ -227,6 +241,28 @@ export async function undoTaxMatch(
       }
     }
   }
+  /* 🔴 감사 H8(2026-08-25): 확정 때 배운 별명을 함께 지운다 — 안 지우면 잘못된 학습이
+     다음 자동확정 후보 1순위로 계속 되살아난다 ("고쳐도 그대로"의 근원) */
+  if (invRow) {
+    const nameKey = normName(invRow.counterparty_name);
+    if (nameKey.length >= 2) {
+      await db.execute(sql`DELETE FROM party_alias WHERE alias_key = ${nameKey} AND party_key LIKE 'S:%'`);
+    }
+    for (const g of gone) {
+      if (g.ref_table !== "cash_txn") continue;
+      const [depRow] = await db.execute<{ description: string }>(sql`
+        SELECT description FROM cash_txn WHERE id = ${g.ref_id}
+      `);
+      if (depRow) {
+        const payerKey = normName(depRow.description.replace(/^\[[^\]]*\]\s*/, "").trim());
+        if (payerKey.length >= 2) {
+          await db.execute(sql`
+            DELETE FROM party_alias WHERE alias_key = ${payerKey + "@" + invRow.counterparty_biz_no}
+          `);
+        }
+      }
+    }
+  }
   await db.execute(sql`UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL WHERE id = ${taxInvoiceId}`);
   revalidatePath("/finance/tax");
   return { ok: true };
@@ -239,6 +275,21 @@ export async function ignoreTaxInvoice(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
+  /* 🔴 감사 H9(2026-08-25): 「되살리기」가 품목규칙을 안 지우면 다음 업로드에서
+     같은 계산서가 다시 자동 무시된다 — 되살릴 때 그 (상대+품목) 규칙도 지운다 */
+  if (back) {
+    const [inv] = await db.execute<{ counterparty_biz_no: string; item_summary: string | null }>(sql`
+      SELECT counterparty_biz_no, item_summary FROM tax_invoice WHERE id = ${taxInvoiceId}
+    `);
+    if (inv) {
+      const itemKey = normName(inv.item_summary ?? "");
+      if (itemKey.length >= 2) {
+        await db.execute(sql`
+          DELETE FROM tax_item_rule WHERE biz_no = ${inv.counterparty_biz_no} AND item_key = ${itemKey}
+        `);
+      }
+    }
+  }
   await db.execute(sql`
     UPDATE tax_invoice SET recon_status = ${back ? "미대조" : "무시"},
            recon_reason = ${back ? null : "직접"}
@@ -363,10 +414,15 @@ export async function confirmTaxToBank(
         await tx.execute(sql`UPDATE cash_txn SET recon_status = '확정' WHERE id = ${cashTxnId}`);
       }
     } else if (inv.direction === "매입") {
-      // 적립 소진 중 — 분류만 미리 붙이고, 통장 줄은 다음 계산서를 기다린다
+      // 적립 소진 중 — 분류를 미리 붙이고 '제안' 상태로 (다음 계산서를 기다린다)
       await tx.execute(sql`
-        UPDATE cash_txn SET category = COALESCE(category, '매입대금') WHERE id = ${cashTxnId}
+        UPDATE cash_txn SET recon_status = '제안', category = COALESCE(category, '매입대금')
+        WHERE id = ${cashTxnId}
       `);
+    } else {
+      /* 🔴 감사 H6(2026-08-25): 매출 부분 연결도 상태를 남긴다 — 안 남기면 입금 대조
+         화면에 전액으로 다시 떠서 외상 수금까지 이중으로 잡을 수 있다 */
+      await tx.execute(sql`UPDATE cash_txn SET recon_status = '제안' WHERE id = ${cashTxnId}`);
     }
   });
 

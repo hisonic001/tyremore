@@ -161,6 +161,25 @@ export async function cancelFinUploadBatch(uploadId: number): Promise<number> {
   const rows = await db.execute<{ id: number }>(sql`
     UPDATE ${table} SET is_active = false WHERE upload_id = ${uploadId} AND is_active RETURNING id
   `);
+  // 🔴 감사 M9: '카드매출승인' 배치는 card_day(집계)와 card_txn(건별) 둘 다 잠재운다
+  if (up.source === "카드매출승인") {
+    await db.execute(sql`
+      UPDATE card_txn SET is_active = false WHERE upload_id = ${uploadId} AND is_active
+    `);
+  }
+  /* 🔴 감사 M10: 잠재운 줄에 붙어 있던 대조 연결을 지운다 — 안 지우면 죽은 줄과 이어진
+     매입·판매·계산서가 영영 후보에서 제외된다. 계산서(src) 쪽은 상태도 미대조로 되돌림 */
+  if (up.source === "통장" || up.source === "법인카드") {
+    await db.execute(sql`
+      DELETE FROM recon_match WHERE ref_table = 'cash_txn'
+        AND ref_id IN (SELECT id FROM cash_txn WHERE upload_id = ${uploadId})
+    `);
+  } else if (up.source === "홈택스매출" || up.source === "홈택스매입") {
+    await db.execute(sql`
+      DELETE FROM recon_match WHERE src_table = 'tax_invoice'
+        AND src_id IN (SELECT id FROM tax_invoice WHERE upload_id = ${uploadId})
+    `);
+  }
   await db.execute(sql`UPDATE fin_upload SET status = '취소' WHERE id = ${uploadId}`);
   return rows.length;
 }

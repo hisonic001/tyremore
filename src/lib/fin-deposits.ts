@@ -146,7 +146,7 @@ export async function collectFromDeposit(
     FROM quote q
     WHERE q.status = '성사' AND q.payment_method = '외상' AND ${cond}
       AND q.total_amount > COALESCE((SELECT SUM(amount)::int FROM receivable_payment rp WHERE rp.quote_id = q.id), 0)
-    ORDER BY COALESCE(q.work_date, q.created_at::date) ASC, q.id ASC LIMIT 100
+    ORDER BY COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) ASC, q.id ASC LIMIT 100
   `);
   if (rows.length === 0) return { ok: false, error: "그 대상의 미납 외상이 없습니다" };
 
@@ -209,5 +209,21 @@ export async function ignoreDeposit(
     WHERE id = ${cashTxnId} AND source = '통장' AND recon_status <> '확정'
   `);
   revalidatePath("/finance/deposits");
+  return { ok: true };
+}
+
+/** 🔴 감사 H10(2026-08-25): 카드정산 표시 취소 — 우연히 패턴에 걸린 진짜 입금을 되살린다 */
+export async function unmarkCardSettlement(
+  cashTxnId: number,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  const rows = await db.execute<{ id: number }>(sql`
+    UPDATE cash_txn SET category = NULL, recon_status = '미대조'
+    WHERE id = ${cashTxnId} AND category = '카드정산' RETURNING id
+  `);
+  if (rows.length === 0) return { ok: false, error: "카드정산으로 표시된 줄이 아닙니다" };
+  revalidatePath("/finance/deposits");
+  revalidatePath("/finance");
   return { ok: true };
 }

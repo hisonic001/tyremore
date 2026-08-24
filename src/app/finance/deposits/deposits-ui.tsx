@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { DepositReconData, DepositSuggestion } from "@/lib/recon-data";
-import { collectFromDeposit, ignoreDeposit, linkDepositToQuote, markCardSettlements } from "@/lib/fin-deposits";
+import { collectFromDeposit, ignoreDeposit, linkDepositToQuote, markCardSettlements, unmarkCardSettlement } from "@/lib/fin-deposits";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
 
@@ -165,6 +165,32 @@ export function DepositsRecon({ data, ym }: { data: DepositReconData; ym: string
           </li>
         ))}
       </ul>
+
+      {/* 🔴 감사 H10 — 카드정산으로 표시된 입금 되돌리기 (우연히 패턴에 걸린 진짜 입금 구제) */}
+      {data.settledCard.length > 0 && (
+        <details className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-600">
+            카드정산으로 표시된 입금 {data.settledCard.length}건 (이 달) — 잘못 표시됐으면 되돌리기
+          </summary>
+          <ul className="mt-2 divide-y divide-slate-100 text-sm">
+            {data.settledCard.map((r) => (
+              <li key={r.id} className="flex items-center justify-between gap-2 py-1.5">
+                <span className="tabular min-w-0 truncate text-xs">
+                  {r.at} · {r.payer} · +{won(r.amount)}원
+                </span>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => act(() => unmarkCardSettlement(r.id), () => "되돌렸습니다 — 정리 목록으로 돌아갔습니다.")}
+                  className="shrink-0 text-xs text-slate-400 underline"
+                >
+                  되돌리기
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
 
       <p className="mt-4 text-xs text-slate-400">
         수금 등록을 되돌리려면 정비 내역·외상 장부의 수금 내역에서 지우면 됩니다 — 여기 연결 자국은

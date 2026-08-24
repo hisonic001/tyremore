@@ -109,6 +109,42 @@ export function ExpensesUi({ data }: { data: ExpenseData }) {
         </ul>
       )}
 
+      {/* 분류된 지출 보기/해제 — 잘못 붙였으면 여기서 (감사 H10 계열) */}
+      {data.classified.length > 0 && (
+        <details className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-600">
+            분류된 지출 {data.classified.length}건 (이 달) — 잘못 붙였으면 해제
+          </summary>
+          <ul className="mt-2 divide-y divide-slate-100 text-sm">
+            {data.classified.map((row) => (
+              <li key={row.id} className="flex items-center justify-between gap-2 py-1.5">
+                <span className="tabular min-w-0 truncate text-xs">
+                  {row.at} {row.source === "법인카드" ? "💳" : "🏦"} {row.payer} · −{won(row.amount)}원 ·{" "}
+                  <span className="text-violet-700">{row.category}</span>
+                </span>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() =>
+                    start(async () => {
+                      setMsg(null);
+                      setError(null);
+                      const r = await setExpenseCategory(row.id, null);
+                      if (!r.ok) return setError(r.error);
+                      setMsg(`「${r.payer}」 분류를 해제했습니다 — 규칙도 지워 앞으로 자동으로 붙지 않습니다.`);
+                      router.refresh();
+                    })
+                  }
+                  className="shrink-0 text-xs text-slate-400 underline"
+                >
+                  해제
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
       <p className="mt-4 text-xs text-slate-400">
         매입대금·카드대금·내부이체로 분류한 지출은 손익의 「쓴 돈」에 다시 넣지 않습니다 — 매입·법인카드
         쪽에서 이미 세고 있어 이중 계산이 되기 때문입니다.

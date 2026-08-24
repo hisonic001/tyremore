@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession } from "@/lib/auth";
 import { EXPENSE_IN_PL } from "@/lib/expense-cats";
+import { TAX_APP_START } from "@/lib/tax-recon";
 import { cancelFinUpload } from "@/lib/fin-upload";
 
 export const dynamic = "force-dynamic";
@@ -122,13 +123,15 @@ export default async function FinancePage({
   `);
   const unclassOut = await db.execute<{ s: string }>(sql`
     SELECT COALESCE(SUM(out_amount), 0)::bigint s FROM cash_txn
-    WHERE ${inMonth} AND source = '통장' AND out_amount > 0 AND category IS NULL
-  `);
+    WHERE ${inMonth} AND out_amount > 0 AND category IS NULL
+  `); // 🔴 감사 M4: 지출 분류 화면과 같은 기준(통장+법인카드)
 
   // ① 월 요약 — 통장 들어옴/나감, 카드로 쓴 돈 (순차)
   const sums = await db.execute<{ source: string; in_sum: string; out_sum: string }>(sql`
     SELECT source, COALESCE(SUM(in_amount), 0)::bigint in_sum, COALESCE(SUM(out_amount), 0)::bigint out_sum
-    FROM cash_txn WHERE ${inMonth} GROUP BY source LIMIT 5
+    FROM cash_txn WHERE ${inMonth}
+      AND COALESCE(category, '') <> '내부이체' -- 🔴 감사 L6: 계좌끼리 옮긴 돈은 입·출금 요약에서 뺀다
+    GROUP BY source LIMIT 5
   `);
   const bank = sums.find((s) => s.source === "통장");
   const card = sums.find((s) => s.source === "법인카드");
@@ -150,6 +153,7 @@ export default async function FinancePage({
   // ⭐ 2단계 — 확인 기다리는 세금계산서 (미대조·제안)
   const taxOpenRows = await db.execute<{ n: number }>(sql`
     SELECT count(*)::int n FROM tax_invoice WHERE is_active AND recon_status IN ('미대조', '제안')
+      AND write_date >= ${TAX_APP_START}::date -- 🔴 감사 M3: 대조 화면과 같은 기준(실사용 기간)
   `);
   const taxOpen = Number(taxOpenRows[0]?.n ?? 0);
 
@@ -187,7 +191,7 @@ export default async function FinancePage({
   const gFeeShown = gFee > 0 ? gFee : feeEstimated;
   const gSpent = gBought + gCardOut + gFeeShown + gBankExp;
   /* 이 달 손익에서 빠져 있는 것 — 모든 달에 같은 규칙으로 */
-  const lastDay = new Date(new Date(nextStart + "T00:00:00").getTime() - 86400000).toISOString().slice(0, 10);
+  const lastDay = new Date(new Date(nextStart + "T00:00:00Z").getTime() - 86400000).toISOString().slice(0, 10); // 감사 L4: UTC 명시
   const endShown = ym === thisYm ? kstToday() : lastDay;
   const covWarnings: string[] = [];
   if (!cov.card_last || cov.card_last < start) {
@@ -322,7 +326,7 @@ export default async function FinancePage({
       {!noData && (
         <section className="mt-4 grid grid-cols-3 gap-2">
           <div className="rounded-2xl border border-slate-200 bg-white p-3 text-center">
-            <p className="text-xs text-slate-500">통장에 들어온 돈</p>
+            <p className="text-xs text-slate-500">통장에 들어온 돈 (계좌끼리 제외)</p>
             <p className="tabular mt-1 font-bold text-emerald-700">{won(Number(bank?.in_sum ?? 0))}원</p>
           </div>
           <div className="rounded-2xl border border-slate-200 bg-white p-3 text-center">

@@ -101,8 +101,8 @@ export async function receivableBook(opts?: {
            SUM(q.total_amount)::bigint total,
            SUM(COALESCE(rp.paid, 0))::bigint paid,
            SUM(q.total_amount - COALESCE(rp.paid, 0))::bigint remain,
-           min(COALESCE(q.work_date, q.created_at::date))::text oldest,
-           (CURRENT_DATE - min(COALESCE(q.work_date, q.created_at::date)))::int oldest_days
+           min(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date))::text oldest,
+           (CURRENT_DATE - min(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)))::int oldest_days
     FROM quote q
     LEFT JOIN customer c ON c.id = q.customer_id
     LEFT JOIN (SELECT quote_id, SUM(amount) paid FROM receivable_payment GROUP BY 1) rp
@@ -126,20 +126,20 @@ export async function receivableBook(opts?: {
     age_days: number;
   }>(sql`
     SELECT ${KEY} k, q.id, q.quote_no,
-           COALESCE(q.work_date, q.created_at::date)::text work_date,
+           COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)::text work_date,
            q.total_amount total,
            COALESCE((SELECT SUM(amount)::int FROM receivable_payment rp WHERE rp.quote_id = q.id), 0) paid,
            v.plate_no,
            (SELECT string_agg(x.description, ' · ')
               FROM (SELECT qi.description FROM quote_item qi
                      WHERE qi.quote_id = q.id ORDER BY qi.id LIMIT 3) x) summary,
-           (CURRENT_DATE - COALESCE(q.work_date, q.created_at::date))::int age_days
+           (CURRENT_DATE - COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date))::int age_days
     FROM quote q
     LEFT JOIN vehicle v ON v.id = q.vehicle_id
     LEFT JOIN (SELECT quote_id, SUM(amount) paid FROM receivable_payment GROUP BY 1) rp
       ON rp.quote_id = q.id
     WHERE q.status = '성사' AND q.payment_method = '외상' ${kindCond} ${openOnly}
-    ORDER BY COALESCE(q.work_date, q.created_at::date) ASC, q.id ASC
+    ORDER BY COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) ASC, q.id ASC
     LIMIT ${DETAIL_CAP}
   `);
 
