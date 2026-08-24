@@ -97,14 +97,19 @@ export function PrintFrame({
 
   return (
     <div className="min-h-dvh bg-slate-200 print:bg-white">
+      {/* ⭐ 인쇄하면 위에 작게 나오던 「타이어모어」(사장님 제보 2026-08-24) — 화면 요소가
+            아니라 **브라우저가 종이 여백에 찍는 머리글**(문서 제목·URL)이다. 여백을 0으로
+            두면 크롬이 머리글·바닥글을 아예 안 그린다. 종이 여백은 아래 A4 div 의
+            p-[12mm] 패딩이 대신한다 (그래서 print:p-0 도 함께 뗐다). */}
+      <style>{`@media print { @page { size: A4; margin: 0 } }`}</style>
       {/* 화면에서만 보이는 도구 막대 */}
       <div className="mx-auto flex max-w-[210mm] flex-wrap items-center justify-between gap-2 px-4 py-3 print:hidden">
         <button onClick={() => history.back()} className="text-sm text-slate-600 underline underline-offset-4">
           ← 돌아가기
         </button>
         <span className="text-xs text-amber-700">
-          ✏️ 표 안의 품명·수량·단가를 눌러 바로 고칠 수 있습니다 — <strong>인쇄에만 반영</strong>되고 정비 내역은 안
-          바뀝니다
+          ✏️ 품명·수량·단가는 눌러서 고치고, [공임] 글자는 눌러서 뺄 수 있습니다 — <strong>인쇄에만 반영</strong>되고
+          정비 내역은 안 바뀝니다
         </span>
         <div className="flex gap-2">
           <a
@@ -120,7 +125,7 @@ export function PrintFrame({
       </div>
 
       {/* A4 종이 */}
-      <div className="mx-auto max-w-[210mm] bg-white p-[12mm] text-[13px] leading-snug text-black shadow print:max-w-none print:p-0 print:shadow-none">
+      <div className="mx-auto max-w-[210mm] bg-white p-[12mm] text-[13px] leading-snug text-black shadow print:max-w-none print:shadow-none">
         {head.canceled && (
           <p className="mb-2 border border-red-500 p-1 text-center font-bold text-red-600 print:hidden">
             ⚠️ 취소된 판매입니다
@@ -213,7 +218,17 @@ export function PrintFrame({
                 <td className="tabular border border-black p-1.5 text-center">{i + 1}</td>
                 <td className="border border-black p-1.5">
                   <span className="flex items-center">
-                    {r.isService && <span className="mr-1 shrink-0 text-[11px] text-slate-500">[공임]</span>}
+                    {/* ⭐ 누르면 [공임] 글자가 빠진다 — 인쇄에만 반영 (사장님 요청 2026-08-24) */}
+                    {r.isService && (
+                      <button
+                        type="button"
+                        onClick={() => patch(r.key, { isService: false })}
+                        title="누르면 [공임] 표시를 뺍니다 (인쇄에만 반영)"
+                        className="mr-1 shrink-0 text-[11px] text-slate-500 hover:text-red-600 hover:line-through"
+                      >
+                        [공임]
+                      </button>
+                    )}
                     <input
                       value={r.description}
                       onChange={(e) => patch(r.key, { description: e.target.value })}

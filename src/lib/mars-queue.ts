@@ -358,9 +358,10 @@ export async function marsQueue(): Promise<MarsEntry[]> {
     LEFT JOIN product      p ON p.id = qi.product_id
     LEFT JOIN service_item s ON s.id = qi.service_item_id
     WHERE qi.quote_id IN ${sql.raw(`(${ids.join(",")})`)}
-      -- 🔴 부품 소모(use) 줄은 MARS 에 안 넣는다 (2026-08-11) — 0원·품번 없음이라
-      --    넣으면 mars-fill 이 「줄 부족」으로 실패한다
-      AND qi.line_type <> 'use'
+      -- 🔴 0원 부품 소모(use) 줄은 MARS 에 안 넣는다 (2026-08-11) — 넣으면 mars-fill 이
+      --    「줄 부족」으로 실패한다. ⭐ 금액 있는 부품 줄은 넣는다 (2026-08-24) — 빼면
+      --    MARS 합계가 앱 합계와 어긋난다. 품번은 위 COALESCE 규칙(NEW- → 범용)을 따른다.
+      AND NOT (qi.line_type = 'use' AND qi.final_price = 0)
     ORDER BY qi.quote_id, qi.line_type DESC, qi.id
   `);
 

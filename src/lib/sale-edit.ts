@@ -349,8 +349,8 @@ export async function updateSaleLine(input: {
     sql`SELECT id, quote_id, product_id, qty, final_price, line_type FROM quote_item WHERE id = ${input.itemId}`,
   );
   if (!line) return { ok: false, error: "품목을 찾을 수 없습니다" };
-  // 🔴 부품 소모(use) 줄은 언제나 0원 — 값을 넣어도 무시한다 (2026-08-11)
-  if (line.line_type === "use") input.unitPrice = 0;
+  // ⭐ 부품(use) 줄도 금액을 고칠 수 있다 (사장님 요청 2026-08-24) — 0원이면 종전처럼
+  //    재고만 차감, 금액이 있으면 청구·MARS 대상 (mars-queue 가 0원 use 만 거른다)
   const e = await editableQuote(Number(line.quote_id));
   if (e.error !== undefined) return { ok: false, error: e.error };
 

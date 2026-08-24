@@ -519,7 +519,7 @@ ${d.label}`)) return;
         }
       />
 
-      {/* ⭐ 정비에 쓴 부품 — 0원 소모 줄, 재고만 차감 (사장님 확인 2026-08-11) */}
+      {/* ⭐ 정비에 쓴 부품 — 기본 0원(재고만 차감), 금액도 쓸 수 있다 (2026-08-24) */}
       <UsedPartsPick
         onAdd={(p) =>
           setRows((rs) => [
@@ -730,7 +730,7 @@ function LineRow({
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">
-            {/* ⭐ 부품 소모 (사장님 확인 2026-08-11) — 0원, 재고만 차감 */}
+            {/* ⭐ 부품 (2026-08-11) — 기본 0원(재고만 차감), 금액을 쓰면 청구·MARS 포함 (2026-08-24) */}
             {row.kind === "use" && <span className="mr-1 rounded bg-sky-200 px-1.5 py-0.5 text-xs font-semibold text-sky-900">부품 사용</span>}
             {row.description}
             {row.spec && <span className="tabular ml-1 font-normal text-slate-500">{row.spec}</span>}
@@ -749,10 +749,8 @@ function LineRow({
         <button type="button" className={BTN} onClick={() => onChange({ qty: row.qty + 1 })}>
           +
         </button>
-        {row.kind === "use" ? (
-          <span className="ml-auto text-xs text-sky-800">재고만 차감 · 0원 (손님 청구 없음)</span>
-        ) : (
-          <>
+        {/* ⭐ 부품(use) 줄도 단가·금액을 쓴다 — 기본 0원 (사장님 요청 2026-08-24) */}
+        <>
             <label className="ml-auto flex items-center gap-1">
               <span className="text-xs text-slate-500">단가</span>
               <input
@@ -776,9 +774,14 @@ function LineRow({
                 onUnit={(n) => onChange(priceChange(n))}
               />
             </label>
-          </>
-        )}
+        </>
       </div>
+      {/* 0원이면 종전 그대로 소모 줄 — 금액을 쓰면 손님 청구·MARS 에 들어간다 */}
+      {row.kind === "use" && (
+        <p className="mt-1 text-right text-xs text-sky-800">
+          {row.unitPrice === 0 ? "0원 — 재고만 차감 (손님 청구 없음)" : "금액이 있어 손님 청구에 들어갑니다"}
+        </p>
+      )}
       {/* ⭐ 검색 카드와 같은 할인 계산 (사장님 요청 2026-08-08) — %를 치면 단가가 따라온다 */}
       {row.listPrice ? (
         <div className="mt-1.5 flex justify-end">
@@ -790,15 +793,13 @@ function LineRow({
         </div>
       ) : null}
       {/* ⭐ 줄별 메모 (사장님 지시 2026-08-07) — MARS 이 줄의 「설명 2」로 들어간다.
-            부품 사용 줄은 MARS 에 안 가므로 메모 칸도 없다 */}
-      {row.kind !== "use" && (
-        <input
-          value={row.memo ?? ""}
-          onChange={(e) => onChange({ memo: e.target.value })}
-          placeholder="이 줄 메모 (선택) — MARS 설명 2"
-          className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
-        />
-      )}
+            금액 있는 부품 줄도 MARS 에 가므로 이제 모든 줄에 보인다 (2026-08-24) */}
+      <input
+        value={row.memo ?? ""}
+        onChange={(e) => onChange({ memo: e.target.value })}
+        placeholder="이 줄 메모 (선택) — MARS 설명 2"
+        className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
+      />
     </li>
   );
 }
@@ -989,7 +990,7 @@ function ServicePick({
 /**
  * ⭐ 정비에 쓴 부품 담기 (사장님 확인 2026-08-11 — "판매 등록에서 함께 담기").
  *    오일필터·엔진오일(통)·배터리 등을 검색해 담으면 0원 소모 줄이 되어
- *    재고만 차감된다. 손님 청구액·MARS 에는 안 들어간다.
+ *    재고만 차감된다(기본 0원). ⭐ 담은 뒤 금액을 쓰면 청구·MARS 에 들어간다 (2026-08-24).
  *    검색·목록 동작은 위 ServicePick 과 같은 규칙 (blur 250ms · mousedown 방어).
  */
 function UsedPartsPick({ onAdd }: { onAdd: (p: ProductHit) => void }) {
@@ -1020,7 +1021,7 @@ function UsedPartsPick({ onAdd }: { onAdd: (p: ProductHit) => void }) {
   return (
     <section className="rounded-2xl border border-slate-300 bg-white p-3">
       <h2 className="font-bold">
-        쓴 부품 담기 <span className="text-sm font-normal text-slate-500">— 재고만 차감 (0원)</span>
+        쓴 부품 담기 <span className="text-sm font-normal text-slate-500">— 기본 0원 (재고만 차감) · 금액도 쓸 수 있음</span>
       </h2>
       <input
         value={q}

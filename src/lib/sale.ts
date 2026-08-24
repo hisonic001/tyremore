@@ -36,7 +36,8 @@ function refresh(...paths: string[]) {
 }
 
 export interface SaleLine {
-  /** 'use' = 정비에 쓴 부품 소모 (2026-08-11) — 0원, 재고만 차감, MARS·청구 제외 */
+  /** 'use' = 정비에 쓴 부품 (2026-08-11) — 기본 0원(재고만 차감·MARS 제외).
+   *  ⭐ 금액을 쓸 수도 있다 (사장님 요청 2026-08-24) — 그러면 청구액·MARS 에 들어간다 */
   kind: "tire" | "service" | "custom" | "use";
   productId?: number | null;
   serviceItemId?: number | null;
@@ -180,13 +181,15 @@ export async function sellFromStock(
 export async function saveSale(
   input: SaleInput,
 ): Promise<{ ok: true; quoteId: number; quoteNo: string; shortages: string[] } | { ok: false; error: string }> {
-  // 부품 소모(use) 줄은 서버가 0원으로 못박는다 — 청구액·MARS 에 절대 안 섞이게 (2026-08-11)
+  // ⭐ 부품(use) 줄은 기본 0원이지만 금액도 쓸 수 있다 (사장님 요청 2026-08-24 —
+  //    "default 값은 0원이지만 금액도 쓸 수 있게"). 기표가·할인율은 부품에 없으니 비운다.
   const lines = input.lines
     .filter((l) => l.qty > 0)
-    .map((l) => (l.kind === "use" ? { ...l, unitPrice: 0, listPrice: null, salesRate: null } : l));
+    .map((l) => (l.kind === "use" ? { ...l, listPrice: null, salesRate: null } : l));
   if (lines.length === 0) return { ok: false, error: "판매할 품목이 없습니다" };
-  if (lines.every((l) => l.kind === "use")) {
-    return { ok: false, error: "부품 소모만으로는 판매가 안 됩니다 — 작업 내역이나 공임을 함께 담아 주세요" };
+  // 0원 부품 소모뿐이면 판매가 아니다 — 금액 있는 부품만이면(배터리 단품 등) 성립한다
+  if (lines.every((l) => l.kind === "use" && l.unitPrice === 0)) {
+    return { ok: false, error: "0원 부품 소모만으로는 판매가 안 됩니다 — 작업 내역·공임을 담거나 부품에 금액을 적어 주세요" };
   }
   for (const l of lines) {
     if (l.kind === "use" && !l.productId) return { ok: false, error: "부품 소모 줄에 상품이 없습니다" };
