@@ -204,7 +204,10 @@ export async function undoTaxMatch(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  // 입금과 이어져 있었다면 그 입금도 미대조로 되돌린다 (v2 — 입금 직접 연결)
+  // 입금·출금과 이어져 있었다면 그 통장 줄도 미대조로 되돌린다 (v2 — 직접 연결)
+  const [invRow] = await db.execute<{ recon_reason: string | null }>(sql`
+    SELECT recon_reason FROM tax_invoice WHERE id = ${taxInvoiceId}
+  `);
   const gone = await db.execute<{ ref_table: string; ref_id: number }>(sql`
     DELETE FROM recon_match WHERE src_table = 'tax_invoice' AND src_id = ${taxInvoiceId}
       AND kind IN ('매입계산서', '매출계산서')
@@ -212,7 +215,16 @@ export async function undoTaxMatch(
   `);
   for (const g of gone) {
     if (g.ref_table === "cash_txn") {
-      await db.execute(sql`UPDATE cash_txn SET recon_status = '미대조' WHERE id = ${g.ref_id}`);
+      if (invRow?.recon_reason === "출금연결") {
+        // 이을 때 우리가 붙였던 '매입대금' 분류도 함께 되돌린다 (사장님 확인 2026-08-25)
+        await db.execute(sql`
+          UPDATE cash_txn SET recon_status = '미대조',
+                 category = CASE WHEN category = '매입대금' THEN NULL ELSE category END
+          WHERE id = ${g.ref_id}
+        `);
+      } else {
+        await db.execute(sql`UPDATE cash_txn SET recon_status = '미대조' WHERE id = ${g.ref_id}`);
+      }
     }
   }
   await db.execute(sql`UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL WHERE id = ${taxInvoiceId}`);
@@ -412,4 +424,53 @@ export async function markTaxExpense(
   }
   revalidatePath("/finance/tax");
   return { ok: true, applied, item: itemKey.length >= 2 ? inv.item_summary : null };
+}
+
+/** 상대 유형 규칙 취소 — 잘못 지정했을 때. 실사용 기간의 자동 정리분을 되살린다 (과거분은 유지) */
+export async function removeTaxPartyRule(
+  bizNo: string,
+): Promise<{ ok: true; revived: number } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  const biz = bizNo.replace(/\D/g, "");
+  const [r] = await db.execute<{ kind: string }>(sql`SELECT kind FROM tax_party_rule WHERE biz_no = ${biz}`);
+  if (!r) return { ok: false, error: "그 상대의 규칙이 없습니다" };
+  await db.execute(sql`DELETE FROM tax_party_rule WHERE biz_no = ${biz}`);
+  const rows = await db.execute<{ id: number }>(sql`
+    UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL
+    WHERE is_active AND counterparty_biz_no = ${biz} AND recon_status = '무시'
+      AND recon_reason = ${r.kind} AND write_date >= ${TAX_APP_START}::date
+    RETURNING id
+  `);
+  revalidatePath("/finance/tax");
+  return { ok: true, revived: rows.length };
+}
+
+/**
+ * ⭐ 수정·마이너스 세금계산서 상쇄 (사장님 제보 2026-08-25 — "잘못 발행하면 나중에
+ *    수정·추가·마이너스 발행을 한다"). 마이너스 계산서와 그 원본을 한 쌍으로 정리한다.
+ */
+export async function markTaxFixPair(
+  minusId: number,
+  originId: number,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  const rows = await db.execute<{ id: number; total: number; counterparty_biz_no: string; recon_status: string }>(sql`
+    SELECT id, total, counterparty_biz_no, recon_status FROM tax_invoice
+    WHERE id IN (${minusId}, ${originId}) AND is_active
+  `);
+  if (rows.length !== 2) return { ok: false, error: "계산서 두 건을 찾을 수 없습니다" };
+  const a = rows.find((x) => Number(x.id) === minusId)!;
+  const b = rows.find((x) => Number(x.id) === originId)!;
+  if (a.counterparty_biz_no !== b.counterparty_biz_no) return { ok: false, error: "상대가 다른 계산서입니다" };
+  if (Number(a.total) + Number(b.total) !== 0) return { ok: false, error: "두 계산서의 금액이 상쇄되지 않습니다" };
+  if (a.recon_status === "확정" || b.recon_status === "확정")
+    return { ok: false, error: "이미 확정된 계산서가 있습니다 — 먼저 되돌려 주세요" };
+  await db.execute(sql`
+    UPDATE tax_invoice SET recon_status = '무시', recon_reason = '수정상쇄'
+    WHERE id IN (${minusId}, ${originId})
+  `);
+  revalidatePath("/finance/tax");
+  return { ok: true };
 }

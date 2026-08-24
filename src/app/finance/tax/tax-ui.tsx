@@ -11,6 +11,8 @@ import {
   linkCounterpartyToSupplier,
   markPastTax,
   markTaxExpense,
+  markTaxFixPair,
+  removeTaxPartyRule,
   setTaxPartyRule,
   undoTaxMatch,
 } from "@/lib/recon";
@@ -25,6 +27,16 @@ export interface RecentRow {
   name: string;
   total: number;
   refs: number;
+  reason: string | null;
+}
+
+export interface ClearedRow {
+  id: number;
+  direction: string;
+  d: string;
+  name: string;
+  total: number;
+  reason: string | null;
 }
 
 /**
@@ -33,7 +45,15 @@ export interface RecentRow {
  *   계산서 나열 → **상대별 그룹**. 상대 유형(경비·대행 정산사·무시)을 한 번 정하면
  *   과거 것 일괄 + 앞으로 자동. 매출은 판매(누구든)·통장 입금과 잇는다.
  */
-export function TaxRecon({ data, recent }: { data: TaxReconV2; recent: RecentRow[] }) {
+export function TaxRecon({
+  data,
+  recent,
+  cleared,
+}: {
+  data: TaxReconV2;
+  recent: RecentRow[];
+  cleared: ClearedRow[];
+}) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
@@ -62,9 +82,27 @@ export function TaxRecon({ data, recent }: { data: TaxReconV2; recent: RecentRow
       (r: { warning: string | null }) => `이었습니다.${r.warning ? ` ⚠️ ${r.warning}` : ""}`,
     );
 
-  const kindBadge = (kind: string | null) =>
-    kind && (
-      <span className="ml-1.5 rounded bg-violet-100 px-1.5 py-0.5 text-xs font-semibold text-violet-800">{kind}</span>
+  const kindBadge = (g: PartyGroup) =>
+    g.kind && (
+      <span className="ml-1.5 rounded bg-violet-100 px-1.5 py-0.5 text-xs font-semibold text-violet-800">
+        {g.kind}
+        <button
+          type="button"
+          disabled={pending}
+          title="규칙 취소 — 이 상대의 자동 정리분(8월 이후)을 되살립니다"
+          onClick={() => {
+            if (!confirm(`「${g.name}」의 ${g.kind} 규칙을 취소할까요?
+자동 정리됐던 계산서(8월 이후)가 다시 확인 목록으로 돌아옵니다.`)) return;
+            act(
+              () => removeTaxPartyRule(g.bizNo),
+              (r: { revived: number }) => `규칙을 취소했습니다 — ${r.revived}건이 돌아왔습니다.`,
+            );
+          }}
+          className="ml-1 text-violet-500 hover:text-red-600"
+        >
+          ✕
+        </button>
+      </span>
     );
 
   return (
@@ -119,7 +157,7 @@ export function TaxRecon({ data, recent }: { data: TaxReconV2; recent: RecentRow
             <div className="flex items-baseline justify-between gap-2">
               <span className="min-w-0">
                 <span className="font-semibold">{g.name}</span>
-                {kindBadge(g.kind)}
+                {kindBadge(g)}
                 <span className="tabular ml-1 text-xs text-slate-400">{bizFmt(g.bizNo)}</span>
               </span>
               <span className="tabular shrink-0 text-sm">
@@ -272,6 +310,25 @@ export function TaxRecon({ data, recent }: { data: TaxReconV2; recent: RecentRow
                     </ul>
                   )}
 
+                  {/* 수정·마이너스 계산서 — 원본과 상쇄 (사장님 제보 2026-08-25) */}
+                  {s.fixPair && (
+                    <div className="mt-1.5 rounded bg-rose-50 p-1.5 text-xs">
+                      <p className="text-rose-900">
+                        마이너스(수정) 계산서로 보입니다 — 원본: {s.fixPair.label}
+                      </p>
+                      <button
+                        type="button"
+                        disabled={pending}
+                        onClick={() =>
+                          act(() => markTaxFixPair(s.inv.id, s.fixPair!.id), () => "원본과 상쇄해 정리했습니다.")
+                        }
+                        className="mt-1 rounded bg-rose-600 px-2 py-1 font-semibold text-white disabled:opacity-40"
+                      >
+                        원본과 함께 정리
+                      </button>
+                    </div>
+                  )}
+
                   {/* 통장 입금 직접 연결 — 대행 정산사의 실질 */}
                   {s.bankCands.length > 0 && (
                     <div className="mt-1.5 rounded bg-sky-50 p-1.5 text-xs">
@@ -285,7 +342,17 @@ export function TaxRecon({ data, recent }: { data: TaxReconV2; recent: RecentRow
                             <button
                               type="button"
                               disabled={pending}
-                              onClick={() => act(() => confirmTaxToBank(s.inv.id, b.id), () => "입금과 이었습니다.")}
+                              onClick={() =>
+                                act(
+                                  () => confirmTaxToBank(s.inv.id, b.id),
+                                  (r: { remaining: number }) =>
+                                    r.remaining > 0
+                                      ? `이었습니다 — 이 통장 줄에 ${won(r.remaining)}원이 남았습니다 (다른 계산서 몫이면 이어서 잇기)`
+                                      : r.remaining < 0
+                                        ? `이었습니다 — 계산서가 통장 금액보다 ${won(-r.remaining)}원 큽니다 (수수료 차감 등이면 정상)`
+                                        : "이었습니다 — 금액이 정확히 맞습니다.",
+                                )
+                              }
                               className="shrink-0 rounded bg-sky-700 px-2 py-0.5 font-semibold text-white disabled:opacity-40"
                             >
                               이 {s.inv.direction === "매입" ? "출금" : "입금"}과 잇기
@@ -345,6 +412,34 @@ export function TaxRecon({ data, recent }: { data: TaxReconV2; recent: RecentRow
         </p>
       )}
 
+      {/* 정리(무시)된 것 — 잘못 정리했으면 되살리기 */}
+      {cleared.length > 0 && (
+        <details className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-600">
+            정리된 계산서 {cleared.length}건 (8월 이후) — 잘못 정리했으면 여기서 되살리기
+          </summary>
+          <ul className="mt-2 divide-y divide-slate-100 text-sm">
+            {cleared.map((r) => (
+              <li key={r.id} className="flex items-center justify-between gap-2 py-1.5">
+                <span className="min-w-0 truncate text-xs">
+                  <span className="tabular text-slate-400">{r.d}</span> {r.direction} · {r.name} ·{" "}
+                  <span className="tabular">{won(r.total)}원</span>
+                  {r.reason && <span className="text-slate-400"> · {r.reason}</span>}
+                </span>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => act(() => ignoreTaxInvoice(r.id, true), () => "되살렸습니다 — 확인 목록으로 돌아갔습니다.")}
+                  className="shrink-0 text-xs text-slate-400 underline"
+                >
+                  되살리기
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
       {/* 최근 확정 — 되돌리기 */}
       {recent.length > 0 && (
         <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
@@ -355,7 +450,9 @@ export function TaxRecon({ data, recent }: { data: TaxReconV2; recent: RecentRow
                 <span className="min-w-0 truncate text-xs">
                   <span className="tabular text-slate-400">{r.d}</span> {r.direction} · {r.name} ·{" "}
                   <span className="tabular">{won(r.total)}원</span>{" "}
-                  <span className="text-slate-400">({r.refs}건 연결)</span>
+                  <span className="text-slate-400">
+                    ({r.refs}건 연결{r.reason ? ` · ${r.reason}` : ""})
+                  </span>
                 </span>
                 <button
                   type="button"

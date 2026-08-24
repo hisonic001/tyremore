@@ -22,13 +22,27 @@ export default async function FinanceTaxPage() {
   const data = await taxReconV2();
 
   // 최근 확정 — 잘못 이었으면 여기서 되돌린다
-  const recent = await db.execute<{ id: number; direction: string; d: string; name: string; total: number; refs: number }>(sql`
+  const recent = await db.execute<{
+    id: number; direction: string; d: string; name: string; total: number; refs: number; reason: string | null;
+  }>(sql`
     SELECT t.id, t.direction, to_char(t.write_date, 'YYYY-MM-DD') d, t.counterparty_name name, t.total,
+           t.recon_reason reason,
            (SELECT count(*)::int FROM recon_match m
              WHERE m.src_table = 'tax_invoice' AND m.src_id = t.id) refs
     FROM tax_invoice t
     WHERE t.is_active AND t.recon_status = '확정'
-    ORDER BY t.id DESC LIMIT 10
+    ORDER BY t.id DESC LIMIT 30
+  `);
+
+  // 정리(무시)된 것 — 잘못 정리했으면 되살린다 (실사용 기간만; 과거분 676건은 제외)
+  const cleared = await db.execute<{
+    id: number; direction: string; d: string; name: string; total: number; reason: string | null;
+  }>(sql`
+    SELECT id, direction, to_char(write_date, 'YYYY-MM-DD') d, counterparty_name name, total,
+           recon_reason reason
+    FROM tax_invoice
+    WHERE is_active AND recon_status = '무시' AND write_date >= '2026-08-01'
+    ORDER BY id DESC LIMIT 30
   `);
 
   return (
@@ -52,6 +66,15 @@ export default async function FinanceTaxPage() {
           name: r.name,
           total: Number(r.total),
           refs: Number(r.refs),
+          reason: r.reason,
+        }))}
+        cleared={cleared.map((r) => ({
+          id: Number(r.id),
+          direction: r.direction,
+          d: r.d,
+          name: r.name,
+          total: Number(r.total),
+          reason: r.reason,
         }))}
       />
     </main>

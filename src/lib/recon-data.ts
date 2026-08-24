@@ -374,7 +374,15 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
         date: q.d,
       }));
     const aliasParty = aliasMap.get(pn) ?? null;
-    const taxHint = aliasParty?.startsWith("T:") ? (aliasLabel.get(pn) ?? "정산 입금으로 기억됨") : null;
+    // 한 입금자가 여러 계산서 상대로 기억될 수 있다 (카랑 → 현대캐피탈·쏘카)
+    const tLabels = [
+      ...new Set(
+        aliases2
+          .filter((a) => a.party_key.startsWith("T:") && (a.alias_key === pn || a.alias_key.startsWith(pn + "@")))
+          .map((a) => a.party_label),
+      ),
+    ];
+    const taxHint = tLabels.length > 0 ? tLabels.join(" · ") : null;
     const aliasTarget =
       aliasParty && !aliasParty.startsWith("T:") ? (book.targets.find((tg) => tg.key === aliasParty) ?? null) : null;
     const parties = [

@@ -58,6 +58,8 @@ export interface TaxSuggestion {
   bundle: CandidateRef[] | null;
   candidates: CandidateRef[];
   bankCands: BankRef[];
+  /** 마이너스(수정) 계산서의 원본으로 보이는 짝 — 함께 상쇄 정리 */
+  fixPair: { id: number; label: string } | null;
   supplierId: number | null;
   supplierName: string | null;
   learnable: boolean;
@@ -155,11 +157,20 @@ export async function taxReconV2(): Promise<TaxReconV2> {
   `);
 
   // ⑥ 이미 이어진 기록 제외
-  const linked = await db.execute<{ ref_table: string; ref_id: number }>(sql`
-    SELECT ref_table, ref_id FROM recon_match
+  const linked = await db.execute<{ ref_table: string; ref_id: number; amount: number }>(sql`
+    SELECT ref_table, ref_id, amount FROM recon_match
     WHERE kind IN ('매입계산서', '매출계산서') LIMIT 2000
   `);
-  const linkedSet = new Set(linked.map((l) => `${l.ref_table}|${l.ref_id}`));
+  const linkedSet = new Set(
+    linked.filter((l) => l.ref_table !== "cash_txn").map((l) => `${l.ref_table}|${l.ref_id}`),
+  );
+  // 통장 줄은 부분 연결이 가능 (카랑 한 입금 = 현대캐피탈+쏘카 계산서) — 남은 금액을 계산
+  const cashLinked = new Map<number, number>();
+  for (const l of linked) {
+    if (l.ref_table === "cash_txn") {
+      cashLinked.set(Number(l.ref_id), (cashLinked.get(Number(l.ref_id)) ?? 0) + Number(l.amount));
+    }
+  }
   const freePurchases = purchases.filter((p) => Number(p.total) > 0 && !linkedSet.has(`purchase_invoice|${p.id}`));
   const freeQuotes = quotes.filter((q) => !linkedSet.has(`quote|${q.id}`));
 
@@ -172,7 +183,9 @@ export async function taxReconV2(): Promise<TaxReconV2> {
       AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${TAX_APP_START}::date
     ORDER BY id DESC LIMIT 400
   `);
-  const freeDeposits = deposits.filter((x) => !linkedSet.has(`cash_txn|${x.id}`));
+  const freeDeposits = deposits
+    .map((x) => ({ ...x, remain: Number(x.in_amount) - (cashLinked.get(Number(x.id)) ?? 0) }))
+    .filter((x) => x.remain > 0);
 
   /* ⑦-2 통장 출금 후보 (매입 계산서 ↔ 출금 직접 연결) — 사장님 통찰 2026-08-25:
    *   "앱 내역과 대조하는 것보다 입출금 내역에서 대조하는 것이 더 정확함" */
@@ -185,7 +198,9 @@ export async function taxReconV2(): Promise<TaxReconV2> {
       AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${TAX_APP_START}::date
     ORDER BY id DESC LIMIT 400
   `);
-  const freeWithdrawals = withdrawals.filter((x) => !linkedSet.has(`cash_txn|${x.id}`));
+  const freeWithdrawals = withdrawals
+    .map((x) => ({ ...x, remain: Number(x.out_amount) - (cashLinked.get(Number(x.id)) ?? 0) }))
+    .filter((x) => x.remain > 0);
 
   const norm = normName;
   const suggestions: TaxSuggestion[] = [];
@@ -235,7 +250,11 @@ export async function taxReconV2(): Promise<TaxReconV2> {
       const monthSum = monthPool.reduce((s, p) => s + Number(p.total), 0);
       const bundle = !auto && monthPool.length > 1 && monthSum === inv.total ? monthPool.map(toRef) : null;
       const near = pool
-        .filter((p) => sameMonth(p.d, inv.writeDate) || Math.abs(Number(p.total) - inv.total) <= Math.max(1000, inv.total * 0.01))
+        .filter(
+          (p) =>
+            dayDiff(p.d, inv.writeDate) <= 45 ||
+            Math.abs(Number(p.total) - inv.total) <= Math.max(1000, Math.abs(inv.total) * 0.01),
+        )
         .slice(0, 6)
         .map(toRef);
       /* 통장 출금 직접 연결 후보 — 지급은 계산서보다 늦을 수 있어 +90일(기억된 상대 +150일).
@@ -243,21 +262,23 @@ export async function taxReconV2(): Promise<TaxReconV2> {
       const buyBank = freeWithdrawals
         .map((x) => {
           const payer = x.description.replace(/^\[[^\]]*\]\s*/, "").trim();
-          const known = aliasMap.get(norm(payer)) === `T:${inv.counterBizNo}`;
-          return { x, known };
+          const known = aliasMap.has(`${norm(payer)}@${inv.counterBizNo}`);
+          return { x, known, exact: x.remain === inv.total };
         })
-        .filter(({ x, known }) => {
-          if (Number(x.out_amount) !== inv.total) return false;
+        .filter(({ x, known, exact }) => {
           const t = new Date(x.date).getTime();
           const w = new Date(inv.writeDate).getTime();
-          return t >= w - 7 * 86400000 && t <= w + (known ? 150 : 90) * 86400000;
+          const inWindow = t >= w - 7 * 86400000 && t <= w + (known ? 150 : 90) * 86400000;
+          return inWindow && (exact || known); // 기억된 지급처는 차액이 있어도 보여준다
         })
-        .sort((a, b) => Number(b.known) - Number(a.known))
+        .sort((a, b) => Number(b.exact) - Number(a.exact) || Number(b.known) - Number(a.known))
         .slice(0, 4)
-        .map(({ x, known }) => ({
+        .map(({ x, known, exact }) => ({
           id: Number(x.id),
-          label: `${known ? "★ " : ""}${x.date.slice(5)} · ${x.description.slice(0, 24)} · −${won(Number(x.out_amount))}원 (${x.l})`,
-          amount: Number(x.out_amount),
+          label:
+            `${known ? "★ " : ""}${x.date.slice(5)} · ${x.description.slice(0, 24)} · −${won(x.remain)}원 (${x.l})` +
+            (exact ? "" : ` · 차액 ${won(x.remain - inv.total)}원`),
+          amount: x.remain,
           date: x.date,
         }));
       suggestions.push({
@@ -266,6 +287,7 @@ export async function taxReconV2(): Promise<TaxReconV2> {
         bundle,
         candidates: auto ? [] : near,
         bankCands: buyBank,
+        fixPair: null,
         supplierId: sup ? Number(sup.id) : null,
         supplierName: sup?.name ?? null,
         learnable: !!sup && !sup.biz_no,
@@ -292,35 +314,42 @@ export async function taxReconV2(): Promise<TaxReconV2> {
       const monthName = namePool.filter((q) => sameMonth(q.d, inv.writeDate));
       const monthSum = monthName.reduce((s, q) => s + Number(q.total), 0);
       const bundle = !auto && monthName.length > 1 && monthSum === inv.total ? monthName.map(toRef) : null;
-      let candidates = monthName.slice(0, 6).map(toRef);
+      // 수정·추가 발행은 나중 달에 온다 — 후보는 ±60일까지 (사장님 제보 2026-08-25)
+      let candidates = namePool.filter((q) => dayDiff(q.d, inv.writeDate) <= 60).slice(0, 6).map(toRef);
       if (!auto && candidates.length === 0) {
-        // 이름으로 못 찾으면 같은 달 같은 금액 (결제수단 무관 — 계좌이체 판매 포함)
+        // 이름으로 못 찾으면 같은 금액 (결제수단 무관 — 계좌이체 판매 포함)
         candidates = freeQuotes
-          .filter((q) => Number(q.total) === inv.total && sameMonth(q.d, inv.writeDate))
+          .filter((q) => Number(q.total) === Math.abs(inv.total) && dayDiff(q.d, inv.writeDate) <= 60)
           .slice(0, 5)
           .map(toRef);
       }
       /* 통장 입금 직접 연결 후보 — 금액 일치, 작성일 −7 ~ +60일.
        * ⭐ 기억된 입금자(★)는 우선·기간 +120일 (사장님 제보 — 「이관우」처럼 개인 이름으로
        *   정산이 와도 한 번 이으면 'T:사업자번호' 별명으로 기억돼 바로 알아본다) */
+      /* ⭐ 대행정산 상대는 계산서 금액 ≠ 입금 금액일 수 있다 (수수료 차감·여러 계산서 합산 —
+       *   사장님 제보 2026-08-25). 기억된 입금자·대행정산 유형이면 차액이 있어도 보여주고
+       *   차액을 라벨에 적는다. 부분 연결된 입금은 남은 금액으로 견준다. */
+      const partyKind = ruleMap.get(inv.counterBizNo) ?? null;
       const bankCands = freeDeposits
         .map((x) => {
           const payer = x.description.replace(/^\[[^\]]*\]\s*/, "").trim();
-          const known = aliasMap.get(norm(payer)) === `T:${inv.counterBizNo}`;
-          return { x, known };
+          const known = aliasMap.has(`${norm(payer)}@${inv.counterBizNo}`);
+          return { x, known, exact: x.remain === inv.total };
         })
-        .filter(({ x, known }) => {
-          if (Number(x.in_amount) !== inv.total) return false;
+        .filter(({ x, known, exact }) => {
           const t = new Date(x.date).getTime();
           const w = new Date(inv.writeDate).getTime();
-          return t >= w - 7 * 86400000 && t <= w + (known ? 120 : 60) * 86400000;
+          const inWindow = t >= w - 7 * 86400000 && t <= w + (known ? 120 : 60) * 86400000;
+          return inWindow && (exact || known || partyKind === "대행정산");
         })
-        .sort((a, b) => Number(b.known) - Number(a.known))
+        .sort((a, b) => Number(b.exact) - Number(a.exact) || Number(b.known) - Number(a.known))
         .slice(0, 4)
-        .map(({ x, known }) => ({
+        .map(({ x, known, exact }) => ({
           id: Number(x.id),
-          label: `${known ? "★ " : ""}${x.date.slice(5)} · ${x.description.slice(0, 24)} · +${won(Number(x.in_amount))}원 (${x.l})`,
-          amount: Number(x.in_amount),
+          label:
+            `${known ? "★ " : ""}${x.date.slice(5)} · ${x.description.slice(0, 24)} · +${won(x.remain)}원 (${x.l})` +
+            (exact ? "" : ` · 차액 ${won(x.remain - inv.total)}원`),
+          amount: x.remain,
           date: x.date,
         }));
       suggestions.push({
@@ -329,10 +358,30 @@ export async function taxReconV2(): Promise<TaxReconV2> {
         bundle,
         candidates: auto ? [] : candidates,
         bankCands,
+        fixPair: null,
         supplierId: null,
         supplierName: namePool[0]?.who ?? null,
         learnable: false,
       });
+    }
+  }
+
+  /* ⑦-3 수정·마이너스 계산서 짝 — 같은 상대, 금액이 정확히 상쇄되는 열린 계산서
+   *   (잘못 발행 → 나중에 마이너스 발행하는 관행, 사장님 제보 2026-08-25) */
+  for (const s of suggestions) {
+    if (s.inv.total >= 0) continue;
+    const origin = suggestions.find(
+      (o) =>
+        o.inv.id !== s.inv.id &&
+        o.inv.counterBizNo === s.inv.counterBizNo &&
+        o.inv.total === -s.inv.total &&
+        o.inv.writeDate <= s.inv.writeDate,
+    );
+    if (origin) {
+      s.fixPair = {
+        id: origin.inv.id,
+        label: `${origin.inv.writeDate.slice(5)} · ${won(origin.inv.total)}원 (원본으로 보임)`,
+      };
     }
   }
 
