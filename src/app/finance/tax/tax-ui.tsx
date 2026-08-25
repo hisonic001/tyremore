@@ -8,6 +8,7 @@ import {
   autoConfirmTax,
   confirmTaxMatch,
   confirmTaxToBank,
+  confirmTaxToBanks,
   ignoreTaxInvoice,
   linkCounterpartyToSupplier,
   markPastTax,
@@ -103,6 +104,13 @@ export function TaxRecon({
           : r.remaining > 0
             ? `이었습니다 — 이 통장 줄에 ${won(r.remaining)}원이 남았습니다 (적립·다른 계산서 몫이면 이어서 잇기)`
             : "이었습니다 — 금액이 정확히 맞습니다.",
+    );
+
+  /* ⭐ 합이 딱 맞는 여러 출금·입금을 한꺼번에 (사장님 제보 2026-08-25 — 위즈오토) */
+  const linkCombo = (s: TaxSuggestion) =>
+    act(
+      () => confirmTaxToBanks(s.inv.id, s.bankCombo!.ids),
+      (r: { applied: number }) => `${r.applied}건을 합쳐 이었습니다 — 금액이 정확히 맞습니다.`,
     );
 
   const kindBadge = (g: PartyGroup) =>
@@ -340,12 +348,15 @@ export function TaxRecon({
                     ? "fix"
                     : s.bundle
                       ? "bundle"
-                      : s.candidates.length > 0
-                        ? "cands"
-                        : s.bankCands.length > 0
-                          ? "bank"
-                          : "none";
+                      : s.bankCombo
+                        ? "combo"
+                        : s.candidates.length > 0
+                          ? "cands"
+                          : s.bankCands.length > 0
+                            ? "bank"
+                            : "none";
                 const moreBits = [
+                  primary !== "combo" && s.bankCombo ? `묶음 ${s.bankCombo.ids.length}` : null,
                   primary !== "cands" && s.candidates.length > 0 ? `앱 기록 ${s.candidates.length}` : null,
                   primary !== "bank" && s.bankCands.length > 0 ? `통장 ${s.bankCands.length}` : null,
                   "통장 검색",
@@ -424,6 +435,27 @@ export function TaxRecon({
                         </button>
                       </div>
                     )}
+                    {primary === "combo" && s.bankCombo && (
+                      <div className="mt-1.5 rounded bg-brand-50 p-1.5 text-xs">
+                        <p className="font-medium text-brand-700">
+                          ✔ 통장 {s.bankCombo.ids.length}건을 합치면 {won(s.bankCombo.total)}원 — 정확히 맞습니다
+                        </p>
+                        <ul className="mt-0.5 space-y-0.5 text-slate-600">
+                          {s.bankCombo.labels.map((l, i) => (
+                            <li key={i}>· {l}</li>
+                          ))}
+                        </ul>
+                        <button
+                          type="button"
+                          disabled={pending}
+                          onClick={() => linkCombo(s)}
+                          className="mt-1 rounded bg-brand-600 px-2.5 py-1 font-semibold text-white active:bg-brand-700 disabled:opacity-40"
+                        >
+                          {s.bankCombo.ids.length}건 한꺼번에 잇기
+                        </button>
+                      </div>
+                    )}
+
                     {primary === "cands" && (
                       <div className="mt-1.5 rounded bg-white p-1.5 text-xs">
                         <PickList
@@ -440,7 +472,7 @@ export function TaxRecon({
                     {primary === "bank" && (
                       <div className="mt-1.5 rounded bg-sky-50 p-1.5 text-xs">
                         <PickList
-                          hint={`같은 금액의 통장 ${s.inv.direction === "매입" ? "출금" : "입금"}이 있습니다:`}
+                          hint={`이 상대의 통장 ${s.inv.direction === "매입" ? "출금" : "입금"} — 맞는 것을 고르세요:`}
                           pending={pending}
                           strong
                           items={s.bankCands.map((b) => ({ key: b.id, label: b.label, onPick: () => bankLink(s, b.id) }))}
@@ -459,6 +491,21 @@ export function TaxRecon({
                         다른 방법 ▾ ({moreBits.join(" · ")})
                       </summary>
                       <div className="mt-1.5 space-y-2 rounded bg-white p-2 text-xs">
+                        {primary !== "combo" && s.bankCombo && (
+                          <div>
+                            <p className="font-medium text-brand-700">
+                              통장 {s.bankCombo.ids.length}건 합계 {won(s.bankCombo.total)}원 — 정확히 맞음
+                            </p>
+                            <button
+                              type="button"
+                              disabled={pending}
+                              onClick={() => linkCombo(s)}
+                              className="mt-1 rounded bg-brand-600 px-2.5 py-1 font-semibold text-white active:bg-brand-700 disabled:opacity-40"
+                            >
+                              {s.bankCombo.ids.length}건 한꺼번에 잇기
+                            </button>
+                          </div>
+                        )}
                         {primary !== "cands" && s.candidates.length > 0 && (
                           <PickList
                             hint="앱 기록 후보"

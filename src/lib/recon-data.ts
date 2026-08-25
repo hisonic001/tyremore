@@ -21,6 +21,48 @@ const norm = (s: string | null | undefined): string =>
 /** ⭐ 별명 사전이 쓰는 이름 정규화 — 학습(recon·fin-deposits)과 조회가 같은 규칙 */
 export const normName = norm;
 
+/* ================================================================== */
+/* ⭐ 상대 이름 맞추기 정본 (사장님 지적 2026-08-25 — "(주)트랜스코스·맥스런이     */
+/*    검색이 안 됨"). 은행 적요는 12자쯤에서 잘리고(「(주)트랜스코스」),           */
+/*    ㈜·(주)·주식회사·공백 표기도 제각각이라 상호 그대로는 절대 안 맞는다.        */
+/*    돈 관리의 모든 이름 매칭이 이 두 개를 쓴다 — 한 곳만 고치면 전부 고쳐진다.   */
+
+/** 앞에서부터 몇 자가 같으면 같은 상대로 볼 것인가 (잘림 대비) */
+const HEAD = 5;
+
+/** 두 이름이 같은 상대인가 — 표기 차이·잘림을 견딘다 */
+export function samePartyName(a: string | null | undefined, b: string | null | undefined): boolean {
+  const x = norm(a);
+  const y = norm(b);
+  if (x.length < 2 || y.length < 2) return false;
+  if (x.includes(y) || y.includes(x)) return true;
+  const n = Math.min(x.length, y.length, HEAD);
+  return n >= 4 && x.slice(0, n) === y.slice(0, n);
+}
+
+/** 정규화한 적요 컬럼 — SQL 쪽 규칙(normName 과 같은 것을 지운다) */
+export const normDescSql = (col = "description") =>
+  sql.raw(`regexp_replace(lower(${col}), '㈜|\\(주\\)|주식회사|[[:space:]]', '', 'g')`);
+
+/**
+ * SQL 조건 — 적요가 이 이름들 중 하나와 맞나 (정규화 + 앞 ${HEAD}자 잘림 대비).
+ * 이름이 없으면 false 를 돌려 질의가 전부를 긁는 사고를 막는다.
+ */
+export function partyMatchSql(names: (string | null | undefined)[], col = "description") {
+  const pats = new Set<string>();
+  for (const n of names) {
+    const x = norm(n);
+    if (x.length >= 2) pats.add(x);
+    if (x.length >= HEAD) pats.add(x.slice(0, HEAD));
+  }
+  if (pats.size === 0) return sql`false`;
+  const nd = normDescSql(col);
+  return sql.join(
+    [...pats].map((p) => sql`${nd} LIKE ${"%" + p + "%"}`),
+    sql` OR `,
+  );
+}
+
 /* 🔴 감사 M2(2026-08-25): v1 taxReconData 170줄(죽은 코드) 삭제 — 정본은 tax-recon.ts */
 
 /* ================================================================== */
@@ -489,11 +531,8 @@ export async function payLinkData(): Promise<{ rows: PayLinkRow[]; supplierNames
     const pn = normName(payer);
     let sup = aliasMap3.get(pn) ?? null;
     if (!sup || !remainMap.has(sup)) {
-      sup =
-        [...remainMap.keys()].find((name) => {
-          const a = normName(name);
-          return a.length >= 2 && pn.length >= 2 && (pn.includes(a) || a.includes(pn));
-        }) ?? null;
+      // 정본 매칭 — 적요 잘림(「(주)맥스런」)·표기 차이를 견딘다
+      sup = [...remainMap.keys()].find((name) => samePartyName(name, payer)) ?? null;
     }
     return {
       id: Number(o.id),

@@ -7,7 +7,7 @@
  *   돈 확인 뷰(money-view)와 계산서 정리 뷰(tax-ui)가 같이 쓴다.
  */
 import { useState, useTransition } from "react";
-import { searchBankLines } from "@/lib/recon";
+import { searchBankLines, type BankHit } from "@/lib/recon";
 
 export interface PickItem {
   key: string | number;
@@ -65,7 +65,7 @@ export function BankSearch({
   onPick: (cashTxnId: number) => void;
 }) {
   const [q, setQ] = useState("");
-  const [hits, setHits] = useState<{ id: number; label: string }[] | null>(null);
+  const [hits, setHits] = useState<BankHit[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [searching, startSearch] = useTransition();
 
@@ -102,7 +102,19 @@ export function BankSearch({
         </button>
       </div>
       {err && <p className="mt-1 text-red-600">{err}</p>}
-      {hits !== null && hits.length === 0 && <p className="mt-1 text-slate-400">맞는 통장 줄이 없습니다 (전체 기간 검색)</p>}
+      {hits !== null && hits.length === 0 && (
+        <p className="mt-1 text-slate-400">
+          맞는 통장 줄이 없습니다 — 이름 일부만(예: 「맥스런」) 치거나 금액으로 찾아 보세요
+        </p>
+      )}
+      {hits !== null && hits.some((h) => h.opposite) && (
+        <p className="mt-1 rounded bg-amber-50 px-1.5 py-1 text-amber-800">
+          <strong>↔ 표시</strong>는 반대 방향입니다 —{" "}
+          {direction === "매입"
+            ? "수수료를 정산 입금에서 떼는 곳(온라인몰 정산사 등)이면 이어도 됩니다"
+            : "받을 돈을 매입 대금과 상계한 곳이면 이어도 됩니다"}
+        </p>
+      )}
       {hits !== null && hits.length > 0 && (
         <PickList pending={pending} items={hits.map((h) => ({ key: h.id, label: h.label, onPick: () => onPick(h.id) }))} />
       )}

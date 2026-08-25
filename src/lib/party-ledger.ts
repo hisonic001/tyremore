@@ -13,6 +13,7 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
+import { partyMatchSql } from "./recon-data";
 import { TAX_APP_START } from "./tax-recon";
 import { monthRange } from "./ym";
 
@@ -118,10 +119,8 @@ export async function partyLedgerData(key: string, ym: string): Promise<PartyLed
   for (const a of aliases) if (!names.includes(a.raw)) names.push(a.raw);
 
   const rows: LedgerRow[] = [];
-  const nameConds = sql.join(
-    names.slice(0, 15).map((n) => sql`description ILIKE ${"%" + n + "%"}`),
-    sql` OR `,
-  );
+  /* 이름 맞추기는 정본(partyMatchSql) — 적요 잘림·㈜ 표기 차이를 견딘다 (2026-08-25) */
+  const nameConds = partyMatchSql(names.slice(0, 15));
 
   // ── ② 세금계산서 (이 달) ──
   const taxCond =

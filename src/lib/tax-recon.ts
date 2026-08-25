@@ -17,7 +17,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { payerKeyOf } from "./expense-cats";
-import { cashUsedMap, normName } from "./recon-data";
+import { cashUsedMap, normName, partyMatchSql, samePartyName } from "./recon-data";
 import { monthRange } from "./ym";
 
 /** 앱 실사용 시작 — 이전 계산서는 대조가 원리적으로 불가능하다 */
@@ -60,6 +60,8 @@ export interface TaxSuggestion {
   bundle: CandidateRef[] | null;
   candidates: CandidateRef[];
   bankCands: BankRef[];
+  /** 여러 통장 줄의 합이 계산서와 정확히 맞는 조합 — 한꺼번에 잇는다 */
+  bankCombo: { ids: number[]; labels: string[]; total: number } | null;
   /** 마이너스(수정) 계산서의 원본으로 보이는 짝 — 함께 상쇄 정리 */
   fixPair: { id: number; label: string } | null;
   supplierId: number | null;
@@ -91,6 +93,45 @@ export interface TaxReconV2 {
 }
 
 const won = (n: number) => n.toLocaleString("ko-KR");
+
+/**
+ * ⭐ 출금·입금 조합 찾기 (사장님 제보 2026-08-25 — 위즈오토 7월 계산서 1,531,222원이
+ *    7/8 840,092 + 7/8 500,940 + 7/12 190,190 세 건의 합과 정확히 같았다).
+ *
+ *    월합계 계산서를 쓰는 곳은 결제를 건별로 나눠 하므로, 한 건씩 골라 잇는 대신
+ *    **합이 딱 맞는 조합**을 찾아 한꺼번에 이어 준다. 정확히 맞을 때만 제안한다
+ *    (근사값은 오히려 헷갈린다). 후보가 많으면(>14) 탐색을 접는다.
+ */
+export function findAmountCombo<T extends { id: number; amount: number }>(
+  cands: T[],
+  target: number,
+  maxPick = 4,
+): T[] | null {
+  if (target <= 0 || cands.length < 2 || cands.length > 14) return null;
+  const pool = cands.filter((c) => c.amount > 0 && c.amount <= target);
+  if (pool.length < 2) return null;
+  let best: T[] | null = null;
+  const pick: T[] = [];
+  const dfs = (i: number, left: number) => {
+    if (best) return; // 첫 정답이면 충분 (건수 적은 것부터 찾는다)
+    if (left === 0 && pick.length >= 2) {
+      best = [...pick];
+      return;
+    }
+    if (i >= pool.length || pick.length >= maxPick || left < 0) return;
+    for (let j = i; j < pool.length; j++) {
+      if (pool[j].amount > left) continue;
+      pick.push(pool[j]);
+      dfs(j + 1, left - pool[j].amount);
+      pick.pop();
+      if (best) return;
+    }
+  };
+  // 건수가 적은 조합을 먼저 찾도록 큰 금액부터
+  pool.sort((a, b) => b.amount - a.amount);
+  dfs(0, target);
+  return best;
+}
 const sameMonth = (a: string | null, b: string) => !!a && a.slice(0, 7) === b.slice(0, 7);
 const dayDiff = (a: string | null, b: string): number =>
   a ? Math.abs((new Date(a).getTime() - new Date(b).getTime()) / 86400000) : 999;
@@ -277,34 +318,57 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
         .map(toRef);
       /* 통장 출금 직접 연결 후보 — 지급은 계산서보다 늦을 수 있어 +90일(기억된 상대 +150일).
        *   ★ = 기억된 지급처(내 출금 이름이 계산서 상호와 달라도 한 번 이으면 기억) */
-      const buyBank = freeWithdrawals
+      const buyPool = freeWithdrawals
         .map((x) => {
           const payer = payerKeyOf("통장", x.description);
-          const known = aliasMap.has(`${norm(payer)}@${inv.counterBizNo}`);
+          // ★ = 기억된 지급처. 이름이 닮아도(적요 잘림 견딤) 후보로 올린다 (2026-08-25)
+          const known =
+            aliasMap.has(`${norm(payer)}@${inv.counterBizNo}`) ||
+            samePartyName(payer, inv.counterName) ||
+            (!!sup && samePartyName(payer, sup.name));
           return { x, known, exact: x.remain === inv.total };
         })
         .filter(({ x, known, exact }) => {
           const t = new Date(x.date).getTime();
           const w = new Date(inv.writeDate).getTime();
-          const inWindow = t >= w - 7 * 86400000 && t <= w + (known ? 150 : 90) * 86400000;
+          /* 🔴 창 넓힘(2026-08-25 위즈오토): 월말 합계 계산서는 그 달 내내의 결제를 담는다 —
+             7/31 계산서에 7/8·7/12 출금이 짝인데 -7일 창이라 잘려 조합을 못 찾았다. */
+          const inWindow = t >= w - 45 * 86400000 && t <= w + (known ? 150 : 90) * 86400000;
           return inWindow && (exact || known); // 기억된 지급처는 차액이 있어도 보여준다
         })
-        .sort((a, b) => Number(b.exact) - Number(a.exact) || Number(b.known) - Number(a.known))
-        .slice(0, 4)
-        .map(({ x, known, exact }) => ({
-          id: Number(x.id),
-          label:
-            `${known ? "★ " : ""}${x.date.slice(5)} · ${x.description.slice(0, 24)} · −${won(x.remain)}원 (${x.l})` +
-            (exact ? "" : ` · 차액 ${won(x.remain - inv.total)}원`),
-          amount: x.remain,
-          date: x.date,
-        }));
+        .sort(
+          (a, b) =>
+            Number(b.exact) - Number(a.exact) ||
+            Number(b.known) - Number(a.known) ||
+            // 계산서 날짜에 가까운 것 먼저 (8월 것이 7월 계산서 위로 오던 문제)
+            dayDiff(a.x.date, inv.writeDate) - dayDiff(b.x.date, inv.writeDate),
+        );
+      /* 합이 딱 맞는 조합 — 월합계 계산서 + 건별 결제(위즈오토 케이스) */
+      const comboSrc = buyPool
+        .filter(({ known }) => known)
+        .map(({ x }) => ({ id: Number(x.id), amount: x.remain, date: x.date, desc: x.description, l: x.l }));
+      const combo = buyPool.some(({ exact }) => exact) ? null : findAmountCombo(comboSrc, inv.total);
+      const buyBank = buyPool.slice(0, 4).map(({ x, known, exact }) => ({
+        id: Number(x.id),
+        label:
+          `${known ? "★ " : ""}${x.date.slice(5)} · ${x.description.slice(0, 24)} · −${won(x.remain)}원 (${x.l})` +
+          (exact ? "" : ` · 계산서보다 ${won(Math.abs(x.remain - inv.total))}원 ${x.remain > inv.total ? "많음" : "적음"}`),
+        amount: x.remain,
+        date: x.date,
+      }));
       suggestions.push({
         inv,
         auto,
         bundle,
         candidates: auto ? [] : near,
         bankCands: buyBank,
+        bankCombo: combo
+          ? {
+              ids: combo.map((c) => c.id),
+              labels: combo.map((c) => `${c.date.slice(5)} · ${c.desc.slice(0, 20)} · −${won(c.amount)}원`),
+              total: combo.reduce((s, c) => s + c.amount, 0),
+            }
+          : null,
         fixPair: null,
         supplierId: sup ? Number(sup.id) : null,
         supplierName: sup?.name ?? null,
@@ -351,34 +415,50 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
        *   사장님 제보 2026-08-25). 기억된 입금자·대행정산 유형이면 차액이 있어도 보여주고
        *   차액을 라벨에 적는다. 부분 연결된 입금은 남은 금액으로 견준다. */
       const partyKind = ruleMap.get(inv.counterBizNo) ?? null;
-      const bankCands = freeDeposits
+      const sellPool = freeDeposits
         .map((x) => {
           const payer = payerKeyOf("통장", x.description);
-          const known = aliasMap.has(`${norm(payer)}@${inv.counterBizNo}`);
+          const known =
+            aliasMap.has(`${norm(payer)}@${inv.counterBizNo}`) || samePartyName(payer, inv.counterName);
           return { x, known, exact: x.remain === inv.total };
         })
         .filter(({ x, known, exact }) => {
           const t = new Date(x.date).getTime();
           const w = new Date(inv.writeDate).getTime();
-          const inWindow = t >= w - 7 * 86400000 && t <= w + (known ? 120 : 60) * 86400000;
+          const inWindow = t >= w - 45 * 86400000 && t <= w + (known ? 120 : 60) * 86400000;
           return inWindow && (exact || known || partyKind === "대행정산");
         })
-        .sort((a, b) => Number(b.exact) - Number(a.exact) || Number(b.known) - Number(a.known))
-        .slice(0, 4)
-        .map(({ x, known, exact }) => ({
-          id: Number(x.id),
-          label:
-            `${known ? "★ " : ""}${x.date.slice(5)} · ${x.description.slice(0, 24)} · +${won(x.remain)}원 (${x.l})` +
-            (exact ? "" : ` · 차액 ${won(x.remain - inv.total)}원`),
-          amount: x.remain,
-          date: x.date,
-        }));
+        .sort(
+          (a, b) =>
+            Number(b.exact) - Number(a.exact) ||
+            Number(b.known) - Number(a.known) ||
+            dayDiff(a.x.date, inv.writeDate) - dayDiff(b.x.date, inv.writeDate),
+        );
+      const comboSrc2 = sellPool
+        .filter(({ known }) => known)
+        .map(({ x }) => ({ id: Number(x.id), amount: x.remain, date: x.date, desc: x.description, l: x.l }));
+      const combo2 = sellPool.some(({ exact }) => exact) ? null : findAmountCombo(comboSrc2, inv.total);
+      const bankCands = sellPool.slice(0, 4).map(({ x, known, exact }) => ({
+        id: Number(x.id),
+        label:
+          `${known ? "★ " : ""}${x.date.slice(5)} · ${x.description.slice(0, 24)} · +${won(x.remain)}원 (${x.l})` +
+          (exact ? "" : ` · 계산서보다 ${won(Math.abs(x.remain - inv.total))}원 ${x.remain > inv.total ? "많음" : "적음"}`),
+        amount: x.remain,
+        date: x.date,
+      }));
       suggestions.push({
         inv,
         auto,
         bundle,
         candidates: auto ? [] : candidates,
         bankCands,
+        bankCombo: combo2
+          ? {
+              ids: combo2.map((c) => c.id),
+              labels: combo2.map((c) => `${c.date.slice(5)} · ${c.desc.slice(0, 20)} · +${won(c.amount)}원`),
+              total: combo2.reduce((s, c) => s + c.amount, 0),
+            }
+          : null,
         fixPair: null,
         supplierId: null,
         supplierName: namePool[0]?.who ?? null,
@@ -459,6 +539,8 @@ export interface TaxCashRow {
   /** 지금까지 직접 확인된 통장 금액(+차액 조정) — 0<이 값<total 이면 「일부 확인」 */
   bankCovered: number;
   autoBank: { id: number; label: string }[];
+  /** 여러 통장 줄의 합이 남은 금액과 정확히 맞는 조합 */
+  bankCombo: { ids: number[]; labels: string[]; total: number } | null;
 }
 
 /**
@@ -580,10 +662,7 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
     `);
     const pats = [...new Set([...names.map((n) => n.raw), inv?.nm ?? mr.name_raw].filter(Boolean))];
     const isIn2 = direction === "매출";
-    const cond = sql.join(
-      pats.map((p) => sql`description ILIKE ${"%" + p + "%"}`),
-      sql` OR `,
-    );
+    const cond = partyMatchSql(pats); // 정본 — 적요 잘림·표기 차이 견딤
     const [pay] = await db.execute<{ n: number; s: string; all_s: string }>(sql`
       SELECT count(*) FILTER (WHERE (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
                                 AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date)::int n,
@@ -637,27 +716,38 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
   const outRows: TaxCashRow[] = rows.map((r) => {
     const total = Number(r.total) - Number(r.bank_covered); // 후보 매칭은 남은 금액 기준
     const loose = isIn && ruleMap2.get(r.biz) === "대행정산";
-    const cands = free
+    const pool2 = free
       .map((x) => {
         const payer = payerKeyOf("통장", x.description);
-        const known = aliasKeys.has(`${normName(payer)}@${r.biz}`);
+        // 기억된 이름 + 닮은 이름(적요 잘림 견딤) 둘 다 ★ (2026-08-25)
+        const known = aliasKeys.has(`${normName(payer)}@${r.biz}`) || samePartyName(payer, r.name);
         return { x, known, exact: x.remain === total };
       })
       .filter(({ x, known, exact }) => {
         const t = new Date(x.date).getTime();
         const w = new Date(r.write_date).getTime();
         const back = isIn ? (known ? 120 : 60) : known ? 150 : 90;
-        const inWindow = t >= w - 7 * 86400000 && t <= w + back * 86400000;
+        // 월말 합계 계산서 대비 — 그 달 초의 결제까지 후보로 (2026-08-25)
+        const inWindow = t >= w - 45 * 86400000 && t <= w + back * 86400000;
         return inWindow && (exact || known || loose);
       })
-      .sort((a, b) => Number(b.exact) - Number(a.exact) || Number(b.known) - Number(a.known))
-      .slice(0, 3)
-      .map(({ x, known, exact }) => ({
-        id: Number(x.id),
-        label:
-          `${known ? "★ " : ""}${x.date.slice(5)} · ${x.description.slice(0, 24)} · ${isIn ? "+" : "−"}${won(x.remain)}원 (${x.l})` +
-          (exact ? "" : ` · 차액 ${won(Math.abs(x.remain - total))}원`),
-      }));
+      .sort(
+        (a, b) =>
+          Number(b.exact) - Number(a.exact) ||
+          Number(b.known) - Number(a.known) ||
+          Math.abs(new Date(a.x.date).getTime() - new Date(r.write_date).getTime()) -
+            Math.abs(new Date(b.x.date).getTime() - new Date(r.write_date).getTime()),
+      );
+    const comboSrc3 = pool2
+      .filter(({ known }) => known)
+      .map(({ x }) => ({ id: Number(x.id), amount: x.remain, date: x.date, desc: x.description }));
+    const combo3 = pool2.some(({ exact }) => exact) ? null : findAmountCombo(comboSrc3, total);
+    const cands = pool2.slice(0, 3).map(({ x, known, exact }) => ({
+      id: Number(x.id),
+      label:
+        `${known ? "★ " : ""}${x.date.slice(5)} · ${x.description.slice(0, 24)} · ${isIn ? "+" : "−"}${won(x.remain)}원 (${x.l})` +
+        (exact ? "" : ` · 계산서보다 ${won(Math.abs(x.remain - total))}원 ${x.remain > total ? "많음" : "적음"}`),
+    }));
     return {
       id: Number(r.id),
       d: r.d,
@@ -666,6 +756,13 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
       appLinked: !!r.app_linked,
       bankCovered: Number(r.bank_covered),
       autoBank: cands,
+      bankCombo: combo3
+        ? {
+            ids: combo3.map((c) => c.id),
+            labels: combo3.map((c) => `${c.date.slice(5)} · ${c.desc.slice(0, 20)} · ${isIn ? "+" : "−"}${won(c.amount)}원`),
+            total: combo3.reduce((s, c) => s + c.amount, 0),
+          }
+        : null,
     };
   });
 

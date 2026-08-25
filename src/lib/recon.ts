@@ -406,7 +406,9 @@ export async function markPastTax(): Promise<{ ok: true; applied: number } | { o
 export async function confirmTaxToBank(
   taxInvoiceId: number,
   cashTxnId: number,
-): Promise<{ ok: true; remaining: number; shortfall: number } | { ok: false; error: string }> {
+): Promise<
+  { ok: true; remaining: number; shortfall: number; netted: boolean } | { ok: false; error: string }
+> {
   const g = await guard();
   if (!g.ok) return g;
   const [inv] = await db.execute<{
@@ -435,16 +437,21 @@ export async function confirmTaxToBank(
     WHERE id = ${cashTxnId} AND source = '통장' AND is_active
   `);
   if (!dep) return { ok: false, error: "통장 줄을 찾을 수 없습니다" };
-  if (inv.direction === "매출" && Number(dep.in_amount) <= 0)
-    return { ok: false, error: "매출 계산서는 입금과만 이을 수 있습니다" };
-  if (inv.direction === "매입" && Number(dep.out_amount) <= 0)
-    return { ok: false, error: "매입 계산서는 출금과만 이을 수 있습니다" };
+  /* ⭐ 상계 허용 (사장님 제보 2026-08-25 — 트랜스코스모스·맥스런):
+     ①온라인몰 정산사는 수수료(매입 계산서)를 정산 입금에서 떼고 보낸다 → 매입인데 입금뿐
+     ②서로 사고파는 거래처는 매출 대금을 매입 대금과 상계한다 → 매출인데 출금뿐
+     둘 다 실제로 결제가 끝난 것이므로(상계도 결제다) 반대 방향 연결을 허용한다. */
+  const isCashIn = Number(dep.in_amount) > 0;
+  if (Number(dep.in_amount) <= 0 && Number(dep.out_amount) <= 0)
+    return { ok: false, error: "금액이 없는 통장 줄입니다" };
+  /** 계산서 방향과 통장 방향이 반대 = 상계로 처리된 건 */
+  const netted = (inv.direction === "매출") !== isCashIn;
   /**
    * ⭐ 한 통장 줄 ↔ 여러 계산서 (사장님 제보 2026-08-25): ①카랑이 현대캐피탈·쏘카 몫을
    *    한 번에 입금 ②선입금(포인트 적립) 후 매입 계산서가 여러 번 — 남은 금액을 추적하며
    *    부분 연결한다. 첫 연결은 차액(수수료 차감 등)이 있어도 허용, 차액을 돌려준다.
    */
-  const depAmt = inv.direction === "매출" ? Number(dep.in_amount) : Number(dep.out_amount);
+  const depAmt = isCashIn ? Number(dep.in_amount) : Number(dep.out_amount);
   /* ⭐ 소진량 정본(cashUsedMap) — 지급 잡기('매입지급')·외상 수금('이체입금')이 쓴 몫까지
      센다 (리뷰 C1 이중계상 차단). 남은 금액만큼만 기록해 SUM 이 통장 금액을 못 넘게 한다(C5). */
   const already = (await cashUsedMap([cashTxnId])).get(cashTxnId) ?? 0;
@@ -456,7 +463,7 @@ export async function confirmTaxToBank(
   const shortfall = invRemain - linkAmt; // 계산서에 아직 남은 금액 — 다른 줄을 이어 잇거나 「차액 확인 끝」
 
   const kind = inv.direction === "매출" ? "매출계산서" : "매입계산서";
-  const reason = inv.direction === "매출" ? "입금연결" : "출금연결";
+  const reason = netted ? "상계연결" : isCashIn ? "입금연결" : "출금연결";
   await db.transaction(async (tx) => {
     await tx.execute(sql`
       INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
@@ -465,7 +472,7 @@ export async function confirmTaxToBank(
     await tx.execute(sql`UPDATE tax_invoice SET recon_status = '확정', recon_reason = ${reason} WHERE id = ${taxInvoiceId}`);
     if (remaining === 0) {
       // 통장 줄이 다 찼다(또는 계산서가 더 크다) — 확정으로 정리
-      if (inv.direction === "매입") {
+      if (inv.direction === "매입" && !isCashIn) {
         await tx.execute(sql`
           UPDATE cash_txn SET recon_status = '확정', category = COALESCE(category, '매입대금')
           WHERE id = ${cashTxnId}
@@ -473,7 +480,7 @@ export async function confirmTaxToBank(
       } else {
         await tx.execute(sql`UPDATE cash_txn SET recon_status = '확정' WHERE id = ${cashTxnId}`);
       }
-    } else if (inv.direction === "매입") {
+    } else if (inv.direction === "매입" && !isCashIn) {
       // 적립 소진 중 — 분류를 미리 붙이고 '제안' 상태로 (다음 계산서를 기다린다)
       await tx.execute(sql`
         UPDATE cash_txn SET recon_status = '제안', category = COALESCE(category, '매입대금')
@@ -508,7 +515,35 @@ export async function confirmTaxToBank(
 
   revalidatePath("/finance/tax");
   revalidatePath("/finance/deposits");
-  return { ok: true, remaining, shortfall };
+  return { ok: true, remaining, shortfall, netted };
+}
+
+/**
+ * ⭐ 여러 통장 줄을 한 계산서에 한꺼번에 (사장님 제보 2026-08-25 — 위즈오토)
+ *    월합계 계산서 + 건별 결제라 「7/8 84만 + 7/8 50만 + 7/12 19만 = 계산서 153만」인
+ *    경우, 합이 딱 맞는 조합을 화면이 찾아 주고 여기서 한 번에 잇는다.
+ */
+export async function confirmTaxToBanks(
+  taxInvoiceId: number,
+  cashTxnIds: number[],
+): Promise<{ ok: true; applied: number; remaining: number } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  const ids = [...new Set((cashTxnIds ?? []).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 12);
+  if (ids.length === 0) return { ok: false, error: "이을 통장 줄을 골라 주세요" };
+  let applied = 0;
+  let remaining = 0;
+  for (const id of ids) {
+    const r = await confirmTaxToBank(taxInvoiceId, id);
+    if (!r.ok) {
+      return applied === 0
+        ? { ok: false, error: r.error }
+        : { ok: false, error: `${applied}건까지 이었고 그다음에서 멈췄습니다 — ${r.error}` };
+    }
+    applied++;
+    remaining = r.remaining;
+  }
+  return { ok: true, applied, remaining };
 }
 
 /**
@@ -703,36 +738,83 @@ export async function markTaxFixPair(
  * 🔴 감사 M17(2026-08-25): 「통장에서 직접 찾기」를 서버 검색으로 — 최신 200줄 풀이
  *   아니라 DB 전체에서 찾는다 (선입금·적립은 오래된 줄일 수 있다). 남은 금액 있는 줄만.
  */
+export interface BankHit {
+  id: number;
+  label: string;
+  /** 계산서 방향과 반대인 줄 — 상계(정산에서 차감·매입과 상계)로 처리된 건 */
+  opposite: boolean;
+}
+
+/**
+ * 🔴 감사 M17(2026-08-25): 「통장에서 직접 찾기」를 서버 검색으로 — DB 전체에서 찾는다.
+ *
+ * ⭐ 보완(사장님 제보 2026-08-25 — "(주)트랜스코스·맥스런이 검색이 안 됨"):
+ *    ① **양방향**으로 찾는다. 온라인몰 정산사는 수수료(매입)를 정산 입금에서 떼고,
+ *       서로 사고파는 거래처는 매출 대금을 매입과 상계해 반대 방향으로만 찍힌다.
+ *       방향이 맞는 것을 먼저, 반대인 것은 opposite 로 표시해 뒤에 보여준다.
+ *    ② **이름 정규화** 매칭 — 은행 적요는 12자쯤에서 잘리고((주)트랜스코스),
+ *       ㈜·(주)·주식회사·공백 표기도 제각각이라 상호 그대로는 안 걸린다.
+ */
 export async function searchBankLines(
   direction: "매출" | "매입",
   query: string,
-): Promise<{ ok: true; rows: { id: number; label: string }[] } | { ok: false; error: string }> {
+): Promise<{ ok: true; rows: BankHit[] } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
   const q = query.trim();
   if (q.length < 1) return { ok: false, error: "검색어를 입력해 주세요" };
   const amt = Number(q.replace(/[^0-9]/g, "")) || 0;
-  const isIn = direction === "매출";
+  const nq = normName(q);
+  const wantIn = direction === "매출";
+  /* ⭐ 은행 적요는 12자쯤에서 잘린다(「(주)트랜스코스」) — 상호 전체로는 못 찾는다.
+     그래서 ①정규화한 검색어 ②그 앞 5자 ③심어 둔 별명(금호타이어→「조준호A금호타」)
+     세 갈래로 찾는다. 이걸 안 해서 「(주)트랜스코스」·「맥스런」이 0건이었다. */
+  const aliasRows =
+    nq.length >= 2
+      ? await db.execute<{ raw: string }>(sql`
+          SELECT alias_raw raw FROM party_alias
+          WHERE party_label ILIKE ${"%" + q + "%"} OR alias_key LIKE ${"%" + nq + "%"}
+          LIMIT 10
+        `)
+      : [];
+  const pats = [...new Set([nq, nq.length >= 5 ? nq.slice(0, 5) : "", ...aliasRows.map((a) => normName(a.raw))]
+    .filter((p) => p.length >= 2))];
+  const NORM_DESC = sql.raw(
+    "regexp_replace(lower(c.description), '㈜|\(주\)|주식회사|[[:space:]]', '', 'g')",
+  );
+  const nameCond =
+    pats.length > 0
+      ? sql.join(pats.map((p) => sql`${NORM_DESC} LIKE ${"%" + p + "%"}`), sql` OR `)
+      : sql`false`;
   const rows = await db.execute<{
-    id: number; date: string; description: string; amount: number; l: string; linked: string;
+    id: number; date: string; description: string; in_amount: number; out_amount: number;
+    l: string; linked: string;
   }>(sql`
     SELECT c.id, to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') date,
-           c.description, ${isIn ? sql.raw("c.in_amount") : sql.raw("c.out_amount")} amount, c.account_label l,
+           c.description, c.in_amount, c.out_amount, c.account_label l,
            ${cashUsedSql("c")} linked
     FROM cash_txn c
     WHERE c.source = '통장' AND c.is_active
-      AND ${isIn ? sql.raw("c.in_amount > 0") : sql.raw("c.out_amount > 0")}
+      AND (c.in_amount > 0 OR c.out_amount > 0)
       AND (c.description ILIKE ${"%" + q + "%"}
-           OR (${amt} > 0 AND ${isIn ? sql.raw("c.in_amount") : sql.raw("c.out_amount")} = ${amt}))
-    ORDER BY c.occurred_at DESC LIMIT 20
+           OR (${nameCond})
+           OR (${amt} > 0 AND (c.in_amount = ${amt} OR c.out_amount = ${amt})))
+    ORDER BY c.occurred_at DESC LIMIT 80
   `);
   const out = rows
-    .map((r) => ({ ...r, remain: Number(r.amount) - Number(r.linked) }))
+    .map((r) => {
+      const isIn = Number(r.in_amount) > 0;
+      const amount = isIn ? Number(r.in_amount) : Number(r.out_amount);
+      return { ...r, isIn, remain: amount - Number(r.linked) };
+    })
     .filter((r) => r.remain > 0)
+    // 방향이 맞는 줄을 먼저 — 반대 방향(상계)은 뒤에
+    .sort((a, b) => Number(a.isIn !== wantIn) - Number(b.isIn !== wantIn))
     .slice(0, 12)
     .map((r) => ({
       id: Number(r.id),
-      label: `${r.date.slice(5)} · ${payerKeyOf("통장", r.description).slice(0, 20)} · ${isIn ? "+" : "−"}${r.remain.toLocaleString()}원 (${r.l})`,
+      label: `${r.isIn !== wantIn ? "↔ " : ""}${r.date.slice(5)} · ${payerKeyOf("통장", r.description).slice(0, 20)} · ${r.isIn ? "+" : "−"}${r.remain.toLocaleString()}원 (${r.l})`,
+      opposite: r.isIn !== wantIn,
     }));
   return { ok: true, rows: out };
 }

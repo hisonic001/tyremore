@@ -10,7 +10,14 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
 import type { TaxCashData } from "@/lib/tax-recon";
-import { closeTaxShortfall, confirmMonthlyParty, confirmTaxToBank, undoMonthlyParty, undoTaxMatch } from "@/lib/recon";
+import {
+  closeTaxShortfall,
+  confirmMonthlyParty,
+  confirmTaxToBank,
+  confirmTaxToBanks,
+  undoMonthlyParty,
+  undoTaxMatch,
+} from "@/lib/recon";
 import { useConfirm } from "@/components/ui/confirm";
 import { won } from "@/components/fin/money";
 import { BankSearch, PickList } from "./link-parts";
@@ -38,12 +45,25 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
       const r = await confirmTaxToBank(invId, cashId);
       if (!r.ok) return setError(r.error);
       setMsg(
-        r.shortfall > 0
-          ? `일부 확인 — 계산서에 ${won(r.shortfall)}원이 남았습니다. 다른 ${isIn ? "입금" : "출금"}을 이어서 잇거나, 수수료·적립 차액이면 「확인 끝」을 누르세요`
-          : r.remaining > 0
-            ? `확인했습니다 — 이 통장 줄에 ${won(r.remaining)}원이 남았습니다 (다른 계산서 몫이면 이어서 확인하세요)`
-            : "확인했습니다 — 금액이 정확히 맞습니다.",
+        // 상계 = 반대 방향 연결 (정산 입금에서 수수료 차감 · 매입과 상계)
+        (r.netted ? "상계로 확인했습니다 (반대 방향). " : "") +
+          (r.shortfall > 0
+            ? `계산서에 ${won(r.shortfall)}원이 남았습니다 — 다른 ${isIn ? "입금" : "출금"}을 이어서 잇거나, 수수료·적립 차액이면 「확인 끝」을 누르세요`
+            : r.remaining > 0
+              ? `확인했습니다 — 이 통장 줄에 ${won(r.remaining)}원이 남았습니다 (다른 계산서 몫이면 이어서 확인하세요)`
+              : "확인했습니다 — 금액이 정확히 맞습니다."),
       );
+      router.refresh();
+    });
+
+  /* ⭐ 합이 딱 맞는 여러 줄을 한꺼번에 (위즈오토 케이스) */
+  const linkCombo = (invId: number, ids: number[]) =>
+    start(async () => {
+      setMsg(null);
+      setError(null);
+      const r = await confirmTaxToBanks(invId, ids);
+      if (!r.ok) return setError(r.error);
+      setMsg(`${r.applied}건을 합쳐 확인했습니다 — 금액이 정확히 맞습니다.`);
       router.refresh();
     });
 
@@ -266,9 +286,29 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
                   </button>
                 )}
               </div>
+              {r.bankCombo && (
+                <div className="mt-1.5 rounded-control bg-brand-50 p-2 text-xs">
+                  <p className="font-semibold text-brand-700">
+                    ✔ {isIn ? "입금" : "출금"} {r.bankCombo.ids.length}건을 합치면 {won(r.bankCombo.total)}원 — 정확히 맞습니다
+                  </p>
+                  <ul className="mt-0.5 space-y-0.5 text-slate-600">
+                    {r.bankCombo.labels.map((l, i) => (
+                      <li key={i}>· {l}</li>
+                    ))}
+                  </ul>
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => linkCombo(r.id, r.bankCombo!.ids)}
+                    className="mt-1.5 rounded-control bg-brand-600 px-3 py-1.5 font-semibold text-white active:bg-brand-700 disabled:opacity-40"
+                  >
+                    {r.bankCombo.ids.length}건 한꺼번에 잇기
+                  </button>
+                </div>
+              )}
               {r.autoBank.length > 0 && (
                 <PickList
-                  hint={`같은 금액·기억된 ${isIn ? "입금" : "출금"}:`}
+                  hint={`이 상대의 ${isIn ? "입금" : "출금"} — 맞는 것을 고르세요:`}
                   pending={pending}
                   strong
                   items={r.autoBank.map((b) => ({
