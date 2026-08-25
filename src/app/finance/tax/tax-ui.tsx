@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "@/lib/link";
 import type { PartyGroup, TaxReconV2, TaxSuggestion } from "@/lib/tax-recon";
 import {
   autoConfirmTax,
@@ -238,7 +239,15 @@ export function TaxRecon({
           <li key={g.bizNo} className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="flex items-baseline justify-between gap-2">
               <span className="min-w-0 truncate">
-                <span className="font-semibold">{g.name}</span>
+                <Link
+                  href={`/finance/party/${encodeURIComponent(
+                    g.items[0]?.supplierName ? `S:${g.items[0].supplierName}` : `B:${g.bizNo}`,
+                  )}`}
+                  className="font-semibold underline-offset-2 hover:underline"
+                  title="이 상대의 원장 보기"
+                >
+                  {g.name}
+                </Link>
                 {kindBadge(g)}
                 <span className="tabular ml-1 text-xs text-slate-400">{bizFmt(g.bizNo)}</span>
               </span>

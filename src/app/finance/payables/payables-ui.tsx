@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "@/lib/link";
 import type { PayLinkRow, PayablesData, PayableSupplier, TaxPayableData } from "@/lib/recon-data";
 import { confirmTaxToBank, searchBankLines } from "@/lib/recon";
 import { payFromWithdrawal, payToSupplier, removePurchasePayment } from "@/lib/purchase-pay";
@@ -229,7 +230,13 @@ export function PayablesUi({
           return (
             <li key={s.supplier} className="rounded-2xl border border-slate-200 bg-white p-4">
               <div className="flex items-baseline justify-between gap-2">
-                <span className="font-semibold">{s.supplier}</span>
+                <Link
+                  href={`/finance/party/${encodeURIComponent(`S:${s.supplier}`)}`}
+                  className="font-semibold underline-offset-2 hover:underline"
+                  title="이 거래처의 원장 보기"
+                >
+                  {s.supplier} <span className="text-xs font-normal text-slate-400">원장 →</span>
+                </Link>
                 <span className="tabular font-bold text-red-600">{won(s.remain)}원</span>
               </div>
               <p className="tabular mt-0.5 text-xs text-slate-500">

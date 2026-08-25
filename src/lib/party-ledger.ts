@@ -1,0 +1,280 @@
+/**
+ * ⭐ 거래처 원장 (ERP 구조화 배치3, 사장님 승인 2026-08-25)
+ *
+ *   한 상대의 세금계산서·통장 입출금·앱 매입/판매·지급/수금을 시간순 한 표로.
+ *   key 는 partyKey 규약 그대로 — 'S:거래처이름' · 'C:고객id' · 'B:사업자번호'(거래처
+ *   미등록 상대 폴백). party_alias·receivable-book 과 같은 열쇠라 세 자료가 이어진다.
+ *
+ *   통장 줄은 이름(별명 사전에 배운 이름 포함)으로 찾는다 — 한 번 이어 배운 상대는
+ *   (주식회사 위즈↔위즈오토) 여기서도 자동으로 잡힌다.
+ *
+ * 🔴 "use server" 아님 — 페이지가 권한 확인 후 부른다. 질의 순차 · LIMIT.
+ * 🔴 러닝 밸런스 열 없음 — 원천이 이질적이라 복식부기 흉내가 된다 (설계 결정).
+ */
+import { sql } from "drizzle-orm";
+import { db } from "@/db";
+import { TAX_APP_START } from "./tax-recon";
+import { monthRange } from "./ym";
+
+export interface LedgerRow {
+  /** YYYY-MM-DD */
+  d: string;
+  kind: "계산서" | "입금" | "출금" | "매입" | "판매" | "지급" | "수금";
+  label: string;
+  /** +받는 축(판매·수금·입금·매출계산서) / −주는 축(매입·지급·출금·매입계산서) */
+  amount: number;
+  status: string | null;
+}
+
+export interface PartyLedger {
+  key: string;
+  title: string;
+  /** 이 상대를 찾는 데 쓴 이름들 (본이름 + 배운 별명) */
+  names: string[];
+  rows: LedgerRow[];
+  /** 줄 돈 — 앱 매입 잔액 (전체 기간, S만) */
+  payableRemain: number;
+  /** 받을 돈 — 외상 잔액 (전체 기간) */
+  receivableRemain: number;
+  /** 출금 확인 안 된 매입 세금계산서 합 (실사용 기간) */
+  taxOpenSum: number;
+}
+
+/** key 해석 실패(모르는 접두어·없는 상대)면 null */
+export async function partyLedgerData(key: string, ym: string): Promise<PartyLedger | null> {
+  const { start, nextStart } = monthRange(ym);
+
+  // ── ① 상대 해석 (순차) ──
+  let title = "";
+  let supplierName: string | null = null;
+  let customerId: number | null = null;
+  const bizNos: string[] = [];
+  const names: string[] = [];
+
+  if (key.startsWith("S:")) {
+    supplierName = key.slice(2);
+    title = supplierName;
+    names.push(supplierName);
+    // supplier.biz_no 는 add-tax-invoice.ts 가 추가한 raw 컬럼 — 스키마 밖이라 raw 로
+    const sup = await db.execute<{ biz_no: string | null }>(sql`
+      SELECT biz_no FROM supplier WHERE name = ${supplierName} LIMIT 1
+    `);
+    if (sup[0]?.biz_no) bizNos.push(sup[0].biz_no);
+  } else if (key.startsWith("C:")) {
+    customerId = Number(key.slice(2));
+    if (!Number.isFinite(customerId)) return null;
+    const cus = await db.execute<{ name: string }>(sql`
+      SELECT name FROM customer WHERE id = ${customerId} LIMIT 1
+    `);
+    if (!cus[0]) return null;
+    title = cus[0].name;
+    names.push(cus[0].name);
+  } else if (key.startsWith("B:")) {
+    const biz = key.slice(2).replace(/\D/g, "");
+    if (!biz) return null;
+    bizNos.push(biz);
+    const t = await db.execute<{ name: string }>(sql`
+      SELECT counterparty_name name FROM tax_invoice
+      WHERE is_active AND counterparty_biz_no = ${biz} ORDER BY id DESC LIMIT 1
+    `);
+    if (!t[0]) return null;
+    title = t[0].name;
+    names.push(t[0].name);
+  } else {
+    return null;
+  }
+
+  // 배운 별명들 (party_alias — 확정 때 학습된 이름) → 통장·계산서 이름 매칭에 합류
+  const aliases = await db.execute<{ raw: string }>(sql`
+    SELECT alias_raw raw FROM party_alias WHERE party_key = ${key} ORDER BY id DESC LIMIT 15
+  `);
+  for (const a of aliases) if (!names.includes(a.raw)) names.push(a.raw);
+
+  const rows: LedgerRow[] = [];
+  const nameConds = sql.join(
+    names.slice(0, 15).map((n) => sql`description ILIKE ${"%" + n + "%"}`),
+    sql` OR `,
+  );
+
+  // ── ② 세금계산서 (이 달) ──
+  const taxCond =
+    bizNos.length > 0
+      ? sql`(counterparty_biz_no IN (${sql.join(bizNos.map((b) => sql`${b}`), sql`, `)})
+             OR counterparty_name IN (${sql.join(names.map((n) => sql`${n}`), sql`, `)}))`
+      : sql`counterparty_name IN (${sql.join(names.map((n) => sql`${n}`), sql`, `)})`;
+  const taxes = await db.execute<{
+    d: string; direction: string; total: number; item: string | null; st: string;
+  }>(sql`
+    SELECT to_char(write_date, 'YYYY-MM-DD') d, direction, total, item_summary item, recon_status st
+    FROM tax_invoice
+    WHERE is_active AND ${taxCond}
+      AND write_date >= ${start}::date AND write_date < ${nextStart}::date
+    ORDER BY write_date LIMIT 200
+  `);
+  for (const t of taxes) {
+    rows.push({
+      d: t.d,
+      kind: "계산서",
+      label: `세금계산서 ${t.direction}${t.item ? ` · ${t.item}` : ""}`,
+      amount: t.direction === "매출" ? Number(t.total) : -Number(t.total),
+      status: t.st,
+    });
+  }
+
+  // ── ③ 통장 입출금 (이 달, 이름 매칭 — 별명 포함) ──
+  const cash = await db.execute<{
+    d: string; description: string; in_amount: number; out_amount: number; st: string;
+  }>(sql`
+    SELECT to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') d,
+           description, in_amount, out_amount, recon_status st
+    FROM cash_txn
+    WHERE source = '통장' AND is_active AND (${nameConds})
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date
+    ORDER BY occurred_at LIMIT 200
+  `);
+  for (const c of cash) {
+    const isIn = Number(c.in_amount) > 0;
+    rows.push({
+      d: c.d,
+      kind: isIn ? "입금" : "출금",
+      label: c.description,
+      amount: isIn ? Number(c.in_amount) : -Number(c.out_amount),
+      status: c.st,
+    });
+  }
+
+  // ── ④ 앱 매입 + 지급 (거래처만, 이 달) ──
+  if (supplierName) {
+    const buys = await db.execute<{ d: string | null; no: string; total: number | null }>(sql`
+      SELECT COALESCE(issued_at, to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')) d,
+             invoice_no no, total
+      FROM purchase_invoice
+      WHERE supplier = ${supplierName} AND status <> '취소'
+        AND COALESCE(issued_at, to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')) >= ${start}
+        AND COALESCE(issued_at, to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')) < ${nextStart}
+      ORDER BY 1 LIMIT 200
+    `);
+    for (const b of buys) {
+      rows.push({ d: b.d ?? start, kind: "매입", label: `매입 ${b.no}`, amount: -Number(b.total ?? 0), status: null });
+    }
+    const pays = await db.execute<{ d: string; amount: number; method: string; no: string }>(sql`
+      SELECT to_char(pp.paid_on, 'YYYY-MM-DD') d, pp.amount, pp.method, pi.invoice_no no
+      FROM purchase_payment pp JOIN purchase_invoice pi ON pi.id = pp.invoice_id
+      WHERE pi.supplier = ${supplierName}
+        AND pp.paid_on >= ${start}::date AND pp.paid_on < ${nextStart}::date
+      ORDER BY pp.paid_on LIMIT 200
+    `);
+    for (const p of pays) {
+      rows.push({ d: p.d, kind: "지급", label: `지급 (${p.method}) · ${p.no}`, amount: -Number(p.amount), status: null });
+    }
+  }
+
+  // ── ⑤ 앱 판매 + 외상 수금 (이 달) ──
+  const D = sql`COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)`;
+  const partyQuote = supplierName
+    ? sql`q.supplier_name = ${supplierName}`
+    : customerId !== null
+      ? sql`q.customer_id = ${customerId}`
+      : null;
+  if (partyQuote) {
+    const sales = await db.execute<{ d: string; no: string; total: number; pm: string | null }>(sql`
+      SELECT to_char(${D}, 'YYYY-MM-DD') d, q.quote_no no, q.total_amount total, q.payment_method pm
+      FROM quote q
+      WHERE q.status = '성사' AND q.quote_no LIKE 'Q%' AND ${partyQuote}
+        AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
+      ORDER BY 1 LIMIT 200
+    `);
+    for (const s of sales) {
+      rows.push({ d: s.d, kind: "판매", label: `판매 ${s.no}${s.pm ? ` (${s.pm})` : ""}`, amount: Number(s.total), status: null });
+    }
+    const colls = await db.execute<{ d: string; amount: number; method: string; no: string }>(sql`
+      SELECT to_char(rp.paid_on, 'YYYY-MM-DD') d, rp.amount, rp.method, q.quote_no no
+      FROM receivable_payment rp JOIN quote q ON q.id = rp.quote_id
+      WHERE ${partyQuote}
+        AND rp.paid_on >= ${start}::date AND rp.paid_on < ${nextStart}::date
+      ORDER BY rp.paid_on LIMIT 200
+    `);
+    for (const c of colls) {
+      rows.push({ d: c.d, kind: "수금", label: `외상 수금 (${c.method}) · ${c.no}`, amount: Number(c.amount), status: null });
+    }
+  }
+
+  rows.sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0));
+
+  // ── ⑥ 잔액 요약 (전체 기간 — 미지급·외상 화면과 같은 식) ──
+  let payableRemain = 0;
+  if (supplierName) {
+    const [p] = await db.execute<{ s: string }>(sql`
+      SELECT COALESCE(SUM(pi.total - COALESCE(pp.paid, 0)), 0)::bigint s
+      FROM purchase_invoice pi
+      LEFT JOIN LATERAL (SELECT SUM(amount)::int paid FROM purchase_payment x WHERE x.invoice_id = pi.id) pp ON true
+      WHERE pi.supplier = ${supplierName} AND pi.status <> '취소' AND pi.total IS NOT NULL
+        AND pi.total > COALESCE(pp.paid, 0)
+    `);
+    payableRemain = Number(p.s);
+  }
+  let receivableRemain = 0;
+  if (partyQuote) {
+    const [r] = await db.execute<{ s: string }>(sql`
+      SELECT COALESCE(SUM(q.total_amount - COALESCE(rp.paid, 0)), 0)::bigint s
+      FROM quote q
+      LEFT JOIN LATERAL (SELECT SUM(amount)::int paid FROM receivable_payment x WHERE x.quote_id = q.id) rp ON true
+      WHERE q.status = '성사' AND q.payment_method = '외상' AND ${partyQuote}
+        AND q.total_amount > COALESCE(rp.paid, 0)
+    `);
+    receivableRemain = Number(r.s);
+  }
+  const [to] = await db.execute<{ s: string }>(sql`
+    SELECT COALESCE(SUM(total), 0)::bigint s FROM tax_invoice
+    WHERE is_active AND direction = '매입' AND recon_status IN ('미대조', '제안')
+      AND write_date >= ${TAX_APP_START}::date AND ${taxCond}
+  `);
+
+  return {
+    key,
+    title,
+    names,
+    rows,
+    payableRemain,
+    receivableRemain,
+    taxOpenSum: Number(to.s),
+  };
+}
+
+export interface PartyListRow {
+  name: string;
+  payableRemain: number;
+  receivableRemain: number;
+}
+
+/** 거래처 목록 + 잔액 — /finance/party 첫 화면 */
+export async function partyListData(): Promise<PartyListRow[]> {
+  const pay = await db.execute<{ s: string; remain: string }>(sql`
+    SELECT pi.supplier s, SUM(pi.total - COALESCE(pp.paid, 0))::bigint remain
+    FROM purchase_invoice pi
+    LEFT JOIN LATERAL (SELECT SUM(amount)::int paid FROM purchase_payment x WHERE x.invoice_id = pi.id) pp ON true
+    WHERE pi.status <> '취소' AND pi.total IS NOT NULL AND pi.total > COALESCE(pp.paid, 0)
+    GROUP BY 1 LIMIT 100
+  `);
+  const recv = await db.execute<{ s: string; remain: string }>(sql`
+    SELECT q.supplier_name s, SUM(q.total_amount - COALESCE(rp.paid, 0))::bigint remain
+    FROM quote q
+    LEFT JOIN LATERAL (SELECT SUM(amount)::int paid FROM receivable_payment x WHERE x.quote_id = q.id) rp ON true
+    WHERE q.status = '성사' AND q.payment_method = '외상' AND q.supplier_name IS NOT NULL
+      AND q.total_amount > COALESCE(rp.paid, 0)
+    GROUP BY 1 LIMIT 100
+  `);
+  const all = await db.execute<{ name: string }>(sql`
+    SELECT name FROM supplier WHERE is_active
+    UNION SELECT DISTINCT supplier FROM purchase_invoice WHERE status <> '취소'
+    ORDER BY 1 LIMIT 150
+  `);
+  const payMap = new Map(pay.map((r) => [r.s, Number(r.remain)]));
+  const recvMap = new Map(recv.map((r) => [r.s, Number(r.remain)]));
+  return all.map((r) => ({
+    name: r.name,
+    payableRemain: payMap.get(r.name) ?? 0,
+    receivableRemain: recvMap.get(r.name) ?? 0,
+  }));
+}

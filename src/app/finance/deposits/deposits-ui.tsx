@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "@/lib/link";
 import type { DepositReconData, DepositSuggestion } from "@/lib/recon-data";
 import { collectFromDeposit, ignoreDeposit, linkDepositToQuote, markCardSettlements, unmarkCardSettlement } from "@/lib/fin-deposits";
 import { won } from "@/components/fin/money";
@@ -107,7 +108,18 @@ export function DepositsRecon({ data, ym }: { data: DepositReconData; ym: string
                   {s.parties.map((p) => (
                     <li key={p.key} className="flex items-center justify-between gap-2">
                       <span className="tabular min-w-0 truncate text-xs">
-                        {p.label} · 잔액 {won(p.remain)}원 ({p.count}건)
+                        {p.key.startsWith("S:") || p.key.startsWith("C:") ? (
+                          <Link
+                            href={`/finance/party/${encodeURIComponent(p.key)}`}
+                            className="underline-offset-2 hover:underline"
+                            title="이 상대의 원장 보기"
+                          >
+                            {p.label}
+                          </Link>
+                        ) : (
+                          p.label
+                        )}{" "}
+                        · 잔액 {won(p.remain)}원 ({p.count}건)
                       </span>
                       <button
                         type="button"
