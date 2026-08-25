@@ -119,7 +119,20 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
       {/* 돈 미확인 목록 — 금액 큰 순 */}
       {data.rows.length === 0 ? (
         <section className="mt-4 rounded-card border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
-          이 달 {data.direction} 계산서는 전부 돈이 확인됐습니다 🎉
+          {data.total.n === 0 && data.ignoredN > 0 ? (
+            <>
+              이 달 {data.direction} 계산서 {data.ignoredN}건은 전부 「정리(무시)」 상태입니다 — 돈
+              확인이 필요하면{" "}
+              <Link href={`/finance/tax?view=sort&ym=${data.ym}`} className="underline">
+                계산서 정리
+              </Link>
+              에서 되살리세요
+            </>
+          ) : data.total.n === 0 ? (
+            <>이 달 {data.direction} 계산서가 없습니다</>
+          ) : (
+            <>이 달 {data.direction} 계산서는 전부 돈이 확인됐습니다 🎉</>
+          )}
         </section>
       ) : (
         <ul className="mt-4 grid grid-cols-1 gap-2 lg:grid-cols-2 lg:items-start">

@@ -490,7 +490,7 @@ export function TaxRecon({
       {cleared.length > 0 && (
         <details className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
           <summary className="cursor-pointer text-sm font-semibold text-slate-600">
-            정리된 계산서 {cleared.length}건 (8월 이후) — 잘못 정리했으면 여기서 되살리기
+            {Number(ym.slice(5, 7))}월 정리된 계산서 {cleared.length}건 — 잘못 정리했으면 여기서 되살리기
           </summary>
           <ul className="mt-2 divide-y divide-slate-100 text-sm">
             {cleared.map((r) => (

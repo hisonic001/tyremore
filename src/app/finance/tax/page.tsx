@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { getSession } from "@/lib/auth";
 import Link from "@/lib/link";
 import { FinShell } from "@/components/fin/shell";
-import { pickYm } from "@/lib/ym";
+import { monthRange, pickYm } from "@/lib/ym";
 import { taxCashData, taxReconV2 } from "@/lib/tax-recon";
 import { TaxRecon } from "./tax-ui";
 import { MoneyView, type RecentBankRow } from "./money-view";
@@ -87,14 +87,17 @@ export default async function FinanceTaxPage({
     WHERE t.is_active AND t.recon_status = '확정'
     ORDER BY t.id DESC LIMIT 30
   `);
+  // 🔴 후속(2026-08-25): 8월 하드코딩 → 보는 달 — 7월 무시(과거분) 건도 되살릴 수 있게
+  const { start: mStart, nextStart: mNext } = monthRange(ym);
   const cleared = await db.execute<{
     id: number; direction: string; d: string; name: string; total: number; reason: string | null;
   }>(sql`
     SELECT id, direction, to_char(write_date, 'YYYY-MM-DD') d, counterparty_name name, total,
            recon_reason reason
     FROM tax_invoice
-    WHERE is_active AND recon_status = '무시' AND write_date >= '2026-08-01'
-    ORDER BY id DESC LIMIT 30
+    WHERE is_active AND recon_status = '무시'
+      AND write_date >= ${mStart}::date AND write_date < ${mNext}::date
+    ORDER BY id DESC LIMIT 50
   `);
 
   return (
