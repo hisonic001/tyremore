@@ -10,7 +10,6 @@ import {
   confirmTaxToBank,
   ignoreTaxInvoice,
   linkCounterpartyToSupplier,
-  searchBankLines,
   markPastTax,
   markTaxExpense,
   markTaxFixPair,
@@ -20,6 +19,7 @@ import {
 } from "@/lib/recon";
 import { won } from "@/components/fin/money";
 import { useConfirm } from "@/components/ui/confirm";
+import { BankSearch, PickList } from "./link-parts";
 
 const bizFmt = (d: string) => (d.length === 10 ? `${d.slice(0, 3)}-${d.slice(3, 5)}-${d.slice(5)}` : d);
 
@@ -64,9 +64,6 @@ export function TaxRecon({
   const [error, setError] = useState<string | null>(null);
   const [ask, confirmDialog] = useConfirm(); // 배치5 — 브라우저 confirm() 대체
   const [supPick, setSupPick] = useState<Record<string, string>>({});
-  /** 계산서별 통장 직접 검색어 (선입금·적립 등 금액이 다른 경우) */
-  const [bankQ, setBankQ] = useState<Record<number, string>>({});
-  const [bankHits, setBankHits] = useState<Record<number, { id: number; label: string }[]>>({});
 
   const act = (fn: () => Promise<{ ok: boolean } & Record<string, unknown>>, okMsg: (r: never) => string) =>
     start(async () => {
@@ -130,54 +127,6 @@ export function TaxRecon({
         </button>
       </span>
     );
-
-  /** 통장 직접 검색 — 「다른 방법」 안에서 쓰는 공통 조각 */
-  const bankSearch = (s: TaxSuggestion) => (
-    <div>
-      <p className="font-medium text-slate-600">통장에서 직접 찾기 (선입금·적립 등 금액이 달라도)</p>
-      <div className="mt-1 flex gap-1.5">
-        <input
-          value={bankQ[s.inv.id] ?? ""}
-          onChange={(e) => setBankQ((p) => ({ ...p, [s.inv.id]: e.target.value }))}
-          placeholder="입금자·내용·금액으로 검색"
-          className="w-full rounded-lg border border-slate-300 px-2 py-1.5"
-        />
-        <button
-          type="button"
-          disabled={pending || !(bankQ[s.inv.id] ?? "").trim()}
-          onClick={() =>
-            start(async () => {
-              setError(null);
-              const r = await searchBankLines(s.inv.direction, bankQ[s.inv.id] ?? "");
-              if (!r.ok) return setError(r.error);
-              setBankHits((p) => ({ ...p, [s.inv.id]: r.rows }));
-            })
-          }
-          className="shrink-0 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-medium disabled:opacity-40"
-        >
-          검색
-        </button>
-      </div>
-      <ul className="mt-1 space-y-1">
-        {(bankHits[s.inv.id] ?? []).map((b) => (
-          <li key={b.id} className="flex items-center justify-between gap-2">
-            <span className="min-w-0 truncate">{b.label}</span>
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => bankLink(s, b.id)}
-              className="shrink-0 rounded border border-slate-300 bg-white px-2 py-0.5 font-medium"
-            >
-              잇기
-            </button>
-          </li>
-        ))}
-        {bankHits[s.inv.id] !== undefined && (bankHits[s.inv.id] ?? []).length === 0 && (
-          <li className="text-slate-400">맞는 통장 줄이 없습니다 (전체 기간 검색)</li>
-        )}
-      </ul>
-    </div>
-  );
 
   return (
     <>
@@ -432,42 +381,27 @@ export function TaxRecon({
                       </div>
                     )}
                     {primary === "cands" && (
-                      <ul className="mt-1.5 space-y-1 rounded bg-white p-1.5 text-xs">
-                        <li className="text-slate-500">맞는 것을 고르세요:</li>
-                        {s.candidates.map((c) => (
-                          <li key={`${c.table}|${c.id}`} className="flex items-center justify-between gap-2">
-                            <span className="min-w-0 truncate">{c.label}</span>
-                            <button
-                              type="button"
-                              disabled={pending}
-                              onClick={() => confirmOne(s, c.table, c.id, "수동")}
-                              className="shrink-0 rounded border border-slate-300 bg-white px-2 py-0.5 font-medium"
-                            >
-                              잇기
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
+                      <div className="mt-1.5 rounded bg-white p-1.5 text-xs">
+                        <PickList
+                          hint="맞는 것을 고르세요:"
+                          pending={pending}
+                          items={s.candidates.map((c) => ({
+                            key: `${c.table}|${c.id}`,
+                            label: c.label,
+                            onPick: () => confirmOne(s, c.table, c.id, "수동"),
+                          }))}
+                        />
+                      </div>
                     )}
                     {primary === "bank" && (
-                      <ul className="mt-1.5 space-y-1 rounded bg-sky-50 p-1.5 text-xs">
-                        <li className="text-sky-900">
-                          같은 금액의 통장 {s.inv.direction === "매입" ? "출금" : "입금"}이 있습니다:
-                        </li>
-                        {s.bankCands.map((b) => (
-                          <li key={b.id} className="flex items-center justify-between gap-2">
-                            <span className="min-w-0 truncate">{b.label}</span>
-                            <button
-                              type="button"
-                              disabled={pending}
-                              onClick={() => bankLink(s, b.id)}
-                              className="shrink-0 rounded bg-sky-700 px-2 py-0.5 font-semibold text-white disabled:opacity-40"
-                            >
-                              잇기
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
+                      <div className="mt-1.5 rounded bg-sky-50 p-1.5 text-xs">
+                        <PickList
+                          hint={`같은 금액의 통장 ${s.inv.direction === "매입" ? "출금" : "입금"}이 있습니다:`}
+                          pending={pending}
+                          strong
+                          items={s.bankCands.map((b) => ({ key: b.id, label: b.label, onPick: () => bankLink(s, b.id) }))}
+                        />
+                      </div>
                     )}
                     {primary === "none" && (
                       <p className="mt-1.5 text-xs text-slate-400">
@@ -482,48 +416,29 @@ export function TaxRecon({
                       </summary>
                       <div className="mt-1.5 space-y-2 rounded bg-white p-2 text-xs">
                         {primary !== "cands" && s.candidates.length > 0 && (
-                          <div>
-                            <p className="font-medium text-slate-600">앱 기록 후보</p>
-                            <ul className="mt-0.5 space-y-1">
-                              {s.candidates.map((c) => (
-                                <li key={`${c.table}|${c.id}`} className="flex items-center justify-between gap-2">
-                                  <span className="min-w-0 truncate">{c.label}</span>
-                                  <button
-                                    type="button"
-                                    disabled={pending}
-                                    onClick={() => confirmOne(s, c.table, c.id, "수동")}
-                                    className="shrink-0 rounded border border-slate-300 bg-white px-2 py-0.5 font-medium"
-                                  >
-                                    잇기
-                                  </button>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
+                          <PickList
+                            hint="앱 기록 후보"
+                            pending={pending}
+                            items={s.candidates.map((c) => ({
+                              key: `${c.table}|${c.id}`,
+                              label: c.label,
+                              onPick: () => confirmOne(s, c.table, c.id, "수동"),
+                            }))}
+                          />
                         )}
                         {primary !== "bank" && s.bankCands.length > 0 && (
-                          <div>
-                            <p className="font-medium text-slate-600">
-                              같은 금액의 통장 {s.inv.direction === "매입" ? "출금" : "입금"}
-                            </p>
-                            <ul className="mt-0.5 space-y-1">
-                              {s.bankCands.map((b) => (
-                                <li key={b.id} className="flex items-center justify-between gap-2">
-                                  <span className="min-w-0 truncate">{b.label}</span>
-                                  <button
-                                    type="button"
-                                    disabled={pending}
-                                    onClick={() => bankLink(s, b.id)}
-                                    className="shrink-0 rounded border border-slate-300 bg-white px-2 py-0.5 font-medium"
-                                  >
-                                    잇기
-                                  </button>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
+                          <PickList
+                            hint={`같은 금액의 통장 ${s.inv.direction === "매입" ? "출금" : "입금"}`}
+                            pending={pending}
+                            items={s.bankCands.map((b) => ({ key: b.id, label: b.label, onPick: () => bankLink(s, b.id) }))}
+                          />
                         )}
-                        {bankSearch(s)}
+                        <div>
+                          <p className="font-medium text-slate-600">통장에서 직접 찾기 (선입금·적립 등 금액이 달라도)</p>
+                          <div className="mt-1">
+                            <BankSearch direction={s.inv.direction} pending={pending} onPick={(id) => bankLink(s, id)} />
+                          </div>
+                        </div>
                         <div className="flex items-center justify-end gap-3 border-t border-slate-100 pt-1.5">
                           {s.inv.direction === "매입" && (
                             <button
