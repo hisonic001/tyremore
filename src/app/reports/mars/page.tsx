@@ -152,7 +152,7 @@ export default async function MarsEvalPage({
       </Link>
 
       <header className="mt-3 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">MARS 입력 평가</h1>
+        <h1 className="text-xl font-bold">MARS 입력 평가</h1>
         <span className="text-xs text-slate-400">본사 평가표 기준 자체 추적</span>
       </header>
 

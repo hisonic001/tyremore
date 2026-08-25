@@ -12,7 +12,7 @@ export default async function ShopPage() {
       <Link href="/settings" className="text-sm text-slate-500 underline underline-offset-4">
         ← 설정으로
       </Link>
-      <h1 className="mt-3 text-2xl font-bold">가게 정보</h1>
+      <h1 className="mt-3 text-xl font-bold">가게 정보</h1>
       <p className="mt-1 text-sm text-slate-500">
         견적서·거래명세서의 <strong>공급자</strong> 칸에 그대로 찍힙니다.
       </p>

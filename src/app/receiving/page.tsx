@@ -57,7 +57,7 @@ export default async function ReceivingPage() {
         ← 검색으로
       </Link>
       <div className="mt-3 flex items-baseline justify-between gap-3">
-        <h1 className="text-2xl font-bold">매입 입고</h1>
+        <h1 className="text-xl font-bold">매입 입고</h1>
         {/* 지나간 매입까지 되짚는 화면 — 여기가 가장 찾기 쉬운 자리다 */}
         <Link
           href="/receiving/history"

@@ -57,7 +57,7 @@ export default async function ProductsPage({
       <Link href="/settings" className="text-sm text-slate-500 underline underline-offset-4">
         ← 설정으로
       </Link>
-      <h1 className="mt-3 text-2xl font-bold">상품</h1>
+      <h1 className="mt-3 text-xl font-bold">상품</h1>
       <p className="mt-1 text-sm text-slate-500">
         검색에 나오는 상품 목록을 손봅니다.
       </p>

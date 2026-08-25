@@ -3,6 +3,8 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { setDotQty } from "@/lib/stock";
+import { Pencil } from "lucide-react";
+import { useConfirm } from "@/components/ui/confirm";
 
 /**
  * ⭐ 화면에서 바로 수량 고치기 (사장님 지시 2026-08-04)
@@ -32,8 +34,9 @@ export function QtyEditor({
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(String(qty));
   const [error, setError] = useState<string | null>(null);
+  const [ask, confirmDialog] = useConfirm(); // 배치4 — confirm() 대체
 
-  function save() {
+  async function save() {
     /**
      * 🔴 빈 칸은 0 이 아니다 (코드 리뷰 2026-08-08).
      *    Number("") === 0 이라, 칸을 지운 채 Enter 를 치면 그 DOT 전량이
@@ -45,7 +48,15 @@ export function QtyEditor({
     }
     const n = Number(value);
     if (n === 0 && qty > 0) {
-      if (!confirm(`이 DOT 의 ${qty}${unit}을 전부 폐기 처리할까요?\n(0으로 저장하면 재고에서 사라집니다)`)) return;
+      if (
+        !(await ask({
+          title: `${qty}${unit}을 전부 폐기할까요?`,
+          body: "0으로 저장하면 이 DOT 가 재고에서 사라집니다.",
+          tone: "danger",
+          confirmLabel: "폐기 처리",
+        }))
+      )
+        return;
     }
     start(async () => {
       setError(null);
@@ -69,13 +80,13 @@ export function QtyEditor({
       >
         {qty}
         <span className="ml-0.5 text-sm font-medium text-slate-500">{unit}</span>
-        <span className="ml-1.5 align-middle text-sm text-slate-400">✏️</span>
+        <Pencil className="ml-1.5 inline size-4 align-middle text-slate-400" />
       </button>
     );
   }
 
   return (
-    <span className="flex items-center gap-1.5">
+    <div className="flex items-center gap-1.5">
       <input
         type="number"
         inputMode="numeric"
@@ -105,7 +116,8 @@ export function QtyEditor({
         취소
       </button>
       {error && <span className="text-xs text-red-600">{error}</span>}
-    </span>
+      {confirmDialog}
+    </div>
   );
 }
 

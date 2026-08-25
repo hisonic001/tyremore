@@ -48,7 +48,7 @@ export default async function PurchaseHistoryPage({
       <Link href="/receiving" className="text-sm text-slate-500 underline underline-offset-4">
         ← 매입 입고로
       </Link>
-      <h1 className="mt-3 text-2xl font-bold">매입 내역</h1>
+      <h1 className="mt-3 text-xl font-bold">매입 내역</h1>
 
       {/* 기간 고르기 — 달 단위. 가로로 넘긴다 */}
       <div className="-mx-4 mt-3 overflow-x-auto px-4">

@@ -68,7 +68,7 @@ export default async function VehiclePage({ params }: { params: Promise<{ id: st
         ← 검색으로
       </Link>
       <div className="mt-3 flex flex-wrap items-baseline justify-between gap-2">
-        <h1 className="text-2xl font-bold">
+        <h1 className="text-xl font-bold">
           {row.plate_no} <span className="text-lg font-normal text-slate-500">{row.name}</span>
         </h1>
         <div className="flex gap-2">

@@ -26,7 +26,7 @@ export default async function UsersPage() {
       <Link href="/settings" className="text-sm text-slate-500 underline underline-offset-4">
         ← 설정으로
       </Link>
-      <h1 className="mt-3 text-2xl font-bold">계정 관리</h1>
+      <h1 className="mt-3 text-xl font-bold">계정 관리</h1>
       <p className="mt-1 text-sm text-slate-500">
         계정을 만들고, 역할(사장님/정비사)을 정하고, 비밀번호를 재설정합니다.
       </p>

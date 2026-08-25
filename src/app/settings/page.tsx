@@ -4,6 +4,20 @@ import { db } from "@/db";
 import { getSession, logout } from "@/lib/auth";
 import { marsReportTechAllowed } from "@/lib/mars-eval";
 import { ChangePassword } from "./password";
+import type { ReactNode } from "react";
+import {
+  Activity,
+  BarChart3,
+  BookOpen,
+  Boxes,
+  ChevronRight,
+  ClipboardList,
+  Store,
+  Tags,
+  Truck,
+  Users,
+  Wallet,
+} from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +41,20 @@ export const dynamic = "force-dynamic";
  *
  * 결과: 설정 하위 8개 → **3개**.
  */
+/* ⭐ 배치4 — 메뉴 아이콘 (토스 리스트 문법: 원형 아이콘 + 제목/설명 + 화살표) */
+const ICONS: Record<string, ReactNode> = {
+  "/reports": <BarChart3 className="size-5" />,
+  "/settings/users": <Users className="size-5" />,
+  "/finance": <Wallet className="size-5" />,
+  "/reports/mars": <ClipboardList className="size-5" />,
+  "/settings/products": <Tags className="size-5" />,
+  "/stock": <Boxes className="size-5" />,
+  "/settings/suppliers": <Truck className="size-5" />,
+  "/receivables": <BookOpen className="size-5" />,
+  "/settings/shop": <Store className="size-5" />,
+  "/status": <Activity className="size-5" />,
+};
+
 export default async function SettingsPage() {
   const session = await getSession();
 
@@ -104,7 +132,7 @@ export default async function SettingsPage() {
       <Link href="/" className="text-sm text-slate-500 underline underline-offset-4">
         ← 검색으로
       </Link>
-      <h1 className="mt-3 text-2xl font-bold">설정</h1>
+      <h1 className="mt-3 text-xl font-bold">설정</h1>
       <p className="mt-1 text-sm text-slate-500">
         판매 · 매입 · 정비 내역은 <strong>홈 맨 위 메뉴</strong>에 있습니다.
       </p>
@@ -126,10 +154,16 @@ export default async function SettingsPage() {
           <li key={i.href}>
             <Link
               href={i.href}
-              className="block rounded-xl border border-slate-200 bg-white p-4 active:bg-slate-50"
+              className="flex items-center gap-3 rounded-card border border-slate-200 bg-white p-4 shadow-card transition-colors active:bg-slate-50 lg:hover:bg-slate-50"
             >
-              <div className="font-semibold">{i.title}</div>
-              <div className="mt-0.5 text-sm text-slate-500">{i.desc}</div>
+              <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-600">
+                {ICONS[i.href] ?? <ChevronRight className="size-5" />}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block font-semibold">{i.title}</span>
+                <span className="mt-0.5 block text-sm leading-snug text-slate-500">{i.desc}</span>
+              </span>
+              <ChevronRight className="size-5 shrink-0 text-slate-300" />
             </Link>
           </li>
         ))}

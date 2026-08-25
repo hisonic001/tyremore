@@ -40,7 +40,7 @@ export default async function StockPage() {
       <header className="mb-4 flex items-baseline justify-between gap-3">
         <h1 className="text-xl font-bold">재고</h1>
         <Link href="/" className="shrink-0 text-sm text-slate-500 underline underline-offset-4">
-          검색으로
+          ← 검색으로
         </Link>
       </header>
 

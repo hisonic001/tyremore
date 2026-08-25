@@ -17,7 +17,7 @@ export default async function SuppliersPage() {
       <Link href="/settings" className="text-sm text-slate-500 underline underline-offset-4">
         ← 설정으로
       </Link>
-      <h1 className="mt-3 text-2xl font-bold">거래처</h1>
+      <h1 className="mt-3 text-xl font-bold">거래처</h1>
       <p className="mt-1 text-sm text-slate-500">
         매입 입고에서 고르는 목록입니다. {active}곳 사용 중
         {rows.length > active && ` · ${rows.length - active}곳 숨김`}

@@ -152,7 +152,7 @@ export default async function StockReportPage() {
       </Link>
 
       <header className="mt-3 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">재고 리포트</h1>
+        <h1 className="text-xl font-bold">재고 리포트</h1>
         <span className="text-xs text-slate-400">사장님 전용</span>
       </header>
 

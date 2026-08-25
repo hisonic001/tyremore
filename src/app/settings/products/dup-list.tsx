@@ -11,6 +11,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { mergeProducts, type DupGroup } from "@/lib/product-merge";
+import { useConfirm } from "@/components/ui/confirm";
 
 const won = (n: number | null) => (n === null ? "—" : n.toLocaleString());
 
@@ -38,6 +39,7 @@ export function DupList({ groups }: { groups: DupGroup[] }) {
 function Group({ g }: { g: DupGroup }) {
   const router = useRouter();
   const [pending, start] = useTransition();
+  const [ask, confirmDialog] = useConfirm(); // 배치4 — confirm() 대체
   const [keepId, setKeepId] = useState<number>(g.products.find((p) => p.suggested)?.id ?? g.products[0].id);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -91,11 +93,13 @@ function Group({ g }: { g: DupGroup }) {
       <button
         type="button"
         disabled={pending}
-        onClick={() => {
+        onClick={async () => {
           if (
-            !confirm(
-              `${g.label}\n\n${absorb.map((p) => p.marsItemNo ?? `#${p.id}`).join(", ")} 을(를) 대표로 합칠까요?\n재고·판매·매입 이력이 전부 대표로 옮겨지고, 흡수된 상품은 지워집니다.`,
-            )
+            !(await ask({
+              title: "대표로 합칠까요?",
+              body: `${g.label}\n\n${absorb.map((p) => p.marsItemNo ?? `#${p.id}`).join(", ")} — 재고·판매·매입 이력이 전부 대표로 옮겨지고, 흡수된 상품은 지워집니다.`,
+              confirmLabel: "합치기",
+            }))
           )
             return;
           start(async () => {
@@ -116,6 +120,7 @@ function Group({ g }: { g: DupGroup }) {
       >
         {pending ? "합치는 중…" : `이 ${absorb.length}개를 대표로 합치기`}
       </button>
+      {confirmDialog}
     </section>
   );
 }
