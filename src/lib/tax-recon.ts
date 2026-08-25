@@ -95,7 +95,14 @@ const sameMonth = (a: string | null, b: string) => !!a && a.slice(0, 7) === b.sl
 const dayDiff = (a: string | null, b: string): number =>
   a ? Math.abs((new Date(a).getTime() - new Date(b).getTime()) / 86400000) : 999;
 
-export async function taxReconV2(): Promise<TaxReconV2> {
+export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
+  /* 월별 보기 (사장님 지적 2026-08-25) — ym 을 주면 그 달만. 과거 달(7월)도 열린다:
+     되돌린 7월 계산서가 「과거분」 통에 숨어 사라져 보이던 문제의 해결 */
+  const mr = ym ? monthRange(ym) : null;
+  const invWhere = mr
+    ? sql`write_date >= ${mr.start}::date AND write_date < ${mr.nextStart}::date`
+    : sql`write_date >= ${TAX_APP_START}::date`;
+  const poolStart = mr ? mr.start : TAX_APP_START;
   // ① 열린 계산서 — 실사용 기간만
   const invs = await db.execute<{
     id: number; direction: "매출" | "매입"; approval_no: string; write_date: string;
@@ -107,13 +114,13 @@ export async function taxReconV2(): Promise<TaxReconV2> {
            counterparty_biz_no, counterparty_name, supply_amount, vat, total, item_summary,
            recon_status, recon_reason
     FROM tax_invoice
-    WHERE is_active AND recon_status IN ('미대조', '제안') AND write_date >= ${TAX_APP_START}::date
+    WHERE is_active AND recon_status IN ('미대조', '제안') AND ${invWhere}
     ORDER BY write_date DESC, id DESC LIMIT 150
   `);
   // 🔴 재설계 C3: 카운트는 절단 없는 count(*) — 150건 넘으면 화면이 "더 있음"을 안다
   const [openCnt] = await db.execute<{ n: number }>(sql`
     SELECT count(*)::int n FROM tax_invoice
-    WHERE is_active AND recon_status IN ('미대조', '제안') AND write_date >= ${TAX_APP_START}::date
+    WHERE is_active AND recon_status IN ('미대조', '제안') AND ${invWhere}
   `);
 
   // ② 상태·사유·과거분 집계
@@ -189,8 +196,8 @@ export async function taxReconV2(): Promise<TaxReconV2> {
     FROM cash_txn
     WHERE source = '통장' AND is_active AND in_amount > 0 AND category IS NULL
       AND recon_status <> '확정' -- 🔴 감사 H7: 외상 수금 등으로 이미 정리된 입금은 후보에서 뺀다
-      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${TAX_APP_START}::date
-    ORDER BY id DESC LIMIT 400
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${poolStart}::date - 7
+    ORDER BY id DESC LIMIT 800
   `);
   const freeDeposits = deposits
     .map((x) => ({ ...x, remain: Number(x.in_amount) - (cashLinked.get(Number(x.id)) ?? 0) }))
@@ -205,8 +212,8 @@ export async function taxReconV2(): Promise<TaxReconV2> {
     WHERE source = '통장' AND is_active AND out_amount > 0
       AND (category IS NULL OR category = '매입대금')
       AND recon_status <> '확정' -- 🔴 재설계 C2: 이미 정리된 출금은 후보에서 뺀다 (deposits와 대칭)
-      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${TAX_APP_START}::date
-    ORDER BY id DESC LIMIT 400
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${poolStart}::date - 7
+    ORDER BY id DESC LIMIT 800
   `);
   const freeWithdrawals = withdrawals
     .map((x) => ({ ...x, remain: Number(x.out_amount) - (cashLinked.get(Number(x.id)) ?? 0) }))
@@ -449,6 +456,8 @@ export interface TaxCashRow {
   total: number;
   /** 앱 기록(매입/판매)과는 이어져 있음 — 돈만 미확인 */
   appLinked: boolean;
+  /** 지금까지 직접 확인된 통장 금액(+차액 조정) — 0<이 값<total 이면 「일부 확인」 */
+  bankCovered: number;
   autoBank: { id: number; label: string }[];
 }
 
@@ -456,25 +465,31 @@ export interface TaxCashData {
   direction: "매입" | "매출";
   ym: string;
   total: { n: number; sum: number };
+  /** 돈 확인 완료 — 직접 확인 합(차액 조정 포함)이 금액을 채웠거나, 간접(지급 잡기) 확인 */
   bankOk: { n: number; sum: number };
-  appOnly: { n: number; sum: number };
-  unknown: { n: number; sum: number };
+  /** 아직 안 끝난 것 — 일부 확인 포함 */
+  open: { n: number; sum: number };
   ignoredN: number;
   /** 돈 미확인 계산서 — 금액 큰 순 LIMIT 50 */
   rows: TaxCashRow[];
   moreN: number;
 }
 
-const BANK_OK = sql`(
-  EXISTS (SELECT 1 FROM recon_match m WHERE m.src_table = 'tax_invoice' AND m.src_id = t.id
-          AND m.ref_table = 'cash_txn' AND m.kind IN ('매입계산서', '매출계산서') AND m.status = '확정')
-  OR EXISTS (SELECT 1 FROM recon_match m1 JOIN recon_match m2
-               ON m2.ref_table = m1.ref_table AND m2.ref_id = m1.ref_id
-             WHERE m1.src_table = 'tax_invoice' AND m1.src_id = t.id AND m1.status = '확정'
-               AND m1.ref_table IN ('purchase_invoice', 'quote')
-               AND m1.kind IN ('매입계산서', '매출계산서')
-               AND m2.src_table = 'cash_txn' AND m2.kind IN ('매입지급', '이체입금') AND m2.status = '확정')
-)`;
+/* 계산서별 확인 상태 — cov: 직접 확인 합(통장 연결 + 「차액 확인 끝」 조정),
+   ind: 간접(계산서↔앱기록↔지급 잡기·외상 수금). 완료 = cov ≥ total OR ind.
+   여러 출금을 합쳐 발행된 계산서·적립 차액(사장님 제보 2026-08-25)을 부분 확인으로 지원 */
+const CASH_LAT = sql`CROSS JOIN LATERAL (
+  SELECT (SELECT COALESCE(SUM(m.amount), 0)::bigint FROM recon_match m
+           WHERE m.src_table = 'tax_invoice' AND m.src_id = t.id AND m.status = '확정'
+             AND m.kind IN ('매입계산서', '매출계산서') AND m.ref_table IN ('cash_txn', 'adjust')) AS cov,
+         EXISTS (SELECT 1 FROM recon_match m1 JOIN recon_match m2
+                   ON m2.ref_table = m1.ref_table AND m2.ref_id = m1.ref_id
+                 WHERE m1.src_table = 'tax_invoice' AND m1.src_id = t.id AND m1.status = '확정'
+                   AND m1.ref_table IN ('purchase_invoice', 'quote')
+                   AND m1.kind IN ('매입계산서', '매출계산서')
+                   AND m2.src_table = 'cash_txn' AND m2.kind IN ('매입지급', '이체입금') AND m2.status = '확정') AS ind
+) x`;
+const DONE = sql`(x.cov >= t.total OR x.ind)`;
 
 export async function taxCashData(direction: "매입" | "매출", ym: string): Promise<TaxCashData> {
   const { start, nextStart } = monthRange(ym);
@@ -483,30 +498,30 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
 
   const [agg] = await db.execute<{
     total_n: number; total_s: string; ok_n: number; ok_s: string;
-    app_n: number; app_s: string; unk_n: number; unk_s: string; ign_n: number;
+    open_n: number; open_s: string; ign_n: number;
   }>(sql`
     SELECT count(*) FILTER (WHERE t.recon_status <> '무시')::int total_n,
            COALESCE(SUM(t.total) FILTER (WHERE t.recon_status <> '무시'), 0)::bigint total_s,
-           count(*) FILTER (WHERE t.recon_status <> '무시' AND ${BANK_OK})::int ok_n,
-           COALESCE(SUM(t.total) FILTER (WHERE t.recon_status <> '무시' AND ${BANK_OK}), 0)::bigint ok_s,
-           count(*) FILTER (WHERE t.recon_status = '확정' AND NOT ${BANK_OK})::int app_n,
-           COALESCE(SUM(t.total) FILTER (WHERE t.recon_status = '확정' AND NOT ${BANK_OK}), 0)::bigint app_s,
-           count(*) FILTER (WHERE t.recon_status IN ('미대조', '제안') AND NOT ${BANK_OK})::int unk_n,
-           COALESCE(SUM(t.total) FILTER (WHERE t.recon_status IN ('미대조', '제안') AND NOT ${BANK_OK}), 0)::bigint unk_s,
+           count(*) FILTER (WHERE t.recon_status <> '무시' AND ${DONE})::int ok_n,
+           COALESCE(SUM(t.total) FILTER (WHERE t.recon_status <> '무시' AND ${DONE}), 0)::bigint ok_s,
+           count(*) FILTER (WHERE t.recon_status <> '무시' AND NOT ${DONE})::int open_n,
+           COALESCE(SUM(t.total) FILTER (WHERE t.recon_status <> '무시' AND NOT ${DONE}), 0)::bigint open_s,
            count(*) FILTER (WHERE t.recon_status = '무시')::int ign_n
-    FROM tax_invoice t WHERE ${inMonth}
+    FROM tax_invoice t ${CASH_LAT} WHERE ${inMonth}
   `);
 
   const rows = await db.execute<{
-    id: number; d: string; write_date: string; name: string; biz: string; total: number; app_linked: boolean;
+    id: number; d: string; write_date: string; name: string; biz: string; total: number;
+    app_linked: boolean; bank_covered: string;
   }>(sql`
     SELECT t.id, to_char(t.write_date, 'MM-DD') d, to_char(t.write_date, 'YYYY-MM-DD') write_date,
            t.counterparty_name name, t.counterparty_biz_no biz, t.total,
            EXISTS (SELECT 1 FROM recon_match m WHERE m.src_table = 'tax_invoice' AND m.src_id = t.id
                    AND m.ref_table IN ('purchase_invoice', 'quote')
-                   AND m.kind IN ('매입계산서', '매출계산서')) app_linked
-    FROM tax_invoice t
-    WHERE ${inMonth} AND t.recon_status <> '무시' AND NOT ${BANK_OK}
+                   AND m.kind IN ('매입계산서', '매출계산서')) app_linked,
+           x.cov bank_covered
+    FROM tax_invoice t ${CASH_LAT}
+    WHERE ${inMonth} AND t.recon_status <> '무시' AND NOT ${DONE}
     ORDER BY ABS(t.total) DESC, t.id DESC LIMIT 50
   `);
 
@@ -521,8 +536,8 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
     WHERE source = '통장' AND is_active AND ${isIn ? sql.raw("in_amount > 0") : sql.raw("out_amount > 0")}
       ${isIn ? sql`AND category IS NULL` : sql`AND (category IS NULL OR category = '매입대금')`}
       AND recon_status <> '확정'
-      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${TAX_APP_START}::date
-    ORDER BY id DESC LIMIT 400
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date - 7
+    ORDER BY id DESC LIMIT 800
   `);
   const free = pool
     .map((x) => ({ ...x, remain: Number(x.amt) - (used.get(Number(x.id)) ?? 0) }))
@@ -537,7 +552,7 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
   const ruleMap2 = new Map(rules2.map((r) => [r.biz_no, r.kind]));
 
   const outRows: TaxCashRow[] = rows.map((r) => {
-    const total = Number(r.total);
+    const total = Number(r.total) - Number(r.bank_covered); // 후보 매칭은 남은 금액 기준
     const loose = isIn && ruleMap2.get(r.biz) === "대행정산";
     const cands = free
       .map((x) => {
@@ -564,8 +579,9 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
       id: Number(r.id),
       d: r.d,
       name: r.name,
-      total,
+      total: Number(r.total),
       appLinked: !!r.app_linked,
+      bankCovered: Number(r.bank_covered),
       autoBank: cands,
     };
   });
@@ -575,10 +591,9 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
     ym,
     total: { n: Number(agg.total_n), sum: Number(agg.total_s) },
     bankOk: { n: Number(agg.ok_n), sum: Number(agg.ok_s) },
-    appOnly: { n: Number(agg.app_n), sum: Number(agg.app_s) },
-    unknown: { n: Number(agg.unk_n), sum: Number(agg.unk_s) },
+    open: { n: Number(agg.open_n), sum: Number(agg.open_s) },
     ignoredN: Number(agg.ign_n),
     rows: outRows,
-    moreN: Math.max(0, Number(agg.app_n) + Number(agg.unk_n) - outRows.length),
+    moreN: Math.max(0, Number(agg.open_n) - outRows.length),
   };
 }

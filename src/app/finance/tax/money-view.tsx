@@ -10,7 +10,8 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
 import type { TaxCashData } from "@/lib/tax-recon";
-import { confirmTaxToBank, undoTaxMatch } from "@/lib/recon";
+import { closeTaxShortfall, confirmTaxToBank, undoTaxMatch } from "@/lib/recon";
+import { useConfirm } from "@/components/ui/confirm";
 import { won } from "@/components/fin/money";
 import { BankSearch, PickList } from "./link-parts";
 
@@ -27,6 +28,7 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [ask, confirmDialog] = useConfirm();
   const isIn = data.direction === "매출";
 
   const link = (invId: number, cashId: number) =>
@@ -37,13 +39,32 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
       if (!r.ok) return setError(r.error);
       setMsg(
         r.shortfall > 0
-          ? `확인했습니다 — 통장 금액이 계산서보다 ${won(r.shortfall)}원 적습니다 (수수료를 떼고 주고받은 것이면 그대로 두면 됩니다)`
+          ? `일부 확인 — 계산서에 ${won(r.shortfall)}원이 남았습니다. 다른 ${isIn ? "입금" : "출금"}을 이어서 잇거나, 수수료·적립 차액이면 「확인 끝」을 누르세요`
           : r.remaining > 0
             ? `확인했습니다 — 이 통장 줄에 ${won(r.remaining)}원이 남았습니다 (다른 계산서 몫이면 이어서 확인하세요)`
             : "확인했습니다 — 금액이 정확히 맞습니다.",
       );
       router.refresh();
     });
+
+  const settle = async (invId: number, remain: number) => {
+    if (
+      !(await ask({
+        title: "남은 차액을 확인 끝으로 정리할까요?",
+        body: `남은 ${won(remain)}원을 수수료·적립·에누리 차액으로 보고 이 계산서의 돈 확인을 끝냅니다.\n(잘못 정리했으면 「통장 연결 되돌리기」로 함께 풀립니다)`,
+        confirmLabel: "확인 끝",
+      }))
+    )
+      return;
+    start(async () => {
+      setMsg(null);
+      setError(null);
+      const r = await closeTaxShortfall(invId);
+      if (!r.ok) return setError(r.error);
+      setMsg(`차액 ${won(r.settled)}원을 정리하고 확인을 끝냈습니다.`);
+      router.refresh();
+    });
+  };
 
   const undoBank = (invId: number) =>
     start(async () => {
@@ -111,8 +132,12 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
                 </span>
                 <span className="tabular shrink-0 font-bold">{won(r.total)}원</span>
               </div>
-              <div className="mt-1">
-                {r.appLinked ? (
+              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                {r.bankCovered > 0 ? (
+                  <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-800">
+                    일부 확인 · 남은 {won(r.total - r.bankCovered)}원
+                  </span>
+                ) : r.appLinked ? (
                   <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
                     앱 기록 있음 · 돈 미확인
                   </span>
@@ -120,6 +145,16 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
                   <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
                     미확인
                   </span>
+                )}
+                {r.bankCovered > 0 && (
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => settle(r.id, r.total - r.bankCovered)}
+                    className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-xs font-medium text-slate-600 active:bg-slate-100 disabled:opacity-40"
+                  >
+                    남은 건 수수료·적립 — 확인 끝
+                  </button>
                 )}
               </div>
               {r.autoBank.length > 0 && (
@@ -189,6 +224,7 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
         카드·현금으로 받은 판매 대금은 통장에 계산서 단위로 찍히지 않아 여기서 확인되지 않습니다 —
         카드는 「카드 대사」에서 따로 맞춥니다. 상대 유형 정리·앱 기록 잇기는 「계산서 정리」 뷰에서.
       </p>
+      {confirmDialog}
     </>
   );
 }

@@ -28,24 +28,25 @@ export default async function FinanceTaxPage({
 
   const sp = await searchParams;
   const view = sp.view === "sort" ? "sort" : "money";
+  // 🔴 뷰를 오가도 달·방향이 유지된다 (사장님 지적 2026-08-25)
+  const direction = sp.direction === "매출" ? ("매출" as const) : ("매입" as const);
+  const ym = pickYm(sp.ym);
   const segCls = (on: boolean) =>
     `flex-1 rounded-lg py-2.5 text-center text-sm font-semibold transition-colors ${
       on ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 active:bg-slate-200"
     }`;
   const segNav = (
     <nav className="mt-2 flex gap-1 rounded-xl bg-slate-100 p-1">
-      <Link href="/finance/tax?view=money" className={segCls(view === "money")}>
+      <Link href={`/finance/tax?view=money&ym=${ym}&direction=${direction}`} className={segCls(view === "money")}>
         돈 확인
       </Link>
-      <Link href="/finance/tax?view=sort" className={segCls(view === "sort")}>
+      <Link href={`/finance/tax?view=sort&ym=${ym}`} className={segCls(view === "sort")}>
         계산서 정리
       </Link>
     </nav>
   );
 
   if (view === "money") {
-    const direction = sp.direction === "매출" ? ("매출" as const) : ("매입" as const);
-    const ym = pickYm(sp.ym);
     const data = await taxCashData(direction, ym);
     // 최근 통장 연결 — 잘못 이었으면 통장 연결만 되돌린다
     const recent = await db.execute<{ id: number; d: string; direction: string; name: string; total: number }>(sql`
@@ -74,7 +75,7 @@ export default async function FinanceTaxPage({
   }
 
   // ── 계산서 정리 뷰 (기존 화면) ──
-  const data = await taxReconV2();
+  const data = await taxReconV2(ym); // 정리 뷰도 월별 (사장님 지적 2026-08-25)
   const recent = await db.execute<{
     id: number; direction: string; d: string; name: string; total: number; refs: number; reason: string | null;
   }>(sql`
@@ -97,13 +98,14 @@ export default async function FinanceTaxPage({
   `);
 
   return (
-    <FinShell tab="tax">
+    <FinShell tab="tax" monthNav={{ ym, basePath: "/finance/tax", keep: { view: "sort" } }}>
       {segNav}
       <p className="mt-2 text-sm text-slate-500">
         계산서의 <strong>신원</strong>을 정리합니다 — 상대 유형(경비·정산사·거래처)·앱 기록 잇기·
         과거분. 대형 거래처 계산서는 보통 월말 일괄 발행이라 매입 기록이 먼저 있어도 정상입니다.
       </p>
       <TaxRecon
+        ym={ym}
         data={data}
         recent={recent.map((r) => ({
           id: Number(r.id),

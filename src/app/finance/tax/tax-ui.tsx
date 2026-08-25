@@ -50,10 +50,12 @@ export interface ClearedRow {
  *   「다른 방법 ▾」 안으로. 상대 유형 정하기도 접어 둔다. 로직·액션은 그대로.
  */
 export function TaxRecon({
+  ym,
   data,
   recent,
   cleared,
 }: {
+  ym: string;
   data: TaxReconV2;
   recent: RecentRow[];
   cleared: ClearedRow[];
@@ -134,14 +136,14 @@ export function TaxRecon({
       <section className="mt-4 rounded-2xl border-2 border-slate-800 bg-white p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="tabular">
-            할 일 <strong className="text-lg">{data.openCount}건</strong>
+            {Number(ym.slice(5, 7))}월 할 일 <strong className="text-lg">{data.openCount}건</strong>
             <span className="text-sm text-slate-500"> ({data.groups.length}곳)</span>
           </p>
           {data.autoCount > 0 && (
             <button
               type="button"
               disabled={pending}
-              onClick={() => act(() => autoConfirmTax(), (r: { confirmed: number }) => `${r.confirmed}건을 자동으로 이었습니다.`)}
+              onClick={() => act(() => autoConfirmTax(ym), (r: { confirmed: number }) => `${r.confirmed}건을 자동으로 이었습니다.`)}
               className="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-40"
             >
               ✔ 확실한 {data.autoCount}건 모두 잇기
@@ -168,7 +170,7 @@ export function TaxRecon({
       {msg && <p className="mt-2 rounded-lg bg-emerald-50 p-2 text-sm text-emerald-800">✅ {msg}</p>}
 
       {/* 과거분 — 재업로드로 되살아난 것 */}
-      {data.pastCount > 0 && (
+      {data.pastCount > 0 && ym >= "2026-08" && (
         <section className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-300 bg-slate-50 p-3">
           <p className="tabular text-sm text-slate-600">
             앱 도입(8월) 이전 과거분 {data.pastCount}건 · {won(data.pastSum)}원 — 대조할 앱 기록이 없던 시절입니다

@@ -200,11 +200,13 @@ export async function linkCounterpartyToSupplier(
 }
 
 /** 자동확정 가능한 것(정확 일치·유일·사업자번호 확실)을 서버가 다시 계산해 한꺼번에 확정 */
-export async function autoConfirmTax(): Promise<{ ok: true; confirmed: number } | { ok: false; error: string }> {
+export async function autoConfirmTax(
+  ym?: string,
+): Promise<{ ok: true; confirmed: number } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  // 🔴 화면이 보낸 목록을 믿지 않는다 — 서버가 같은 규칙으로 다시 계산한다
-  const data = await taxReconV2();
+  // 🔴 화면이 보낸 목록을 믿지 않는다 — 서버가 같은 규칙으로 다시 계산한다 (보는 달과 같은 범위)
+  const data = await taxReconV2(ym);
   let confirmed = 0;
   for (const s of data.groups.flatMap((g) => g.items)) {
     if (!s.auto) continue;
@@ -235,7 +237,7 @@ export async function undoTaxMatch(
   const gone = await db.execute<{ ref_table: string; ref_id: number }>(sql`
     DELETE FROM recon_match WHERE src_table = 'tax_invoice' AND src_id = ${taxInvoiceId}
       AND kind IN ('매입계산서', '매출계산서')
-      ${scope === "통장" ? sql`AND ref_table = 'cash_txn'` : sql``}
+      ${scope === "통장" ? sql`AND ref_table IN ('cash_txn', 'adjust')` : sql``}
     RETURNING ref_table, ref_id
   `);
   for (const g of gone) {
@@ -394,14 +396,17 @@ export async function confirmTaxToBank(
   if (!inv) return { ok: false, error: "세금계산서를 찾을 수 없습니다" };
   if (Number(inv.total) <= 0)
     return { ok: false, error: "마이너스 계산서는 원본과 상쇄로 정리해 주세요" };
-  /* ⭐ 재설계(2026-08-25): 앱 기록과 이어진 확정 계산서에도 통장을 이을 수 있다(3자 대조).
-     거절은 「이미 통장 연결이 있을 때」만. */
-  const bankTaken = await db.execute<{ id: number }>(sql`
-    SELECT id FROM recon_match WHERE src_table = 'tax_invoice' AND src_id = ${taxInvoiceId}
-      AND ref_table = 'cash_txn' AND kind IN ('매입계산서', '매출계산서') LIMIT 1
+  /* ⭐ 여러 출금·입금 합산 발행 지원 (사장님 제보 2026-08-25) — 계산서에 남은 금액이
+     있는 한 계속 잇는다. 부분 확인 상태는 돈 확인 뷰가 「일부 확인 · 남은 X원」으로 보여준다. */
+  const [covRow] = await db.execute<{ s: string }>(sql`
+    SELECT COALESCE(SUM(amount), 0)::bigint s FROM recon_match
+    WHERE src_table = 'tax_invoice' AND src_id = ${taxInvoiceId} AND status = '확정'
+      AND kind IN ('매입계산서', '매출계산서') AND ref_table IN ('cash_txn', 'adjust')
   `);
-  if (bankTaken.length > 0)
-    return { ok: false, error: "이미 통장과 이어진 계산서입니다 — 먼저 통장 연결을 되돌려 주세요" };
+  const invCovered = Number(covRow.s);
+  const invRemain = Number(inv.total) - invCovered;
+  if (invRemain <= 0)
+    return { ok: false, error: "이 계산서는 금액이 이미 다 확인됐습니다 — 잘못 이었다면 되돌린 뒤 다시 이으세요" };
   const [dep] = await db.execute<{ id: number; in_amount: number; out_amount: number; description: string }>(sql`
     SELECT id, in_amount, out_amount, description FROM cash_txn
     WHERE id = ${cashTxnId} AND source = '통장' AND is_active
@@ -423,9 +428,9 @@ export async function confirmTaxToBank(
   const remain0 = depAmt - already;
   if (remain0 <= 0)
     return { ok: false, error: "이 통장 줄은 남은 금액이 없습니다 — 이미 다른 연결이 다 썼습니다" };
-  const linkAmt = Math.min(Number(inv.total), remain0);
+  const linkAmt = Math.min(invRemain, remain0);
   const remaining = remain0 - linkAmt; // 통장 쪽 잔여 (>= 0)
-  const shortfall = Number(inv.total) - linkAmt; // 계산서 쪽 미달 = 수수료 차감 등 (>= 0)
+  const shortfall = invRemain - linkAmt; // 계산서에 아직 남은 금액 — 다른 줄을 이어 잇거나 「차액 확인 끝」
 
   const kind = inv.direction === "매출" ? "매출계산서" : "매입계산서";
   const reason = inv.direction === "매출" ? "입금연결" : "출금연결";
@@ -481,6 +486,40 @@ export async function confirmTaxToBank(
   revalidatePath("/finance/tax");
   revalidatePath("/finance/deposits");
   return { ok: true, remaining, shortfall };
+}
+
+/**
+ * ⭐ 차액 확인 끝 (사장님 제보 2026-08-25) — 포인트·적립 소진, 수수료 차감, 에누리로
+ *    계산서와 통장 금액이 끝내 안 맞는 경우: 남은 차액을 「조정」으로 기록해 확인을 끝낸다.
+ *    ref_table='adjust' 는 통장 소진량(cashUsedMap)에 안 세이고, 되돌리기(통장)가 함께 지운다.
+ */
+export async function closeTaxShortfall(
+  taxInvoiceId: number,
+): Promise<{ ok: true; settled: number } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  const [inv] = await db.execute<{ id: number; direction: string; total: number }>(sql`
+    SELECT id, direction, total FROM tax_invoice WHERE id = ${taxInvoiceId} AND is_active
+  `);
+  if (!inv) return { ok: false, error: "세금계산서를 찾을 수 없습니다" };
+  const [covRow] = await db.execute<{ s: string; cash_n: number }>(sql`
+    SELECT COALESCE(SUM(amount), 0)::bigint s,
+           count(*) FILTER (WHERE ref_table = 'cash_txn')::int cash_n
+    FROM recon_match
+    WHERE src_table = 'tax_invoice' AND src_id = ${taxInvoiceId} AND status = '확정'
+      AND kind IN ('매입계산서', '매출계산서') AND ref_table IN ('cash_txn', 'adjust')
+  `);
+  if (Number(covRow.cash_n) === 0)
+    return { ok: false, error: "먼저 통장 출금·입금을 하나 이상 이어 주세요" };
+  const remain = Number(inv.total) - Number(covRow.s);
+  if (remain <= 0) return { ok: false, error: "남은 차액이 없습니다 — 이미 확인이 끝났습니다" };
+  const kind = inv.direction === "매출" ? "매출계산서" : "매입계산서";
+  await db.execute(sql`
+    INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
+    VALUES (${kind}, 'tax_invoice', ${taxInvoiceId}, 'adjust', ${taxInvoiceId}, ${remain}, '확정', '수동', ${g.uid}, now())
+  `);
+  revalidatePath("/finance/tax");
+  return { ok: true, settled: remain };
 }
 
 /**

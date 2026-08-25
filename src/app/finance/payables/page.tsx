@@ -35,7 +35,7 @@ export default async function FinancePayablesPage() {
         data={data}
         links={links.rows}
         supplierNames={links.supplierNames}
-        cashSummary={{ ym: cash.ym, n: cash.appOnly.n + cash.unknown.n, sum: cash.appOnly.sum + cash.unknown.sum }}
+        cashSummary={{ ym: cash.ym, n: cash.open.n, sum: cash.open.sum }}
       />
     </FinShell>
   );
