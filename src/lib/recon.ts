@@ -362,6 +362,28 @@ export async function setTaxPartyRule(input: {
   return { ok: true, applied };
 }
 
+/**
+ * ⭐ 그 달 과거분 되살리기 (사장님 요청 2026-08-25 — "7월부터 전부 맞춰보고 싶다")
+ *    「과거분」으로 접어 둔 계산서를 그 달만 골라 확인 목록으로 돌린다.
+ *    지난달을 소급해서 맞출 때 쓴다 — markPastTax 의 역방향.
+ */
+export async function revivePastTax(
+  ym: string,
+): Promise<{ ok: true; revived: number } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return { ok: false, error: "달이 이상합니다" };
+  const rows = await db.execute<{ id: number }>(sql`
+    UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL
+    WHERE is_active AND recon_status = '무시' AND recon_reason = '과거분'
+      AND write_date >= (${ym} || '-01')::date
+      AND write_date < ((${ym} || '-01')::date + INTERVAL '1 month')
+    RETURNING id
+  `);
+  revalidatePath("/finance/tax");
+  return { ok: true, revived: rows.length };
+}
+
 /** 과거분(앱 도입 전) 일괄 처리 — 재업로드로 되살아난 것 포함 */
 export async function markPastTax(): Promise<{ ok: true; applied: number } | { ok: false; error: string }> {
   const g = await guard();

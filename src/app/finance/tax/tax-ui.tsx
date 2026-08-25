@@ -14,6 +14,7 @@ import {
   markTaxExpense,
   markTaxFixPair,
   removeTaxPartyRule,
+  revivePastTax,
   setTaxPartyRule,
   undoTaxMatch,
 } from "@/lib/recon";
@@ -51,11 +52,14 @@ export interface ClearedRow {
  */
 export function TaxRecon({
   ym,
+  pastInMonth,
   data,
   recent,
   cleared,
 }: {
   ym: string;
+  /** 이 달에 「과거분」으로 접어 둔 계산서 — 소급해 맞출 때 되살린다 */
+  pastInMonth: { n: number; sum: number };
   data: TaxReconV2;
   recent: RecentRow[];
   cleared: ClearedRow[];
@@ -168,6 +172,29 @@ export function TaxRecon({
       </section>
       {error && <p className="mt-2 rounded-lg bg-red-50 p-2 text-sm text-red-700">⚠️ {error}</p>}
       {msg && <p className="mt-2 rounded-lg bg-emerald-50 p-2 text-sm text-emerald-800">✅ {msg}</p>}
+
+      {/* ⭐ 이 달 과거분 되살리기 (사장님 요청 2026-08-25 — 지난달 소급 대사) */}
+      {pastInMonth.n > 0 && (
+        <section className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-card border border-sky-300 bg-sky-50 p-3">
+          <p className="tabular text-sm text-sky-900">
+            {Number(ym.slice(5, 7))}월 계산서 <strong>{pastInMonth.n}건 · {won(pastInMonth.sum)}원</strong>이
+            「과거분」으로 접혀 있습니다 — 이 달을 맞춰 보시려면 되살리세요
+          </p>
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() =>
+              act(
+                () => revivePastTax(ym),
+                (r: { revived: number }) => `${r.revived}건을 되살렸습니다 — 아래 목록에서 정리하세요.`,
+              )
+            }
+            className="rounded-control bg-sky-700 px-3 py-2 text-sm font-semibold text-white active:bg-sky-800 disabled:opacity-40"
+          >
+            {Number(ym.slice(5, 7))}월 과거분 되살리기
+          </button>
+        </section>
+      )}
 
       {/* 과거분 — 재업로드로 되살아난 것 */}
       {data.pastCount > 0 && ym >= "2026-08" && (
