@@ -348,12 +348,12 @@ export function TaxRecon({
                 <p className="mt-0.5 text-slate-600">
                   이 달 계산서 합과 지급 합, 그리고 <strong>아직 안 준 돈(잔액)</strong>만 보시면 됩니다.
                 </p>
-                <a
-                  href={`/finance/tax?view=money&ym=${ym}&direction=매입`}
+                <Link
+                  href={`/finance/tax?view=money&ym=${ym}&direction=${g.items[0]?.inv.direction ?? "매입"}`}
                   className="mt-1.5 inline-block rounded-control bg-brand-600 px-3 py-1.5 font-semibold text-white"
                 >
                   돈 확인에서 잔액 보기 →
-                </a>
+                </Link>
               </div>
             )}
 

@@ -123,6 +123,20 @@ export async function payFromWithdrawal(input: {
       AND kind = '매입지급' LIMIT 1
   `);
   if (dupe.length > 0) return { ok: false, error: "이미 지급으로 이어진 출금입니다" };
+  /* 🔴 감사 B4(2026-08-25): 계산서 확인·수금이 이미 쓴 몫을 빼고 배분 — 같은 출금
+     이중 소진 차단 (소진량 정본과 같은 식) */
+  const [usedRow] = await db.execute<{ s: string }>(sql`
+    SELECT COALESCE(SUM(amount), 0)::bigint s FROM (
+      SELECT amount FROM recon_match WHERE ref_table = 'cash_txn' AND ref_id = ${input.cashTxnId}
+        AND kind IN ('매입계산서', '매출계산서') AND status = '확정'
+      UNION ALL
+      SELECT amount FROM recon_match WHERE src_table = 'cash_txn' AND src_id = ${input.cashTxnId}
+        AND kind IN ('매입지급', '이체입금') AND status = '확정'
+    ) x
+  `);
+  const avail = Number(dep.out_amount) - Number(usedRow.s);
+  if (avail <= 0)
+    return { ok: false, error: "이 출금은 남은 금액이 없습니다 — 계산서 확인이 이미 썼습니다" };
 
   try {
     return await db.transaction(async (tx) => {
@@ -139,7 +153,7 @@ export async function payFromWithdrawal(input: {
         .map((r) => ({ quoteId: Number(r.id), quoteNo: r.invoice_no, remain: Number(r.total) - Number(r.paid) }))
         .filter((r) => r.remain > 0);
       if (open.length === 0) return { ok: false as const, error: "그 거래처의 미지급 매입이 없습니다" };
-      const plan = planSettlement(open, Number(dep.out_amount));
+      const plan = planSettlement(open, avail);
       if (plan.plan.length === 0) return { ok: false as const, error: "배분할 금액이 없습니다" };
 
       for (const p of plan.plan) {

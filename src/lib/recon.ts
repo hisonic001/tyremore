@@ -14,7 +14,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, isOwner } from "@/lib/auth";
 import { payerKeyOf } from "./expense-cats";
-import { cashUsedMap, cashUsedSql, normName } from "./recon-data";
+import { cashUsedMap, cashUsedSql, normDescSql, normName } from "./recon-data";
 import { TAX_APP_START, taxReconV2 } from "./tax-recon";
 
 export interface MatchRef {
@@ -240,17 +240,18 @@ export async function undoTaxMatch(
       ${scope === "통장" ? sql`AND ref_table IN ('cash_txn', 'adjust')` : sql``}
     RETURNING ref_table, ref_id
   `);
-  for (const g of gone) {
-    if (g.ref_table === "cash_txn") {
+  for (const mrow of gone) {
+    if (mrow.ref_table === "cash_txn") {
       if (invRow?.recon_reason === "출금연결") {
         // 이을 때 우리가 붙였던 '매입대금' 분류도 함께 되돌린다 (사장님 확인 2026-08-25)
         await db.execute(sql`
           UPDATE cash_txn SET recon_status = '미대조',
                  category = CASE WHEN category = '매입대금' THEN NULL ELSE category END
-          WHERE id = ${g.ref_id}
+          WHERE id = ${mrow.ref_id}
         `);
       } else {
-        await db.execute(sql`UPDATE cash_txn SET recon_status = '미대조' WHERE id = ${g.ref_id}`);
+        // 입금연결·상계연결 — 상태만 복원 (분류는 붙인 적 없음)
+        await db.execute(sql`UPDATE cash_txn SET recon_status = '미대조' WHERE id = ${mrow.ref_id}`);
       }
     }
   }
@@ -263,10 +264,10 @@ export async function undoTaxMatch(
         await db.execute(sql`DELETE FROM party_alias WHERE alias_key = ${nameKey} AND party_key LIKE 'S:%'`);
       }
     }
-    for (const g of gone) {
-      if (g.ref_table !== "cash_txn") continue;
+    for (const mrow of gone) {
+      if (mrow.ref_table !== "cash_txn") continue;
       const [depRow] = await db.execute<{ description: string }>(sql`
-        SELECT description FROM cash_txn WHERE id = ${g.ref_id}
+        SELECT description FROM cash_txn WHERE id = ${mrow.ref_id}
       `);
       if (depRow) {
         const payerKey = normName(depRow.description.replace(/^\[[^\]]*\]\s*/, "").trim());
@@ -487,9 +488,9 @@ export async function confirmTaxToBank(
         WHERE id = ${cashTxnId}
       `);
     } else {
-      /* 🔴 감사 H6(2026-08-25): 매출 부분 연결도 상태를 남긴다 — 안 남기면 입금 대조
-         화면에 전액으로 다시 떠서 외상 수금까지 이중으로 잡을 수 있다 */
-      await tx.execute(sql`UPDATE cash_txn SET recon_status = '제안' WHERE id = ${cashTxnId}`);
+      /* 부분 연결 입금은 '미대조'로 남긴다 (감사 B6, 2026-08-25) — 입금 대조 화면이
+         남은 금액만 보여주고, 이중 사용은 소진량 정본(cashUsedMap)이 막는다.
+         '제안'으로 빼돌리면 남은 돈을 외상 수금에 쓸 길이 사라진다 (H6 재해석) */
     }
   });
 
@@ -763,6 +764,7 @@ export async function searchBankLines(
   if (!g.ok) return g;
   const q = query.trim();
   if (q.length < 1) return { ok: false, error: "검색어를 입력해 주세요" };
+  const qEsc = q.replace(/([%_\\])/g, "\\$1"); // LIKE 와일드카드 이스케이프 (감사 C7)
   const amt = Number(q.replace(/[^0-9]/g, "")) || 0;
   const nq = normName(q);
   const wantIn = direction === "매출";
@@ -773,15 +775,16 @@ export async function searchBankLines(
     nq.length >= 2
       ? await db.execute<{ raw: string }>(sql`
           SELECT alias_raw raw FROM party_alias
-          WHERE party_label ILIKE ${"%" + q + "%"} OR alias_key LIKE ${"%" + nq + "%"}
+          WHERE party_label ILIKE ${"%" + qEsc + "%"}
+             OR split_part(alias_key, '@', 1) LIKE ${"%" + nq + "%"} -- 사업자번호부 오탐 방지(C7)
           LIMIT 10
         `)
       : [];
   const pats = [...new Set([nq, nq.length >= 5 ? nq.slice(0, 5) : "", ...aliasRows.map((a) => normName(a.raw))]
     .filter((p) => p.length >= 2))];
-  const NORM_DESC = sql.raw(
-    "regexp_replace(lower(c.description), '㈜|\(주\)|주식회사|[[:space:]]', '', 'g')",
-  );
+  // 🔴 감사 B1(2026-08-25): 손 복제본은 \(주\) 가 캡처그룹으로 죽어 '주' 글자를
+  //    전부 지웠다("광주고무" 검색 0건 경로) — 정규화는 정본 하나만 쓴다
+  const NORM_DESC = normDescSql("c.description");
   const nameCond =
     pats.length > 0
       ? sql.join(pats.map((p) => sql`${NORM_DESC} LIKE ${"%" + p + "%"}`), sql` OR `)
@@ -796,7 +799,8 @@ export async function searchBankLines(
     FROM cash_txn c
     WHERE c.source = '통장' AND c.is_active
       AND (c.in_amount > 0 OR c.out_amount > 0)
-      AND (c.description ILIKE ${"%" + q + "%"}
+      AND (c.category IS NULL OR c.category = '매입대금') -- 카드정산·내부이체·급여는 후보 아님(C7)
+      AND (c.description ILIKE ${"%" + qEsc + "%"}
            OR (${nameCond})
            OR (${amt} > 0 AND (c.in_amount = ${amt} OR c.out_amount = ${amt})))
     ORDER BY c.occurred_at DESC LIMIT 80

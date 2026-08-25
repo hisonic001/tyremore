@@ -63,6 +63,40 @@ export function partyMatchSql(names: (string | null | undefined)[], col = "descr
   );
 }
 
+/**
+ * 상대의 「돈 계산용」 이름들 — 최근 상호 + 배운 지급·정산 별명(T:) 원문.
+ * 🔴 짧은 거래처 약칭('미쉐린')은 일부러 안 넣는다 — '미쉐린로열'(경비)까지 긁어
+ *    월정산 카드와 원장의 잔액이 어긋나던 근원 (감사 B5, 2026-08-25).
+ */
+export async function partyStrictNames(bizNo: string): Promise<string[]> {
+  const [t] = await db.execute<{ name: string }>(sql`
+    SELECT counterparty_name name FROM tax_invoice
+    WHERE is_active AND counterparty_biz_no = ${bizNo} ORDER BY id DESC LIMIT 1
+  `);
+  const aliases = await db.execute<{ raw: string }>(sql`
+    SELECT alias_raw raw FROM party_alias WHERE party_key = ${"T:" + bizNo} LIMIT 12
+  `);
+  return [...new Set([t?.name, ...aliases.map((a) => a.raw)].filter((x): x is string => !!x))];
+}
+
+/** 상대의 달별 통장 합(출금·입금·건수) — 월정산 카드와 거래처 원장이 같은 식을 쓴다 */
+export async function partyMonthlyCash(
+  names: string[],
+): Promise<Map<string, { outS: number; inS: number; n: number }>> {
+  if (names.length === 0) return new Map();
+  const cond = partyMatchSql(names);
+  const rows = await db.execute<{ ym: string; out_s: string; in_s: string; n: number }>(sql`
+    SELECT to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM') ym,
+           COALESCE(SUM(out_amount), 0)::bigint out_s,
+           COALESCE(SUM(in_amount), 0)::bigint in_s,
+           count(*)::int n
+    FROM cash_txn
+    WHERE source = '통장' AND is_active AND (${cond})
+    GROUP BY 1 ORDER BY 1 LIMIT 40
+  `);
+  return new Map(rows.map((r) => [r.ym, { outS: Number(r.out_s), inS: Number(r.in_s), n: Number(r.n) }]));
+}
+
 /* 🔴 감사 M2(2026-08-25): v1 taxReconData 170줄(죽은 코드) 삭제 — 정본은 tax-recon.ts */
 
 /* ================================================================== */
@@ -130,9 +164,11 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
   }>(sql`
     SELECT id, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') date,
            to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at,
-           in_amount, description, account_label l
+           (in_amount - ${cashUsedSql("cash_txn")})::int in_amount, description, account_label l
     FROM cash_txn
-    WHERE ${inMonth} AND recon_status = '미대조' AND category IS NULL AND NOT ${CARD_PAT}
+    WHERE ${inMonth} AND recon_status IN ('미대조', '제안') AND category IS NULL AND NOT ${CARD_PAT}
+      -- 🔴 감사 B6(2026-08-25): 계산서에 일부 연결된 입금도 남은 금액으로 정리할 수 있게
+      AND in_amount > ${cashUsedSql("cash_txn")}
     ORDER BY occurred_at DESC, id DESC LIMIT 60
   `);
 
@@ -213,8 +249,8 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
       ...book.targets.filter((tg) => {
         if (tg.kind === "walkin") return false; // 🔴 감사 L13: 비회원은 수금 등록이 안 되는 대상 — 후보에서 뺀다
         if (aliasTarget && tg.key === aliasTarget.key) return false;
-        const a = norm(tg.label.replace(/^거래처\s*/, ""));
-        return pn.length >= 2 && a.length >= 2 && (a.includes(pn) || pn.includes(a));
+        // 정본 매칭 — 적요 잘림·㈜ 표기 차이 견딤 (감사 C10, 2026-08-25)
+        return samePartyName(tg.label.replace(/^거래처\s*/, ""), payerName);
       }),
     ]
       .slice(0, 3)
@@ -338,7 +374,8 @@ export async function expenseData(ym: string): Promise<ExpenseData> {
   // 감사 M5 — 상대별 묶음 (전체 미분류 대상, LIMIT 없는 집계)
   const byPayerRows = await db.execute<{ p: string; n: number; s: string; any_id: number }>(sql`
     SELECT CASE WHEN source = '통장'
-             THEN trim(regexp_replace(description, '^\[[^\]]*\] *', ''))
+             -- 🔴 감사 B2(2026-08-25): 템플릿 리터럴이 백슬래시를 먹어 접두어가 안 잘렸다
+             THEN trim(regexp_replace(description, '^\\[[^\\]]*\\] *', ''))
              ELSE trim(description) END p,
            count(*)::int n, COALESCE(SUM(out_amount), 0)::bigint s, min(id)::int any_id
     FROM cash_txn WHERE ${inMonth} AND category IS NULL
@@ -502,14 +539,13 @@ export interface PayLinkRow {
 export async function payLinkData(): Promise<{ rows: PayLinkRow[]; supplierNames: string[] }> {
   // '매입대금' 출금 중 지급 기록과 안 이어진 것 — 실사용 기간(8월~)만
   const outs = await db.execute<{ id: number; at: string; description: string; out_amount: number }>(sql`
-    SELECT c.id, to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD') at, c.description, c.out_amount
+    SELECT c.id, to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD') at, c.description,
+           (c.out_amount - ${cashUsedSql("c")})::int out_amount
     FROM cash_txn c
-    WHERE c.source = '통장' AND c.is_active AND c.out_amount > 0 AND c.category = '매입대금'
+    WHERE c.source = '통장' AND c.is_active AND c.category = '매입대금'
       AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date >= '2026-08-01'
-      AND NOT EXISTS (
-        SELECT 1 FROM recon_match m
-        WHERE m.src_table = 'cash_txn' AND m.src_id = c.id AND m.kind = '매입지급'
-      )
+      -- 🔴 감사 B4(2026-08-25): 계산서 확인·지급이 이미 쓴 몫을 뺀 잔액만 — 이중 소진 차단
+      AND c.out_amount > ${cashUsedSql("c")}
     ORDER BY c.occurred_at DESC LIMIT 60
   `);
   // 거래처별 미지급 잔액
@@ -525,11 +561,25 @@ export async function payLinkData(): Promise<{ rows: PayLinkRow[]; supplierNames
     SELECT alias_key, party_key FROM party_alias WHERE party_key LIKE 'S:%' LIMIT 2000
   `);
   const aliasMap3 = new Map(aliases3.map((a) => [a.alias_key, a.party_key.slice(2)]));
+  // 🔴 C10(2026-08-25): 지급출금 별명(T:) → 사업자번호 → 거래처 — 「콘티_(주)싸이」 제안의 열쇠
+  const tAliases = await db.execute<{ alias_key: string; party_key: string }>(sql`
+    SELECT alias_key, party_key FROM party_alias WHERE party_key LIKE 'T:%' LIMIT 2000
+  `);
+  const supByBiz = await db.execute<{ name: string; biz_no: string }>(sql`
+    SELECT name, biz_no FROM supplier WHERE biz_no IS NOT NULL AND is_active LIMIT 500
+  `);
+  const bizToSup = new Map(supByBiz.map((s2) => [s2.biz_no.replace(/\D/g, ""), s2.name]));
+  const tMap = new Map<string, string>();
+  for (const a of tAliases) {
+    const nm = a.alias_key.split("@")[0];
+    const sup2 = bizToSup.get(a.party_key.slice(2));
+    if (nm && sup2) tMap.set(nm, sup2);
+  }
 
   const rows: PayLinkRow[] = outs.map((o) => {
     const payer = payerKeyOf("통장", o.description);
     const pn = normName(payer);
-    let sup = aliasMap3.get(pn) ?? null;
+    let sup = aliasMap3.get(pn) ?? tMap.get(pn) ?? null;
     if (!sup || !remainMap.has(sup)) {
       // 정본 매칭 — 적요 잘림(「(주)맥스런」)·표기 차이를 견딘다
       sup = [...remainMap.keys()].find((name) => samePartyName(name, payer)) ?? null;
@@ -547,59 +597,6 @@ export async function payLinkData(): Promise<{ rows: PayLinkRow[]; supplierNames
     SELECT DISTINCT supplier s FROM purchase_invoice WHERE status <> '취소' ORDER BY 1 LIMIT 100
   `);
   return { rows, supplierNames: names.map((r) => r.s) };
-}
-
-/* ================================================================== */
-/* 미지급 — 세금계산서 기준 (사장님 지시 2026-08-25:                     */
-/*   "앱보다 세금계산서만 따져 달라 — 입출금과 계산서 일치가 더 중요")     */
-
-export interface TaxPayRow {
-  id: number;
-  d: string;
-  name: string;
-  total: number;
-  status: string;
-}
-
-export interface TaxPayableData {
-  /** 출금 확인 안 된 매입 계산서 (실사용 기간) */
-  open: TaxPayRow[];
-  openSum: number;
-  /** 출금·매입과 이어져 확인된 매입 계산서 합 */
-  confirmedSum: number;
-  /** 지급 잡기용 거래처 이름 — 인보이스에 실제로 쓰인 이름 전체 (검색 자동완성) */
-  supplierNames: string[];
-}
-
-export async function taxPayableData(): Promise<TaxPayableData> {
-  const open = await db.execute<{ id: number; d: string; name: string; total: number; status: string }>(sql`
-    SELECT id, to_char(write_date, 'MM-DD') d, counterparty_name name, total, recon_status status
-    FROM tax_invoice
-    WHERE is_active AND direction = '매입' AND write_date >= '2026-08-01'
-      AND recon_status IN ('미대조', '제안')
-    ORDER BY write_date DESC, id DESC LIMIT 100
-  `);
-  const [sums] = await db.execute<{ o: string; c: string }>(sql`
-    SELECT COALESCE(SUM(total) FILTER (WHERE recon_status IN ('미대조', '제안')), 0)::bigint o,
-           COALESCE(SUM(total) FILTER (WHERE recon_status = '확정'), 0)::bigint c
-    FROM tax_invoice
-    WHERE is_active AND direction = '매입' AND write_date >= '2026-08-01'
-  `);
-  const names = await db.execute<{ s: string }>(sql`
-    SELECT DISTINCT supplier s FROM purchase_invoice WHERE status <> '취소' ORDER BY 1 LIMIT 100
-  `);
-  return {
-    open: open.map((r) => ({
-      id: Number(r.id),
-      d: r.d,
-      name: r.name,
-      total: Number(r.total),
-      status: r.status,
-    })),
-    openSum: Number(sums.o),
-    confirmedSum: Number(sums.c),
-    supplierNames: names.map((r) => r.s),
-  };
 }
 
 /* ================================================================== */

@@ -197,6 +197,12 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
                     </dd>
                   </div>
                 </dl>
+                {m.balance < 0 && (
+                  <p className="mt-1 text-[11px] leading-snug text-slate-400">
+                    − 는 통장 자료 시작(25-01) 이전 이월이 반영되지 않아 생기는 값일 수
+                    있습니다 — 정확한 흐름은 원장에서 확인하세요
+                  </p>
+                )}
                 <div className="mt-2 flex items-center justify-between gap-2">
                   <Link
                     href={`/finance/party/${encodeURIComponent(`B:${m.bizNo}`)}?ym=${data.ym}`}
@@ -331,6 +337,11 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
               ) : (
                 <div className="mt-1.5">
                   <BankSearch direction={data.direction} pending={pending} onPick={(id) => link(r.id, id)} />
+                  {!r.bankCombo && (
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      이 상대와 한 번 이어 두면 다음부터 후보·묶음 추천이 자동으로 켜집니다
+                    </p>
+                  )}
                 </div>
               )}
             </li>

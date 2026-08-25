@@ -40,7 +40,7 @@ export default async function FinanceTaxPage({
       <Link href={`/finance/tax?view=money&ym=${ym}&direction=${direction}`} className={segCls(view === "money")}>
         돈 확인
       </Link>
-      <Link href={`/finance/tax?view=sort&ym=${ym}`} className={segCls(view === "sort")}>
+      <Link href={`/finance/tax?view=sort&ym=${ym}&direction=${direction}`} className={segCls(view === "sort")}>
         계산서 정리
       </Link>
     </nav>
@@ -52,8 +52,8 @@ export default async function FinanceTaxPage({
     const recent = await db.execute<{ id: number; d: string; direction: string; name: string; total: number }>(sql`
       SELECT id, to_char(write_date, 'MM-DD') d, direction, counterparty_name name, total
       FROM tax_invoice
-      WHERE is_active AND recon_reason IN ('출금연결', '입금연결')
-      ORDER BY id DESC LIMIT 20
+      WHERE is_active AND recon_reason IN ('출금연결', '입금연결', '상계연결')
+      ORDER BY (direction = ${direction}) DESC, id DESC LIMIT 20
     `);
     const recentBank: RecentBankRow[] = recent.map((r) => ({
       id: Number(r.id),

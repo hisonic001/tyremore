@@ -17,7 +17,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { payerKeyOf } from "./expense-cats";
-import { cashUsedMap, normName, partyMatchSql, samePartyName } from "./recon-data";
+import { cashUsedMap, normName, partyMonthlyCash, partyStrictNames, samePartyName } from "./recon-data";
 import { monthRange } from "./ym";
 
 /** 앱 실사용 시작 — 이전 계산서는 대조가 원리적으로 불가능하다 */
@@ -107,8 +107,10 @@ export function findAmountCombo<T extends { id: number; amount: number }>(
   target: number,
   maxPick = 4,
 ): T[] | null {
-  if (target <= 0 || cands.length < 2 || cands.length > 14) return null;
-  const pool = cands.filter((c) => c.amount > 0 && c.amount <= target);
+  if (target <= 0 || cands.length < 2) return null;
+  // 🔴 감사 C3(2026-08-25): 후보가 많으면 침묵하는 대신 앞쪽(호출자가 관련도 순으로
+  //    정렬해 옴) 14개만 탐색 — 다건 거래처에서 조합 추천이 먼저 꺼지던 문제
+  const pool = cands.filter((c) => c.amount > 0 && c.amount <= target).slice(0, 14);
   if (pool.length < 2) return null;
   let best: T[] | null = null;
   const pick: T[] = [];
@@ -445,7 +447,10 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
           const t = new Date(x.date).getTime();
           const w = new Date(inv.writeDate).getTime();
           const inWindow = t >= w - 45 * 86400000 && t <= w + (known ? 120 : 60) * 86400000;
-          return inWindow && (exact || known || partyKind === "대행정산");
+          /* 🔴 감사 B7(2026-08-25): 대행정산이라도 이름이 닮은(known) 입금만 —
+             무차별 후보는 오픈링크에 쫑아수산이 추천되는 오염을 만들었다.
+             금액 차이는 known 이면 이미 허용된다 */
+          return inWindow && (exact || known);
         })
         .sort(
           (a, b) =>
@@ -613,7 +618,8 @@ const CASH_LAT = sql`CROSS JOIN LATERAL (
 /* 🔴 수리(2026-08-25): recon_reason 이 NULL 이면 `= '월정산'` 이 NULL 이 되고
    `AND DONE`·`AND NOT DONE` 양쪽 FILTER 에서 다 빠져 계산서가 집계에서 실종된다
    (7월 31건 중 14건이 사라졌다). COALESCE 로 NULL 전파를 끊는다. */
-const DONE = sql`(x.cov >= t.total OR x.ind OR COALESCE(t.recon_reason, '') = '월정산')`;
+// 🔴 감사 B8(2026-08-25): 음수(수정) 계산서는 cov(0)≥total 로 자동 확인되던 것 차단
+const DONE = sql`(t.total > 0 AND (x.cov >= t.total OR x.ind OR COALESCE(t.recon_reason, '') = '월정산'))`;
 
 export async function taxCashData(direction: "매입" | "매출", ym: string): Promise<TaxCashData> {
   const { start, nextStart } = monthRange(ym);
@@ -635,8 +641,17 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
   `);
 
   /* ⭐ 월정산 상대 — 개별 목록에서 빼고 잔액 카드로 (사장님 승인 2026-08-25) */
+  /* 🔴 감사 B3(2026-08-25): 월정산 흐름은 「이 방향·이 달에 계산서가 있는 상대」만 —
+     방향 무관 제외는 반대 방향 계산서를 영구 실종시키고(미쉐린 8월 매입 1,045,000원)
+     0건짜리 죽은 카드를 만들었다 */
   const monthlyRules = await db.execute<{ biz_no: string; name_raw: string }>(sql`
-    SELECT biz_no, name_raw FROM tax_party_rule WHERE kind = '월정산' LIMIT 50
+    SELECT r.biz_no, r.name_raw FROM tax_party_rule r
+    WHERE r.kind = '월정산'
+      AND EXISTS (SELECT 1 FROM tax_invoice t2 WHERE t2.is_active
+                    AND t2.direction = ${direction}
+                    AND t2.counterparty_biz_no = r.biz_no
+                    AND t2.write_date >= ${start}::date AND t2.write_date < ${nextStart}::date)
+    LIMIT 50
   `);
   const monthlyBiz = monthlyRules.map((r) => r.biz_no);
   const notMonthly =
@@ -661,6 +676,7 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
 
   // 월정산 상대별 — 이 달 계산서 / 이 달 지급 / 누적 잔액 (순차)
   const monthly: MonthlyParty[] = [];
+  let monthlyOpenN = 0; // 월정산 상대의 「이 달 맞음」 대기 건수 — moreN 정직화(B3)
   for (const mr of monthlyRules) {
     const [inv] = await db.execute<{ n: number; s: string; done_n: number; open_n: number; all_s: string; nm: string }>(sql`
       SELECT count(*) FILTER (WHERE write_date >= ${start}::date AND write_date < ${nextStart}::date)::int n,
@@ -675,34 +691,27 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
       FROM tax_invoice
       WHERE is_active AND direction = ${direction} AND counterparty_biz_no = ${mr.biz_no}
     `);
-    // 이 상대의 통장 이름들 — 배운 별명(T:) + 계산서 상호
-    const names = await db.execute<{ raw: string }>(sql`
-      SELECT alias_raw raw FROM party_alias WHERE party_key = ${"T:" + mr.biz_no} LIMIT 12
-    `);
-    const pats = [...new Set([...names.map((n) => n.raw), inv?.nm ?? mr.name_raw].filter(Boolean))];
+    /* 🔴 감사 B5(2026-08-25): 지급 합은 원장과 같은 정본(partyStrictNames +
+       partyMonthlyCash) — 환불·상계 입금을 차감하고 '미쉐린'류 짧은 약칭의 과다
+       매칭(미쉐린로열 33만원 혼입)을 없앤다. 월정산 카드 잔액 ≡ 거래처 원장 잔액 */
+    const strict = await partyStrictNames(mr.biz_no);
+    const cashByYm = await partyMonthlyCash(strict);
     const isIn2 = direction === "매출";
-    const cond = partyMatchSql(pats); // 정본 — 적요 잘림·표기 차이 견딤
-    const [pay] = await db.execute<{ n: number; s: string; all_s: string }>(sql`
-      SELECT count(*) FILTER (WHERE (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
-                                AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date)::int n,
-             COALESCE(SUM(${isIn2 ? sql.raw("in_amount") : sql.raw("out_amount")})
-                      FILTER (WHERE (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
-                                AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date), 0)::bigint s,
-             COALESCE(SUM(${isIn2 ? sql.raw("in_amount") : sql.raw("out_amount")}), 0)::bigint all_s
-      FROM cash_txn
-      WHERE source = '통장' AND is_active
-        AND ${isIn2 ? sql.raw("in_amount > 0") : sql.raw("out_amount > 0")}
-        AND (${cond})
-    `);
+    const mm = cashByYm.get(ym) ?? { outS: 0, inS: 0, n: 0 };
+    const paidMonth = isIn2 ? mm.inS - mm.outS : mm.outS - mm.inS;
+    let paidAll = 0;
+    for (const v of cashByYm.values()) paidAll += isIn2 ? v.inS - v.outS : v.outS - v.inS;
+    monthlyOpenN += Number(inv?.open_n ?? 0);
     monthly.push({
       bizNo: mr.biz_no,
       name: inv?.nm ?? mr.name_raw,
       invN: Number(inv?.n ?? 0),
       invSum: Number(inv?.s ?? 0),
-      paidN: Number(pay?.n ?? 0),
-      paidSum: Number(pay?.s ?? 0),
-      balance: Number(inv?.all_s ?? 0) - Number(pay?.all_s ?? 0),
-      confirmed: Number(inv?.open_n ?? 0) === 0 && Number(inv?.n ?? 0) > 0,
+      paidN: Number(mm.n),
+      paidSum: paidMonth,
+      balance: Number(inv?.all_s ?? 0) - paidAll,
+      // 🔴 감사 C2: 「이 달 확인됨」은 월정산 확인이 실제로 있을 때만
+      confirmed: Number(inv?.done_n ?? 0) > 0 && Number(inv?.open_n ?? 0) === 0,
     });
   }
 
@@ -734,7 +743,6 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
 
   const outRows: TaxCashRow[] = rows.map((r) => {
     const total = Number(r.total) - Number(r.bank_covered); // 후보 매칭은 남은 금액 기준
-    const loose = isIn && ruleMap2.get(r.biz) === "대행정산";
     const pool2 = free
       .map((x) => {
         const payer = payerKeyOf("통장", x.description);
@@ -748,7 +756,8 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
         const back = isIn ? (known ? 120 : 60) : known ? 150 : 90;
         // 월말 합계 계산서 대비 — 그 달 초의 결제까지 후보로 (2026-08-25)
         const inWindow = t >= w - 45 * 86400000 && t <= w + back * 86400000;
-        return inWindow && (exact || known || loose);
+        // 🔴 감사 B7: 이름 무관 후보(대행정산 loose) 폐지 — 오염 추천의 근원
+        return inWindow && (exact || known);
       })
       .sort(
         (a, b) =>
@@ -793,7 +802,7 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
     open: { n: Number(agg.open_n), sum: Number(agg.open_s) },
     ignoredN: Number(agg.ign_n),
     rows: outRows,
-    moreN: Math.max(0, Number(agg.open_n) - outRows.length),
+    moreN: Math.max(0, Number(agg.open_n) - outRows.length - monthlyOpenN),
     monthly,
   };
 }

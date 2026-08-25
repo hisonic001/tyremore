@@ -13,7 +13,7 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { partyMatchSql } from "./recon-data";
+import { partyMatchSql, partyMonthlyCash, partyStrictNames } from "./recon-data";
 import { TAX_APP_START } from "./tax-recon";
 import { monthRange } from "./ym";
 
@@ -268,13 +268,11 @@ export async function partyLedgerData(key: string, ym: string): Promise<PartyLed
     WHERE is_active AND direction = '매입' AND ${taxCond}
     GROUP BY 1 ORDER BY 1 LIMIT 36
   `);
-  const mPay = await db.execute<{ ym: string; s: string }>(sql`
-    SELECT to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM') ym,
-           COALESCE(SUM(out_amount), 0)::bigint s
-    FROM cash_txn
-    WHERE source = '통장' AND is_active AND out_amount > 0 AND (${nameConds})
-    GROUP BY 1 ORDER BY 1 LIMIT 36
-  `);
+  /* 🔴 감사 B5(2026-08-25): 달별 지급 = 정본(partyStrictNames+partyMonthlyCash),
+     환불·상계 입금 차감(출금−입금) — 월정산 카드와 같은 식이라 두 화면 잔액이 일치 */
+  const strictNames = bizNos.length > 0 ? await partyStrictNames(bizNos[0]) : names;
+  const cashByYm = await partyMonthlyCash(strictNames);
+  const mPay = [...cashByYm].map(([ym2, v]) => ({ ym: ym2, s: String(v.outS - v.inS) }));
   const invMap = new Map(mInv.map((r) => [r.ym, Number(r.s)]));
   const payMap = new Map(mPay.map((r) => [r.ym, Number(r.s)]));
   const allYms = [...new Set([...invMap.keys(), ...payMap.keys()])].sort();
