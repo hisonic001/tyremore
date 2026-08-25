@@ -1293,3 +1293,12 @@ export async function receiveLine(input: {
   refresh("/receiving", "/", `/stock/${line.productId}`);
   return { ok: true, created: input.qty };
 }
+
+/** 금액 없는 매입 장부 수 — 매입 입고 화면 배지용 (사장님 목표 2026-08-25: "0원 매입 없애기") */
+export async function zeroTotalInvoiceCount(): Promise<number> {
+  const [r] = await db.execute<{ n: number }>(sql`
+    SELECT count(*)::int n FROM purchase_invoice
+    WHERE status <> '취소' AND COALESCE(total, 0) = 0
+  `);
+  return Number(r?.n ?? 0);
+}

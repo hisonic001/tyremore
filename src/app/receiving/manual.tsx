@@ -105,7 +105,11 @@ function ManualLedger({ inv, owner }: { inv: PendingInvoice; owner: boolean }) {
       setArm(false);
       const r = await receiveAll(inv.invoiceId);
       if (!r.ok) return setNotice(r.error);
-      const notes = [r.failed.length ? `남은 문제:\n${r.failed.join("\n")}` : null].filter(Boolean);
+      const notes = [
+        r.failed.length ? `남은 문제:\n${r.failed.join("\n")}` : null,
+        // ⭐ 0원 매입 예방 (사장님 목표 2026-08-25) — 막지는 않되 반드시 알린다
+        total === 0 ? "⚠ 금액 없이 입고했습니다 — 원가·마진에서 빠집니다. 매입 입고 화면에서 본당 단가를 채워 주세요." : null,
+      ].filter(Boolean);
       if (notes.length) setNotice(`${r.created}본 입고. ${notes.join("\n")}`);
       router.refresh();
     });
@@ -120,7 +124,7 @@ function ManualLedger({ inv, owner }: { inv: PendingInvoice; owner: boolean }) {
         </h2>
         <span className="tabular text-sm text-indigo-800">
           {inv.lines.reduce((s, l) => s + l.qty, 0)}본
-          {total > 0 && ` · ${won(total)}원`}
+          {total > 0 && ` · ${won(total)}원 (+VAT 10% 자동)`}
         </span>
       </div>
       <p className="mt-2 text-sm text-indigo-800">
@@ -271,13 +275,14 @@ function ManualRow({ line, owner }: { line: PendingInvoice["lines"][number]; own
         {/* 🔴 매입가 칸은 사장님만 — 정비사 화면에 있으면 값이 보이고, 지운 채 저장하면 덮어써진다 */}
         {owner && (
           <label className="ml-auto flex items-center gap-1">
-            <span className="text-xs text-slate-500">본당</span>
+            <span className="text-xs text-slate-500">본당(VAT 별도)</span>
             <input
               value={cost === "" ? "" : Number(cost).toLocaleString()}
               onChange={(e) => setCost(e.target.value.replace(/\D/g, ""))}
               onBlur={() => save({ qty, unitCost: cost === "" ? null : Number(cost) })}
               inputMode="numeric"
-              placeholder="매입가"
+              placeholder="세전 단가"
+              title="부가세를 뺀 단가를 넣으세요 — 장부 합계에 10%가 자동으로 붙습니다 (세 포함 단가를 넣으면 이중 부가세가 됩니다)"
               className="tabular h-10 w-28 rounded-lg border border-indigo-300 px-2 text-right"
             />
             <span className="text-xs text-slate-500">원</span>

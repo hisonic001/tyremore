@@ -1,7 +1,7 @@
 import Link from "@/lib/link";
 import { cookies } from "next/headers";
 import { isOwner } from "@/lib/auth";
-import { pendingInvoices, supplierList } from "@/lib/invoice";
+import { pendingInvoices, supplierList, zeroTotalInvoiceCount } from "@/lib/invoice";
 import { PendingList } from "./client";
 import { RegisterPurchase } from "./register";
 import { PastePurchase } from "./paste";
@@ -20,6 +20,7 @@ export default async function ReceivingPage() {
    *    입고 작업(수량·DOT·전량 입고)은 정비사도 그대로 할 수 있다.
    */
   const owner = await isOwner();
+  const zeroN = owner ? await zeroTotalInvoiceCount() : 0; // 0원 매입 배지 (사장님만)
   const raw = await pendingInvoices();
   const invoices = owner
     ? raw
@@ -56,6 +57,12 @@ export default async function ReceivingPage() {
       <Link href="/" className="text-sm text-slate-500 underline underline-offset-4">
         ← 검색으로
       </Link>
+      {zeroN > 0 && (
+        <p className="tabular mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          ⚠ 금액이 없는 매입 장부 <strong>{zeroN}건</strong> — 원가·마진·손익에서 빠집니다.
+          장부를 열어 본당 단가(부가세 별도)를 채워 주세요.
+        </p>
+      )}
       <div className="mt-3 flex items-baseline justify-between gap-3">
         <h1 className="text-xl font-bold">매입 입고</h1>
         {/* 지나간 매입까지 되짚는 화면 — 여기가 가장 찾기 쉬운 자리다 */}
