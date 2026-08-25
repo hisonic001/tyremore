@@ -26,7 +26,7 @@ export function SectionCard({
   children: ReactNode;
 }) {
   return (
-    <section className={`mt-4 rounded-2xl p-4 ${TONES[tone]} ${className ?? ""}`}>
+    <section className={`mt-4 rounded-card p-4 ${TONES[tone]} ${className ?? ""}`}>
       {title && <h2 className="font-semibold">{title}</h2>}
       {children}
     </section>

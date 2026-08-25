@@ -14,12 +14,12 @@ export function MonthNav({ ym, basePath, keep }: { ym: string; basePath: string;
   };
   return (
     <nav className="tabular mt-2 flex items-center justify-center gap-4 text-sm">
-      <Link href={href(ymAdd(ym, -1))} className="rounded-lg px-3 py-1.5 active:bg-slate-200">
+      <Link href={href(ymAdd(ym, -1))} className="rounded-control px-3 py-2.5 active:bg-slate-200">
         ◀ {ymAdd(ym, -1)}
       </Link>
       <span className="font-bold">{ym}</span>
       {ym < thisYm ? (
-        <Link href={href(ymAdd(ym, 1))} className="rounded-lg px-3 py-1.5 active:bg-slate-200">
+        <Link href={href(ymAdd(ym, 1))} className="rounded-control px-3 py-2.5 active:bg-slate-200">
           {ymAdd(ym, 1)} ▶
         </Link>
       ) : (

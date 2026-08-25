@@ -19,6 +19,7 @@ import {
   undoTaxMatch,
 } from "@/lib/recon";
 import { won } from "@/components/fin/money";
+import { useConfirm } from "@/components/ui/confirm";
 
 const bizFmt = (d: string) => (d.length === 10 ? `${d.slice(0, 3)}-${d.slice(3, 5)}-${d.slice(5)}` : d);
 
@@ -61,6 +62,7 @@ export function TaxRecon({
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [ask, confirmDialog] = useConfirm(); // 배치5 — 브라우저 confirm() 대체
   const [supPick, setSupPick] = useState<Record<string, string>>({});
   /** 계산서별 통장 직접 검색어 (선입금·적립 등 금액이 다른 경우) */
   const [bankQ, setBankQ] = useState<Record<number, string>>({});
@@ -108,9 +110,15 @@ export function TaxRecon({
           type="button"
           disabled={pending}
           title="규칙 취소 — 이 상대의 자동 정리분(8월 이후)을 되살립니다"
-          onClick={() => {
-            if (!confirm(`「${g.name}」의 ${g.kind} 규칙을 취소할까요?
-자동 정리됐던 계산서(8월 이후)가 다시 확인 목록으로 돌아옵니다.`)) return;
+          onClick={async () => {
+            if (
+              !(await ask({
+                title: `${g.kind} 규칙을 취소할까요?`,
+                body: `「${g.name}」 — 자동 정리됐던 계산서(8월 이후)가 다시 확인 목록으로 돌아옵니다.`,
+                confirmLabel: "규칙 취소",
+              }))
+            )
+              return;
             act(
               () => removeTaxPartyRule(g.bizNo),
               (r: { revived: number }) => `규칙을 취소했습니다 — ${r.revived}건이 돌아왔습니다.`,
@@ -618,6 +626,7 @@ export function TaxRecon({
           </ul>
         </details>
       )}
+      {confirmDialog}
     </>
   );
 }

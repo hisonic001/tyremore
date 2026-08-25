@@ -8,6 +8,7 @@ import { confirmTaxToBank, searchBankLines } from "@/lib/recon";
 import { payFromWithdrawal, payToSupplier, removePurchasePayment } from "@/lib/purchase-pay";
 import { won } from "@/components/fin/money";
 import { StatusBadge } from "@/components/fin/badge";
+import { useConfirm } from "@/components/ui/confirm";
 
 const kstToday = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
 const METHODS = ["계좌이체", "현금", "카드", "기타"];
@@ -26,6 +27,7 @@ export function PayablesUi({
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [ask, confirmDialog] = useConfirm(); // 배치5 — 브라우저 confirm() 대체
   /** 거래처별 지급 폼 상태 */
   const [form, setForm] = useState<Record<string, { amount: string; method: string; paidOn: string }>>({});
 
@@ -59,8 +61,15 @@ export function PayablesUi({
       router.refresh();
     });
 
-  const linkPay = (row: PayLinkRow, supplier: string) => {
-    if (!confirm(`${row.at} 출금 ${won(row.amount)}원을 「${supplier}」 지급으로 잡을까요?\n(오래된 매입부터 차례로 채웁니다)`)) return;
+  const linkPay = async (row: PayLinkRow, supplier: string) => {
+    if (
+      !(await ask({
+        title: `「${supplier}」 지급으로 잡을까요?`,
+        body: `${row.at} 출금 ${won(row.amount)}원 — 오래된 매입부터 차례로 채웁니다.`,
+        confirmLabel: "지급 잡기",
+      }))
+    )
+      return;
     start(async () => {
       setMsg(null);
       setError(null);
@@ -76,11 +85,18 @@ export function PayablesUi({
   const getForm = (s: PayableSupplier) =>
     form[s.supplier] ?? { amount: String(s.remain), method: "계좌이체", paidOn: kstToday() };
 
-  const pay = (s: PayableSupplier) => {
+  const pay = async (s: PayableSupplier) => {
     const f = getForm(s);
     const amount = Number(f.amount.replace(/\D/g, ""));
     if (!amount) return setError("지급 금액을 적어 주세요");
-    if (!confirm(`${s.supplier}에 ${won(amount)}원 지급을 넣을까요?\n(오래된 매입부터 차례로 채웁니다)`)) return;
+    if (
+      !(await ask({
+        title: `${s.supplier}에 지급을 넣을까요?`,
+        body: `${won(amount)}원 — 오래된 매입부터 차례로 채웁니다.`,
+        confirmLabel: "지급 등록",
+      }))
+    )
+      return;
     start(async () => {
       setMsg(null);
       setError(null);
@@ -318,8 +334,9 @@ export function PayablesUi({
                 <button
                   type="button"
                   disabled={pending}
-                  onClick={() => {
-                    if (!confirm("이 지급 기록을 지울까요? 잔액이 도로 늘어납니다.")) return;
+                  onClick={async () => {
+                    if (!(await ask({ title: "이 지급 기록을 지울까요?", body: "잔액이 도로 늘어납니다.", tone: "danger", confirmLabel: "지우기" })))
+                      return;
                     start(async () => {
                       setMsg(null);
                       setError(null);
@@ -338,6 +355,7 @@ export function PayablesUi({
           </ul>
         </section>
       )}
+      {confirmDialog}
     </>
   );
 }

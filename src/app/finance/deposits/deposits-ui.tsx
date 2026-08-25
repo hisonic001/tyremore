@@ -6,6 +6,7 @@ import Link from "@/lib/link";
 import type { DepositReconData, DepositSuggestion } from "@/lib/recon-data";
 import { collectFromDeposit, ignoreDeposit, linkDepositToQuote, markCardSettlements, unmarkCardSettlement } from "@/lib/fin-deposits";
 import { won } from "@/components/fin/money";
+import { useConfirm } from "@/components/ui/confirm";
 
 
 /** ⭐ 통장 입금을 카드 정산·이체 판매·외상 수금으로 정리 (ERP 4단계, 2026-08-24) */
@@ -14,6 +15,7 @@ export function DepositsRecon({ data, ym }: { data: DepositReconData; ym: string
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [ask, confirmDialog] = useConfirm(); // 배치5 — 브라우저 confirm() 대체
 
   const act = (fn: () => Promise<{ ok: boolean } & Record<string, unknown>>, okMsg: (r: never) => string) =>
     start(async () => {
@@ -25,14 +27,16 @@ export function DepositsRecon({ data, ym }: { data: DepositReconData; ym: string
       router.refresh();
     });
 
-  const collect = (s: DepositSuggestion, key: string, label: string, remain: number) => {
+  const collect = async (s: DepositSuggestion, key: string, label: string, remain: number) => {
     const take = Math.min(s.dep.amount, remain);
     if (
-      !confirm(
-        `${label}의 외상을 ${won(take)}원 수금으로 등록할까요?\n(오래된 건부터 차례로 채웁니다${
-          s.dep.amount > remain ? ` — 입금이 잔액보다 커서 ${won(s.dep.amount - remain)}원이 남습니다` : ""
-        })`,
-      )
+      !(await ask({
+        title: `${label} 수금으로 등록할까요?`,
+        body: `외상 ${won(take)}원을 오래된 건부터 차례로 채웁니다.${
+          s.dep.amount > remain ? `\n입금이 잔액보다 커서 ${won(s.dep.amount - remain)}원이 남습니다.` : ""
+        }`,
+        confirmLabel: "수금 등록",
+      }))
     )
       return;
     act(
@@ -208,6 +212,7 @@ export function DepositsRecon({ data, ym }: { data: DepositReconData; ym: string
         수금 등록을 되돌리려면 정비 내역·외상 장부의 수금 내역에서 지우면 됩니다 — 여기 연결 자국은
         장부와 별개의 표시일 뿐입니다.
       </p>
+      {confirmDialog}
     </>
   );
 }

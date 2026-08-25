@@ -5,6 +5,7 @@ import { MonthNav } from "./month-nav";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { reopenMonthForm } from "@/lib/month-close";
+import { Lock } from "lucide-react";
 
 /**
  * ⭐ 돈 관리 페이지 셸 (ERP 구조화 배치1, 사장님 승인 2026-08-25)
@@ -50,9 +51,10 @@ export async function FinShell({
       <FinTabs tab={tab} />
       {monthNav && <MonthNav {...monthNav} />}
       {closedAt && monthNav && (
-        <div className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-violet-50 px-3 py-1.5 text-xs text-violet-800">
-          <span>
-            🔒 {monthNav.ym}은 마감된 달입니다 ({closedAt}) — 고치면 마감 때 숫자와 달라질 수 있어요
+        <div className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-slate-100 px-3 py-1.5 text-xs text-slate-700">
+          <span className="flex items-center gap-1">
+            <Lock className="size-3.5 shrink-0" />
+            {monthNav.ym}은 마감된 달입니다 ({closedAt}) — 고치면 마감 때 숫자와 달라질 수 있어요
           </span>
           <form action={reopenMonthForm.bind(null, monthNav.ym)}>
             <button type="submit" className="shrink-0 underline">

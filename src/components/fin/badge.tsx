@@ -7,7 +7,7 @@
 const MAP: Record<string, { label: string; cls: string }> = {
   미대조: { label: "확인 필요", cls: "bg-amber-100 text-amber-700" },
   제안: { label: "추천", cls: "bg-sky-100 text-sky-700" },
-  확정: { label: "맞춰짐", cls: "bg-emerald-100 text-emerald-700" },
+  확정: { label: "맞춰짐", cls: "bg-brand-100 text-brand-700" },
   무시: { label: "정리됨", cls: "bg-slate-100 text-slate-500" },
 };
 
