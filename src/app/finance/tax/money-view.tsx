@@ -10,7 +10,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
 import type { TaxCashData } from "@/lib/tax-recon";
-import { closeTaxShortfall, confirmTaxToBank, undoTaxMatch } from "@/lib/recon";
+import { closeTaxShortfall, confirmMonthlyParty, confirmTaxToBank, undoMonthlyParty, undoTaxMatch } from "@/lib/recon";
 import { useConfirm } from "@/components/ui/confirm";
 import { won } from "@/components/fin/money";
 import { BankSearch, PickList } from "./link-parts";
@@ -66,6 +66,28 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
     });
   };
 
+  /* ⭐ 월정산 상대 — 계산서 1장 ↔ 출금 1건이 대응하지 않는 거래처(미쉐린형).
+     그 달 계산서 합과 지급 합을 견주고 「맞음」 한 번으로 끝낸다. */
+  const confirmMonth = (bizNo: string) =>
+    start(async () => {
+      setMsg(null);
+      setError(null);
+      const r = await confirmMonthlyParty(bizNo, data.ym, data.direction);
+      if (!r.ok) return setError(r.error);
+      setMsg(`${r.applied}건을 이 달 정산으로 확인했습니다.`);
+      router.refresh();
+    });
+
+  const undoMonth = (bizNo: string) =>
+    start(async () => {
+      setMsg(null);
+      setError(null);
+      const r = await undoMonthlyParty(bizNo, data.ym, data.direction);
+      if (!r.ok) return setError(r.error);
+      setMsg(`${r.reverted}건을 되돌렸습니다.`);
+      router.refresh();
+    });
+
   const undoBank = (invId: number) =>
     start(async () => {
       setMsg(null);
@@ -116,6 +138,78 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
         </p>
       </section>
 
+      {/* ⭐ 월정산 거래처 — 잔액으로 본다 (사장님 승인 2026-08-25) */}
+      {data.monthly.length > 0 && (
+        <section className="mt-4">
+          <h2 className="text-[15px] font-semibold">월정산 거래처 — 잔액으로 봅니다</h2>
+          <p className="mt-0.5 text-xs text-slate-500">
+            계산서는 월말에 한 장, 결제는 수시로 나눠 하는 곳입니다 — 한 건씩 맞출 수 없으니
+            이 달 합계와 잔액만 보시면 됩니다.
+          </p>
+          <ul className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-2 lg:items-start">
+            {data.monthly.map((m) => (
+              <li key={m.bizNo} className="rounded-card border border-slate-200 bg-white p-3 shadow-card">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="min-w-0 truncate font-medium">{m.name}</span>
+                  {m.confirmed ? (
+                    <span className="shrink-0 rounded-full bg-brand-100 px-2 py-0.5 text-xs font-semibold text-brand-700">
+                      이 달 확인됨
+                    </span>
+                  ) : (
+                    <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
+                      확인 전
+                    </span>
+                  )}
+                </div>
+                <dl className="tabular mt-2 space-y-0.5 text-sm">
+                  <div className="flex justify-between">
+                    <dt className="text-slate-500">이 달 계산서 ({m.invN}건)</dt>
+                    <dd className="font-medium">{won(m.invSum)}원</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-slate-500">이 달 {isIn ? "입금" : "지급"} ({m.paidN}건)</dt>
+                    <dd className="font-medium">{won(m.paidSum)}원</dd>
+                  </div>
+                  <div className="flex justify-between border-t border-slate-100 pt-1">
+                    <dt className="font-medium">{isIn ? "아직 못 받은 돈" : "아직 안 준 돈"} (누적)</dt>
+                    <dd className={`font-bold ${m.balance > 0 ? "text-red-600" : "text-brand-700"}`}>
+                      {won(m.balance)}원
+                    </dd>
+                  </div>
+                </dl>
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <Link
+                    href={`/finance/party/${encodeURIComponent(`B:${m.bizNo}`)}?ym=${data.ym}`}
+                    className="text-xs text-slate-500 underline underline-offset-2"
+                  >
+                    원장 보기 →
+                  </Link>
+                  {m.confirmed ? (
+                    <button
+                      type="button"
+                      disabled={pending}
+                      onClick={() => undoMonth(m.bizNo)}
+                      className="text-xs text-slate-400 underline disabled:opacity-40"
+                    >
+                      확인 되돌리기
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={pending || m.invN === 0}
+                      onClick={() => confirmMonth(m.bizNo)}
+                      className="rounded-control bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white active:bg-brand-700 disabled:opacity-40"
+                    >
+                      이 달 맞음 — 확인
+                    </button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {/* 돈 미확인 목록 — 금액 큰 순 */}
       {data.rows.length === 0 ? (
         <section className="mt-4 rounded-card border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
@@ -130,6 +224,8 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
             </>
           ) : data.total.n === 0 ? (
             <>이 달 {data.direction} 계산서가 없습니다</>
+          ) : data.monthly.length > 0 ? (
+            <>한 건씩 맞출 계산서는 없습니다 — 위 월정산 거래처만 확인하시면 됩니다</>
           ) : (
             <>이 달 {data.direction} 계산서는 전부 돈이 확인됐습니다 🎉</>
           )}

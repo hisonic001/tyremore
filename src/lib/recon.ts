@@ -332,12 +332,13 @@ export async function ignoreTaxInvoice(
 
 /**
  * 상대(사업자번호) 유형 지정 — 한 번 정하면 과거·미래 계산서가 계속 자동 처리된다.
- * '경비'·'무시' = 열린 계산서를 전부 무시(사유 포함), '대행정산' = 라벨만 (입금 연결로 확정).
+ * '경비'·'무시' = 열린 계산서를 전부 무시(사유 포함).
+ * '대행정산'·'월정산' = 라벨만 — 대행정산은 입금 연결로, 월정산은 월 잔액으로 확인한다.
  */
 export async function setTaxPartyRule(input: {
   bizNo: string;
   nameRaw: string;
-  kind: "경비" | "대행정산" | "무시";
+  kind: "경비" | "대행정산" | "무시" | "월정산";
 }): Promise<{ ok: true; applied: number } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
@@ -349,7 +350,7 @@ export async function setTaxPartyRule(input: {
     ON CONFLICT (biz_no) DO UPDATE SET kind = EXCLUDED.kind, name_raw = EXCLUDED.name_raw, updated_at = now()
   `);
   let applied = 0;
-  if (input.kind !== "대행정산") {
+  if (input.kind === "경비" || input.kind === "무시") {
     const rows = await db.execute<{ id: number }>(sql`
       UPDATE tax_invoice SET recon_status = '무시', recon_reason = ${input.kind}
       WHERE is_active AND recon_status IN ('미대조', '제안') AND counterparty_biz_no = ${bizNo}
@@ -511,6 +512,55 @@ export async function confirmTaxToBank(
 }
 
 /**
+ * ⭐ 월정산 상대의 「이 달 맞음」 (사장님 승인 2026-08-25)
+ *
+ *   미쉐린처럼 월말 합계 계산서를 쓰는 상대는 계산서 ↔ 출금이 1:1로 대응하지 않는다.
+ *   세무적으로도 매칭은 요구되지 않으므로(매입세액공제는 계산서 기준), 그 달 계산서와
+ *   지급 총액을 눈으로 견주고 「맞음」을 누르면 그 달 확인이 끝난다. 잔액은 누계로 남는다.
+ */
+export async function confirmMonthlyParty(
+  bizNo: string,
+  ym: string,
+  direction: "매입" | "매출",
+): Promise<{ ok: true; applied: number } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  const biz = bizNo.replace(/\D/g, "");
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return { ok: false, error: "달이 이상합니다" };
+  const rows = await db.execute<{ id: number }>(sql`
+    UPDATE tax_invoice SET recon_status = '확정', recon_reason = '월정산'
+    WHERE is_active AND counterparty_biz_no = ${biz} AND direction = ${direction}
+      AND recon_status IN ('미대조', '제안')
+      AND write_date >= (${ym} || '-01')::date
+      AND write_date < ((${ym} || '-01')::date + INTERVAL '1 month')
+    RETURNING id
+  `);
+  revalidatePath("/finance/tax");
+  return { ok: true, applied: rows.length };
+}
+
+/** 월정산 「이 달 맞음」 되돌리기 */
+export async function undoMonthlyParty(
+  bizNo: string,
+  ym: string,
+  direction: "매입" | "매출",
+): Promise<{ ok: true; reverted: number } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  const biz = bizNo.replace(/\D/g, "");
+  const rows = await db.execute<{ id: number }>(sql`
+    UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL
+    WHERE is_active AND counterparty_biz_no = ${biz} AND direction = ${direction}
+      AND recon_reason = '월정산'
+      AND write_date >= (${ym} || '-01')::date
+      AND write_date < ((${ym} || '-01')::date + INTERVAL '1 month')
+    RETURNING id
+  `);
+  revalidatePath("/finance/tax");
+  return { ok: true, reverted: rows.length };
+}
+
+/**
  * ⭐ 차액 확인 끝 (사장님 제보 2026-08-25) — 포인트·적립 소진, 수수료 차감, 에누리로
  *    계산서와 통장 금액이 끝내 안 맞는 경우: 남은 차액을 「조정」으로 기록해 확인을 끝낸다.
  *    ref_table='adjust' 는 통장 소진량(cashUsedMap)에 안 세이고, 되돌리기(통장)가 함께 지운다.
@@ -605,9 +655,9 @@ export async function removeTaxPartyRule(
   const [r] = await db.execute<{ kind: string }>(sql`SELECT kind FROM tax_party_rule WHERE biz_no = ${biz}`);
   if (!r) return { ok: false, error: "그 상대의 규칙이 없습니다" };
   await db.execute(sql`DELETE FROM tax_party_rule WHERE biz_no = ${biz}`);
-  // 대행정산은 계산서를 자동 정리한 적이 없어 되살릴 것도 없다 — 라벨만 지운다 (리뷰 지적)
+  // 대행정산·월정산은 계산서를 자동 정리한 적이 없어 되살릴 게 없다 (라벨만 지운다)
   let revived = 0;
-  if (r.kind !== "대행정산") {
+  if (r.kind === "경비" || r.kind === "무시") {
     const rows = await db.execute<{ id: number }>(sql`
       UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL
       WHERE is_active AND counterparty_biz_no = ${biz} AND recon_status = '무시'

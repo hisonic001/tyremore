@@ -461,6 +461,24 @@ export interface TaxCashRow {
   autoBank: { id: number; label: string }[];
 }
 
+/**
+ * ⭐ 월정산 거래처 (사장님 승인 2026-08-25)
+ *   미쉐린처럼 「월말 합계 계산서 + 수시 분할결제」인 상대 — 계산서 1장과 출금 1건이
+ *   1:1로 대응하지 않으므로(실측 42건↔107건) 월 단위 잔액으로 본다.
+ */
+export interface MonthlyParty {
+  bizNo: string;
+  name: string;
+  invN: number;
+  invSum: number;
+  paidN: number;
+  paidSum: number;
+  /** 누적 미지급 = 전체 기간 계산서 − 전체 기간 지급 */
+  balance: number;
+  /** 이 달 계산서를 「맞음」으로 확인했나 */
+  confirmed: boolean;
+}
+
 export interface TaxCashData {
   direction: "매입" | "매출";
   ym: string;
@@ -473,6 +491,8 @@ export interface TaxCashData {
   /** 돈 미확인 계산서 — 금액 큰 순 LIMIT 50 */
   rows: TaxCashRow[];
   moreN: number;
+  /** 월정산으로 지정한 상대 — 개별 잇기 대신 잔액으로 본다 */
+  monthly: MonthlyParty[];
 }
 
 /* 계산서별 확인 상태 — cov: 직접 확인 합(통장 연결 + 「차액 확인 끝」 조정),
@@ -489,7 +509,10 @@ const CASH_LAT = sql`CROSS JOIN LATERAL (
                    AND m1.kind IN ('매입계산서', '매출계산서')
                    AND m2.src_table = 'cash_txn' AND m2.kind IN ('매입지급', '이체입금') AND m2.status = '확정') AS ind
 ) x`;
-const DONE = sql`(x.cov >= t.total OR x.ind)`;
+/* 🔴 수리(2026-08-25): recon_reason 이 NULL 이면 `= '월정산'` 이 NULL 이 되고
+   `AND DONE`·`AND NOT DONE` 양쪽 FILTER 에서 다 빠져 계산서가 집계에서 실종된다
+   (7월 31건 중 14건이 사라졌다). COALESCE 로 NULL 전파를 끊는다. */
+const DONE = sql`(x.cov >= t.total OR x.ind OR COALESCE(t.recon_reason, '') = '월정산')`;
 
 export async function taxCashData(direction: "매입" | "매출", ym: string): Promise<TaxCashData> {
   const { start, nextStart } = monthRange(ym);
@@ -510,6 +533,16 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
     FROM tax_invoice t ${CASH_LAT} WHERE ${inMonth}
   `);
 
+  /* ⭐ 월정산 상대 — 개별 목록에서 빼고 잔액 카드로 (사장님 승인 2026-08-25) */
+  const monthlyRules = await db.execute<{ biz_no: string; name_raw: string }>(sql`
+    SELECT biz_no, name_raw FROM tax_party_rule WHERE kind = '월정산' LIMIT 50
+  `);
+  const monthlyBiz = monthlyRules.map((r) => r.biz_no);
+  const notMonthly =
+    monthlyBiz.length > 0
+      ? sql`AND t.counterparty_biz_no NOT IN (${sql.join(monthlyBiz.map((b) => sql`${b}`), sql`, `)})`
+      : sql``;
+
   const rows = await db.execute<{
     id: number; d: string; write_date: string; name: string; biz: string; total: number;
     app_linked: boolean; bank_covered: string;
@@ -521,9 +554,59 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
                    AND m.kind IN ('매입계산서', '매출계산서')) app_linked,
            x.cov bank_covered
     FROM tax_invoice t ${CASH_LAT}
-    WHERE ${inMonth} AND t.recon_status <> '무시' AND NOT ${DONE}
+    WHERE ${inMonth} AND t.recon_status <> '무시' AND NOT ${DONE} ${notMonthly}
     ORDER BY ABS(t.total) DESC, t.id DESC LIMIT 50
   `);
+
+  // 월정산 상대별 — 이 달 계산서 / 이 달 지급 / 누적 잔액 (순차)
+  const monthly: MonthlyParty[] = [];
+  for (const mr of monthlyRules) {
+    const [inv] = await db.execute<{ n: number; s: string; done_n: number; open_n: number; all_s: string; nm: string }>(sql`
+      SELECT count(*) FILTER (WHERE write_date >= ${start}::date AND write_date < ${nextStart}::date)::int n,
+             COALESCE(SUM(total) FILTER (WHERE write_date >= ${start}::date
+                                AND write_date < ${nextStart}::date), 0)::bigint s,
+             count(*) FILTER (WHERE write_date >= ${start}::date AND write_date < ${nextStart}::date
+                                AND recon_reason = '월정산')::int done_n,
+             count(*) FILTER (WHERE write_date >= ${start}::date AND write_date < ${nextStart}::date
+                                AND recon_status IN ('미대조', '제안'))::int open_n,
+             COALESCE(SUM(total), 0)::bigint all_s, -- 잔액은 「무시」 포함 (발행된 건 다 채무)
+             COALESCE(max(counterparty_name), ${mr.name_raw}) nm
+      FROM tax_invoice
+      WHERE is_active AND direction = ${direction} AND counterparty_biz_no = ${mr.biz_no}
+    `);
+    // 이 상대의 통장 이름들 — 배운 별명(T:) + 계산서 상호
+    const names = await db.execute<{ raw: string }>(sql`
+      SELECT alias_raw raw FROM party_alias WHERE party_key = ${"T:" + mr.biz_no} LIMIT 12
+    `);
+    const pats = [...new Set([...names.map((n) => n.raw), inv?.nm ?? mr.name_raw].filter(Boolean))];
+    const isIn2 = direction === "매출";
+    const cond = sql.join(
+      pats.map((p) => sql`description ILIKE ${"%" + p + "%"}`),
+      sql` OR `,
+    );
+    const [pay] = await db.execute<{ n: number; s: string; all_s: string }>(sql`
+      SELECT count(*) FILTER (WHERE (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
+                                AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date)::int n,
+             COALESCE(SUM(${isIn2 ? sql.raw("in_amount") : sql.raw("out_amount")})
+                      FILTER (WHERE (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
+                                AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date), 0)::bigint s,
+             COALESCE(SUM(${isIn2 ? sql.raw("in_amount") : sql.raw("out_amount")}), 0)::bigint all_s
+      FROM cash_txn
+      WHERE source = '통장' AND is_active
+        AND ${isIn2 ? sql.raw("in_amount > 0") : sql.raw("out_amount > 0")}
+        AND (${cond})
+    `);
+    monthly.push({
+      bizNo: mr.biz_no,
+      name: inv?.nm ?? mr.name_raw,
+      invN: Number(inv?.n ?? 0),
+      invSum: Number(inv?.s ?? 0),
+      paidN: Number(pay?.n ?? 0),
+      paidSum: Number(pay?.s ?? 0),
+      balance: Number(inv?.all_s ?? 0) - Number(pay?.all_s ?? 0),
+      confirmed: Number(inv?.open_n ?? 0) === 0 && Number(inv?.n ?? 0) > 0,
+    });
+  }
 
   // 통장 후보 풀 — taxReconV2 ⑦과 같은 규칙(금액 정확 일치 OR 기억된 상대, 대행정산은 느슨).
   // 🔴 소진량은 정본(cashUsedMap) 기준의 남은 금액
@@ -595,5 +678,6 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
     ignoredN: Number(agg.ign_n),
     rows: outRows,
     moreN: Math.max(0, Number(agg.open_n) - outRows.length),
+    monthly,
   };
 }

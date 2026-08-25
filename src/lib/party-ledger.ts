@@ -26,6 +26,15 @@ export interface LedgerRow {
   status: string | null;
 }
 
+/** 달별 계산서·지급 요약 — 월합계 계산서를 쓰는 상대의 채무 장부 (2026-08-25) */
+export interface PartyMonthRow {
+  ym: string;
+  invSum: number;
+  paySum: number;
+  /** 그 달까지의 누적 미지급 */
+  running: number;
+}
+
 export interface PartyLedger {
   key: string;
   title: string;
@@ -38,6 +47,8 @@ export interface PartyLedger {
   receivableRemain: number;
   /** 출금 확인 안 된 매입 세금계산서 합 (실사용 기간) */
   taxOpenSum: number;
+  /** 달별 계산서 vs 지급 — 오래된 달부터, 누적 잔액 포함 */
+  months: PartyMonthRow[];
 }
 
 /** key 해석 실패(모르는 접두어·없는 상대)면 null */
@@ -80,13 +91,29 @@ export async function partyLedgerData(key: string, ym: string): Promise<PartyLed
     if (!t[0]) return null;
     title = t[0].name;
     names.push(t[0].name);
+    /* 🔴 수리(2026-08-25): 사업자번호로 앱 거래처를 찾아 매입·지급·판매까지 잇는다.
+       (전에는 B: 키면 계산서·통장만 보여 원장이 반쪽이었다) */
+    const sup2 = await db.execute<{ name: string }>(sql`
+      SELECT name FROM supplier WHERE biz_no = ${biz} LIMIT 1
+    `);
+    if (sup2[0]) {
+      supplierName = sup2[0].name;
+      if (!names.includes(sup2[0].name)) names.push(sup2[0].name);
+    }
   } else {
     return null;
   }
 
-  // 배운 별명들 (party_alias — 확정 때 학습된 이름) → 통장·계산서 이름 매칭에 합류
+  /* 배운 별명들 → 통장·계산서 이름 매칭에 합류.
+     🔴 수리(2026-08-25): 은행 적요는 12자쯤에서 잘린다(「미쉐린코리아(」) — 상호명으로는
+     ILIKE 가 안 걸린다. 지급출금 별명('T:사업자번호')·거래처 별명('S:이름')까지 끌어와야
+     통장 줄이 잡힌다. 이걸 안 해서 원장의 지급이 0원으로 보였다. */
+  const keyList = [key, ...bizNos.map((b) => `T:${b}`)];
+  if (supplierName) keyList.push(`S:${supplierName}`);
   const aliases = await db.execute<{ raw: string }>(sql`
-    SELECT alias_raw raw FROM party_alias WHERE party_key = ${key} ORDER BY id DESC LIMIT 15
+    SELECT alias_raw raw FROM party_alias
+    WHERE party_key IN (${sql.join(keyList.map((k) => sql`${k}`), sql`, `)})
+    ORDER BY id DESC LIMIT 20
   `);
   for (const a of aliases) if (!names.includes(a.raw)) names.push(a.raw);
 
@@ -231,6 +258,35 @@ export async function partyLedgerData(key: string, ym: string): Promise<PartyLed
       AND write_date >= ${TAX_APP_START}::date AND ${taxCond}
   `);
 
+  /* ⭐ 달별 계산서 vs 지급 (2026-08-25) — 미쉐린처럼 월말 합계 계산서를 쓰는 상대는
+     개별 매칭이 불가능하므로, 「이 달 발행 − 이 달 지급 = 잔액」이 진짜 장부가 된다. */
+  /* 🔴 수리(2026-08-25): 「무시」로 접어 둔 계산서도 실제로 발행돼 돈을 줘야 하는 채무다
+     — 화면 정리 상태일 뿐이므로 잔액에서 빼면 안 된다 (전에는 과거분이 통째로 빠져
+     계산서 0원으로 보였다). 채무 장부이므로 매입만 센다. */
+  const mInv = await db.execute<{ ym: string; s: string }>(sql`
+    SELECT to_char(write_date, 'YYYY-MM') ym, COALESCE(SUM(total), 0)::bigint s
+    FROM tax_invoice
+    WHERE is_active AND direction = '매입' AND ${taxCond}
+    GROUP BY 1 ORDER BY 1 LIMIT 36
+  `);
+  const mPay = await db.execute<{ ym: string; s: string }>(sql`
+    SELECT to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM') ym,
+           COALESCE(SUM(out_amount), 0)::bigint s
+    FROM cash_txn
+    WHERE source = '통장' AND is_active AND out_amount > 0 AND (${nameConds})
+    GROUP BY 1 ORDER BY 1 LIMIT 36
+  `);
+  const invMap = new Map(mInv.map((r) => [r.ym, Number(r.s)]));
+  const payMap = new Map(mPay.map((r) => [r.ym, Number(r.s)]));
+  const allYms = [...new Set([...invMap.keys(), ...payMap.keys()])].sort();
+  let running = 0;
+  const months: PartyMonthRow[] = allYms.map((m) => {
+    const i = invMap.get(m) ?? 0;
+    const p = payMap.get(m) ?? 0;
+    running += i - p;
+    return { ym: m, invSum: i, paySum: p, running };
+  });
+
   return {
     key,
     title,
@@ -239,6 +295,7 @@ export async function partyLedgerData(key: string, ym: string): Promise<PartyLed
     payableRemain,
     receivableRemain,
     taxOpenSum: Number(to.s),
+    months,
   };
 }
 

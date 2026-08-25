@@ -246,7 +246,7 @@ export function TaxRecon({
             {!g.kind && (
               <details className="mt-1.5">
                 <summary className="cursor-pointer text-xs font-medium text-violet-700 underline underline-offset-2">
-                  이 상대 기억하기 ▾ (경비 · 정산사 · 무시 · 거래처)
+                  이 상대 기억하기 ▾ (경비 · 정산사 · 월정산 · 무시 · 거래처)
                 </summary>
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5 rounded-lg bg-violet-50 p-2 text-xs">
                   <button
@@ -274,6 +274,21 @@ export function TaxRecon({
                     className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-medium"
                   >
                     보험·렌터카 정산사
+                  </button>
+                  {/* ⭐ 월정산 (사장님 승인 2026-08-25) — 미쉐린처럼 월말 합계 계산서 + 수시 분할결제 */}
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() =>
+                      act(
+                        () => setTaxPartyRule({ bizNo: g.bizNo, nameRaw: g.name, kind: "월정산" }),
+                        () => "월정산 거래처로 기억 — 「돈 확인」에서 잔액으로 봅니다.",
+                      )
+                    }
+                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-medium"
+                    title="월말에 합계 계산서 한 장, 결제는 수시로 나눠 하는 거래처 (미쉐린·금호 등)"
+                  >
+                    월정산 (합계 계산서)
                   </button>
                   <button
                     type="button"

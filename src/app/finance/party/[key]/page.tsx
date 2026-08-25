@@ -90,6 +90,47 @@ export default async function FinancePartyLedgerPage({
         </Link>
       </section>
 
+      {/* ⭐ 달별 계산서 vs 지급 — 월합계 계산서 상대의 채무 장부 (2026-08-25) */}
+      {data.months.length > 0 && (
+        <section className="mt-4">
+          <h2 className="text-[15px] font-semibold">달별 계산서 · 지급 · 잔액</h2>
+          <p className="mt-0.5 text-xs text-slate-500">
+            계산서 한 장과 출금 한 건이 1:1로 안 맞는 거래처는 이 표의 <strong>잔액</strong>이 장부입니다.
+          </p>
+          <TableWrap minWidth={460}>
+            <thead>
+              <tr className="text-xs text-slate-500">
+                <th className="py-1.5 text-left">달</th>
+                <th className="text-right">계산서</th>
+                <th className="text-right">지급</th>
+                <th className="text-right">이 달 차이</th>
+                <th className="text-right">누적 잔액</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.months.slice(-14).map((m) => (
+                <tr key={m.ym} className={`border-t border-slate-100 ${m.ym === ym ? "bg-brand-50" : ""}`}>
+                  <td className="py-1.5 text-xs">{m.ym}</td>
+                  <td className="text-right">{m.invSum ? <Money n={m.invSum} /> : <span className="text-slate-300">—</span>}</td>
+                  <td className="text-right">{m.paySum ? <Money n={m.paySum} /> : <span className="text-slate-300">—</span>}</td>
+                  <td className="text-right"><Money n={m.invSum - m.paySum} signed /></td>
+                  <td className={`text-right font-semibold ${m.running > 0 ? "text-red-600" : ""}`}>
+                    <Money n={m.running} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-slate-300 text-xs text-slate-500">
+                <td className="py-1.5" colSpan={5}>
+                  누적 잔액 = 계산서 합 − 통장 지급 합 (＋는 아직 안 준 돈)
+                </td>
+              </tr>
+            </tfoot>
+          </TableWrap>
+        </section>
+      )}
+
       {/* 종류 필터 칩 */}
       {kinds.length > 1 && (
         <div className="mt-3 flex flex-wrap gap-1.5 text-sm">
