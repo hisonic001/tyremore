@@ -10,6 +10,7 @@ import { TAX_APP_START } from "@/lib/tax-recon";
 import { cancelFinUpload } from "@/lib/fin-upload";
 import { FinShell } from "@/components/fin/shell";
 import { won } from "@/components/fin/money";
+import { closeChecklist, closeMonthForm, monthCloseStatus, reopenMonthForm } from "@/lib/month-close";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +46,9 @@ export default async function FinancePage({
   const sp = await searchParams;
   const ym = pickYm(sp.ym);
   const view = sp.v === "내역" ? "내역" : "요약";
+  // ⭐ 배치4 — 월 마감 상태 + (지난달 이하·미마감이면) 체크리스트
+  const mc = await monthCloseStatus(ym);
+  const closeChecks = view === "요약" && !mc.closed && ym < thisYm ? await closeChecklist(ym, health.allOk) : [];
   const start = `${ym}-01`;
   const nextStart = `${ymAdd(ym, 1)}-01`;
   /** 이번 달 조건 — 모든 질의가 글자 그대로 같은 조건을 쓴다 */
@@ -226,7 +230,7 @@ export default async function FinancePage({
   const noData = sums.length === 0;
 
   return (
-    <FinShell tab="home" monthNav={{ ym, basePath: "/finance" }}>
+    <FinShell tab="home" monthNav={{ ym, basePath: "/finance" }} closeNotice={false}>
 
       <div
         className={`tabular mt-2 rounded-lg px-3 py-1.5 text-[11px] ${health.allOk ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900"}`}
@@ -394,6 +398,58 @@ export default async function FinancePage({
           <p className="text-sm font-semibold">마진 리포트</p>
           <p className="mt-1 text-xs text-slate-500">품목·제조사별 →</p>
         </Link>
+      </section>
+
+      {/* ⭐ 배치4 — 월 마감: 정리가 다 되면 그 달 숫자를 확정 표시 */}
+      <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+        <h2 className="font-semibold">{ym} 마감</h2>
+        {mc.closed ? (
+          <div className="mt-2 flex items-center justify-between gap-2 text-sm">
+            <p className="text-emerald-800">
+              ✅ 마감됨 ({mc.closedAt})
+              {mc.profit !== null && (
+                <>
+                  {" "}— 남은 돈 <strong className="tabular">{won(mc.profit)}원</strong>으로 확정
+                </>
+              )}
+            </p>
+            <form action={reopenMonthForm.bind(null, ym)}>
+              <button type="submit" className="shrink-0 text-xs text-slate-400 underline">
+                마감 풀기
+              </button>
+            </form>
+          </div>
+        ) : ym >= thisYm ? (
+          <p className="mt-1 text-xs text-slate-400">
+            이 달이 끝나면 마감할 수 있습니다 — 마감하면 그 달 손익이 확정 표시되고, 이후에
+            고치면 배너로 알려 드립니다
+          </p>
+        ) : (
+          <>
+            <ul className="mt-2 space-y-1 text-sm">
+              {closeChecks.map((c) => (
+                <li key={c.text}>
+                  {c.ok ? (
+                    <span className="text-emerald-700">✓ {c.text}</span>
+                  ) : (
+                    <Link href={c.href} className="text-amber-700 underline underline-offset-2">
+                      ⚠ {c.text} →
+                    </Link>
+                  )}
+                </li>
+              ))}
+            </ul>
+            {closeChecks.length > 0 && closeChecks.every((c) => c.ok) ? (
+              <form action={closeMonthForm.bind(null, ym)} className="mt-2">
+                <button type="submit" className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white">
+                  이 달 마감하기
+                </button>
+              </form>
+            ) : (
+              <p className="mt-2 text-xs text-slate-400">전부 ✓가 되면 마감 버튼이 나옵니다</p>
+            )}
+          </>
+        )}
       </section>
       </div>
         </div>
