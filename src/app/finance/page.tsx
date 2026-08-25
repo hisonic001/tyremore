@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession } from "@/lib/auth";
-import { EXPENSE_IN_PL } from "@/lib/expense-cats";
+import { CARD_SETTLE_PATTERN_SQL, EXPENSE_IN_PL } from "@/lib/expense-cats";
 import { finHealth } from "@/lib/fin-health";
 import { kstToday, ymAdd, pickYm } from "@/lib/ym";
 import { TAX_APP_START } from "@/lib/tax-recon";
@@ -44,6 +44,7 @@ export default async function FinancePage({
   const thisYm = kstToday().slice(0, 7);
   const sp = await searchParams;
   const ym = pickYm(sp.ym);
+  const view = sp.v === "내역" ? "내역" : "요약";
   const start = `${ym}-01`;
   const nextStart = `${ymAdd(ym, 1)}-01`;
   /** 이번 달 조건 — 모든 질의가 글자 그대로 같은 조건을 쓴다 */
@@ -135,13 +136,13 @@ export default async function FinancePage({
   const bank = sums.find((s) => s.source === "통장");
   const card = sums.find((s) => s.source === "법인카드");
 
-  // ② 계좌·카드별 이번 달 + 통장 마지막 잔액
-  const accounts = await db.execute<{ source: string; l: string; in_sum: string; out_sum: string; n: number }>(sql`
+  // ② 계좌·카드별 이번 달 + 통장 마지막 잔액 — ⭐ 배치2: 「내역」 보기일 때만 질의
+  const accounts = view !== "내역" ? [] : await db.execute<{ source: string; l: string; in_sum: string; out_sum: string; n: number }>(sql`
     SELECT source, account_label l, COALESCE(SUM(in_amount),0)::bigint in_sum,
            COALESCE(SUM(out_amount),0)::bigint out_sum, count(*)::int n
     FROM cash_txn WHERE ${inMonth} GROUP BY 1, 2 ORDER BY 1, 2 LIMIT 20
   `);
-  const balances = await db.execute<{ l: string; balance: string; at: string }>(sql`
+  const balances = view !== "내역" ? [] : await db.execute<{ l: string; balance: string; at: string }>(sql`
     SELECT DISTINCT ON (account_label) account_label l, balance::bigint,
            to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD') at
     FROM cash_txn
@@ -156,8 +157,19 @@ export default async function FinancePage({
   `);
   const taxOpen = Number(taxOpenRows[0]?.n ?? 0);
 
-  // ③ 최근 올린 파일 (배치)
-  const uploads = await db.execute<{
+  // ⭐ 배치2 — 현황 할 일: 입금 정리 대기 (deposits 대조 화면의 open과 글자 그대로 같은 조건)
+  const depOpenRows = await db.execute<{ n: number }>(sql`
+    SELECT count(*)::int n FROM cash_txn
+    WHERE source = '통장' AND is_active AND in_amount > 0
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date
+      AND recon_status = '미대조' AND category IS NULL
+      AND NOT ${sql.raw(CARD_SETTLE_PATTERN_SQL)}
+  `);
+  const depOpen = Number(depOpenRows[0]?.n ?? 0);
+
+  // ③ 최근 올린 파일 (배치) — 내역 보기일 때만
+  const uploads = view !== "내역" ? [] : await db.execute<{
     id: number; source: string; l: string | null; file_name: string;
     row_count: number; new_count: number; dup_count: number; status: string; at: string;
   }>(sql`
@@ -166,8 +178,8 @@ export default async function FinancePage({
     FROM fin_upload ORDER BY id DESC LIMIT 10
   `);
 
-  // ④ 이번 달 거래 (최근 60줄)
-  const txns = await db.execute<{
+  // ④ 이번 달 거래 (최근 60줄) — 내역 보기일 때만
+  const txns = view !== "내역" ? [] : await db.execute<{
     id: number; source: string; l: string; at: string; description: string;
     in_amount: number; out_amount: number;
   }>(sql`
@@ -211,7 +223,7 @@ export default async function FinancePage({
   const gPayable = Number(payableRows[0].s);
   const gUnclassOut = Number(unclassOut[0].s);
 
-  const noData = sums.length === 0 && uploads.length === 0;
+  const noData = sums.length === 0;
 
   return (
     <FinShell tab="home" monthNav={{ ym, basePath: "/finance" }}>
@@ -223,6 +235,32 @@ export default async function FinancePage({
           health.lines.map((l) => (l.ok ? l.text : `⚠ ${l.text}`)).join("  ·  ")}
       </div>
 
+      {/* ⭐ 배치2 — 요약/내역 보기 전환 (내역 질의는 그때만) */}
+      <div className="mt-3 flex gap-1.5 text-sm">
+        <Link
+          href={`/finance?ym=${ym}`}
+          className={
+            view === "요약"
+              ? "rounded-lg bg-slate-900 px-3 py-1.5 font-semibold text-white"
+              : "rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-medium text-slate-600"
+          }
+        >
+          요약
+        </Link>
+        <Link
+          href={`/finance?ym=${ym}&v=내역`}
+          className={
+            view === "내역"
+              ? "rounded-lg bg-slate-900 px-3 py-1.5 font-semibold text-white"
+              : "rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-medium text-slate-600"
+          }
+        >
+          통장·파일 내역
+        </Link>
+      </div>
+
+      {view === "요약" && (
+        <div className="lg:grid lg:grid-cols-2 lg:items-start lg:gap-4">
       {/* ── 월 손익 (5단계) — 회계어 없이, 이중 계산 없이 ── */}
       <section className="mt-4 rounded-2xl border-2 border-slate-800 bg-white p-4">
         <h2 className="font-bold">{ym} 손익</h2>
@@ -295,6 +333,8 @@ export default async function FinancePage({
         </p>
       </section>
 
+      <div>
+
       {noData && (
         <section className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
           아직 올린 내역이 없습니다 — <Link href="/finance/upload" className="underline">내역 올리기</Link>에서
@@ -320,60 +360,47 @@ export default async function FinancePage({
         </section>
       )}
 
-      {/* ── 마진 리포트 바로가기 (2026-08-25) ── */}
-      <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-        <Link href="/reports/margin" className="flex items-center justify-between">
-          <span className="font-semibold">마진 리포트</span>
-          <span className="text-sm text-slate-500">품목·제조사별 남는 장사인가 →</span>
+      {/* ⭐ 배치2 — 할 일 한눈에 (바로가기 카드 6장 → 그리드) */}
+      <section className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-3">
+        <Link href="/finance/tax" className="rounded-2xl border border-slate-200 bg-white p-3">
+          <p className="text-sm font-semibold">세금계산서</p>
+          <p className={`tabular mt-1 text-xs ${taxOpen > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
+            {taxOpen > 0 ? `확인할 것 ${taxOpen}건 →` : "다 맞춰짐 ✓"}
+          </p>
+        </Link>
+        <Link href="/finance/deposits" className="rounded-2xl border border-slate-200 bg-white p-3">
+          <p className="text-sm font-semibold">입금 정리</p>
+          <p className={`tabular mt-1 text-xs ${depOpen > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
+            {depOpen > 0 ? `정리할 입금 ${depOpen}건 →` : "다 됨 ✓"}
+          </p>
+        </Link>
+        <Link href="/finance/expenses" className="rounded-2xl border border-slate-200 bg-white p-3">
+          <p className="text-sm font-semibold">지출 분류</p>
+          <p className={`tabular mt-1 text-xs ${gUnclassOut > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
+            {gUnclassOut > 0 ? `미분류 ${won(gUnclassOut)}원 →` : "다 됨 ✓"}
+          </p>
+        </Link>
+        <Link href="/finance/payables" className="rounded-2xl border border-slate-200 bg-white p-3">
+          <p className="text-sm font-semibold">미지급</p>
+          <p className={`tabular mt-1 text-xs ${gPayable > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
+            {gPayable > 0 ? `줄 돈 ${won(gPayable)}원 →` : "없음 ✓"}
+          </p>
+        </Link>
+        <Link href="/finance/card" className="rounded-2xl border border-slate-200 bg-white p-3">
+          <p className="text-sm font-semibold">카드 대사</p>
+          <p className="mt-1 text-xs text-slate-500">여신협회 vs 앱 →</p>
+        </Link>
+        <Link href="/reports/margin" className="rounded-2xl border border-slate-200 bg-white p-3">
+          <p className="text-sm font-semibold">마진 리포트</p>
+          <p className="mt-1 text-xs text-slate-500">품목·제조사별 →</p>
         </Link>
       </section>
+      </div>
+        </div>
+      )}
 
-      {/* ── 세금계산서 대조 바로가기 (2단계) ── */}
-      <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-        <Link href="/finance/tax" className="flex items-center justify-between">
-          <span className="font-semibold">세금계산서 대조</span>
-          <span className={`text-sm ${taxOpen > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
-            {taxOpen > 0 ? `확인할 것 ${taxOpen}건 →` : "열어 보기 →"}
-          </span>
-        </Link>
-      </section>
-
-      {/* ── 카드 매출 대사 바로가기 (3단계) ── */}
-      <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-        <Link href="/finance/card" className="flex items-center justify-between">
-          <span className="font-semibold">카드 매출 대사</span>
-          <span className="text-sm text-slate-500">여신협회 승인 vs 앱 · 수수료 →</span>
-        </Link>
-      </section>
-
-      {/* ── 통장 입금 대조 바로가기 (4단계) ── */}
-      <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-        <Link href="/finance/deposits" className="flex items-center justify-between">
-          <span className="font-semibold">통장 입금 대조</span>
-          <span className="text-sm text-slate-500">카드 정산·이체 판매·외상 수금 정리 →</span>
-        </Link>
-      </section>
-
-      {/* ── 지출 분류 바로가기 (⑥) ── */}
-      <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-        <Link href="/finance/expenses" className="flex items-center justify-between">
-          <span className="font-semibold">지출 분류</span>
-          <span className={`text-sm ${gUnclassOut > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
-            {gUnclassOut > 0 ? `분류 안 된 출금 ${won(gUnclassOut)}원 →` : "열어 보기 →"}
-          </span>
-        </Link>
-      </section>
-
-      {/* ── 미지급 장부 바로가기 (⑦) ── */}
-      <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-        <Link href="/finance/payables" className="flex items-center justify-between">
-          <span className="font-semibold">미지급 장부</span>
-          <span className={`text-sm ${gPayable > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
-            {gPayable > 0 ? `줄 돈 ${won(gPayable)}원 →` : "열어 보기 →"}
-          </span>
-        </Link>
-      </section>
-
+      {view === "내역" && (
+        <>
       {/* ── 계좌·카드별 ── */}
       {accounts.length > 0 && (
         <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
@@ -458,6 +485,8 @@ export default async function FinancePage({
             ))}
           </ul>
         </section>
+      )}
+        </>
       )}
     </FinShell>
   );

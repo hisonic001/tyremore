@@ -17,8 +17,8 @@ import {
   setTaxPartyRule,
   undoTaxMatch,
 } from "@/lib/recon";
+import { won } from "@/components/fin/money";
 
-const won = (n: number) => n.toLocaleString("ko-KR");
 const bizFmt = (d: string) => (d.length === 10 ? `${d.slice(0, 3)}-${d.slice(3, 5)}-${d.slice(5)}` : d);
 
 export interface RecentRow {
@@ -233,7 +233,7 @@ export function TaxRecon({
       )}
 
       {/* ── 상대별 그룹 ── */}
-      <ul className="mt-4 space-y-3">
+      <ul className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2 lg:items-start">
         {data.groups.map((g: PartyGroup) => (
           <li key={g.bizNo} className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="flex items-baseline justify-between gap-2">

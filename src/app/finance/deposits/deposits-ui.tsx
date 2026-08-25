@@ -4,8 +4,8 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { DepositReconData, DepositSuggestion } from "@/lib/recon-data";
 import { collectFromDeposit, ignoreDeposit, linkDepositToQuote, markCardSettlements, unmarkCardSettlement } from "@/lib/fin-deposits";
+import { won } from "@/components/fin/money";
 
-const won = (n: number) => n.toLocaleString("ko-KR");
 
 /** ⭐ 통장 입금을 카드 정산·이체 판매·외상 수금으로 정리 (ERP 4단계, 2026-08-24) */
 export function DepositsRecon({ data, ym }: { data: DepositReconData; ym: string }) {
@@ -84,7 +84,7 @@ export function DepositsRecon({ data, ym }: { data: DepositReconData; ym: string
         </section>
       )}
 
-      <ul className="mt-2 space-y-3">
+      <ul className="mt-2 grid grid-cols-1 gap-3 lg:grid-cols-2 lg:items-start">
         {data.open.map((s) => (
           <li key={s.dep.id} className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="flex items-baseline justify-between gap-2">

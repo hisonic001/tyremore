@@ -7,6 +7,7 @@ import { pickYm, ymAdd } from "@/lib/ym";
 import { CARD_SETTLE_PATTERN_SQL } from "@/lib/expense-cats";
 import { FinShell } from "@/components/fin/shell";
 import { won } from "@/components/fin/money";
+import { TableWrap } from "@/components/fin/table";
 
 export const dynamic = "force-dynamic";
 
@@ -170,7 +171,7 @@ export default async function FinanceCardPage({
               차이 난 날은 그 날짜의 정비 내역에서 카드 판매를 펼쳐 보세요 — 앱에 안 적힌 카드
               매출(등록 누락)이거나, 앱에는 있는데 승인이 없는 건입니다
             </p>
-            <table className="tabular mt-2 w-full text-sm">
+            <TableWrap minWidth={430}>
               <thead>
                 <tr className="text-xs text-slate-500">
                   <th className="py-1 text-left">날짜</th>
@@ -204,7 +205,7 @@ export default async function FinanceCardPage({
                   </td>
                 </tr>
               </tfoot>
-            </table>
+            </TableWrap>
           </section>
 
           {/* ⭐ 차이 난 날 펼쳐보기 — 하루 1분 확인 (사장님 승인 2026-08-25) */}
@@ -306,7 +307,7 @@ export default async function FinanceCardPage({
       {deposits.length > 0 && (
         <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
           <h2 className="font-semibold">카드사별 정산 ({ym} 매출분)</h2>
-          <table className="tabular mt-2 w-full text-sm">
+          <TableWrap minWidth={430}>
             <thead>
               <tr className="text-xs text-slate-500">
                 <th className="py-1 text-left">카드사</th>
@@ -339,7 +340,7 @@ export default async function FinanceCardPage({
                 <td className="text-right">{won(sumSale - deposits.reduce((s, r) => s + Number(r.vat_agency), 0) - sumDeposit)}</td>
               </tr>
             </tfoot>
-          </table>
+          </TableWrap>
           <p className="tabular mt-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
             통장에서 카드 정산으로 보이는 입금(적요 FB자금·매출표): {won(Number(bankCard[0]?.s ?? 0))}원 ·{" "}
             {Number(bankCard[0]?.n ?? 0)}건 — 입금은 매출보다 며칠 늦게 들어와 월 경계에서 어긋날 수

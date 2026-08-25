@@ -5,8 +5,8 @@ import { useRouter } from "next/navigation";
 import { EXPENSE_CATS } from "@/lib/expense-cats";
 import type { ExpenseData, ExpenseRow } from "@/lib/recon-data";
 import { setExpenseCategory } from "@/lib/fin-expense";
+import { won } from "@/components/fin/money";
 
-const won = (n: number) => n.toLocaleString("ko-KR");
 
 /** ⭐ 지출 분류 화면 (ERP ⑥, 2026-08-25) — 제안 원터치 + 분류 고르기 */
 export function ExpensesUi({ data }: { data: ExpenseData }) {
@@ -113,7 +113,7 @@ export function ExpensesUi({ data }: { data: ExpenseData }) {
           이 달 지출은 모두 분류됐습니다 🎉
         </section>
       ) : (
-        <ul className="mt-2 space-y-2">
+        <ul className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-2 lg:items-start">
           {data.unclassified.map((row) => (
             <li key={row.id} className="rounded-2xl border border-slate-200 bg-white p-3">
               <div className="flex items-baseline justify-between gap-2">

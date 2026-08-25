@@ -5,8 +5,9 @@ import { useRouter } from "next/navigation";
 import type { PayLinkRow, PayablesData, PayableSupplier, TaxPayableData } from "@/lib/recon-data";
 import { confirmTaxToBank, searchBankLines } from "@/lib/recon";
 import { payFromWithdrawal, payToSupplier, removePurchasePayment } from "@/lib/purchase-pay";
+import { won } from "@/components/fin/money";
+import { StatusBadge } from "@/components/fin/badge";
 
-const won = (n: number) => n.toLocaleString("ko-KR");
 const kstToday = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
 const METHODS = ["계좌이체", "현금", "카드", "기타"];
 
@@ -114,12 +115,13 @@ export function PayablesUi({
             모든 매입 계산서가 확인됐습니다 🎉
           </p>
         ) : (
-          <ul className="mt-2 space-y-2">
+          <ul className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-2 lg:items-start">
             {taxPay.open.map((t) => (
               <li key={t.id} className="rounded-lg border border-slate-100 bg-slate-50 p-2.5 text-sm">
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="tabular min-w-0 truncate">
-                    <span className="text-xs text-slate-400">{t.d}</span> {t.name}
+                    <span className="text-xs text-slate-400">{t.d}</span> {t.name}{" "}
+                    <StatusBadge status={t.status} />
                   </span>
                   <span className="tabular shrink-0 font-bold">{won(t.total)}원</span>
                 </div>
@@ -221,7 +223,7 @@ export function PayablesUi({
         </section>
       )}
 
-      <ul className="mt-4 space-y-3">
+      <ul className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2 lg:items-start">
         {data.suppliers.map((s) => {
           const f = getForm(s);
           return (
