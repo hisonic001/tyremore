@@ -188,3 +188,12 @@ export const SEASON_STYLE: Record<Season, string> = {
   올웨더: "bg-teal-100 text-teal-800",
   겨울: "bg-sky-100 text-sky-800",
 };
+
+/** ⭐ 배치2 — 카테고리 배지 테두리형(글자색만): 상태 배지(채움형)와 「형태」로 분리해 색 충돌 해소.
+    사계절은 성공색(brand green)과 이격하려 lime. 카드(cards.tsx)가 쓴다 — 다른 화면은 배치4에서 이관 */
+export const SEASON_TEXT: Record<Season, string> = {
+  여름: "text-orange-700",
+  사계절: "text-lime-700",
+  올웨더: "text-teal-700",
+  겨울: "text-sky-700",
+};

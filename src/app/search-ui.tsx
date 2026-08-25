@@ -5,15 +5,16 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { Mode } from "@/lib/search";
 import { SEASON_ORDER } from "@/lib/tire-attrs";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { SearchButton } from "./search-box";
 
 /** ⭐ 버튼 하나로 갈라진다 (사장님 요청 2026-08-01) */
 export function ModeTabs({ mode, q }: { mode: Mode; q: string }) {
-  const base = "flex-1 rounded-xl py-3 text-center text-lg font-semibold transition-colors";
-  const on = "bg-slate-900 text-white";
-  const off = "bg-white text-slate-500 border border-slate-300";
+  const base = "flex-1 rounded-full py-2.5 text-center text-base font-semibold transition-colors";
+  const on = "bg-white text-slate-900 shadow-sm";
+  const off = "text-slate-500 active:bg-slate-200";
   return (
-    <div className="flex gap-2">
+    <div className="flex gap-1 rounded-full bg-slate-100 p-1">
       <Link href={`/?mode=customer&q=${encodeURIComponent(q)}`} className={`${base} ${mode === "customer" ? on : off}`}>
         고객 · 차량
       </Link>
@@ -39,9 +40,9 @@ export interface Filter {
   parts: boolean;
 }
 
-const CHIP = "rounded-full border px-4 py-2 text-sm font-medium transition-colors";
+const CHIP = "inline-flex min-h-11 items-center rounded-full border px-4 text-sm font-medium transition-colors";
 const CHIP_ON = "border-slate-900 bg-slate-900 text-white";
-const CHIP_OFF = "border-slate-300 bg-white text-slate-600";
+const CHIP_OFF = "border-slate-300 bg-white text-slate-600 active:bg-slate-100 lg:hover:bg-slate-50";
 
 /**
  * ⚠️ `useSearchParams()`를 쓰지 않는다.
@@ -98,7 +99,7 @@ export function FilterPanel({
             onClick={() => setOpen((v) => !v)}
             className={`${CHIP} ${count > 0 ? CHIP_ON : CHIP_OFF}`}
           >
-            필터 {count > 0 && `· ${count}`} {open ? "▲" : "▼"}
+            필터 {count > 0 && `· ${count}`}{open ? <ChevronUp className="ml-0.5 size-4" /> : <ChevronDown className="ml-0.5 size-4" />}
           </button>
           <button
             type="button"

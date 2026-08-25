@@ -80,51 +80,25 @@ export default async function Home({
            제목은 절대 줄이지 않고(shrink-0 · whitespace-nowrap),
            나머지 메뉴는 설정 아이콘 하나로 접었다.
       */}
+      {/* ⭐ 배치2 — 워드마크 헤더. 정비 내역·설정은 전역 탭바(AppNav)로 이동.
+            제목 <a>는 홈 초기화용(사장님 요청 2026-08-09), PC는 상단 AppNav 워드마크가 있어 숨긴다 */}
       <header className="mb-4 flex items-center justify-between gap-2">
-        <h1 className="shrink-0 whitespace-nowrap text-xl font-bold tracking-tight">
-          {/*
-            ⭐ 제목을 누르면 홈 초기 화면으로 (사장님 요청 2026-08-09 — "마치 새로고침 하듯").
-               <a> 를 일부러 쓴다: 이미 홈(/)에 있을 때 Link 는 같은 주소라 아무 일도
-               안 하지만, <a> 는 진짜 새로 불러와 검색어·필터까지 싹 비운다.
-          */}
-          <a href="/">타이어모어</a>
+        <h1 className="shrink-0 whitespace-nowrap text-xl font-extrabold tracking-tight lg:hidden">
+          <a href="/">타이어<span className="text-brand-500">모어</span></a>
         </h1>
-        <nav className="flex shrink-0 items-center gap-1">
-          {/* ⭐ 판매 등록이 하루에 가장 자주 쓰는 화면이다 — 눈에 띄게 둔다 */}
+        <nav className="flex shrink-0 items-center gap-1.5 lg:ml-auto">
+          {/* ⭐ 판매 등록이 하루에 가장 자주 쓰는 화면 — 브랜드 초록 CTA */}
           <Link
             href="/sale"
-            className="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white active:bg-emerald-800"
+            className="rounded-control bg-brand-600 px-3.5 py-2 text-sm font-semibold text-white transition-colors active:bg-brand-700 lg:hover:bg-brand-700"
           >
             판매 등록
           </Link>
           <Link
             href="/receiving"
-            className="rounded-lg px-2.5 py-2 text-sm font-medium text-slate-600 active:bg-slate-200"
+            className="rounded-control px-2.5 py-2 text-sm font-medium text-slate-600 active:bg-slate-200 lg:hover:bg-slate-100"
           >
             매입
-          </Link>
-          {/*
-            ⭐ 재고 대신 정비 내역 (사장님 지시 2026-08-06).
-               "홈 화면에 판매내역으로 바로 갈 수 있는 버튼을 재고버튼 대신 넣어줘.
-                재고 기능은 /settings 으로 이동."
-               재고 조회는 어차피 검색 결과 카드에 나온다 — 창고 세기 화면(/stock)은
-               자주 안 쓰니 설정으로 내렸다.
-          */}
-          <Link
-            href="/sales"
-            className="rounded-lg px-2.5 py-2 text-sm font-medium text-slate-600 active:bg-slate-200"
-          >
-            정비 내역
-          </Link>
-          <Link
-            href="/settings"
-            aria-label="설정"
-            className="rounded-lg px-2 py-2 text-slate-500 active:bg-slate-200"
-          >
-            <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6" stroke="currentColor" strokeWidth="1.8">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6 1.65 1.65 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
           </Link>
         </nav>
       </header>
@@ -190,7 +164,7 @@ export default async function Home({
               {!all && (
                 <Link
                   href={linkWith(true)}
-                  className="mt-3 inline-block rounded-xl border-2 border-slate-900 px-6 py-3 font-semibold text-slate-900"
+                  className="mt-3 inline-flex min-h-11 items-center justify-center rounded-control border border-slate-300 bg-white px-6 font-semibold text-slate-700 transition-colors active:bg-slate-100 lg:hover:bg-slate-50"
                 >
                   전체 목록에서 찾기
                 </Link>
@@ -198,7 +172,7 @@ export default async function Home({
               <div className="mt-3">
                 <Link
                   href={`/settings/products?tab=new&q=${encodeURIComponent(q)}`}
-                  className="inline-block rounded-xl border-2 border-dashed border-slate-300 px-6 py-3 font-medium text-slate-600"
+                  className="text-sm text-slate-500 underline underline-offset-4"
                 >
                   + 새 상품으로 등록
                 </Link>

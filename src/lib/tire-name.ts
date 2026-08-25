@@ -474,3 +474,11 @@ export const BADGE_STYLE: Record<BadgeKind, string> = {
 export function looksLikeCai(q: string): boolean {
   return /^\d{5,6}$/.test(q.trim());
 }
+
+/** ⭐ 배치2 — 카테고리 배지 테두리형(글자색만). 채움형 BADGE_STYLE 은 다른 화면이 아직 씀(배치4 이관) */
+export const BADGE_TEXT: Record<BadgeKind, string> = {
+  runflat: "text-violet-700",
+  feature: "text-slate-600",
+  oe: "text-amber-700",
+  structure: "text-slate-500",
+};

@@ -15,7 +15,9 @@ export default async function LoginPage({
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-sm flex-col justify-center px-6">
-      <h1 className="text-3xl font-bold tracking-tight">타이어모어</h1>
+      <h1 className="text-3xl font-extrabold tracking-tight">
+        타이어<span className="text-brand-500">모어</span>
+      </h1>
       <p className="mt-1 text-slate-500">재고·상담·견적</p>
       <LoginForm next={next} />
       {/* ⭐ 비밀번호 찾기의 매장 방식 (2026-08-08) — 이메일 발송 대신 사장님 재설정 */}

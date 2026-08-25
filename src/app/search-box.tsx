@@ -75,8 +75,8 @@ export function SearchBox({ mode, q, filter }: { mode: Mode; q: string; filter: 
               : "규격 2254517 · 모델명 · CAI"
         }
         aria-label="검색"
-        className="w-full rounded-2xl border-2 border-slate-300 bg-white px-5 py-4 text-2xl
-                   shadow-sm outline-none placeholder:text-slate-400 focus:border-slate-900"
+        className="w-full rounded-full border-2 border-slate-200 bg-white px-6 py-4 text-2xl
+                   shadow-card outline-none placeholder:text-slate-400 focus:border-brand-500"
       />
     </form>
   );
@@ -88,7 +88,7 @@ export function SearchButton() {
     <button
       type="submit"
       form={SEARCH_FORM_ID}
-      className="rounded-full bg-slate-900 px-6 py-2 text-sm font-semibold text-white active:bg-slate-700"
+      className="inline-flex min-h-11 items-center rounded-full bg-brand-600 px-6 text-sm font-semibold text-white transition-colors active:bg-brand-700 lg:hover:bg-brand-700"
     >
       조회
     </button>

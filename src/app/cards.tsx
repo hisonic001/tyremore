@@ -8,13 +8,14 @@ import type { ProductHit, VehicleHit } from "@/lib/search";
  *    화면을 이동하면 그 렌더들이 중단되며 DB 질의가 좀비로 남아 풀러를 채웠다.
  *    누르면 그때 열리는 것으로 충분하다 — 서울 리전이라 이제 어차피 빠르다.
  */
-import { SEASON_STYLE } from "@/lib/tire-attrs";
-import { BADGE_STYLE } from "@/lib/tire-name";
+import { SEASON_TEXT } from "@/lib/tire-attrs";
+import { BADGE_TEXT } from "@/lib/tire-name";
+import { PenLine } from "lucide-react";
 import { PriceTool } from "./price-tool";
 
 export function VehicleCard({ v }: { v: VehicleHit }) {
   return (
-    <li className="rounded-xl border border-slate-200 bg-white p-4">
+    <li className="rounded-card border border-slate-200 bg-white p-4 shadow-card">
       {/* 이름이 길어도 번호판이 밀리면 안 된다 — 번호판이 식별의 기준이다 */}
       <div className="flex items-baseline justify-between gap-3">
         <span className="tabular shrink-0 text-xl font-bold">{v.plateNo}</span>
@@ -30,7 +31,12 @@ export function VehicleCard({ v }: { v: VehicleHit }) {
         {v.phone ? <span>{v.phone}</span> : <span className="text-amber-600">번호 없음</span>}
         {v.lastFittedSize ? <span>최근 {v.lastFittedSize}</span> : null}
       </div>
-      {v.memo && <div className="mt-1 text-sm text-indigo-700">📝 {v.memo}</div>}
+      {v.memo && (
+        <div className="mt-1 flex items-start gap-1 text-sm text-slate-600">
+          <PenLine className="mt-0.5 size-3.5 shrink-0 text-slate-400" />
+          <span className="min-w-0">{v.memo}</span>
+        </div>
+      )}
       {v.familyGroupId && (
         <div className="mt-1 text-xs text-slate-400">같은 번호를 쓰는 고객이 더 있습니다</div>
       )}
@@ -74,7 +80,7 @@ export function VehicleCard({ v }: { v: VehicleHit }) {
 export function ProductCard({ p }: { p: ProductHit }) {
   const unit = p.itemType === "tire" ? "본" : "개";
   return (
-    <li className="rounded-xl border border-slate-200 bg-white p-4">
+    <li className="rounded-card border border-slate-200 bg-white p-4 shadow-card">
       {/* 정보 부분만 링크. 아래 가격 툴은 눌러도 화면이 넘어가면 안 된다 */}
       <Link prefetch={false} href={`/stock/${p.productId}`} className="block active:opacity-60">
         {/* 1줄: 브랜드 · 계절 */}
@@ -90,7 +96,7 @@ export function ProductCard({ p }: { p: ProductHit }) {
                여름으로 나왔다. 누르면 상세 화면에서 바로 고칠 수 있다.
           */}
           {p.season ? (
-            <span className={`rounded px-2 py-0.5 text-xs font-medium ${SEASON_STYLE[p.season]}`}>
+            <span className={`rounded-md border border-current/25 bg-white px-1.5 py-0.5 text-xs font-medium ${SEASON_TEXT[p.season]}`}>
               {p.season}
             </span>
           ) : p.itemType === "tire" ? (
@@ -122,7 +128,7 @@ export function ProductCard({ p }: { p: ProductHit }) {
             {p.badges.map((b) => (
               <span
                 key={b.code}
-                className={`rounded px-2 py-0.5 text-xs font-medium ${BADGE_STYLE[b.kind]}`}
+                className={`rounded-md border border-current/25 bg-white px-1.5 py-0.5 text-xs font-medium ${BADGE_TEXT[b.kind]}`}
               >
                 {b.code === b.label ? b.code : `${b.code} ${b.label}`}
               </span>
@@ -185,11 +191,11 @@ function StockBadge({ p }: { p: ProductHit }) {
   const unit = p.itemType === "tire" ? "본" : "개";
   const gray = "shrink-0 rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-500";
 
-  if (!p.stockTracked) return <span className={gray}>⚪ 미등록</span>;
-  if (!p.verified) return <span className={gray}>⚪ 미확인</span>;
+  if (!p.stockTracked) return <span className={gray}>미등록</span>;
+  if (!p.verified) return <span className={gray}>미확인</span>;
   if (p.stockQty > 0) {
     return (
-      <span className="tabular shrink-0 rounded-lg bg-emerald-100 px-3 py-1.5 text-base font-bold text-emerald-800">
+      <span className="tabular shrink-0 rounded-lg bg-brand-100 px-3 py-1.5 text-base font-bold text-brand-700">
         {p.stockQty}
         {unit}
       </span>

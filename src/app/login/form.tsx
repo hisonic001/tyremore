@@ -3,6 +3,8 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { login } from "@/lib/auth";
+import { LoaderCircle } from "lucide-react";
+import { Notice } from "@/components/ui/notice";
 
 export function LoginForm({ next }: { next?: string }) {
   const router = useRouter();
@@ -20,7 +22,7 @@ export function LoginForm({ next }: { next?: string }) {
     });
 
   const FIELD =
-    "w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-xl outline-none focus:border-slate-900";
+    "w-full rounded-control border border-slate-300 px-4 py-4 text-xl outline-none placeholder:text-slate-400 focus:border-brand-500";
 
   return (
     <form
@@ -50,13 +52,16 @@ export function LoginForm({ next }: { next?: string }) {
         className={FIELD}
       />
 
-      {error && <p className="rounded-lg bg-red-50 px-4 py-3 text-red-700">{error}</p>}
+      {error && <Notice tone="error">{error}</Notice>}
 
       <button
         type="submit"
         disabled={pending}
-        className="w-full rounded-xl bg-slate-900 py-4 text-lg font-semibold text-white disabled:opacity-50"
+        className="flex min-h-[3.25rem] w-full items-center justify-center gap-2 rounded-control bg-brand-600
+                   text-lg font-semibold text-white transition-colors active:scale-[0.98] active:bg-brand-700
+                   disabled:opacity-50 lg:hover:bg-brand-700"
       >
+        {pending && <LoaderCircle className="size-5 animate-spin" />}
         {pending ? "확인 중…" : "로그인"}
       </button>
       <p className="pt-1 text-center text-xs text-slate-400">
