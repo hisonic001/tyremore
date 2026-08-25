@@ -107,6 +107,20 @@ export default async function FinanceCardPage({
       AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date
   `);
 
+  /* ⭐ 감사 D3(2026-08-25): 지역화폐 두 갈래 병기 — 카드 연동형은 여신 승인에 섞이고,
+     앱·QR형은 「속초정산」 입금으로만 온다. 차이 해석의 힌트로 요약에 보여준다 */
+  const localSale = await db.execute<{ s: string; n: number }>(sql`
+    SELECT COALESCE(SUM(q.total_amount), 0)::bigint s, count(*)::int n FROM quote q
+    WHERE q.status = '성사' AND q.payment_method = '지역화폐'
+      AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
+  `);
+  const sokcho = await db.execute<{ s: string; n: number }>(sql`
+    SELECT COALESCE(SUM(in_amount), 0)::bigint s, count(*)::int n FROM cash_txn
+    WHERE source = '통장' AND is_active AND in_amount > 0 AND description LIKE '%속초정산%'
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date
+  `);
+
   // 날짜별로 합친다
   const appMap = new Map<string, number>();
   for (const r of [...appDan, ...appSplit, ...appColl]) {
@@ -171,6 +185,13 @@ export default async function FinanceCardPage({
               차이 난 날은 그 날짜의 정비 내역에서 카드 판매를 펼쳐 보세요 — 앱에 안 적힌 카드
               매출(등록 누락)이거나, 앱에는 있는데 승인이 없는 건입니다
             </p>
+            {(Number(localSale[0]?.n ?? 0) > 0 || Number(sokcho[0]?.n ?? 0) > 0) && (
+              <p className="tabular mt-1 rounded-lg bg-sky-50 p-2 text-xs text-sky-900">
+                이 달 지역화폐: 앱 판매 {won(Number(localSale[0]?.s ?? 0))}원 ({Number(localSale[0]?.n ?? 0)}건) ·
+                속초정산 입금 {won(Number(sokcho[0]?.s ?? 0))}원 ({Number(sokcho[0]?.n ?? 0)}건) —
+                카드 연동형은 여신 승인에 섞이고 앱·QR형은 정산 입금으로만 옵니다 (차이 해석의 힌트)
+              </p>
+            )}
             <TableWrap minWidth={430}>
               <thead>
                 <tr className="text-xs text-slate-500">

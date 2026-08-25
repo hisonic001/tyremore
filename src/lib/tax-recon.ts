@@ -806,3 +806,18 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
     monthly,
   };
 }
+
+/**
+ * ⭐ 현황 대시보드용 경량 카운트 (감사 C1, 2026-08-25) — 돈 확인 뷰와 같은 정의
+ *    (bank_ok 기준, 매입+매출, 이 달). 첫 화면 8건 ↔ 탭 9건 불일치의 해결.
+ */
+export async function taxOpenCount(ym: string): Promise<number> {
+  const { start, nextStart } = monthRange(ym);
+  const [r] = await db.execute<{ n: number }>(sql`
+    SELECT count(*)::int n
+    FROM tax_invoice t ${CASH_LAT}
+    WHERE t.is_active AND t.recon_status <> '무시' AND NOT ${DONE}
+      AND t.write_date >= ${start}::date AND t.write_date < ${nextStart}::date
+  `);
+  return Number(r?.n ?? 0);
+}

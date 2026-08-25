@@ -6,7 +6,7 @@ import { getSession } from "@/lib/auth";
 import { CARD_SETTLE_PATTERN_SQL, EXPENSE_IN_PL } from "@/lib/expense-cats";
 import { finHealth } from "@/lib/fin-health";
 import { kstToday, ymAdd, pickYm } from "@/lib/ym";
-import { TAX_APP_START } from "@/lib/tax-recon";
+import { taxOpenCount } from "@/lib/tax-recon";
 import { cancelFinUpload } from "@/lib/fin-upload";
 import { FinShell } from "@/components/fin/shell";
 import { won } from "@/components/fin/money";
@@ -48,7 +48,8 @@ export default async function FinancePage({
   const view = sp.v === "내역" ? "내역" : "요약";
   // ⭐ 배치4 — 월 마감 상태 + (지난달 이하·미마감이면) 체크리스트
   const mc = await monthCloseStatus(ym);
-  const closeChecks = view === "요약" && !mc.closed && ym < thisYm ? await closeChecklist(ym, health.allOk) : [];
+  // 감사 C9: 당월에도 체크리스트를 보여준다 (마감 버튼만 다음 달부터)
+  const closeChecks = view === "요약" && !mc.closed ? await closeChecklist(ym, health.allOk) : [];
   const start = `${ym}-01`;
   const nextStart = `${ymAdd(ym, 1)}-01`;
   /** 이번 달 조건 — 모든 질의가 글자 그대로 같은 조건을 쓴다 */
@@ -154,12 +155,9 @@ export default async function FinancePage({
     ORDER BY account_label, occurred_at DESC, id DESC LIMIT 10
   `);
 
-  // ⭐ 2단계 — 확인 기다리는 세금계산서 (미대조·제안)
-  const taxOpenRows = await db.execute<{ n: number }>(sql`
-    SELECT count(*)::int n FROM tax_invoice WHERE is_active AND recon_status IN ('미대조', '제안')
-      AND write_date >= ${TAX_APP_START}::date -- 🔴 감사 M3: 대조 화면과 같은 기준(실사용 기간)
-  `);
-  const taxOpen = Number(taxOpenRows[0]?.n ?? 0);
+  // ⭐ 감사 C1(2026-08-25): 할 일 카운트 = 돈 확인 뷰와 같은 정의(bank_ok, 이 달)
+  //    — 첫 화면 8건 ↔ 탭 9건 불일치의 해결
+  const taxOpen = await taxOpenCount(ym);
 
   // ⭐ 배치2 — 현황 할 일: 입금 정리 대기 (deposits 대조 화면의 open과 글자 그대로 같은 조건)
   const depOpenRows = await db.execute<{ n: number }>(sql`
@@ -366,8 +364,8 @@ export default async function FinancePage({
 
       {/* ⭐ 배치2 — 할 일 한눈에 (바로가기 카드 6장 → 그리드) */}
       <section className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-3">
-        <Link href="/finance/tax" className="rounded-2xl border border-slate-200 bg-white p-3">
-          <p className="text-sm font-semibold">세금계산서</p>
+        <Link href={`/finance/tax?view=money&ym=${ym}`} className="rounded-2xl border border-slate-200 bg-white p-3">
+          <p className="text-sm font-semibold">세금계산서 · 돈 확인</p>
           <p className={`tabular mt-1 text-xs ${taxOpen > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
             {taxOpen > 0 ? `확인할 것 ${taxOpen}건 →` : "다 맞춰짐 ✓"}
           </p>
@@ -420,10 +418,24 @@ export default async function FinancePage({
             </form>
           </div>
         ) : ym >= thisYm ? (
-          <p className="mt-1 text-xs text-slate-400">
-            이 달이 끝나면 마감할 수 있습니다 — 마감하면 그 달 손익이 확정 표시되고, 이후에
-            고치면 배너로 알려 드립니다
-          </p>
+          <>
+            <ul className="mt-2 space-y-1 text-sm">
+              {closeChecks.map((c) => (
+                <li key={c.text}>
+                  {c.ok ? (
+                    <span className="text-emerald-700">✓ {c.text}</span>
+                  ) : (
+                    <Link href={c.href} className="text-amber-700 underline underline-offset-2">
+                      ⚠ {c.text} →
+                    </Link>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-xs text-slate-400">
+              이 달이 끝나면(다음 달부터) 마감 버튼이 나옵니다 — 위 항목이 전부 ✓면 준비 끝입니다
+            </p>
+          </>
         ) : (
           <>
             <ul className="mt-2 space-y-1 text-sm">
