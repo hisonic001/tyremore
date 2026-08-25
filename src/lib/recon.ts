@@ -14,7 +14,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, isOwner } from "@/lib/auth";
 import { payerKeyOf } from "./expense-cats";
-import { normName } from "./recon-data";
+import { cashUsedMap, cashUsedSql, normName } from "./recon-data";
 import { TAX_APP_START, taxReconV2 } from "./tax-recon";
 
 export interface MatchRef {
@@ -50,7 +50,14 @@ export async function confirmTaxMatch(input: {
     WHERE id = ${input.taxInvoiceId} AND is_active
   `);
   if (!inv) return { ok: false, error: "세금계산서를 찾을 수 없습니다" };
-  if (inv.recon_status === "확정") return { ok: false, error: "이미 확정된 계산서입니다 — 먼저 되돌려 주세요" };
+  /* ⭐ 재설계(2026-08-25): 통장 연결만 있는 확정 계산서에도 앱 기록을 더 이을 수 있다
+     (3자 대조: 계산서 = 앱 기록 = 실제 돈). 거절은 「이미 앱 기록 연결이 있을 때」만. */
+  const appTaken = await db.execute<{ id: number }>(sql`
+    SELECT id FROM recon_match WHERE src_table = 'tax_invoice' AND src_id = ${input.taxInvoiceId}
+      AND ref_table IN ('purchase_invoice', 'quote') AND kind IN ('매입계산서', '매출계산서') LIMIT 1
+  `);
+  if (appTaken.length > 0)
+    return { ok: false, error: "이미 앱 기록과 이어진 계산서입니다 — 먼저 되돌려 주세요" };
 
   // ref 존재 검증 — FK 가 없으니 여기서 (kind 별로)
   for (const r of refs) {
@@ -216,6 +223,8 @@ export async function autoConfirmTax(): Promise<{ ok: true; confirmed: number } 
 /** 확정 되돌리기 — 연결을 지우고 미대조로 */
 export async function undoTaxMatch(
   taxInvoiceId: number,
+  /** "통장" = 통장 연결만 풀기(앱 기록 연결·확정은 유지) · "전부" = 현행 전체 초기화 */
+  scope: "통장" | "전부" = "전부",
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
@@ -226,6 +235,7 @@ export async function undoTaxMatch(
   const gone = await db.execute<{ ref_table: string; ref_id: number }>(sql`
     DELETE FROM recon_match WHERE src_table = 'tax_invoice' AND src_id = ${taxInvoiceId}
       AND kind IN ('매입계산서', '매출계산서')
+      ${scope === "통장" ? sql`AND ref_table = 'cash_txn'` : sql``}
     RETURNING ref_table, ref_id
   `);
   for (const g of gone) {
@@ -245,9 +255,11 @@ export async function undoTaxMatch(
   /* 🔴 감사 H8(2026-08-25): 확정 때 배운 별명을 함께 지운다 — 안 지우면 잘못된 학습이
      다음 자동확정 후보 1순위로 계속 되살아난다 ("고쳐도 그대로"의 근원) */
   if (invRow) {
-    const nameKey = normName(invRow.counterparty_name);
-    if (nameKey.length >= 2) {
-      await db.execute(sql`DELETE FROM party_alias WHERE alias_key = ${nameKey} AND party_key LIKE 'S:%'`);
+    if (scope === "전부") {
+      const nameKey = normName(invRow.counterparty_name);
+      if (nameKey.length >= 2) {
+        await db.execute(sql`DELETE FROM party_alias WHERE alias_key = ${nameKey} AND party_key LIKE 'S:%'`);
+      }
     }
     for (const g of gone) {
       if (g.ref_table !== "cash_txn") continue;
@@ -264,7 +276,20 @@ export async function undoTaxMatch(
       }
     }
   }
-  await db.execute(sql`UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL WHERE id = ${taxInvoiceId}`);
+  if (scope === "통장") {
+    // 앱 기록 연결이 남아 있으면 확정은 유지(돈 미확인 상태로만 복귀), 없으면 미대조로
+    const [appLeft] = await db.execute<{ n: number }>(sql`
+      SELECT count(*)::int n FROM recon_match WHERE src_table = 'tax_invoice' AND src_id = ${taxInvoiceId}
+        AND ref_table IN ('purchase_invoice', 'quote') AND kind IN ('매입계산서', '매출계산서')
+    `);
+    if (Number(appLeft.n) > 0) {
+      await db.execute(sql`UPDATE tax_invoice SET recon_reason = NULL WHERE id = ${taxInvoiceId}`);
+    } else {
+      await db.execute(sql`UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL WHERE id = ${taxInvoiceId}`);
+    }
+  } else {
+    await db.execute(sql`UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL WHERE id = ${taxInvoiceId}`);
+  }
   revalidatePath("/finance/tax");
   return { ok: true };
 }
@@ -356,7 +381,7 @@ export async function markPastTax(): Promise<{ ok: true; applied: number } | { o
 export async function confirmTaxToBank(
   taxInvoiceId: number,
   cashTxnId: number,
-): Promise<{ ok: true; remaining: number } | { ok: false; error: string }> {
+): Promise<{ ok: true; remaining: number; shortfall: number } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
   const [inv] = await db.execute<{
@@ -367,7 +392,16 @@ export async function confirmTaxToBank(
     FROM tax_invoice WHERE id = ${taxInvoiceId} AND is_active
   `);
   if (!inv) return { ok: false, error: "세금계산서를 찾을 수 없습니다" };
-  if (inv.recon_status === "확정") return { ok: false, error: "이미 확정된 계산서입니다 — 먼저 되돌려 주세요" };
+  if (Number(inv.total) <= 0)
+    return { ok: false, error: "마이너스 계산서는 원본과 상쇄로 정리해 주세요" };
+  /* ⭐ 재설계(2026-08-25): 앱 기록과 이어진 확정 계산서에도 통장을 이을 수 있다(3자 대조).
+     거절은 「이미 통장 연결이 있을 때」만. */
+  const bankTaken = await db.execute<{ id: number }>(sql`
+    SELECT id FROM recon_match WHERE src_table = 'tax_invoice' AND src_id = ${taxInvoiceId}
+      AND ref_table = 'cash_txn' AND kind IN ('매입계산서', '매출계산서') LIMIT 1
+  `);
+  if (bankTaken.length > 0)
+    return { ok: false, error: "이미 통장과 이어진 계산서입니다 — 먼저 통장 연결을 되돌려 주세요" };
   const [dep] = await db.execute<{ id: number; in_amount: number; out_amount: number; description: string }>(sql`
     SELECT id, in_amount, out_amount, description FROM cash_txn
     WHERE id = ${cashTxnId} AND source = '통장' AND is_active
@@ -382,29 +416,26 @@ export async function confirmTaxToBank(
    *    한 번에 입금 ②선입금(포인트 적립) 후 매입 계산서가 여러 번 — 남은 금액을 추적하며
    *    부분 연결한다. 첫 연결은 차액(수수료 차감 등)이 있어도 허용, 차액을 돌려준다.
    */
-  const [prev] = await db.execute<{ s: string }>(sql`
-    SELECT COALESCE(SUM(amount), 0)::bigint s FROM recon_match
-    WHERE ref_table = 'cash_txn' AND ref_id = ${cashTxnId} AND kind IN ('매출계산서', '매입계산서')
-  `);
   const depAmt = inv.direction === "매출" ? Number(dep.in_amount) : Number(dep.out_amount);
-  const already = Number(prev.s);
-  if (already > 0 && already + inv.total > depAmt) {
-    return {
-      ok: false,
-      error: `이 통장 줄의 남은 금액(${(depAmt - already).toLocaleString()}원)보다 계산서(${inv.total.toLocaleString()}원)가 큽니다`,
-    };
-  }
-  const remaining = depAmt - (already + inv.total); // 음수 = 계산서가 통장 금액보다 큼 (수수료 차감 등)
+  /* ⭐ 소진량 정본(cashUsedMap) — 지급 잡기('매입지급')·외상 수금('이체입금')이 쓴 몫까지
+     센다 (리뷰 C1 이중계상 차단). 남은 금액만큼만 기록해 SUM 이 통장 금액을 못 넘게 한다(C5). */
+  const already = (await cashUsedMap([cashTxnId])).get(cashTxnId) ?? 0;
+  const remain0 = depAmt - already;
+  if (remain0 <= 0)
+    return { ok: false, error: "이 통장 줄은 남은 금액이 없습니다 — 이미 다른 연결이 다 썼습니다" };
+  const linkAmt = Math.min(Number(inv.total), remain0);
+  const remaining = remain0 - linkAmt; // 통장 쪽 잔여 (>= 0)
+  const shortfall = Number(inv.total) - linkAmt; // 계산서 쪽 미달 = 수수료 차감 등 (>= 0)
 
   const kind = inv.direction === "매출" ? "매출계산서" : "매입계산서";
   const reason = inv.direction === "매출" ? "입금연결" : "출금연결";
   await db.transaction(async (tx) => {
     await tx.execute(sql`
       INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
-      VALUES (${kind}, 'tax_invoice', ${taxInvoiceId}, 'cash_txn', ${cashTxnId}, ${inv.total}, '확정', '수동', ${g.uid}, now())
+      VALUES (${kind}, 'tax_invoice', ${taxInvoiceId}, 'cash_txn', ${cashTxnId}, ${linkAmt}, '확정', '수동', ${g.uid}, now())
     `);
     await tx.execute(sql`UPDATE tax_invoice SET recon_status = '확정', recon_reason = ${reason} WHERE id = ${taxInvoiceId}`);
-    if (remaining <= 0) {
+    if (remaining === 0) {
       // 통장 줄이 다 찼다(또는 계산서가 더 크다) — 확정으로 정리
       if (inv.direction === "매입") {
         await tx.execute(sql`
@@ -449,7 +480,7 @@ export async function confirmTaxToBank(
 
   revalidatePath("/finance/tax");
   revalidatePath("/finance/deposits");
-  return { ok: true, remaining };
+  return { ok: true, remaining, shortfall };
 }
 
 /**
@@ -513,14 +544,19 @@ export async function removeTaxPartyRule(
   const [r] = await db.execute<{ kind: string }>(sql`SELECT kind FROM tax_party_rule WHERE biz_no = ${biz}`);
   if (!r) return { ok: false, error: "그 상대의 규칙이 없습니다" };
   await db.execute(sql`DELETE FROM tax_party_rule WHERE biz_no = ${biz}`);
-  const rows = await db.execute<{ id: number }>(sql`
-    UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL
-    WHERE is_active AND counterparty_biz_no = ${biz} AND recon_status = '무시'
-      AND recon_reason = ${r.kind} AND write_date >= ${TAX_APP_START}::date
-    RETURNING id
-  `);
+  // 대행정산은 계산서를 자동 정리한 적이 없어 되살릴 것도 없다 — 라벨만 지운다 (리뷰 지적)
+  let revived = 0;
+  if (r.kind !== "대행정산") {
+    const rows = await db.execute<{ id: number }>(sql`
+      UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL
+      WHERE is_active AND counterparty_biz_no = ${biz} AND recon_status = '무시'
+        AND recon_reason = ${r.kind} AND write_date >= ${TAX_APP_START}::date
+      RETURNING id
+    `);
+    revived = rows.length;
+  }
   revalidatePath("/finance/tax");
-  return { ok: true, revived: rows.length };
+  return { ok: true, revived };
 }
 
 /**
@@ -571,9 +607,7 @@ export async function searchBankLines(
   }>(sql`
     SELECT c.id, to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') date,
            c.description, ${isIn ? sql.raw("c.in_amount") : sql.raw("c.out_amount")} amount, c.account_label l,
-           COALESCE((SELECT SUM(m.amount)::int FROM recon_match m
-             WHERE m.ref_table = 'cash_txn' AND m.ref_id = c.id
-               AND m.kind IN ('매출계산서', '매입계산서', '매입지급')), 0) linked
+           ${cashUsedSql("c")} linked
     FROM cash_txn c
     WHERE c.source = '통장' AND c.is_active
       AND ${isIn ? sql.raw("c.in_amount > 0") : sql.raw("c.out_amount > 0")}

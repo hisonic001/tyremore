@@ -52,10 +52,10 @@ export function PayablesUi({
       const r = await confirmTaxToBank(invId, cashId);
       if (!r.ok) return setError(r.error);
       setMsg(
-        r.remaining > 0
-          ? `계산서를 출금과 이었습니다 — 그 출금에 ${won(r.remaining)}원이 남았습니다 (다른 계산서 몫이면 이어서)`
-          : r.remaining < 0
-            ? `이었습니다 — 계산서가 출금보다 ${won(-r.remaining)}원 큽니다 (선입금·적립 소진이면 정상)`
+        r.shortfall > 0
+          ? `이었습니다 — 출금이 계산서보다 ${won(r.shortfall)}원 적습니다 (수수료·선입금 소진이면 그대로 두면 됩니다)`
+          : r.remaining > 0
+            ? `계산서를 출금과 이었습니다 — 그 출금에 ${won(r.remaining)}원이 남았습니다 (다른 계산서 몫이면 이어서)`
             : "계산서를 출금과 이었습니다 — 금액이 정확히 맞습니다.",
       );
       router.refresh();

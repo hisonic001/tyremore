@@ -457,7 +457,7 @@ export interface PayLinkRow {
   suggest: { supplier: string; remain: number } | null;
 }
 
-export async function payLinkData(): Promise<{ rows: PayLinkRow[] }> {
+export async function payLinkData(): Promise<{ rows: PayLinkRow[]; supplierNames: string[] }> {
   // '매입대금' 출금 중 지급 기록과 안 이어진 것 — 실사용 기간(8월~)만
   const outs = await db.execute<{ id: number; at: string; description: string; out_amount: number }>(sql`
     SELECT c.id, to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD') at, c.description, c.out_amount
@@ -503,7 +503,11 @@ export async function payLinkData(): Promise<{ rows: PayLinkRow[] }> {
       suggest: sup && remainMap.has(sup) ? { supplier: sup, remain: remainMap.get(sup)! } : null,
     };
   });
-  return { rows };
+  // ⭐ 재설계(2026-08-25): 지급 잡기 datalist용 거래처 이름 — taxPayableData 대체 준비
+  const names = await db.execute<{ s: string }>(sql`
+    SELECT DISTINCT supplier s FROM purchase_invoice WHERE status <> '취소' ORDER BY 1 LIMIT 100
+  `);
+  return { rows, supplierNames: names.map((r) => r.s) };
 }
 
 /* ================================================================== */
@@ -558,3 +562,35 @@ export async function taxPayableData(): Promise<TaxPayableData> {
     supplierNames: names.map((r) => r.s),
   };
 }
+
+/* ================================================================== */
+/* ⭐ 통장 줄 소진량 정본 (tax 재설계 2026-08-25) — 이중계상 차단
+ *
+ *   recon_match 에서 cash_txn 의 방향이 kind 마다 다르다:
+ *     매입계산서·매출계산서 = ref (계산서가 src)
+ *     매입지급·이체입금     = src (지급 잡기·외상 수금이 쓴 몫)
+ *   양방향을 다 세야 지급 잡기로 이미 쓴 출금이 계산서 후보에
+ *   전액 남은 것처럼 되살아나지 않는다 (리뷰 C1). 전부 status='확정'만. */
+
+export async function cashUsedMap(ids?: number[]): Promise<Map<number, number>> {
+  const f1 = ids && ids.length > 0 ? sql`AND ref_id IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})` : sql``;
+  const f2 = ids && ids.length > 0 ? sql`AND src_id IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})` : sql``;
+  const rows = await db.execute<{ cash_id: number; used: string }>(sql`
+    SELECT cash_id, SUM(amount)::bigint used FROM (
+      SELECT ref_id cash_id, amount FROM recon_match
+       WHERE ref_table = 'cash_txn' AND kind IN ('매입계산서', '매출계산서') AND status = '확정' ${f1}
+      UNION ALL
+      SELECT src_id, amount FROM recon_match
+       WHERE src_table = 'cash_txn' AND kind IN ('매입지급', '이체입금') AND status = '확정' ${f2}
+    ) x GROUP BY 1 LIMIT 20000
+  `);
+  return new Map(rows.map((r) => [Number(r.cash_id), Number(r.used)]));
+}
+
+/** 위와 같은 식의 SQL 조각 — 상관 서브쿼리용 (searchBankLines 등) */
+export const cashUsedSql = (alias: string) => sql`
+  COALESCE((SELECT SUM(m.amount)::bigint FROM recon_match m
+    WHERE m.status = '확정' AND (
+      (m.ref_table = 'cash_txn' AND m.ref_id = ${sql.raw(alias)}.id AND m.kind IN ('매출계산서', '매입계산서'))
+      OR (m.src_table = 'cash_txn' AND m.src_id = ${sql.raw(alias)}.id AND m.kind IN ('매입지급', '이체입금'))
+    )), 0)`;

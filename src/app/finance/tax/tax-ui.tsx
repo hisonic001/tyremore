@@ -94,11 +94,11 @@ export function TaxRecon({
   const bankLink = (s: TaxSuggestion, cashId: number) =>
     act(
       () => confirmTaxToBank(s.inv.id, cashId),
-      (r: { remaining: number }) =>
-        r.remaining > 0
-          ? `이었습니다 — 이 통장 줄에 ${won(r.remaining)}원이 남았습니다 (적립·다른 계산서 몫이면 이어서 잇기)`
-          : r.remaining < 0
-            ? `이었습니다 — 계산서가 통장 금액보다 ${won(-r.remaining)}원 큽니다 (수수료 차감 등이면 정상)`
+      (r: { remaining: number; shortfall: number }) =>
+        r.shortfall > 0
+          ? `이었습니다 — 통장 금액이 계산서보다 ${won(r.shortfall)}원 적습니다 (수수료를 떼고 주고받은 것이면 그대로 두면 됩니다)`
+          : r.remaining > 0
+            ? `이었습니다 — 이 통장 줄에 ${won(r.remaining)}원이 남았습니다 (적립·다른 계산서 몫이면 이어서 잇기)`
             : "이었습니다 — 금액이 정확히 맞습니다.",
     );
 
