@@ -148,13 +148,13 @@ export default async function SalesPage({
           <Link href="/receivables" className="text-sm font-medium text-amber-800 underline underline-offset-4">
             외상 장부
           </Link>
-          <Link href="/sale" className="text-sm font-medium text-emerald-700 underline underline-offset-4">
+          <Link href="/sale" className="text-sm font-medium text-brand-700 underline underline-offset-4">
             판매 등록 →
           </Link>
         </div>
       </div>
 
-      <h1 className="mt-3 text-2xl font-bold">정비 내역</h1>
+      <h1 className="mt-3 text-xl font-bold">정비 내역</h1>
       {h.filterLabel ? (
         <p className="mt-1 text-sm text-slate-600">
           <strong>{h.filterLabel}</strong> 의 정비 이력입니다.{" "}

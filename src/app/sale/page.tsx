@@ -18,7 +18,7 @@ export default function SalePage() {
           정비 내역 →
         </Link>
       </div>
-      <h1 className="mt-3 text-2xl font-bold">판매 등록</h1>
+      <h1 className="mt-3 text-xl font-bold">판매 등록</h1>
       <p className="mt-1 text-sm text-slate-500">
         저장하면 재고가 빠지고 정비 내역에 남습니다. MARS 는 정비 내역에서 골라 올립니다.
       </p>

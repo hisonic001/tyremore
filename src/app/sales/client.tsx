@@ -166,7 +166,7 @@ export function SaleCard({
 
   return (
     <li
-      className={`rounded-xl border bg-white ${
+      className={`rounded-card border bg-white shadow-card ${
         canceled ? "border-slate-200 opacity-60" : "border-slate-200"
       } ${
         // 선택 모드: 체크된 카드는 테두리로, 체크 못 하는 카드는 흐리게
@@ -177,7 +177,7 @@ export function SaleCard({
       <button
         type="button"
         onClick={() => (select ? select.eligible && select.toggle() : setOpen(!open))}
-        className="w-full p-3 text-left lg:p-5"
+        className="w-full rounded-card p-3 text-left transition-colors active:bg-slate-50 lg:p-5 lg:hover:bg-slate-50"
       >
         <div className="flex items-baseline justify-between gap-2">
           <span className="min-w-0 truncate font-semibold lg:text-lg">

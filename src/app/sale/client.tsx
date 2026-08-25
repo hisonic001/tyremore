@@ -11,6 +11,7 @@ import { EXCLUSIVE, SPLITTABLE } from "@/lib/payments";
 /** ⭐ 고객·거래처 선택기는 공용으로 뺐다 (2026-08-17) — 정비 내역의 「대상 바꾸기」도 쓴다 */
 import { CustomerPick, type NewCustomerDraft } from "./customer-pick";
 import { listSaleDrafts, removeSaleDraft, saveSaleDraft, type SaleDraft, type SaleDraftState } from "./draft-store";
+import { useConfirm } from "@/components/ui/confirm";
 
 const won = (n: number) => n.toLocaleString();
 
@@ -38,6 +39,7 @@ const PAYMENTS = [...SPLITTABLE, ...EXCLUSIVE] as readonly string[];
 export function SaleForm() {
   const router = useRouter();
   const [pending, start] = useTransition();
+  const [ask, confirmDialog] = useConfirm(); // 배치3 — 브라우저 confirm() 대체 시트
 
   const [vehicle, setVehicle] = useState<VehicleHit | null>(null);
   /** ⭐ 거래처 판매 (사장님 요청 2026-08-05) — MARS 에 등록하지 않는다 */
@@ -294,9 +296,9 @@ export function SaleForm() {
                   <button
                     type="button"
                     aria-label="지우기"
-                    onClick={() => {
-                      if (!confirm(`지울까요?
-${d.label}`)) return;
+                    onClick={async () => {
+                      if (!(await ask({ title: "임시 저장을 지울까요?", body: d.label, tone: "danger", confirmLabel: "지우기" })))
+                        return;
                       removeSaleDraft(d.id);
                       setDrafts(listSaleDrafts());
                     }}
@@ -319,19 +321,20 @@ ${d.label}`)) return;
       </aside>
     ) : null;
 
-  const submit = () => {
+  const submit = async () => {
     /**
      * ⭐ 고객 미등록 경고 (사장님 요청 2026-08-08).
      *    "고객 등록을 안하고 판매 확정을 누르면 한번 경고를 하며 고객등록을 하도록 유도"
      *    거래처 판매가 아닌데 차량을 고르지 않았으면 — 한 번 묻는다.
      */
     if (!supplierSale && !vehicle) {
-      const ok = confirm(
-        "고객·차량을 등록하지 않았습니다.\n" +
-          "이대로 저장하면 비회원 판매로 남아 MARS 자동 입력이 안 되고, 다음 방문 때 이력이 이어지지 않습니다.\n\n" +
-          "「취소」를 누르고 고객·차량 탭에서 「등록 안 된 손님입니다」로 등록하는 것을 권합니다.\n" +
-          "그래도 이대로 저장할까요?",
-      );
+      const ok = await ask({
+        title: "고객·차량 없이 저장할까요?",
+        body:
+          "이대로 저장하면 비회원 판매로 남아 MARS 자동 입력이 안 되고, 다음 방문 때 이력이 이어지지 않습니다.\n\n고객·차량 탭의 「등록 안 된 손님입니다」로 등록하는 것을 권합니다.",
+        confirmLabel: "이대로 저장",
+        cancelLabel: "돌아가기",
+      });
       if (!ok) return;
     }
     // 분할 결제는 금액 합이 판매 합계와 같아야 저장된다 (서버도 다시 검증한다)
@@ -386,9 +389,9 @@ ${d.label}`)) return;
 
   if (done) {
     return (
-      <section className="mt-5 rounded-2xl border-2 border-emerald-600 bg-emerald-50 p-5">
-        <h2 className="text-lg font-bold text-emerald-900">판매를 등록했습니다 — {done.quoteNo}</h2>
-        <p className="mt-1 text-sm text-emerald-800">
+      <section className="mt-5 rounded-card border-2 border-brand-500 bg-brand-50 p-5">
+        <h2 className="text-lg font-bold text-brand-700">판매를 등록했습니다 — {done.quoteNo}</h2>
+        <p className="mt-1 text-sm text-brand-700">
           재고가 빠졌고 정비 내역에 남았습니다. MARS 에 올릴 때는 정비 내역에서 카드를 체크하세요.
         </p>
         {done.shortages.length > 0 && (
@@ -401,14 +404,14 @@ ${d.label}`)) return;
         <div className="mt-4 flex gap-2">
           <a
             href="/sales"
-            className="flex-1 rounded-lg bg-indigo-700 py-3 text-center font-semibold text-white"
+            className="flex-1 rounded-control bg-brand-600 py-3 text-center font-semibold text-white transition-colors active:bg-brand-700"
           >
             정비 내역 보기
           </a>
           <button
             type="button"
             onClick={() => setDone(null)}
-            className="flex-1 rounded-lg border border-emerald-600 bg-white py-3 font-semibold text-emerald-800"
+            className="flex-1 rounded-control border border-slate-300 bg-white py-3 font-semibold text-slate-700 transition-colors active:bg-slate-100"
           >
             판매 또 등록
           </button>
@@ -644,7 +647,7 @@ ${d.label}`)) return;
           </p>
         )}
         {payMethods[0] === "서비스" && (
-          <p className="mt-1.5 rounded-lg bg-emerald-50 px-2 py-1.5 text-xs text-emerald-900">
+          <p className="mt-1.5 rounded-lg bg-brand-50 px-2 py-1.5 text-xs text-brand-700">
             서비스(무상)는 <strong>MARS 에 등록하지 않습니다</strong> — 우리 기록에만 남습니다.
             단가를 0원으로 바꿔서 등록하세요.
           </p>
@@ -681,7 +684,7 @@ ${d.label}`)) return;
             type="button"
             disabled={pending || (rows.length === 0 && !vehicle && !supplierSale && !newCust)}
             onClick={stashDraft}
-            className="shrink-0 rounded-xl border-2 border-amber-500 bg-white px-4 py-3.5 font-bold text-amber-800 disabled:opacity-40"
+            className="shrink-0 rounded-control border border-slate-300 bg-white px-4 py-3.5 font-bold text-slate-700 transition-colors active:bg-slate-100 disabled:opacity-40"
           >
             임시 저장
           </button>
@@ -689,12 +692,13 @@ ${d.label}`)) return;
             type="button"
             disabled={pending || rows.length === 0}
             onClick={submit}
-            className="shrink-0 rounded-xl bg-emerald-700 px-6 py-3.5 text-lg font-bold text-white disabled:opacity-40"
+            className="shrink-0 rounded-control bg-brand-600 px-6 py-3.5 text-lg font-bold text-white transition-colors active:bg-brand-700 disabled:opacity-40"
           >
             {pending ? "저장 중…" : "판매 확정"}
           </button>
         </div>
       </div>
+      {confirmDialog}
     </div>
   );
 }

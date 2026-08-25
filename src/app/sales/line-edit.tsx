@@ -12,6 +12,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { RateBox } from "../rate-box";
 import { addSaleLine, removeSaleLine, updateSaleLine } from "@/lib/sale-edit";
+import { useConfirm } from "@/components/ui/confirm";
 import { signedStr, showSigned } from "@/lib/signed-input";
 import { findServices } from "@/lib/sale";
 import { searchProducts } from "@/lib/search-actions";
@@ -23,6 +24,7 @@ const won = (n: number) => n.toLocaleString("ko-KR");
 export function EditableLine({ line: l, onMessage }: { line: SaleLine; onMessage: (m: string) => void }) {
   const router = useRouter();
   const [pending, start] = useTransition();
+  const [ask, confirmDialog] = useConfirm(); // 배치3 — confirm() 대체
   const [editing, setEditing] = useState(false);
   const [qty, setQty] = useState(l.qty);
   const [price, setPrice] = useState(String(l.finalPrice));
@@ -48,8 +50,9 @@ export function EditableLine({ line: l, onMessage }: { line: SaleLine; onMessage
       router.refresh();
     });
 
-  const remove = () => {
-    if (!confirm(`「${l.description}」 줄을 지울까요? 재고는 되살아납니다.`)) return;
+  const remove = async () => {
+    if (!(await ask({ title: "이 줄을 지울까요?", body: `「${l.description}」 — 재고는 되살아납니다.`, tone: "danger", confirmLabel: "지우기" })))
+      return;
     start(async () => {
       const r = await removeSaleLine(l.itemId);
       if (!r.ok) return onMessage(`⚠️ ${r.error}`);
@@ -80,13 +83,15 @@ export function EditableLine({ line: l, onMessage }: { line: SaleLine; onMessage
           </span>
         </div>
         {/* ⭐ 줄별 메모 (사장님 지시 2026-08-07) — 펼치면 품목 아래에 보인다 */}
-        {l.memo && <p className="mt-0.5 pl-1 text-xs text-amber-700">└ 📝 {l.memo}</p>}
+        {l.memo && <p className="mt-0.5 pl-1 text-xs text-slate-500">└ {l.memo}</p>}
+        {confirmDialog}
       </li>
     );
   }
 
   return (
     <li className="rounded-lg bg-slate-50 p-2">
+      {confirmDialog}
       {/* 품명 — 자유롭게 타이핑해 바꿀 수 있다 */}
       <input
         value={desc}
