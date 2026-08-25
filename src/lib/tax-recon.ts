@@ -279,6 +279,25 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
       reconReason: r.recon_reason,
     };
 
+    /* ⭐ 월정산 상대는 개별 매칭을 요구하지 않는다 (사장님 지적 2026-08-25 —
+       "월정산으로 지정했는데도 계속 하나씩 고르라고 함"). 계산서 1장 ↔ 출금 1건이
+       대응하지 않는 곳이므로 후보를 만들지 않고, 화면은 잔액으로 보라고 안내한다. */
+    if (ruleMap.get(inv.counterBizNo) === "월정산") {
+      suggestions.push({
+        inv,
+        auto: null,
+        bundle: null,
+        candidates: [],
+        bankCands: [],
+        bankCombo: null,
+        fixPair: null,
+        supplierId: null,
+        supplierName: null,
+        learnable: false,
+      });
+      continue;
+    }
+
     if (inv.direction === "매입") {
       const byBiz = suppliers.find((s) => s.biz_no && s.biz_no.replace(/\D/g, "") === inv.counterBizNo);
       const aliasParty = aliasMap.get(norm(inv.counterName)) ?? null;

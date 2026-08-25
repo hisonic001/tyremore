@@ -338,6 +338,25 @@ export function TaxRecon({
               </details>
             )}
 
+            {/* ⭐ 월정산 상대 — 개별 매칭 대신 잔액으로 (사장님 지적 2026-08-25) */}
+            {g.kind === "월정산" && (
+              <div className="mt-2 rounded-control bg-brand-50 p-2.5 text-xs">
+                <p className="font-medium text-brand-700">
+                  월정산 거래처입니다 — 계산서 한 장과 출금 한 건이 짝이 아니라서 하나씩 맞추지
+                  않습니다.
+                </p>
+                <p className="mt-0.5 text-slate-600">
+                  이 달 계산서 합과 지급 합, 그리고 <strong>아직 안 준 돈(잔액)</strong>만 보시면 됩니다.
+                </p>
+                <a
+                  href={`/finance/tax?view=money&ym=${ym}&direction=매입`}
+                  className="mt-1.5 inline-block rounded-control bg-brand-600 px-3 py-1.5 font-semibold text-white"
+                >
+                  돈 확인에서 잔액 보기 →
+                </a>
+              </div>
+            )}
+
             {/* 계산서별 — 추천 하나만 크게, 나머지는 「다른 방법 ▾」 */}
             <ul className="mt-2 space-y-2">
               {g.items.map((s) => {
@@ -479,14 +498,16 @@ export function TaxRecon({
                         />
                       </div>
                     )}
-                    {primary === "none" && (
-                      <p className="mt-1.5 text-xs text-slate-400">
-                        추천 없음 — 「다른 방법 ▾」에서 통장을 검색하거나, 위 「이 상대 기억하기」로 유형을 정하세요
+                    {primary === "none" && g.kind !== "월정산" && (
+                      <p className="mt-1.5 rounded bg-slate-50 p-1.5 text-xs text-slate-500">
+                        딱 맞는 짝이 없습니다. 전기·통신·세금·수수료처럼 <strong>매달 나가는 비용</strong>이면
+                        「다른 방법 ▾ → 경비로」가 맞습니다 — 전기요금은 계산서 금액과 실제 납부액이
+                        (전력기금 때문에) 원래 다릅니다.
                       </p>
                     )}
 
-                    {/* ② 다른 방법 — 전부 접어 둔다 */}
-                    <details className="mt-1.5">
+                    {/* ② 다른 방법 — 전부 접어 둔다 (월정산 상대는 아예 감춘다) */}
+                    <details className="mt-1.5" hidden={g.kind === "월정산"}>
                       <summary className="cursor-pointer text-xs text-slate-500 underline underline-offset-2">
                         다른 방법 ▾ ({moreBits.join(" · ")})
                       </summary>
