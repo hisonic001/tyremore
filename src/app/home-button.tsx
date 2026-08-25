@@ -2,6 +2,7 @@
 
 import Link from "@/lib/link";
 import { usePathname } from "next/navigation";
+import { House } from "lucide-react";
 
 /**
  * ⭐ 어느 화면에서든 홈으로 (사장님 요청 2026-08-06)
@@ -15,20 +16,17 @@ import { usePathname } from "next/navigation";
  */
 export function HomeButton() {
   const path = usePathname();
-  if (path === "/" || path === "/login" || path.startsWith("/print/")) return null;
+  // 배치1: 전역 탭바(AppNav) 도입 — 이 FAB는 탭바가 숨는 /sale(하단 결제 바 화면) 전용
+  if (path !== "/sale") return null;
 
   return (
     <Link
       href="/"
       aria-label="홈으로"
-      className={`fixed right-4 z-40 flex h-12 w-12 items-center justify-center rounded-full
-                  bg-slate-900 text-white shadow-lg active:bg-slate-700 print:hidden
-                  ${path === "/sale" ? "bottom-24" : "bottom-5"}`}
+      className="fixed bottom-24 right-4 z-40 flex h-12 w-12 items-center justify-center rounded-full
+                  bg-brand-600 text-white shadow-float active:bg-brand-700 print:hidden"
     >
-      <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M3 11l9-8 9 8" />
-        <path d="M5 9.5V21h5v-6h4v6h5V9.5" />
-      </svg>
+      <House className="h-6 w-6" />
     </Link>
   );
 }

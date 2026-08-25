@@ -7,7 +7,28 @@
  *   · 다크모드 미지원 (D-11 7번)
  */
 @theme {
-  --font-sans: "Pretendard", system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+  --font-sans: var(--font-pretendard), "Pretendard", system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+
+  /* ⭐ 브랜드 (매장 간판색, 사장님 확정 2026-08-25): 초록 #009944 · 노랑 #ffe500 · 흰 · 검정 */
+  --color-brand-50: #eefaf2;
+  --color-brand-100: #d7f2e2;
+  --color-brand-500: #009944; /* 아이콘·링·큰 글자 전용 — 작은 흰 글자 금지(대비 3.7:1) */
+  --color-brand-600: #007a36; /* 주 버튼 정본 (흰 글자 5.4:1 AA) */
+  --color-brand-700: #00622c; /* pressed·틴트 위 텍스트 */
+  --color-accent-100: #fffbe0;
+  --color-accent-400: #ffe500; /* 검정 글자 전용 — 흰 글자 올리지 말 것 */
+
+  /* 모서리 규칙: 카드 16px(rounded-card) · 컨트롤 12px(rounded-control) · 칩/배지 full */
+  --radius-card: 1rem;
+  --radius-control: 0.75rem;
+
+  /* 그림자 2단 */
+  --shadow-card: 0 1px 3px rgb(0 0 0 / 0.06), 0 1px 2px rgb(0 0 0 / 0.04);
+  --shadow-float: 0 8px 24px rgb(0 0 0 / 0.16);
+
+  /* 트랜지션 표준 */
+  --default-transition-duration: 150ms;
+  --default-transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
 }
 
 html {
@@ -47,4 +68,28 @@ body {
 /* 숫자는 자릿수가 흔들리면 읽기 어렵다 */
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+
+/* ⭐ 배치1 — 포커스 링 전역: 로그인에만 있던 것을 전 화면으로 */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-brand-500);
+  outline-offset: 2px;
+}
+
+/* 확인 시트 모션 (confirm.tsx) */
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
