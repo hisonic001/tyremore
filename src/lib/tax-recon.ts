@@ -87,8 +87,9 @@ export interface TaxReconV2 {
   ignoredCount: number;
   reasonCounts: { reason: string; n: number }[];
   supplierOptions: { id: number; name: string }[];
-  /** 이 달 창에 앱 기록(매입 인보이스·판매)이 있나 — 없으면(2025) 「통장에서 직접」 안내 */
-  appRecordsN: number;
+  /** 이 달 창의 앱 기록 건수 — 0이면(2025) 「통장에서 직접 찾기」 안내 (매입은 인보이스, 매출은 판매) */
+  appPurchasesN: number;
+  appQuotesN: number;
 }
 
 const won = (n: number) => n.toLocaleString("ko-KR");
@@ -566,7 +567,8 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
     ignoredCount: counts.find((c) => c.s === "무시")?.n ?? 0,
     reasonCounts: reasons.map((r) => ({ reason: r.reason, n: Number(r.n) })),
     supplierOptions: suppliers.map((s) => ({ id: Number(s.id), name: s.name })),
-    appRecordsN: purchases.length + quotes.length,
+    appPurchasesN: purchases.length,
+    appQuotesN: quotes.length,
   };
 }
 

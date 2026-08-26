@@ -160,6 +160,16 @@ export function FinUpload() {
               <span className="mt-1 block text-xs text-slate-500">
                 전에 쓴 이름 그대로 골라 주세요 — 이름이 다르면 다른 계좌로 셉니다
               </span>
+              {/* 🔴 2025 감사 F21: 같은 계좌를 다른 이름으로 올리면 2025 전량이 중복된다(검증은 최근 60일만) */}
+              {newLabel && preview.labels.length > 0 && (
+                <span className="mt-1 block rounded bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                  ⚠ 이미 등록된 {preview.source === "통장" ? "통장" : "카드"}이 {preview.labels.length}개 있습니다 — 같은
+                  계좌를 새 이름으로 올리면 지난 내역이 통째로 두 번 들어갑니다.{" "}
+                  <button type="button" className="underline" onClick={() => { setNewLabel(false); setLabel(""); }}>
+                    기존 계정에서 고르기
+                  </button>
+                </span>
+              )}
             </label>
           )}
 

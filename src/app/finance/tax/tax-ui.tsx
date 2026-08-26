@@ -158,9 +158,16 @@ export function TaxRecon({
           )}
         </div>
         <ol className="mt-2 list-inside list-decimal space-y-0.5 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
-          <li>
-            <strong className="text-emerald-800">초록 「잇기」</strong>부터 누르세요 — 확실한 것만 초록입니다
-          </li>
+          {data.appPurchasesN === 0 && data.autoCount === 0 ? (
+            <li>
+              이 달은 <strong>앱 매입 기록이 없는 달</strong>입니다(2026-08 이전) — 자동 잇기는 없고, 월정산 상대는
+              「돈 확인」에서 <strong>[이 달 맞음]</strong>, 나머지는 <strong>통장 검색</strong>으로 잇습니다
+            </li>
+          ) : (
+            <li>
+              <strong className="text-emerald-800">초록 「잇기」</strong>부터 누르세요 — 확실한 것만 초록입니다
+            </li>
+          )}
           <li>
             추천이 안 맞거나 없으면 <strong>「다른 방법 ▾」</strong>을 펼치세요 (후보 고르기 · 통장 검색 · 경비 · 무시)
           </li>
@@ -460,13 +467,22 @@ export function TaxRecon({
                         />
                       </div>
                     )}
-                    {primary === "none" && g.kind !== "월정산" && (
-                      <p className="mt-1.5 rounded bg-slate-50 p-1.5 text-xs text-slate-500">
-                        딱 맞는 짝이 없습니다. 전기·통신·세금·수수료처럼 <strong>매달 나가는 비용</strong>이면
-                        「다른 방법 ▾ → 경비로」가 맞습니다 — 전기요금은 계산서 금액과 실제 납부액이
-                        (전력기금 때문에) 원래 다릅니다.
-                      </p>
-                    )}
+                    {/* 🔴 2025 감사 F14: 앱 기록이 없는 달(2025)은 "짝이 없다→경비"가 아니라 통장에서 찾는 것 */}
+                    {primary === "none" &&
+                      g.kind !== "월정산" &&
+                      ((s.inv.direction === "매입" ? data.appPurchasesN : data.appQuotesN) === 0 ? (
+                        <p className="mt-1.5 rounded bg-sky-50 p-1.5 text-xs text-sky-900">
+                          이 달은 앱 기록이 없어 <strong>통장에서 직접</strong> 찾습니다 — 「다른 방법 ▾」의 통장 검색이
+                          계산서 날짜에 가까운 줄부터 보여줍니다. 매달 나가는 비용(전기·통신·세무 수수료)이면 「이 상대
+                          기억하기 → 경비」로 한 번만 정하세요.
+                        </p>
+                      ) : (
+                        <p className="mt-1.5 rounded bg-slate-50 p-1.5 text-xs text-slate-500">
+                          딱 맞는 짝이 없습니다. 전기·통신·세금·수수료처럼 <strong>매달 나가는 비용</strong>이면
+                          「다른 방법 ▾ → 경비로」가 맞습니다 — 전기요금은 계산서 금액과 실제 납부액이
+                          (전력기금 때문에) 원래 다릅니다.
+                        </p>
+                      ))}
 
                     {/* ② 다른 방법 — 전부 접어 둔다 (월정산 상대는 아예 감춘다) */}
                     <details className="mt-1.5" hidden={g.kind === "월정산"}>

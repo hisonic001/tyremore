@@ -370,25 +370,25 @@ export default async function FinancePage({
             {taxOpen > 0 ? `확인할 것 ${taxOpen}건 →` : "다 맞춰짐 ✓"}
           </p>
         </Link>
-        <Link href="/finance/deposits" className="rounded-2xl border border-slate-200 bg-white p-3">
+        <Link href={`/finance/deposits?ym=${ym}`} className="rounded-2xl border border-slate-200 bg-white p-3">
           <p className="text-sm font-semibold">입금 정리</p>
           <p className={`tabular mt-1 text-xs ${depOpen > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
             {depOpen > 0 ? `정리할 입금 ${depOpen}건 →` : "다 됨 ✓"}
           </p>
         </Link>
-        <Link href="/finance/expenses" className="rounded-2xl border border-slate-200 bg-white p-3">
+        <Link href={`/finance/expenses?ym=${ym}`} className="rounded-2xl border border-slate-200 bg-white p-3">
           <p className="text-sm font-semibold">지출 분류</p>
           <p className={`tabular mt-1 text-xs ${gUnclassOut > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
             {gUnclassOut > 0 ? `미분류 ${won(gUnclassOut)}원 →` : "다 됨 ✓"}
           </p>
         </Link>
-        <Link href="/finance/payables" className="rounded-2xl border border-slate-200 bg-white p-3">
+        <Link href={`/finance/payables?ym=${ym}`} className="rounded-2xl border border-slate-200 bg-white p-3">
           <p className="text-sm font-semibold">미지급</p>
           <p className={`tabular mt-1 text-xs ${gPayable > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
             {gPayable > 0 ? `줄 돈 ${won(gPayable)}원 →` : "없음 ✓"}
           </p>
         </Link>
-        <Link href="/finance/card" className="rounded-2xl border border-slate-200 bg-white p-3">
+        <Link href={`/finance/card?ym=${ym}`} className="rounded-2xl border border-slate-200 bg-white p-3">
           <p className="text-sm font-semibold">카드 대사</p>
           <p className="mt-1 text-xs text-slate-500">여신협회 vs 앱 →</p>
         </Link>
@@ -405,10 +405,12 @@ export default async function FinancePage({
           <div className="mt-2 flex items-center justify-between gap-2 text-sm">
             <p className="text-emerald-800">
               ✅ 마감됨 ({mc.closedAt})
-              {mc.profit !== null && (
+              {mc.profit !== null && mc.dataComplete ? (
                 <>
                   {" "}— 남은 돈 <strong className="tabular">{won(mc.profit)}원</strong>으로 확정
                 </>
+              ) : (
+                <span className="text-slate-500"> — 자료 기준 마감 (앱 판매·매입 기록이 없는 달이라 손익은 없음)</span>
               )}
             </p>
             <form action={reopenMonthForm.bind(null, ym)}>

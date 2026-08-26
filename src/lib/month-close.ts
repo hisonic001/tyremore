@@ -27,6 +27,8 @@ export interface MonthCloseInfo {
   closed: boolean;
   closedAt: string | null;
   profit: number | null;
+  /** 앱 판매·매입 기록이 있는 달인가 — 없으면(2025) 손익은 의미가 없어 「자료 기준 마감」으로 표시 */
+  dataComplete: boolean;
 }
 
 export async function monthCloseStatus(ym: string): Promise<MonthCloseInfo> {
@@ -34,9 +36,14 @@ export async function monthCloseStatus(ym: string): Promise<MonthCloseInfo> {
     SELECT to_char(closed_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') d, headline
     FROM month_close WHERE ym = ${ym} LIMIT 1
   `);
-  if (!r[0]) return { closed: false, closedAt: null, profit: null };
-  const h = r[0].headline as { profit?: number } | null;
-  return { closed: true, closedAt: r[0].d, profit: typeof h?.profit === "number" ? h.profit : null };
+  if (!r[0]) return { closed: false, closedAt: null, profit: null, dataComplete: true };
+  const h = r[0].headline as { profit?: number; dataComplete?: boolean } | null;
+  return {
+    closed: true,
+    closedAt: r[0].d,
+    profit: typeof h?.profit === "number" ? h.profit : null,
+    dataComplete: h?.dataComplete !== false,
+  };
 }
 
 /** 마감 조건 체크리스트 — 미충족 항목은 그 화면으로 가는 링크가 된다 */
@@ -69,6 +76,9 @@ export async function closeChecklist(ym: string, healthOk?: boolean): Promise<Cl
     href: `/finance/tax?view=money&ym=${ym}`,
   };
   const hOk = healthOk ?? (await finHealth()).allOk;
+  /* 🔴 2025 감사 F6: 자료 검증은 「최근 60일·최근 3달」 기준이라 지난 달(특히 2025) 마감과
+     무관하다 — 지난 달은 경고만 보이고 마감을 막지 않는다 */
+  const past = ym < kstToday().slice(0, 7);
 
   return [
     {
@@ -82,7 +92,11 @@ export async function closeChecklist(ym: string, healthOk?: boolean): Promise<Cl
       href: `/finance/expenses?ym=${ym}`,
     },
     taxCheck,
-    { ok: hOk, text: hOk ? "자료 검증 ✓" : "자료 검증 경고 있음", href: "/finance" },
+    {
+      ok: hOk || past,
+      text: hOk ? "자료 검증 ✓" : past ? "자료 검증 경고 있음 (최근 자료 기준 — 지난 달 마감은 막지 않음)" : "자료 검증 경고 있음",
+      href: `/finance?ym=${ym}`,
+    },
   ];
 }
 
@@ -122,7 +136,8 @@ async function computeHeadline(ym: string) {
   const c = Number(cardOut.s);
   const f = Number(fee.s);
   const x = Number(bankExp.s);
-  return { earned: e, bought: b, cardOut: c, fee: f, bankExp: x, profit: e - b - c - f - x };
+  // 앱 판매·매입 기록이 둘 다 0이면(2025) 손익이 아니라 「자료 기준 마감」 (2025 감사 F6)
+  return { earned: e, bought: b, cardOut: c, fee: f, bankExp: x, profit: e - b - c - f - x, dataComplete: e > 0 || b > 0 };
 }
 
 export async function closeMonth(ym: string): Promise<{ ok: true } | { ok: false; error: string }> {
