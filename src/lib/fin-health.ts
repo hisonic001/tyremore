@@ -11,6 +11,8 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
+import { uploadCoverage, coverageStatus } from "./upload-coverage";
+import { kstToday } from "./ym";
 
 export interface HealthLine {
   ok: boolean;
@@ -78,16 +80,11 @@ export async function finHealth(): Promise<{ allOk: boolean; lines: HealthLine[]
     });
   }
 
-  // ④ 커버리지
-  const [cov] = await db.execute<{ bank: string | null; card: string | null; assoc: string | null }>(sql`
-    SELECT (SELECT max((occurred_at AT TIME ZONE 'Asia/Seoul')::date)::text FROM cash_txn WHERE source = '통장' AND is_active) bank,
-           (SELECT max((occurred_at AT TIME ZONE 'Asia/Seoul')::date)::text FROM cash_txn WHERE source = '법인카드' AND is_active) card,
-           (SELECT max(day)::text FROM card_day WHERE is_active) assoc
-  `);
-  lines.push({
-    ok: true,
-    text: `자료: 통장 ~${cov.bank?.slice(5) ?? "없음"} · 카드 ~${cov.card?.slice(5) ?? "없음"} · 여신 ~${cov.assoc?.slice(5) ?? "없음"}`,
-  });
+  /* ④ 커버리지 — 🔴 2026 감사 R3: 카드를 라벨 통합 max 로 봐서 우리카드 24일 공백·정산 자료 누락이
+     allOk 뒤에 숨었다. 원천별(계좌·카드 라벨·여신·정산·홈택스) 정본 upload-coverage 로 — 정보 줄이라
+     allOk 에는 안 넣는다 (지난 달 마감을 막지 않게) */
+  const cov = coverageStatus(await uploadCoverage(), kstToday().slice(0, 7));
+  lines.push({ ok: true, text: `자료: ${cov.text}` });
 
   return { allOk: lines.every((l) => l.ok), lines };
 }
