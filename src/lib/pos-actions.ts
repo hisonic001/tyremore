@@ -15,7 +15,7 @@ import { revalidateFinance } from "./fin-revalidate";
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const REF_TABLE = { quote: "quote", qp: "quote_payment", rp: "receivable_payment" } as const;
-export const POS_REASONS = ["단말기 누락", "앱 미등록", "취소", "다른 날", "기타"] as const;
+const POS_REASONS = ["단말기 누락", "앱 미등록", "취소", "다른 날", "기타"] as const;
 
 async function guard(): Promise<{ ok: true; uid: number | null } | { ok: false; error: string }> {
   if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };

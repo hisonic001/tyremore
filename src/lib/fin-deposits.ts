@@ -256,7 +256,7 @@ export async function undoDepositLink(
 }
 
 /** 판매와 무관한 입금 분류 — 이자·지원금·환불·기타 (사장님 요청 2026-08-26: 「무시」로 매출 입금을 접지 않게) */
-export const DEPOSIT_KINDS = ["이자·지원금", "환불", "기타입금"] as const;
+const DEPOSIT_KINDS = ["이자·지원금", "환불", "기타입금"] as const;
 
 export async function setDepositKind(
   cashTxnId: number,
