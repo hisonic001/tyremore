@@ -103,8 +103,8 @@ export function ExpensesUi({ data }: { data: ExpenseData }) {
 
       <section className="mt-4 flex items-center justify-between text-sm">
         <span className="tabular">
-          분류 안 된 지출 <strong>{won(data.unclassifiedTotal)}원</strong>
-          {data.unclassified.length < 80 ? "" : " (금액 큰 80건부터)"}
+          분류 안 된 지출 <strong>{data.unclassifiedCount}건 · {won(data.unclassifiedTotal)}원</strong>
+          {data.unclassifiedCount > data.unclassified.length ? ` (금액 큰 ${data.unclassified.length}건부터 표시)` : ""}
         </span>
       </section>
 

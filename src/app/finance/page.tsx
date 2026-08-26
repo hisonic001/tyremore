@@ -3,10 +3,11 @@ import { redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession } from "@/lib/auth";
-import { CARD_SETTLE_PATTERN_SQL, EXPENSE_IN_PL } from "@/lib/expense-cats";
 import { finHealth } from "@/lib/fin-health";
+import { finPL } from "@/lib/fin-pl";
 import { kstToday, ymAdd, pickYm } from "@/lib/ym";
-import { taxOpenCount } from "@/lib/tax-recon";
+import { taxOpenCounts } from "@/lib/tax-recon";
+import { depositOpenCount, expenseOpen } from "@/lib/recon-data";
 import { cancelFinUpload } from "@/lib/fin-upload";
 import { FinShell } from "@/components/fin/shell";
 import { won } from "@/components/fin/money";
@@ -57,24 +58,8 @@ export default async function FinancePage({
     AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
     AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date`;
 
-  /* ⭐ 5단계 — 월 손익 재료 (전부 순차). 이중 계산 방지 원칙:
-   *    「쓴 돈」= 상품 매입 + 법인카드 + 카드 수수료.
-   *    통장 출금은 매입 대금·카드값이 대부분이라 다시 넣지 않는다 — 참고로만 보여준다. */
-  const D = sql`COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)`;
-  const earned = await db.execute<{ s: string }>(sql`
-    SELECT COALESCE(SUM(q.total_amount), 0)::bigint s FROM quote q
-    WHERE q.status = '성사' AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
-  `);
-  const bought = await db.execute<{ s: string }>(sql`
-    SELECT COALESCE(SUM(total), 0)::bigint s FROM purchase_invoice
-    WHERE status <> '취소' AND total IS NOT NULL
-      AND COALESCE(issued_at, to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')) >= ${start}
-      AND COALESCE(issued_at, to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')) < ${nextStart}
-  `);
-  const cardFeeRows = await db.execute<{ fee: string }>(sql`
-    SELECT COALESCE(SUM(sale_amount - vat_agency - deposit_amount), 0)::bigint fee
-    FROM card_deposit WHERE is_active AND month = ${ym}
-  `);
+  /* ⭐ 5단계 — 월 손익. 🔴 2026 감사 N5: 식은 lib/fin-pl.finPL 한 벌 — 마감 headline 과 같은 함수 */
+  const pl = await finPL(ym);
   const recvRows = await db.execute<{ s: string }>(sql`
     SELECT COALESCE(SUM(q.total_amount - COALESCE(rp.paid, 0)), 0)::bigint s
     FROM quote q
@@ -91,15 +76,6 @@ export default async function FinancePage({
            (SELECT min(COALESCE(issued_at, to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')))
               FROM purchase_invoice WHERE status <> '취소') buy_first
   `);
-  const assocMonth = await db.execute<{ s: string }>(sql`
-    SELECT COALESCE(SUM(total_amount), 0)::bigint s FROM card_day
-    WHERE is_active AND day >= ${start}::date AND day < ${nextStart}::date
-  `);
-  const avgRateRows = await db.execute<{ r: string | null }>(sql`
-    SELECT (SUM(sale_amount - vat_agency - deposit_amount)::numeric / NULLIF(SUM(sale_amount), 0))::text r
-    FROM card_deposit WHERE is_active
-  `);
-
   // ⭐ 미지급 잔액 (ERP ⑦, 2026-08-25) — 매입 인보이스 − 지급 합
   const payableRows = await db.execute<{ s: string }>(sql`
     SELECT COALESCE(SUM(pi.total - COALESCE(pp.paid, 0)), 0)::bigint s
@@ -112,24 +88,8 @@ export default async function FinancePage({
     WHERE is_active AND direction = '매입' AND recon_status IN ('미대조', '제안')
       AND write_date >= ${start}::date AND write_date < ${nextStart}::date
   `);
-  // ⭐ 경비 분류 (ERP ⑥, 2026-08-25) — 분류된 통장 경비는 「쓴 돈」에 들어간다.
-  //    내부이체(㈜싸이오토모티브 = 우리 법인 계좌끼리)는 분류가 '내부이체'로 자동 처리됨.
-  const bankExp = await db.execute<{ s: string }>(sql`
-    SELECT COALESCE(SUM(out_amount), 0)::bigint s FROM cash_txn
-    WHERE ${inMonth} AND source = '통장'
-      AND category IN (${sql.join(EXPENSE_IN_PL.map((c) => sql`${c}`), sql`, `)})
-  `);
-  /* 🔴 감사 H2(2026-08-25): 법인카드 지출이 분류를 무시하고 전액 「쓴 돈」에 들어갔다 —
-     카드로 낸 매입대금이 매입과 두 번 계산됨. 통장과 같은 규칙(미분류 또는 경비 분류만). */
-  const cardOutRows = await db.execute<{ s: string }>(sql`
-    SELECT COALESCE(SUM(out_amount), 0)::bigint s FROM cash_txn
-    WHERE ${inMonth} AND source = '법인카드'
-      AND (category IS NULL OR category IN (${sql.join(EXPENSE_IN_PL.map((c) => sql`${c}`), sql`, `)}))
-  `);
-  const unclassOut = await db.execute<{ s: string }>(sql`
-    SELECT COALESCE(SUM(out_amount), 0)::bigint s FROM cash_txn
-    WHERE ${inMonth} AND out_amount > 0 AND category IS NULL
-  `); // 🔴 감사 M4: 지출 분류 화면과 같은 기준(통장+법인카드)
+  // 분류 안 된 지출 — 지출 화면·체크리스트와 같은 정본 (2026 감사 N3)
+  const expOpen = await expenseOpen(ym);
 
   // ① 월 요약 — 통장 들어옴/나감, 카드로 쓴 돈 (순차)
   const sums = await db.execute<{ source: string; in_sum: string; out_sum: string }>(sql`
@@ -157,18 +117,11 @@ export default async function FinancePage({
 
   // ⭐ 감사 C1(2026-08-25): 할 일 카운트 = 돈 확인 뷰와 같은 정의(bank_ok, 이 달)
   //    — 첫 화면 8건 ↔ 탭 9건 불일치의 해결
-  const taxOpen = await taxOpenCount(ym);
+  const taxOpenBy = await taxOpenCounts(ym);
+  const taxOpen = taxOpenBy.buy + taxOpenBy.sell;
 
-  // ⭐ 배치2 — 현황 할 일: 입금 정리 대기 (deposits 대조 화면의 open과 글자 그대로 같은 조건)
-  const depOpenRows = await db.execute<{ n: number }>(sql`
-    SELECT count(*)::int n FROM cash_txn
-    WHERE source = '통장' AND is_active AND in_amount > 0
-      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
-      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date
-      AND recon_status = '미대조' AND category IS NULL
-      AND NOT ${sql.raw(CARD_SETTLE_PATTERN_SQL)}
-  `);
-  const depOpen = Number(depOpenRows[0]?.n ?? 0);
+  // ⭐ 현황 할 일: 입금 정리 대기 — 입금 화면·마감 체크리스트와 같은 정본 함수 (2026 감사 N2)
+  const depOpen = await depositOpenCount(ym);
 
   // ③ 최근 올린 파일 (배치) — 내역 보기일 때만
   const uploads = view !== "내역" ? [] : await db.execute<{
@@ -191,18 +144,14 @@ export default async function FinancePage({
     ORDER BY occurred_at DESC, id DESC LIMIT 60
   `);
 
-  const gEarned = Number(earned[0].s);
-  const gBought = Number(bought[0].s);
-  const gCardOut = Number(cardOutRows[0].s);
-  const gFee = Number(cardFeeRows[0].fee);
-  const gBankExp = Number(bankExp[0].s);
-  /* 정산 자료가 없는 달은 카드 수수료를 평균 요율로 추정한다 (감사 개선 2026-08-25 —
-     8월처럼 정산이 아직 안 나온 달에 수수료 0원으로 두면 손익이 후해 보인다) */
-  const gAssocMonth = Number(assocMonth[0].s);
-  const feeRate = avgRateRows[0].r ? Number(avgRateRows[0].r) : null;
-  const feeEstimated = gFee === 0 && gAssocMonth > 0 && feeRate ? Math.round(gAssocMonth * feeRate) : 0;
-  const gFeeShown = gFee > 0 ? gFee : feeEstimated;
-  const gSpent = gBought + gCardOut + gFeeShown + gBankExp;
+  const gEarned = pl.earned;
+  const gBought = pl.bought;
+  const gCardOut = pl.cardOut;
+  const gBankExp = pl.bankExp;
+  const feeRate = pl.feeRate;
+  const feeEstimated = pl.feeEstimated;
+  const gFeeShown = pl.feeShown;
+  const gSpent = pl.spent;
   /* 이 달 손익에서 빠져 있는 것 — 모든 달에 같은 규칙으로 */
   const lastDay = new Date(new Date(nextStart + "T00:00:00Z").getTime() - 86400000).toISOString().slice(0, 10); // 감사 L4: UTC 명시
   const endShown = ym === thisYm ? kstToday() : lastDay;
@@ -223,7 +172,8 @@ export default async function FinancePage({
   const gRecv = Number(recvRows[0].s);
   const gTaxBuyOpen = Number(taxBuyOpenRows[0].s);
   const gPayable = Number(payableRows[0].s);
-  const gUnclassOut = Number(unclassOut[0].s);
+  const gUnclassOut = expOpen.sum;
+  const gUnclassN = expOpen.n;
 
   const noData = sums.length === 0;
 
@@ -367,7 +317,7 @@ export default async function FinancePage({
         <Link href={`/finance/tax?view=money&ym=${ym}`} className="rounded-2xl border border-slate-200 bg-white p-3">
           <p className="text-sm font-semibold">세금계산서 · 돈 확인</p>
           <p className={`tabular mt-1 text-xs ${taxOpen > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
-            {taxOpen > 0 ? `확인할 것 ${taxOpen}건 →` : "다 맞춰짐 ✓"}
+            {taxOpen > 0 ? `돈 확인할 것 매입 ${taxOpenBy.buy} · 매출 ${taxOpenBy.sell}건 →` : "돈 확인 다 됨 ✓"}
           </p>
         </Link>
         <Link href={`/finance/deposits?ym=${ym}`} className="rounded-2xl border border-slate-200 bg-white p-3">
@@ -379,7 +329,7 @@ export default async function FinancePage({
         <Link href={`/finance/expenses?ym=${ym}`} className="rounded-2xl border border-slate-200 bg-white p-3">
           <p className="text-sm font-semibold">지출 분류</p>
           <p className={`tabular mt-1 text-xs ${gUnclassOut > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
-            {gUnclassOut > 0 ? `미분류 ${won(gUnclassOut)}원 →` : "다 됨 ✓"}
+            {gUnclassN > 0 ? `미분류 ${gUnclassN}건 · ${won(gUnclassOut)}원 →` : "다 됨 ✓"}
           </p>
         </Link>
         <Link href={`/finance/payables?ym=${ym}`} className="rounded-2xl border border-slate-200 bg-white p-3">

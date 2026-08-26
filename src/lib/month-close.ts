@@ -15,7 +15,10 @@ import { db } from "@/db";
 import { getSession } from "./auth";
 import { finHealth } from "./fin-health";
 import { kstToday, monthRange } from "./ym";
-import { CARD_SETTLE_PATTERN_SQL, EXPENSE_IN_PL } from "./expense-cats";
+import { depositOpenCount, expenseOpen } from "./recon-data";
+import { taxOpenCount } from "./tax-recon";
+import { finPL } from "./fin-pl";
+import { revalidateFinance } from "./fin-revalidate";
 
 export interface CloseCheck {
   ok: boolean;
@@ -48,31 +51,17 @@ export async function monthCloseStatus(ym: string): Promise<MonthCloseInfo> {
 
 /** 마감 조건 체크리스트 — 미충족 항목은 그 화면으로 가는 링크가 된다 */
 export async function closeChecklist(ym: string, healthOk?: boolean): Promise<CloseCheck[]> {
-  const { start, nextStart } = monthRange(ym);
-  const inMonth = sql`is_active
-    AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
-    AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date`;
-
-  const [dep] = await db.execute<{ n: number }>(sql`
-    SELECT count(*)::int n FROM cash_txn
-    WHERE source = '통장' AND ${inMonth} AND in_amount > 0
-      AND recon_status = '미대조' AND category IS NULL
-      AND NOT ${sql.raw(CARD_SETTLE_PATTERN_SQL)}
-  `);
-  const [exp] = await db.execute<{ n: number }>(sql`
-    SELECT count(*)::int n FROM cash_txn
-    WHERE ${inMonth} AND out_amount > 0 AND category IS NULL
-  `);
-  /* 🔴 2025 감사 F6(2026-08-26): 「대조 도입 전 달이라 건너뜀」 분기 삭제 — 2025-05를 21건
-     미확인인 채 마감할 수 있었다. 모든 달이 같은 기준. */
-  const [tax] = await db.execute<{ n: number }>(sql`
-    SELECT count(*)::int n FROM tax_invoice
-    WHERE is_active AND recon_status IN ('미대조', '제안')
-      AND write_date >= ${start}::date AND write_date < ${nextStart}::date
-  `);
+  /* 🔴 2026 감사 N1·N2·N3: 세 항목 전부 각 화면·현황 카드와 **같은 함수**로 센다 — 전엔 입금은
+     '미대조'만(입금 화면은 미대조+제안·잔액>0), 계산서는 recon_status(돈 확인 뷰는 bank_ok)라
+     같은 달에 타일 "다 맞춰짐 ✓"와 마감 줄 "확인 안 됨 5건"이 동시에 떴다 */
+  const depN = await depositOpenCount(ym);
+  const exp = await expenseOpen(ym);
+  /* 🔴 2025 감사 F6(2026-08-26): 「대조 도입 전 달이라 건너뜀」 분기 삭제 — 모든 달이 같은 기준 */
+  const taxN = await taxOpenCount(ym);
+  const dep = { n: depN };
   const taxCheck: CloseCheck = {
-    ok: Number(tax.n) === 0,
-    text: Number(tax.n) === 0 ? "세금계산서 다 맞춰짐" : `세금계산서 확인 안 됨 ${tax.n}건`,
+    ok: taxN === 0,
+    text: taxN === 0 ? "세금계산서 돈 확인 다 됨" : `세금계산서 돈 확인 안 됨 ${taxN}건`,
     href: `/finance/tax?view=money&ym=${ym}`,
   };
   const hOk = healthOk ?? (await finHealth()).allOk;
@@ -100,44 +89,19 @@ export async function closeChecklist(ym: string, healthOk?: boolean): Promise<Cl
   ];
 }
 
-/** 마감 당시 손익 머리숫자 — 현황 손익과 같은 식 (수수료는 실측만, 추정 제외) */
+/** 마감 당시 손익 머리숫자 — 🔴 2026 감사 N5: 현황과 **같은 함수**(fin-pl.finPL). 추정 수수료 여부도 함께 남긴다 */
 async function computeHeadline(ym: string) {
-  const { start, nextStart } = monthRange(ym);
-  const D = sql`COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)`;
-  const inMonth = sql`is_active
-    AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
-    AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date`;
-  const CATS = sql.join(EXPENSE_IN_PL.map((c) => sql`${c}`), sql`, `);
-
-  const [earned] = await db.execute<{ s: string }>(sql`
-    SELECT COALESCE(SUM(q.total_amount), 0)::bigint s FROM quote q
-    WHERE q.status = '성사' AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
-  `);
-  const [bought] = await db.execute<{ s: string }>(sql`
-    SELECT COALESCE(SUM(total), 0)::bigint s FROM purchase_invoice
-    WHERE status <> '취소' AND total IS NOT NULL
-      AND COALESCE(issued_at, to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')) >= ${start}
-      AND COALESCE(issued_at, to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')) < ${nextStart}
-  `);
-  const [cardOut] = await db.execute<{ s: string }>(sql`
-    SELECT COALESCE(SUM(out_amount), 0)::bigint s FROM cash_txn
-    WHERE ${inMonth} AND source = '법인카드' AND (category IS NULL OR category IN (${CATS}))
-  `);
-  const [fee] = await db.execute<{ s: string }>(sql`
-    SELECT COALESCE(SUM(sale_amount - vat_agency - deposit_amount), 0)::bigint s
-    FROM card_deposit WHERE is_active AND month = ${ym}
-  `);
-  const [bankExp] = await db.execute<{ s: string }>(sql`
-    SELECT COALESCE(SUM(out_amount), 0)::bigint s FROM cash_txn
-    WHERE ${inMonth} AND source = '통장' AND category IN (${CATS})
-  `);
-  const e = Number(earned.s);
-  const b = Number(bought.s);
-  const c = Number(cardOut.s);
-  const f = Number(fee.s);
-  const x = Number(bankExp.s);
-  // 앱 판매·매입 기록이 둘 다 0이면(2025) 손익이 아니라 「자료 기준 마감」 (2025 감사 F6)
-  return { earned: e, bought: b, cardOut: c, fee: f, bankExp: x, profit: e - b - c - f - x, dataComplete: e > 0 || b > 0 };
+  const pl = await finPL(ym);
+  return {
+    earned: pl.earned,
+    bought: pl.bought,
+    cardOut: pl.cardOut,
+    fee: pl.feeShown,
+    feeEstimated: pl.feeEstimated > 0,
+    bankExp: pl.bankExp,
+    profit: pl.profit,
+    dataComplete: pl.dataComplete,
+  };
 }
 
 export async function closeMonth(ym: string): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -156,6 +120,7 @@ export async function closeMonth(ym: string): Promise<{ ok: true } | { ok: false
     VALUES (${ym}, ${session.uid}, ${JSON.stringify(headline)}::jsonb)
     ON CONFLICT (ym) DO NOTHING
   `);
+  revalidateFinance();
   return { ok: true };
 }
 
@@ -163,6 +128,7 @@ export async function reopenMonth(ym: string): Promise<{ ok: true } | { ok: fals
   const session = await getSession();
   if (!session || session.role !== "owner") return { ok: false, error: "사장님만 할 수 있습니다" };
   await db.execute(sql`DELETE FROM month_close WHERE ym = ${ym}`);
+  revalidateFinance();
   return { ok: true };
 }
 

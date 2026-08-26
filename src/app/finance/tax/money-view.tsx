@@ -153,7 +153,7 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
           <div className="h-full rounded-full bg-brand-500 transition-all" style={{ width: `${pct}%` }} />
         </div>
         <p className="tabular mt-1.5 text-xs text-slate-500">
-          {won(data.bankOk.sum)}원 확인 / 전체 {won(data.total.sum)}원
+          돈 확인할 것 {data.open.n}건 · {won(data.bankOk.sum)}원 확인 / 전체 {won(data.total.sum)}원
           {data.ignoredN > 0 && ` · 정리(무시) ${data.ignoredN}건은 셈에서 뺐습니다`}
         </p>
       </section>

@@ -79,7 +79,9 @@ export function DepositsRecon({ data, ym }: { data: DepositReconData; ym: string
 
       <section className="mt-4 flex items-center justify-between text-sm">
         <span className="tabular">
-          정리할 입금 <strong>{data.open.length}건</strong> · 정리됨 {data.doneCount}건 · 무시 {data.ignoredCount}건
+          정리할 입금 <strong>{data.openTotal}건</strong>
+          {data.openTotal > data.open.length && ` (금액 큰 ${data.open.length}건부터 표시)`} · 정리됨 {data.doneCount}건 · 무시{" "}
+          {data.ignoredCount}건
         </span>
       </section>
 

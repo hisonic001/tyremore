@@ -174,6 +174,8 @@ export interface DepositSuggestion {
 
 export interface DepositReconData {
   open: DepositSuggestion[];
+  /** 정리할 입금 총 건수 — 목록(60건)과 무관한 실제 수. 현황·마감 체크리스트와 같은 정의 (2026 감사 N2) */
+  openTotal: number;
   /** 카드정산으로 표시된 입금(이 달) — 잘못 표시했으면 되돌린다 (감사 H10). 목록은 40건까지 */
   settledCard: { id: number; at: string; amount: number; payer: string }[];
   /** 카드정산 표시 총 건수 (목록 절단과 무관한 실제 수 — 2026 감사 N4) */
@@ -185,6 +187,35 @@ export interface DepositReconData {
   cardPatternSum: number;
   doneCount: number;
   ignoredCount: number;
+}
+
+/**
+ * ⭐ 정리할 입금 수 정본 (2026 감사 N2) — 현황 카드·마감 체크리스트·입금 화면이 이 하나를 쓴다.
+ *   전엔 세 곳이 세 정의('미대조'만 / 미대조+제안·잔액>0 / LIMIT 60 의 length)였다.
+ */
+export async function depositOpenCount(ym: string): Promise<number> {
+  const { start, nextStart } = monthRange(ym);
+  const [r] = await db.execute<{ n: number }>(sql`
+    SELECT count(*)::int n FROM cash_txn
+    WHERE source = '통장' AND is_active AND in_amount > 0
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date
+      AND recon_status IN ('미대조', '제안') AND category IS NULL AND NOT ${sql.raw(CARD_SETTLE_PATTERN_SQL)}
+      AND in_amount > ${cashUsedSql("cash_txn")}
+  `);
+  return Number(r?.n ?? 0);
+}
+
+/** ⭐ 분류 안 된 지출 정본 (2026 감사 N3) — 건수와 합을 현황·체크리스트·지출 화면이 같이 쓴다 */
+export async function expenseOpen(ym: string): Promise<{ n: number; sum: number }> {
+  const { start, nextStart } = monthRange(ym);
+  const [r] = await db.execute<{ n: number; s: string }>(sql`
+    SELECT count(*)::int n, COALESCE(SUM(out_amount), 0)::bigint s FROM cash_txn
+    WHERE is_active AND out_amount > 0 AND category IS NULL
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date
+  `);
+  return { n: Number(r?.n ?? 0), sum: Number(r?.s ?? 0) };
 }
 
 export async function depositReconData(ym: string): Promise<DepositReconData> {
@@ -239,7 +270,7 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
 
   // ③ 이미 이은 판매는 후보에서 뺀다
   const linked = await db.execute<{ ref_id: number }>(sql`
-    SELECT ref_id FROM recon_match WHERE kind = '이체입금' AND ref_table = 'quote' LIMIT 1000
+    SELECT ref_id FROM recon_match WHERE kind = '이체입금' AND ref_table = 'quote' LIMIT 10000
   `);
   const linkedQ = new Set(linked.map((l) => Number(l.ref_id)));
   const freeTransfers = transfers.filter((q) => !linkedQ.has(Number(q.id)));
@@ -250,7 +281,7 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
 
   // ⭐ 별명 사전 — 입금자명을 한 번 이어주면 다음부터 바로 알아본다
   const aliases2 = await db.execute<{ alias_key: string; party_key: string; party_label: string }>(sql`
-    SELECT alias_key, party_key, party_label FROM party_alias LIMIT 2000
+    SELECT alias_key, party_key, party_label FROM party_alias LIMIT 10000
   `);
   const aliasMap = new Map(aliases2.map((a) => [a.alias_key, a.party_key]));
   const aliasLabel = new Map(aliases2.map((a) => [a.alias_key, a.party_label]));
@@ -328,8 +359,11 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
     GROUP BY c.id ORDER BY c.occurred_at DESC LIMIT 40
   `);
 
+  const openTotal = await depositOpenCount(ym);
+
   return {
     open,
+    openTotal,
     settledCardTotal: Number(settledCnt?.n ?? 0),
     linked: linkedRows.map((r) => ({
       id: Number(r.id),
@@ -378,8 +412,11 @@ export interface ExpenseData {
   byPayer: { payer: string; n: number; sum: number; anyId: number; suggest: string | null }[];
   /** 분류된 지출(이 달) — 잘못 붙였으면 해제 (감사 H10 계열) */
   classified: ExpenseRow[];
+  /** 화면에 보이는(금액 큰 80건) 합 */
   unclassifiedSum: number;
+  /** 분류 안 된 지출 전체 합·건수 — 현황·체크리스트(expenseOpen)와 같은 값 */
   unclassifiedTotal: number;
+  unclassifiedCount: number;
   /** 이 달 분류별 지출 합 */
   sums: { category: string; amount: number; n: number }[];
 }
@@ -473,6 +510,7 @@ export async function expenseData(ym: string): Promise<ExpenseData> {
     classified,
     unclassifiedSum: unclassified.reduce((s, r) => s + r.amount, 0),
     unclassifiedTotal: Number(totalRow[0]?.s ?? 0),
+    unclassifiedCount: Number(totalRow[0]?.n ?? 0),
     sums: sums.map((r) => ({ category: r.category, amount: Number(r.s), n: Number(r.n) })),
   };
 }
@@ -628,12 +666,12 @@ export async function payLinkData(
   `);
   const remainMap = new Map(remains.map((r) => [r.supplier, Number(r.remain)]));
   const aliases3 = await db.execute<{ alias_key: string; party_key: string }>(sql`
-    SELECT alias_key, party_key FROM party_alias WHERE party_key LIKE 'S:%' LIMIT 2000
+    SELECT alias_key, party_key FROM party_alias WHERE party_key LIKE 'S:%' LIMIT 10000
   `);
   const aliasMap3 = new Map(aliases3.map((a) => [a.alias_key, a.party_key.slice(2)]));
   // 🔴 C10(2026-08-25): 지급출금 별명(T:) → 사업자번호 → 거래처 — 「콘티_(주)싸이」 제안의 열쇠
   const tAliases = await db.execute<{ alias_key: string; party_key: string }>(sql`
-    SELECT alias_key, party_key FROM party_alias WHERE party_key LIKE 'T:%' LIMIT 2000
+    SELECT alias_key, party_key FROM party_alias WHERE party_key LIKE 'T:%' LIMIT 10000
   `);
   const supByBiz = await db.execute<{ name: string; biz_no: string }>(sql`
     SELECT name, biz_no FROM supplier WHERE biz_no IS NOT NULL AND is_active LIMIT 500

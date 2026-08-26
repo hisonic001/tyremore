@@ -143,8 +143,14 @@ export function TaxRecon({
       <section className="mt-4 rounded-2xl border-2 border-slate-800 bg-white p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="tabular">
-            {Number(ym.slice(5, 7))}월 할 일 <strong className="text-lg">{data.openCount}건</strong>
+            {Number(ym.slice(5, 7))}월 신원 정리할 계산서 <strong className="text-lg">{data.openCount}건</strong>
             <span className="text-sm text-slate-500"> ({data.groups.length}곳)</span>
+            {/* 🔴 2026 감사 N8: 150건 넘으면 화면이 "더 있음"을 안다 */}
+            {data.openCount > data.groups.reduce((s, g) => s + g.items.length, 0) && (
+              <span className="text-xs text-slate-400">
+                {" "}— 최근 {data.groups.reduce((s, g) => s + g.items.length, 0)}건 표시, 처리하면 이어서 나옵니다
+              </span>
+            )}
           </p>
           {data.autoCount > 0 && (
             <button

@@ -17,6 +17,7 @@ import { payerKeyOf } from "./expense-cats";
 import { cashUsedMap, cashUsedSql, normDescSql, normName } from "./recon-data";
 import { taxReconV2 } from "./tax-recon";
 import { restoreCashLine } from "./cash-restore";
+import { revalidateFinance } from "./fin-revalidate";
 
 export interface MatchRef {
   table: "purchase_invoice" | "quote";
@@ -151,7 +152,7 @@ export async function confirmTaxMatch(input: {
     // 별명 학습 실패는 확정 자체를 막지 않는다
   }
 
-  revalidatePath("/finance/tax");
+  revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   revalidatePath("/finance");
   return { ok: true, warning };
 }
@@ -196,7 +197,7 @@ export async function linkCounterpartyToSupplier(
         party_label = EXCLUDED.party_label, updated_at = now()
     `);
   }
-  revalidatePath("/finance/tax");
+  revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   return { ok: true, learned: sup.name, warning };
 }
 
@@ -219,7 +220,7 @@ export async function autoConfirmTax(
     });
     if (r.ok) confirmed++;
   }
-  revalidatePath("/finance/tax");
+  revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   return { ok: true, confirmed };
 }
 
@@ -285,7 +286,7 @@ export async function undoTaxMatch(
   } else {
     await db.execute(sql`UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL WHERE id = ${taxInvoiceId}`);
   }
-  revalidatePath("/finance/tax");
+  revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   revalidatePath("/finance");
   revalidatePath("/finance/deposits");
   revalidatePath("/finance/expenses");
@@ -319,7 +320,7 @@ export async function ignoreTaxInvoice(
            recon_reason = ${back ? null : "직접"}
     WHERE id = ${taxInvoiceId} AND recon_status <> '확정'
   `);
-  revalidatePath("/finance/tax");
+  revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   return { ok: true };
 }
 
@@ -354,7 +355,7 @@ export async function setTaxPartyRule(input: {
     `);
     applied = rows.length;
   }
-  revalidatePath("/finance/tax");
+  revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   revalidatePath("/finance");
   return { ok: true, applied };
 }
@@ -474,7 +475,7 @@ export async function confirmTaxToBank(
     // 학습 실패는 확정을 막지 않는다
   }
 
-  revalidatePath("/finance/tax");
+  revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   revalidatePath("/finance/deposits");
   return { ok: true, remaining, shortfall, netted };
 }
@@ -531,7 +532,7 @@ export async function confirmMonthlyParty(
       AND write_date < ((${ym} || '-01')::date + INTERVAL '1 month')
     RETURNING id
   `);
-  revalidatePath("/finance/tax");
+  revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   return { ok: true, applied: rows.length };
 }
 
@@ -552,7 +553,7 @@ export async function undoMonthlyParty(
       AND write_date < ((${ym} || '-01')::date + INTERVAL '1 month')
     RETURNING id
   `);
-  revalidatePath("/finance/tax");
+  revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   return { ok: true, reverted: rows.length };
 }
 
@@ -586,7 +587,7 @@ export async function closeTaxShortfall(
     INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
     VALUES (${kind}, 'tax_invoice', ${taxInvoiceId}, 'adjust', ${taxInvoiceId}, ${remain}, '확정', '수동', ${g.uid}, now())
   `);
-  revalidatePath("/finance/tax");
+  revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   return { ok: true, settled: remain };
 }
 
@@ -637,7 +638,7 @@ export async function markTaxExpense(
     `);
     applied = 1;
   }
-  revalidatePath("/finance/tax");
+  revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   return { ok: true, applied, item: itemKey.length >= 2 ? inv.item_summary : null };
 }
 
@@ -663,7 +664,7 @@ export async function removeTaxPartyRule(
     `);
     revived = rows.length;
   }
-  revalidatePath("/finance/tax");
+  revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   return { ok: true, revived };
 }
 
@@ -692,7 +693,7 @@ export async function markTaxFixPair(
     UPDATE tax_invoice SET recon_status = '무시', recon_reason = '수정상쇄'
     WHERE id IN (${minusId}, ${originId})
   `);
-  revalidatePath("/finance/tax");
+  revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   return { ok: true };
 }
 

@@ -68,10 +68,10 @@ export default async function FinancePartyLedgerPage({
         <p className="mt-0.5 text-xs text-slate-400">이 이름들로 찾았습니다: {data.names.join(" · ")}</p>
       )}
 
-      {/* 잔액 요약 — 전체 기간, 미지급·외상 화면과 같은 식 */}
+      {/* 잔액 요약 — 세 숫자는 축이 다르다 (2026 감사 N7): 앱 매입 장부 / 계산서 돈 확인 / 외상 */}
       <section className="mt-3 grid grid-cols-3 gap-2 text-center">
-        <Link href="/finance/payables" className="rounded-2xl border border-slate-200 bg-white p-3">
-          <p className="text-xs text-slate-500">줄 돈 (미지급)</p>
+        <Link href={`/finance/payables?ym=${ym}`} className="rounded-2xl border border-slate-200 bg-white p-3">
+          <p className="text-xs text-slate-500">앱 매입 장부 미지급</p>
           <p className={`tabular mt-1 font-bold ${data.payableRemain > 0 ? "text-red-600" : "text-slate-400"}`}>
             {won(data.payableRemain)}원
           </p>
@@ -82,8 +82,8 @@ export default async function FinancePartyLedgerPage({
             {won(data.receivableRemain)}원
           </p>
         </Link>
-        <Link href="/finance/tax" className="rounded-2xl border border-slate-200 bg-white p-3">
-          <p className="text-xs text-slate-500">계산서 미확인</p>
+        <Link href={`/finance/tax?view=money&ym=${ym}&direction=매입`} className="rounded-2xl border border-slate-200 bg-white p-3">
+          <p className="text-xs text-slate-500">돈 확인 안 된 계산서 (누적)</p>
           <p className={`tabular mt-1 font-bold ${data.taxOpenSum > 0 ? "text-amber-700" : "text-slate-400"}`}>
             {won(data.taxOpenSum)}원
           </p>

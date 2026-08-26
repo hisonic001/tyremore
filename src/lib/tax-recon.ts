@@ -205,7 +205,7 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
     SELECT id, name, biz_no FROM supplier WHERE is_active ORDER BY id LIMIT 500
   `);
   const aliases = await db.execute<{ alias_key: string; party_key: string }>(sql`
-    SELECT alias_key, party_key FROM party_alias LIMIT 2000
+    SELECT alias_key, party_key FROM party_alias LIMIT 10000
   `);
   const aliasMap = new Map(aliases.map((a) => [a.alias_key, a.party_key]));
   const rules = await db.execute<{ biz_no: string; kind: string }>(sql`
@@ -243,12 +243,17 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
     ORDER BY q.id DESC LIMIT 1000
   `);
 
-  // ⑥ 이미 이어진 기록 제외
-  const linked = await db.execute<{ ref_table: string; ref_id: number }>(sql`
-    SELECT ref_table, ref_id FROM recon_match
-    WHERE kind IN ('매입계산서', '매출계산서') AND ref_table IN ('purchase_invoice', 'quote')
-    ORDER BY id LIMIT 10000
-  `);
+  // ⑥ 이미 이어진 기록 제외 — 🔴 2026 감사 N8: 전체 LIMIT 10000 대신 이 풀의 id 만 조회(절단 없음)
+  const poolIds = [...purchases.map((p) => Number(p.id)), ...quotes.map((q) => Number(q.id))];
+  const linked =
+    poolIds.length === 0
+      ? []
+      : await db.execute<{ ref_table: string; ref_id: number }>(sql`
+          SELECT ref_table, ref_id FROM recon_match
+          WHERE kind IN ('매입계산서', '매출계산서') AND ref_table IN ('purchase_invoice', 'quote')
+            AND ref_id IN (${sql.join(poolIds.map((i) => sql`${i}`), sql`, `)})
+          LIMIT 5000
+        `);
   const linkedSet = new Set(linked.map((l) => `${l.ref_table}|${l.ref_id}`));
   /* 🔴 재설계 C1(2026-08-25): 통장 줄 남은 금액은 소진량 정본(cashUsedMap)으로 —
      지급 잡기('매입지급')·외상 수금('이체입금')이 쓴 몫까지 센다. 이중계상 차단 */
@@ -686,7 +691,7 @@ export interface TaxCashData {
 /* 계산서별 확인 상태 — cov: 직접 확인 합(통장 연결 + 「차액 확인 끝」 조정),
    ind: 간접(계산서↔앱기록↔지급 잡기·외상 수금). 완료 = cov ≥ total OR ind.
    여러 출금을 합쳐 발행된 계산서·적립 차액(사장님 제보 2026-08-25)을 부분 확인으로 지원 */
-const CASH_LAT = sql`CROSS JOIN LATERAL (
+export const CASH_LAT = sql`CROSS JOIN LATERAL (
   SELECT (SELECT COALESCE(SUM(m.amount), 0)::bigint FROM recon_match m
            WHERE m.src_table = 'tax_invoice' AND m.src_id = t.id AND m.status = '확정'
              AND m.kind IN ('매입계산서', '매출계산서') AND m.ref_table IN ('cash_txn', 'adjust')) AS cov,
@@ -701,7 +706,7 @@ const CASH_LAT = sql`CROSS JOIN LATERAL (
    `AND DONE`·`AND NOT DONE` 양쪽 FILTER 에서 다 빠져 계산서가 집계에서 실종된다
    (7월 31건 중 14건이 사라졌다). COALESCE 로 NULL 전파를 끊는다. */
 // 🔴 감사 B8(2026-08-25): 음수(수정) 계산서는 cov(0)≥total 로 자동 확인되던 것 차단
-const DONE = sql`(t.total > 0 AND (x.cov >= t.total OR x.ind OR COALESCE(t.recon_reason, '') = '월정산'))`;
+export const DONE = sql`(t.total > 0 AND (x.cov >= t.total OR x.ind OR COALESCE(t.recon_reason, '') = '월정산'))`;
 
 export async function taxCashData(direction: "매입" | "매출", ym: string): Promise<TaxCashData> {
   const { start, nextStart } = monthRange(ym);
@@ -825,7 +830,7 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
     .map((x) => ({ ...x, remain: Number(x.amt) - (used.get(Number(x.id)) ?? 0) }))
     .filter((x) => x.remain > 0);
   const aliases2 = await db.execute<{ alias_key: string }>(sql`
-    SELECT alias_key FROM party_alias LIMIT 2000
+    SELECT alias_key FROM party_alias LIMIT 10000
   `);
   const aliasKeys = new Set(aliases2.map((a) => a.alias_key));
   const rules2 = await db.execute<{ biz_no: string; kind: string }>(sql`
@@ -933,12 +938,19 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
  *    (bank_ok 기준, 매입+매출, 이 달). 첫 화면 8건 ↔ 탭 9건 불일치의 해결.
  */
 export async function taxOpenCount(ym: string): Promise<number> {
+  const c = await taxOpenCounts(ym);
+  return c.buy + c.sell;
+}
+
+/** 방향별 돈 확인 할 일 — 현황 카드가 "매입 a · 매출 b"로 보여 준다 (2026 감사 N1: 합만 보이면 탭 숫자와 어긋나 보였다) */
+export async function taxOpenCounts(ym: string): Promise<{ buy: number; sell: number }> {
   const { start, nextStart } = monthRange(ym);
-  const [r] = await db.execute<{ n: number }>(sql`
-    SELECT count(*)::int n
+  const [r] = await db.execute<{ b: number; s: number }>(sql`
+    SELECT count(*) FILTER (WHERE t.direction = '매입')::int b,
+           count(*) FILTER (WHERE t.direction = '매출')::int s
     FROM tax_invoice t ${CASH_LAT}
     WHERE t.is_active AND t.recon_status <> '무시' AND NOT ${DONE}
       AND t.write_date >= ${start}::date AND t.write_date < ${nextStart}::date
   `);
-  return Number(r?.n ?? 0);
+  return { buy: Number(r?.b ?? 0), sell: Number(r?.s ?? 0) };
 }
