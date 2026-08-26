@@ -8,6 +8,8 @@ import { finPL } from "@/lib/fin-pl";
 import { kstToday, ymAdd, pickYm } from "@/lib/ym";
 import { taxOpenCounts } from "@/lib/tax-recon";
 import { depositOpenCount, expenseOpen } from "@/lib/recon-data";
+import { uploadCoverage, coverageStatus } from "@/lib/upload-coverage";
+import { cardDaySums } from "@/lib/card-recon";
 import { cancelFinUpload } from "@/lib/fin-upload";
 import { FinShell } from "@/components/fin/shell";
 import { won } from "@/components/fin/money";
@@ -122,6 +124,9 @@ export default async function FinancePage({
 
   // ⭐ 현황 할 일: 입금 정리 대기 — 입금 화면·마감 체크리스트와 같은 정본 함수 (2026 감사 N2)
   const depOpen = await depositOpenCount(ym);
+  // ⭐ 2026 감사 R2·R3 — 이 달 자료 컷오프·카드 차이 (올리기·카드 화면·체크리스트와 같은 정본)
+  const covSt = coverageStatus(await uploadCoverage(), ym);
+  const cardSum = await cardDaySums(ym);
 
   // ③ 최근 올린 파일 (배치) — 내역 보기일 때만
   const uploads = view !== "내역" ? [] : await db.execute<{
@@ -177,15 +182,51 @@ export default async function FinancePage({
 
   const noData = sums.length === 0;
 
-  return (
-    <FinShell tab="home" monthNav={{ ym, basePath: "/finance" }} closeNotice={false}>
+  /* ⭐ 2026 감사 R2 — 사장님 월말 루틴(P4) 순서 그대로: 번호가 곧 순서다 */
+  const steps = [
+    {
+      href: `/finance/upload?ym=${ym}`,
+      title: "자료 올리기",
+      status: covSt.ok ? "이 달 자료 다 올라옴 ✓" : `안 올라온 자료 ${covSt.lagging.length}곳 →`,
+      warn: !covSt.ok,
+    },
+    {
+      href: `/finance/card?ym=${ym}`,
+      title: "카드 매출 맞추기",
+      status: !cardSum.assocLast ? "여신협회 자료 없음 →" : cardSum.diffDays > 0 ? `차이 난 날 ${cardSum.diffDays}일 →` : "다 맞음 ✓",
+      warn: !cardSum.assocLast || cardSum.diffDays > 0,
+    },
+    { href: `/finance/deposits?ym=${ym}`, title: "입금 정리", status: depOpen > 0 ? `정리할 입금 ${depOpen}건 →` : "다 됨 ✓", warn: depOpen > 0 },
+    {
+      href: `/finance/expenses?ym=${ym}`,
+      title: "지출 분류",
+      status: gUnclassN > 0 ? `미분류 ${gUnclassN}건 · ${won(gUnclassOut)}원 →` : "다 됨 ✓",
+      warn: gUnclassN > 0,
+    },
+    {
+      href: `/finance/tax?view=money&ym=${ym}`,
+      title: "세금계산서 돈 확인",
+      status: taxOpen > 0 ? `매입 ${taxOpenBy.buy} · 매출 ${taxOpenBy.sell}건 →` : "다 됨 ✓",
+      warn: taxOpen > 0,
+    },
+    { href: `/finance/payables?ym=${ym}`, title: "미지급", status: gPayable > 0 ? `줄 돈 ${won(gPayable)}원 →` : "없음 ✓", warn: gPayable > 0 },
+  ];
 
-      <div
-        className={`tabular mt-2 rounded-lg px-3 py-1.5 text-[11px] ${health.allOk ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900"}`}
+  return (
+    <FinShell tab="home" monthNav={{ ym, basePath: "/finance", keep: view === "내역" ? { v: "내역" } : undefined }} closeNotice={false}>
+
+      {/* 🔴 2026 감사 R2: 첫 줄은 시스템 자기검증이 아니라 사장님이 할 일 — 검증은 접어 둔다 */}
+      <p className="mt-2 text-sm text-slate-600">
+        <strong>{Number(ym.slice(5, 7))}월 정리</strong>는 아래 ①→⑥ 순서로 하시면 됩니다. 다 되면 맨 아래 「마감」.
+      </p>
+      <details
+        className={`tabular mt-2 rounded-lg px-3 py-1.5 text-[11px] ${health.allOk && covSt.ok ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900"}`}
       >
-        {(health.allOk ? "자료 검증 ✓  " : "자료 확인 필요 ⚠  ") +
-          health.lines.map((l) => (l.ok ? l.text : `⚠ ${l.text}`)).join("  ·  ")}
-      </div>
+        <summary className="cursor-pointer">
+          {health.allOk ? "자료 검증 ✓" : "자료 확인 필요 ⚠"} · 자료: {covSt.text}
+        </summary>
+        <p className="mt-1">{health.lines.map((l) => (l.ok ? l.text : `⚠ ${l.text}`)).join("  ·  ")}</p>
+      </details>
 
       {/* ⭐ 배치2 — 요약/내역 보기 전환 (내역 질의는 그때만) */}
       <div className="mt-3 flex gap-1.5 text-sm">
@@ -259,19 +300,19 @@ export default async function FinancePage({
           <p>받을 돈 (외상 잔액 전체): {won(gRecv)}원</p>
           <p>
             줄 돈 (매입 미지급 잔액): {won(gPayable)}원 —{" "}
-            <Link href="/finance/payables" className="underline">미지급 장부</Link>에서 지급을 넣어
+            <Link href={`/finance/payables?ym=${ym}`} className="underline">미지급 장부</Link>에서 지급을 넣어
             맞춰 주세요
           </p>
           {gTaxBuyOpen > 0 && (
             <p>
-              이 달 매입 세금계산서 중 대조 안 됨: {won(gTaxBuyOpen)}원 —{" "}
-              <Link href="/finance/tax" className="underline">세금계산서 대조</Link>에서 확인
+              이 달 매입 세금계산서 중 돈 확인 안 됨: {won(gTaxBuyOpen)}원 —{" "}
+              <Link href={`/finance/tax?view=money&ym=${ym}&direction=매입`} className="underline">세금계산서 돈 확인</Link>에서 확인
             </p>
           )}
           {gUnclassOut > 0 && (
             <p>
               분류 안 된 통장 출금: {won(gUnclassOut)}원 —{" "}
-              <Link href="/finance/expenses" className="underline">지출 분류</Link>에서 나누면 손익이
+              <Link href={`/finance/expenses?ym=${ym}`} className="underline">지출 분류</Link>에서 나누면 손익이
               정확해집니다
             </p>
           )}
@@ -312,40 +353,26 @@ export default async function FinancePage({
         </section>
       )}
 
-      {/* ⭐ 배치2 — 할 일 한눈에 (바로가기 카드 6장 → 그리드) */}
-      <section className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-3">
-        <Link href={`/finance/tax?view=money&ym=${ym}`} className="rounded-2xl border border-slate-200 bg-white p-3">
-          <p className="text-sm font-semibold">세금계산서 · 돈 확인</p>
-          <p className={`tabular mt-1 text-xs ${taxOpen > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
-            {taxOpen > 0 ? `돈 확인할 것 매입 ${taxOpenBy.buy} · 매출 ${taxOpenBy.sell}건 →` : "돈 확인 다 됨 ✓"}
-          </p>
-        </Link>
-        <Link href={`/finance/deposits?ym=${ym}`} className="rounded-2xl border border-slate-200 bg-white p-3">
-          <p className="text-sm font-semibold">입금 정리</p>
-          <p className={`tabular mt-1 text-xs ${depOpen > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
-            {depOpen > 0 ? `정리할 입금 ${depOpen}건 →` : "다 됨 ✓"}
-          </p>
-        </Link>
-        <Link href={`/finance/expenses?ym=${ym}`} className="rounded-2xl border border-slate-200 bg-white p-3">
-          <p className="text-sm font-semibold">지출 분류</p>
-          <p className={`tabular mt-1 text-xs ${gUnclassOut > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
-            {gUnclassN > 0 ? `미분류 ${gUnclassN}건 · ${won(gUnclassOut)}원 →` : "다 됨 ✓"}
-          </p>
-        </Link>
-        <Link href={`/finance/payables?ym=${ym}`} className="rounded-2xl border border-slate-200 bg-white p-3">
-          <p className="text-sm font-semibold">미지급</p>
-          <p className={`tabular mt-1 text-xs ${gPayable > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}>
-            {gPayable > 0 ? `줄 돈 ${won(gPayable)}원 →` : "없음 ✓"}
-          </p>
-        </Link>
-        <Link href={`/finance/card?ym=${ym}`} className="rounded-2xl border border-slate-200 bg-white p-3">
-          <p className="text-sm font-semibold">카드 대사</p>
-          <p className="mt-1 text-xs text-slate-500">여신협회 vs 앱 →</p>
-        </Link>
-        <Link href="/reports/margin" className="rounded-2xl border border-slate-200 bg-white p-3">
-          <p className="text-sm font-semibold">마진 리포트</p>
-          <p className="mt-1 text-xs text-slate-500">품목·제조사별 →</p>
-        </Link>
+      {/* ⭐ 2026 감사 R2 — 이 달 정리 순서 (사장님 루틴 그대로, 번호 = 순서) */}
+      <section className="mt-4">
+        <ol className="grid grid-cols-2 gap-2 lg:grid-cols-3">
+          {steps.map((s, i) => (
+            <li key={s.href}>
+              <Link href={s.href} className="block h-full rounded-2xl border border-slate-200 bg-white p-3">
+                <p className="flex items-center gap-1.5 text-sm font-semibold">
+                  <span className="inline-grid size-5 shrink-0 place-items-center rounded-md bg-brand-100 text-[11px] text-brand-700">
+                    {i + 1}
+                  </span>
+                  {s.title}
+                </p>
+                <p className={`tabular mt-1 text-xs ${s.warn ? "font-semibold text-amber-700" : "text-slate-500"}`}>{s.status}</p>
+              </Link>
+            </li>
+          ))}
+        </ol>
+        <p className="mt-1.5 text-xs text-slate-400">
+          품목별 마진은 <Link href="/reports/margin" className="underline">마진 리포트</Link>에서 따로 봅니다.
+        </p>
       </section>
 
       {/* ⭐ 배치4 — 월 마감: 정리가 다 되면 그 달 숫자를 확정 표시 */}
@@ -377,8 +404,11 @@ export default async function FinancePage({
                   {c.ok ? (
                     <span className="text-emerald-700">✓ {c.text}</span>
                   ) : (
-                    <Link href={c.href} className="text-amber-700 underline underline-offset-2">
-                      ⚠ {c.text} →
+                    <Link
+                      href={c.href}
+                      className={`underline underline-offset-2 ${c.soft ? "text-slate-500" : "text-amber-700"}`}
+                    >
+                      {c.soft ? "ⓘ" : "⚠"} {c.text} →{c.soft && <span className="text-slate-400"> (참고)</span>}
                     </Link>
                   )}
                 </li>
@@ -396,21 +426,24 @@ export default async function FinancePage({
                   {c.ok ? (
                     <span className="text-emerald-700">✓ {c.text}</span>
                   ) : (
-                    <Link href={c.href} className="text-amber-700 underline underline-offset-2">
-                      ⚠ {c.text} →
+                    <Link
+                      href={c.href}
+                      className={`underline underline-offset-2 ${c.soft ? "text-slate-500" : "text-amber-700"}`}
+                    >
+                      {c.soft ? "ⓘ" : "⚠"} {c.text} →{c.soft && <span className="text-slate-400"> (참고)</span>}
                     </Link>
                   )}
                 </li>
               ))}
             </ul>
-            {closeChecks.length > 0 && closeChecks.every((c) => c.ok) ? (
+            {closeChecks.length > 0 && closeChecks.filter((c) => !c.soft).every((c) => c.ok) ? (
               <form action={closeMonthForm.bind(null, ym)} className="mt-2">
                 <button type="submit" className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white">
                   이 달 마감하기
                 </button>
               </form>
             ) : (
-              <p className="mt-2 text-xs text-slate-400">전부 ✓가 되면 마감 버튼이 나옵니다</p>
+              <p className="mt-2 text-xs text-slate-400">참고(ⓘ) 항목 빼고 전부 ✓가 되면 마감 버튼이 나옵니다</p>
             )}
           </>
         )}

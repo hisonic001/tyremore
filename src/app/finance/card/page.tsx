@@ -8,6 +8,7 @@ import { CARD_SETTLE_PATTERN_SQL } from "@/lib/expense-cats";
 import { FinShell } from "@/components/fin/shell";
 import { won } from "@/components/fin/money";
 import { TableWrap } from "@/components/fin/table";
+import { cardDaySums } from "@/lib/card-recon";
 
 export const dynamic = "force-dynamic";
 
@@ -40,33 +41,8 @@ export default async function FinanceCardPage({
   /** 앱 판매의 「판 날」 — 리포트와 같은 기준 */
   const D = sql`COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)`;
 
-  // ① 여신협회 일별 승인 (순차)
-  const assoc = await db.execute<{ d: string; total: number; cnt: number; cancelled: number }>(sql`
-    SELECT to_char(day, 'YYYY-MM-DD') d, total_amount total, total_cnt cnt, cancelled_amount cancelled
-    FROM card_day WHERE is_active AND day >= ${start}::date AND day < ${nextStart}::date
-    ORDER BY day LIMIT 40
-  `);
-
-  // ② 앱의 카드 매출 — 카드 단일 + 혼합의 카드 몫 + 외상 카드 수금 (셋을 날짜별로 합친다)
-  const appDan = await db.execute<{ d: string; amt: string }>(sql`
-    SELECT to_char(${D}, 'YYYY-MM-DD') d, SUM(q.total_amount)::bigint amt
-    FROM quote q WHERE q.status = '성사' AND q.payment_method = '카드'
-      AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
-    GROUP BY 1 LIMIT 40
-  `);
-  const appSplit = await db.execute<{ d: string; amt: string }>(sql`
-    SELECT to_char(${D}, 'YYYY-MM-DD') d, SUM(pm.amount)::bigint amt
-    FROM quote_payment pm JOIN quote q ON q.id = pm.quote_id
-    WHERE q.status = '성사' AND pm.method = '카드'
-      AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
-    GROUP BY 1 LIMIT 40
-  `);
-  const appColl = await db.execute<{ d: string; amt: string }>(sql`
-    SELECT to_char(rp.paid_on, 'YYYY-MM-DD') d, SUM(rp.amount)::bigint amt
-    FROM receivable_payment rp
-    WHERE rp.method = '카드' AND rp.paid_on >= ${start}::date AND rp.paid_on < ${nextStart}::date
-    GROUP BY 1 LIMIT 40
-  `);
+  // ①② 여신협회 일별 승인 vs 앱 카드 매출 — 정본 함수 (현황·마감 체크리스트와 같은 식, 2026 감사 R4)
+  const cd = await cardDaySums(ym);
 
   /* ⭐ 차이 난 날 펼쳐보기 (사장님 승인 2026-08-25) — 그날 카드·혼합 판매와
    *    「차이와 같은 금액」의 다른 수단 판매(수단 착오 후보)를 바로 보여준다 */
@@ -121,22 +97,10 @@ export default async function FinanceCardPage({
       AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date
   `);
 
-  // 날짜별로 합친다
-  const appMap = new Map<string, number>();
-  for (const r of [...appDan, ...appSplit, ...appColl]) {
-    appMap.set(r.d, (appMap.get(r.d) ?? 0) + Number(r.amt));
-  }
-  const days = new Map<string, { assoc: number; cnt: number; cancelled: number; app: number }>();
-  for (const a of assoc) days.set(a.d, { assoc: Number(a.total), cnt: Number(a.cnt), cancelled: Number(a.cancelled), app: 0 });
-  for (const [d, amt] of appMap) {
-    const row = days.get(d) ?? { assoc: 0, cnt: 0, cancelled: 0, app: 0 };
-    row.app = amt;
-    days.set(d, row);
-  }
-  const dayRows = [...days.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1));
-  const sumAssoc = dayRows.reduce((s, [, r]) => s + r.assoc, 0);
-  const sumApp = dayRows.reduce((s, [, r]) => s + r.app, 0);
-  const diffDays = dayRows.filter(([, r]) => r.assoc !== r.app).length;
+  const { dayRows, sumAssoc, sumApp, diffDays, assocLast, afterCutoffDays, afterCutoffApp } = cd;
+  /* 🔴 2026 감사 R4: 여신 자료가 끝난 날 이후의 앱 매출은 「차이」가 아니라 「비교 불가」 —
+     8/24~26 569만원이 빨간 차이로 보이던 것 */
+  const comparable = (d: string) => assocLast !== null && d <= assocLast;
   const txnsByDay = new Map<string, { t: string; card_co: string; approval_no: string; amount: number; is_cancel: boolean }[]>();
   for (const x of monthTxns) {
     const arr = txnsByDay.get(x.d) ?? [];
@@ -154,6 +118,23 @@ export default async function FinanceCardPage({
 
   return (
     <FinShell tab="card" monthNav={{ ym, basePath: "/finance/card" }}>
+      <h2 className="mt-3 text-lg font-bold">카드 매출 맞추기</h2>
+      <p className="mt-1 text-sm text-slate-500">
+        여신협회 승인(카드사가 실제로 승인한 금액)과 앱에 적은 카드 판매를 <strong>날짜별로</strong> 견줍니다 —
+        차이 난 날만 열어 보면 됩니다.
+      </p>
+      {assocLast && afterCutoffDays > 0 && (
+        <p className="tabular mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-900">
+          여신협회 자료가 {assocLast.slice(5)}까지입니다 — 그 뒤 {afterCutoffDays}일(앱 카드 매출 {won(afterCutoffApp)}원)은 비교할
+          수 없어 회색으로 둡니다. 자료가 오면{" "}
+          <Link href={`/finance/upload?ym=${ym}`} className="underline">올리기</Link>에서 올려 주세요.
+        </p>
+      )}
+      {dayRows.length > 0 && deposits.length === 0 && (
+        <p className="mt-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-500">
+          이 달 카드사 정산(입금) 자료가 아직 없습니다 — 수수료는 평균 요율로 추정해 손익에 넣습니다.
+        </p>
+      )}
 
       {dayRows.length === 0 ? (
         <section className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
@@ -204,13 +185,17 @@ export default async function FinanceCardPage({
               <tbody>
                 {dayRows.map(([d, r]) => {
                   const diff = r.assoc - r.app;
+                  const cmp = comparable(d);
                   return (
-                    <tr key={d} className={`border-t border-slate-100 ${diff !== 0 ? "bg-amber-50 font-medium" : ""}`}>
+                    <tr
+                      key={d}
+                      className={`border-t border-slate-100 ${!cmp ? "text-slate-400" : diff !== 0 ? "bg-amber-50 font-medium" : ""}`}
+                    >
                       <td className="py-1">{d.slice(5)}</td>
                       <td className="text-right">{r.assoc !== 0 ? `${won(r.assoc)}` : <span className="text-slate-300">—</span>}</td>
                       <td className="text-right">{r.app !== 0 ? `${won(r.app)}` : <span className="text-slate-300">—</span>}</td>
-                      <td className={`text-right ${diff === 0 ? "text-slate-300" : "text-amber-700"}`}>
-                        {diff === 0 ? "✓" : `${diff > 0 ? "+" : ""}${won(diff)}`}
+                      <td className={`text-right ${!cmp ? "text-slate-300" : diff === 0 ? "text-slate-300" : "text-amber-700"}`}>
+                        {!cmp ? "자료 없음" : diff === 0 ? "✓" : `${diff > 0 ? "+" : ""}${won(diff)}`}
                       </td>
                     </tr>
                   );
@@ -239,7 +224,7 @@ export default async function FinanceCardPage({
               </p>
               <div className="mt-2 space-y-1">
                 {dayRows
-                  .filter(([, r]) => r.assoc !== r.app)
+                  .filter(([d, r]) => comparable(d) && r.assoc !== r.app)
                   .map(([d, r]) => {
                     const diff = r.assoc - r.app;
                     const dayQ = quotesByDay.get(d) ?? [];

@@ -166,7 +166,7 @@ export function TaxRecon({
         <ol className="mt-2 list-inside list-decimal space-y-0.5 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
           {data.appPurchasesN === 0 && data.autoCount === 0 ? (
             <li>
-              이 달은 <strong>앱 매입 기록이 없는 달</strong>입니다(2026-08 이전) — 자동 잇기는 없고, 월정산 상대는
+              이 달은 <strong>앱 매입 기록이 없는 달</strong>입니다 — 자동 잇기는 없고, 월정산 상대는
               「돈 확인」에서 <strong>[이 달 맞음]</strong>, 나머지는 <strong>통장 검색</strong>으로 잇습니다
             </li>
           ) : (
@@ -204,7 +204,7 @@ export function TaxRecon({
                 <Link
                   href={`/finance/party/${encodeURIComponent(
                     g.items[0]?.supplierName ? `S:${g.items[0].supplierName}` : `B:${g.bizNo}`,
-                  )}`}
+                  )}?ym=${ym}`}
                   className="font-semibold underline-offset-2 hover:underline"
                   title="이 상대의 원장 보기"
                 >

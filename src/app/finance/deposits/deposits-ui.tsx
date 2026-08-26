@@ -85,9 +85,20 @@ export function DepositsRecon({ data, ym }: { data: DepositReconData; ym: string
         </span>
       </section>
 
+      {/* 🔴 2026 감사 R5: 「자료 없음」과 「다 됐다」를 가른다 */}
       {data.open.length === 0 && data.cardPatternCount === 0 && (
         <section className="mt-2 rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
-          이 달은 정리할 입금이 없습니다.
+          {data.monthInCount === 0 ? (
+            <>
+              {Number(ym.slice(5, 7))}월 통장 내역이 아직 안 올라왔습니다 —{" "}
+              <Link href={`/finance/upload?ym=${ym}`} className="underline">내역 올리기</Link>
+            </>
+          ) : (
+            <>
+              {Number(ym.slice(5, 7))}월 입금은 다 정리됐습니다 🎉 — 다음은{" "}
+              <Link href={`/finance/expenses?ym=${ym}`} className="font-semibold underline">지출 분류 →</Link>
+            </>
+          )}
         </section>
       )}
 
@@ -116,7 +127,7 @@ export function DepositsRecon({ data, ym }: { data: DepositReconData; ym: string
                       <span className="tabular min-w-0 truncate text-xs">
                         {p.key.startsWith("S:") || p.key.startsWith("C:") ? (
                           <Link
-                            href={`/finance/party/${encodeURIComponent(p.key)}`}
+                            href={`/finance/party/${encodeURIComponent(p.key)}?ym=${ym}`}
                             className="underline-offset-2 hover:underline"
                             title="이 상대의 원장 보기"
                           >
@@ -253,6 +264,12 @@ export function DepositsRecon({ data, ym }: { data: DepositReconData; ym: string
 
       <p className="mt-4 text-xs text-slate-400">
         잘못 이은 입금은 위 「판매·수금과 이은 입금」에서 되돌리면 수금 기록까지 함께 풀립니다.
+      </p>
+      <p className="mt-2 text-sm">
+        다음 단계:{" "}
+        <Link href={`/finance/expenses?ym=${ym}`} className="font-semibold text-brand-700 underline underline-offset-2">
+          지출 분류 →
+        </Link>
       </p>
       {confirmDialog}
     </>

@@ -46,7 +46,7 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
       if (!r.ok) return setError(r.error);
       setMsg(
         // 상계 = 반대 방향 연결 (정산 입금에서 수수료 차감 · 매입과 상계)
-        (r.netted ? "상계로 확인했습니다 (반대 방향). " : "") +
+        (r.netted ? "반대 방향 줄로 확인했습니다 — 수수료를 떼고 주고받은 건입니다. " : "") +
           (r.shortfall > 0
             ? `계산서에 ${won(r.shortfall)}원이 남았습니다 — 다른 ${isIn ? "입금" : "출금"}을 이어서 잇거나, 수수료·적립 차액이면 「확인 끝」을 누르세요`
             : r.remaining > 0
@@ -203,6 +203,11 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
                     있습니다 — 정확한 흐름은 원장에서 확인하세요
                   </p>
                 )}
+                {!m.confirmed && m.invN > 0 && (
+                  <p className="mt-1.5 text-[11px] leading-snug text-slate-400">
+                    이 달 지급이 계산서와 비슷하면 [이 달 맞음]을 누르세요 — 정확한 잔액 흐름은 원장에서 봅니다
+                  </p>
+                )}
                 <div className="mt-2 flex items-center justify-between gap-2">
                   <Link
                     href={`/finance/party/${encodeURIComponent(`B:${m.bizNo}`)}?ym=${data.ym}`}
@@ -243,7 +248,7 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
             <>
               이 달 {data.direction} 계산서 {data.ignoredN}건은 전부 「정리(무시)」 상태입니다 — 돈
               확인이 필요하면{" "}
-              <Link href={`/finance/tax?view=sort&ym=${data.ym}`} className="underline">
+              <Link href={`/finance/tax?view=sort&ym=${data.ym}&direction=${data.direction}`} className="underline">
                 계산서 정리
               </Link>
               에서 되살리세요
@@ -411,7 +416,7 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
 
       <p className="mt-3 text-xs text-slate-400">
         카드·현금으로 받은 판매 대금은 통장에 계산서 단위로 찍히지 않아 여기서 확인되지 않습니다 —
-        카드는 「카드 대사」에서 따로 맞춥니다. 상대 유형 정리·앱 기록 잇기는 「계산서 정리」 뷰에서.
+        카드는 <Link href={`/finance/card?ym=${data.ym}`} className="underline">카드 매출 맞추기</Link>에서 따로 맞춥니다. 상대 유형 정리·앱 기록 잇기는 「계산서 정리」 뷰에서.
       </p>
       {confirmDialog}
     </>

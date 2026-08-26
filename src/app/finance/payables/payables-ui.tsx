@@ -105,7 +105,7 @@ export function PayablesUi({
             </strong>
           </p>
           <Link
-            href="/finance/tax?view=money&direction=매입"
+            href={`/finance/tax?view=money&ym=${cashSummary.ym}&direction=매입`}
             className="shrink-0 rounded-control bg-brand-600 px-3 py-2 text-sm font-semibold text-white active:bg-brand-700"
           >
             돈 확인 화면 →

@@ -176,6 +176,8 @@ export interface DepositReconData {
   open: DepositSuggestion[];
   /** 정리할 입금 총 건수 — 목록(60건)과 무관한 실제 수. 현황·마감 체크리스트와 같은 정의 (2026 감사 N2) */
   openTotal: number;
+  /** 이 달 통장 입금 줄 수 — 0이면 「자료가 안 올라왔다」와 「다 정리됐다」를 가른다 (2026 감사 R5) */
+  monthInCount: number;
   /** 카드정산으로 표시된 입금(이 달) — 잘못 표시했으면 되돌린다 (감사 H10). 목록은 40건까지 */
   settledCard: { id: number; at: string; amount: number; payer: string }[];
   /** 카드정산 표시 총 건수 (목록 절단과 무관한 실제 수 — 2026 감사 N4) */
@@ -360,10 +362,12 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
   `);
 
   const openTotal = await depositOpenCount(ym);
+  const [inCnt] = await db.execute<{ n: number }>(sql`SELECT count(*)::int n FROM cash_txn WHERE ${inMonth}`);
 
   return {
     open,
     openTotal,
+    monthInCount: Number(inCnt?.n ?? 0),
     settledCardTotal: Number(settledCnt?.n ?? 0),
     linked: linkedRows.map((r) => ({
       id: Number(r.id),
@@ -417,6 +421,8 @@ export interface ExpenseData {
   /** 분류 안 된 지출 전체 합·건수 — 현황·체크리스트(expenseOpen)와 같은 값 */
   unclassifiedTotal: number;
   unclassifiedCount: number;
+  /** 이 달 지출 줄 수(통장+카드) — 0이면 자료가 안 올라온 것 (2026 감사 R5) */
+  monthOutCount: number;
   /** 이 달 분류별 지출 합 */
   sums: { category: string; amount: number; n: number }[];
 }
@@ -482,6 +488,7 @@ export async function expenseData(ym: string): Promise<ExpenseData> {
     suggest: ruleMap.get(r.p) ?? null,
   }));
 
+  const [outCnt] = await db.execute<{ n: number }>(sql`SELECT count(*)::int n FROM cash_txn WHERE ${inMonth}`);
   const classifiedRows = await db.execute<{
     id: number; source: string; l: string; at: string; out_amount: number; description: string; category: string;
   }>(sql`
@@ -511,6 +518,7 @@ export async function expenseData(ym: string): Promise<ExpenseData> {
     unclassifiedSum: unclassified.reduce((s, r) => s + r.amount, 0),
     unclassifiedTotal: Number(totalRow[0]?.s ?? 0),
     unclassifiedCount: Number(totalRow[0]?.n ?? 0),
+    monthOutCount: Number(outCnt?.n ?? 0),
     sums: sums.map((r) => ({ category: r.category, amount: Number(r.s), n: Number(r.n) })),
   };
 }

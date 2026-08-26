@@ -18,11 +18,14 @@ import { Lock } from "lucide-react";
 export async function FinShell({
   tab,
   monthNav,
+  ym,
   closeNotice = true,
   children,
 }: {
   tab: FinTabId;
   monthNav?: { ym: string; basePath: string; keep?: Record<string, string> };
+  /** 월네비가 없는 화면(올리기·거래처 목록)도 탭이 달을 지키게 — 보는 달만 넘긴다 (2026 감사 R1) */
+  ym?: string;
   /** 마감된 달 배너 (현황은 자기 마감 섹션이 있어 끈다) */
   closeNotice?: boolean;
   children: ReactNode;
@@ -48,7 +51,7 @@ export async function FinShell({
           설정으로
         </Link>
       </header>
-      <FinTabs tab={tab} />
+      <FinTabs tab={tab} ym={monthNav?.ym ?? ym} />
       {monthNav && <MonthNav {...monthNav} />}
       {closedAt && monthNav && (
         <div className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-slate-100 px-3 py-1.5 text-xs text-slate-700">

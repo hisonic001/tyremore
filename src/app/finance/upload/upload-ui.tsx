@@ -2,7 +2,17 @@
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "@/lib/link";
 import { applyFinUpload, previewFinUpload, type FinPreview } from "@/lib/fin-upload";
+
+/** 파일 종류별 다음 화면 (2026 감사 R5) */
+function nextStepOf(source: string, ym: string): { href: string; label: string } {
+  if (source.includes("통장")) return { href: `/finance/deposits?ym=${ym}`, label: "입금 정리로 →" };
+  if (source.includes("법인카드")) return { href: `/finance/expenses?ym=${ym}`, label: "지출 분류로 →" };
+  if (source.includes("카드매출")) return { href: `/finance/card?ym=${ym}`, label: "카드 매출 맞추기로 →" };
+  if (source.includes("홈택스")) return { href: `/finance/tax?view=money&ym=${ym}`, label: "세금계산서 돈 확인으로 →" };
+  return { href: `/finance?ym=${ym}`, label: "현황으로 →" };
+}
 
 const won = (n: number) => n.toLocaleString("ko-KR");
 
@@ -13,8 +23,9 @@ const won = (n: number) => n.toLocaleString("ko-KR");
  *   파일 종류(통장·법인카드·홈택스 세금계산서)는 서버가 알아본다.
  *   같은 파일을 다시 올려도 안전하다 — 이미 있는 줄은 「이미 있음」으로 세기만 한다.
  */
-export function FinUpload() {
+export function FinUpload({ ym }: { ym: string }) {
   const router = useRouter();
+  const [next, setNext] = useState<{ href: string; label: string } | null>(null);
   const [pending, start] = useTransition();
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<FinPreview | null>(null);
@@ -50,10 +61,8 @@ export function FinUpload() {
     start(async () => {
       const r = await applyFinUpload(fd);
       if (!r.ok) return setError(r.error);
-      setDoneMsg(
-        `반영했습니다 — 새로 ${r.newCount}줄 · 이미 있음 ${r.dupCount}줄` +
-          (r.source.startsWith("홈택스") ? " · 「세금계산서 대조」에서 확인하세요" : ""),
-      );
+      setDoneMsg(`${r.source} 반영했습니다 — 새로 ${r.newCount}줄 · 이미 있음 ${r.dupCount}줄`);
+      setNext(nextStepOf(r.source, ym));
       setPreview(null);
       setFile(null);
       if (input.current) input.current.value = ""; // 계정 이름은 남긴다 — 다음 파일에 이어 쓰게
@@ -81,7 +90,16 @@ export function FinUpload() {
         />
         {pending && <p className="mt-2 text-sm text-slate-500">읽는 중…</p>}
         {error && <p className="mt-2 rounded-lg bg-red-50 p-2 text-sm text-red-700">⚠️ {error}</p>}
-        {doneMsg && <p className="mt-2 rounded-lg bg-emerald-50 p-2 text-sm text-emerald-800">✅ {doneMsg}</p>}
+        {doneMsg && (
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-emerald-50 p-2 text-sm text-emerald-800">
+            <span>✅ {doneMsg}</span>
+            {next && (
+              <Link href={next.href} className="shrink-0 rounded-control bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white">
+                {next.label}
+              </Link>
+            )}
+          </div>
+        )}
       </section>
 
       {preview && (

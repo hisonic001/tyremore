@@ -42,8 +42,8 @@ export function PickList({
             onClick={it.onPick}
             className={
               strong
-                ? "shrink-0 rounded bg-brand-600 px-2 py-0.5 font-semibold text-white active:bg-brand-700 disabled:opacity-40"
-                : "shrink-0 rounded border border-slate-300 bg-white px-2 py-0.5 font-medium active:bg-slate-100 disabled:opacity-40"
+                ? "shrink-0 rounded-control bg-brand-600 px-2.5 py-1.5 font-semibold text-white active:bg-brand-700 disabled:opacity-40"
+                : "shrink-0 rounded-control border border-slate-300 bg-white px-2.5 py-1.5 font-medium active:bg-slate-100 disabled:opacity-40"
             }
           >
             {buttonLabel}

@@ -34,7 +34,7 @@ export default async function FinanceExpensesPage({
       <p className="mt-2 text-sm text-slate-500">
         한 번 분류하면 같은 상대는 과거 것까지 한꺼번에, 앞으로 올리는 파일에도 자동으로 붙습니다.
       </p>
-      <ExpensesUi data={data} />
+      <ExpensesUi data={data} ym={ym} />
     </FinShell>
   );
 }

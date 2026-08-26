@@ -21,14 +21,23 @@ const TABS: { id: FinTabId; href: string; label: string }[] = [
   { id: "upload", href: "/finance/upload", label: "올리기" },
 ];
 
-export function FinTabs({ tab }: { tab: FinTabId }) {
+/**
+ * 🔴 2026 감사 R1(2026-08-26): 탭이 달을 버려 9/1에 8월을 정리하다 탭을 누르면 전 화면이 9월로 튀었다
+ *    — 보는 달을 모든 탭에 붙인다 (계산서는 돈 확인 뷰로).
+ */
+export function FinTabs({ tab, ym }: { tab: FinTabId; ym?: string }) {
+  const hrefOf = (t: (typeof TABS)[number]) => {
+    if (!ym) return t.href;
+    if (t.id === "tax") return `${t.href}?view=money&ym=${ym}`;
+    return `${t.href}?ym=${ym}`;
+  };
   return (
     <nav className="-mx-4 mt-2 overflow-x-auto px-4">
       <div className="flex min-w-max gap-1 rounded-xl bg-slate-100 p-1 lg:min-w-0">
         {TABS.map((t) => (
           <Link
             key={t.id}
-            href={t.href}
+            href={hrefOf(t)}
             className={`whitespace-nowrap rounded-lg px-3 py-2 text-center text-sm font-semibold lg:flex-1 ${
               tab === t.id ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 active:bg-slate-200"
             }`}

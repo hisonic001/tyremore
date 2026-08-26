@@ -15,15 +15,20 @@ import { db } from "@/db";
 import { getSession } from "./auth";
 import { finHealth } from "./fin-health";
 import { kstToday, monthRange } from "./ym";
-import { depositOpenCount, expenseOpen } from "./recon-data";
+import { depositOpenCount, expenseOpen, payablesData } from "./recon-data";
 import { taxOpenCount } from "./tax-recon";
 import { finPL } from "./fin-pl";
 import { revalidateFinance } from "./fin-revalidate";
+import { uploadCoverage, coverageStatus } from "./upload-coverage";
+import { cardDaySums } from "./card-recon";
+import { zeroTotalInvoiceCount } from "./invoice";
 
 export interface CloseCheck {
   ok: boolean;
   text: string;
   href: string;
+  /** 참고 항목 — ⚠ 로 보여 주되 마감을 막지 않는다 (자료 컷오프·카드 차이·미지급·0원 매입) */
+  soft?: boolean;
 }
 
 export interface MonthCloseInfo {
@@ -68,8 +73,44 @@ export async function closeChecklist(ym: string, healthOk?: boolean): Promise<Cl
   /* 🔴 2025 감사 F6: 자료 검증은 「최근 60일·최근 3달」 기준이라 지난 달(특히 2025) 마감과
      무관하다 — 지난 달은 경고만 보이고 마감을 막지 않는다 */
   const past = ym < kstToday().slice(0, 7);
+  /* 🔴 2026 감사 R2·R3: 사장님 루틴 8단계 중 체크리스트가 3단계만 봤다 — 자료 올림·카드 매출·미지급·
+     0원 매입을 참고(soft) 항목으로 추가. 막지는 않고 ⚠ 만 */
+  const cov = coverageStatus(await uploadCoverage(), ym);
+  const card = await cardDaySums(ym);
+  const pay = await payablesData();
+  const zeroN = await zeroTotalInvoiceCount();
+  const softChecks: CloseCheck[] = [
+    {
+      ok: cov.ok,
+      soft: true,
+      text: cov.ok ? "자료 다 올라옴" : `안 올라온 자료 — ${cov.lagging.map((l) => `${l.label} ~${l.last ? l.last.slice(5) : "없음"}`).join(" · ")}`,
+      href: `/finance/upload?ym=${ym}`,
+    },
+    {
+      ok: !!card.assocLast && card.diffDays === 0,
+      soft: true,
+      text: !card.assocLast
+        ? "여신협회 카드 자료 없음"
+        : card.diffDays === 0
+          ? "카드 매출 다 맞음"
+          : `카드 매출 차이 난 날 ${card.diffDays}일`,
+      href: `/finance/card?ym=${ym}`,
+    },
+  ];
+  const softTail: CloseCheck[] = [
+    {
+      ok: pay.suppliers.length === 0,
+      soft: true,
+      text: pay.suppliers.length === 0 ? "미지급 없음" : `줄 돈 확인 — 미지급 ${pay.suppliers.length}곳 ${pay.totalRemain.toLocaleString("ko-KR")}원`,
+      href: `/finance/payables?ym=${ym}`,
+    },
+    ...(zeroN > 0
+      ? [{ ok: false, soft: true, text: `금액 없는 매입 장부 ${zeroN}건 — 단가를 채워 주세요`, href: "/receiving" }]
+      : []),
+  ];
 
   return [
+    ...softChecks,
     {
       ok: Number(dep.n) === 0,
       text: Number(dep.n) === 0 ? "입금 다 정리됨" : `정리 안 된 입금 ${dep.n}건`,
@@ -81,6 +122,7 @@ export async function closeChecklist(ym: string, healthOk?: boolean): Promise<Cl
       href: `/finance/expenses?ym=${ym}`,
     },
     taxCheck,
+    ...softTail,
     {
       ok: hOk || past,
       text: hOk ? "자료 검증 ✓" : past ? "자료 검증 경고 있음 (최근 자료 기준 — 지난 달 마감은 막지 않음)" : "자료 검증 경고 있음",
@@ -111,7 +153,7 @@ export async function closeMonth(ym: string): Promise<{ ok: true } | { ok: false
   if (ym >= kstToday().slice(0, 7)) return { ok: false, error: "이 달이 끝난 뒤에 마감할 수 있습니다" };
 
   const checks = await closeChecklist(ym);
-  const bad = checks.filter((c) => !c.ok);
+  const bad = checks.filter((c) => !c.ok && !c.soft); // 참고 항목은 마감을 막지 않는다
   if (bad.length > 0) return { ok: false, error: `아직 남은 일이 있습니다 — ${bad.map((c) => c.text).join(" · ")}` };
 
   const headline = await computeHeadline(ym);

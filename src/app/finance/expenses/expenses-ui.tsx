@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "@/lib/link";
 import { EXPENSE_CATS } from "@/lib/expense-cats";
 import type { ExpenseData, ExpenseRow } from "@/lib/recon-data";
 import { setExpenseCategory } from "@/lib/fin-expense";
@@ -9,7 +10,7 @@ import { won } from "@/components/fin/money";
 
 
 /** ⭐ 지출 분류 화면 (ERP ⑥, 2026-08-25) — 제안 원터치 + 분류 고르기 */
-export function ExpensesUi({ data }: { data: ExpenseData }) {
+export function ExpensesUi({ data, ym }: { data: ExpenseData; ym: string }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
@@ -110,7 +111,17 @@ export function ExpensesUi({ data }: { data: ExpenseData }) {
 
       {data.unclassified.length === 0 ? (
         <section className="mt-2 rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
-          이 달 지출은 모두 분류됐습니다 🎉
+          {data.monthOutCount === 0 ? (
+            <>
+              {Number(ym.slice(5, 7))}월 통장·카드 내역이 아직 안 올라왔습니다 —{" "}
+              <Link href={`/finance/upload?ym=${ym}`} className="underline">내역 올리기</Link>
+            </>
+          ) : (
+            <>
+              {Number(ym.slice(5, 7))}월 지출은 모두 분류됐습니다 🎉 — 다음은{" "}
+              <Link href={`/finance/tax?view=money&ym=${ym}`} className="font-semibold underline">세금계산서 돈 확인 →</Link>
+            </>
+          )}
         </section>
       ) : (
         <ul className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-2 lg:items-start">
@@ -200,6 +211,12 @@ export function ExpensesUi({ data }: { data: ExpenseData }) {
       <p className="mt-4 text-xs text-slate-400">
         매입대금·카드대금·내부이체로 분류한 지출은 손익의 「쓴 돈」에 다시 넣지 않습니다 — 매입·법인카드
         쪽에서 이미 세고 있어 이중 계산이 되기 때문입니다.
+      </p>
+      <p className="mt-2 text-sm">
+        다음 단계:{" "}
+        <Link href={`/finance/tax?view=money&ym=${ym}`} className="font-semibold text-brand-700 underline underline-offset-2">
+          세금계산서 돈 확인 →
+        </Link>
       </p>
     </>
   );

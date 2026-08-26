@@ -34,10 +34,16 @@ export default async function FinancePayablesPage({
   return (
     <FinShell tab="payables" monthNav={{ ym, basePath: "/finance/payables" }}>
       <p className="mt-2 text-sm text-slate-500">
-        ⭐ 정본은 <strong>세금계산서 ↔ 통장 출금</strong>입니다 (사장님 방침 2026-08-25) — 계산서가
-        출금으로 확인되면 그 매입은 준 것입니다. 아래 앱 매입 장부(2026-08부터)는 보조 참고입니다. 이미 다 준 매입이면
-        지급을 넣어 장부를 맞춰 주세요. 「출금에서 지급 잡기」는 보는 달의 매입대금 출금을 앱 매입과 잇습니다.
+        줄 돈의 정본은 <strong>세금계산서 ↔ 통장 출금</strong>입니다 — 아래 앱 매입 장부는 보조 참고예요.
       </p>
+      <details className="mt-1 text-xs text-slate-500">
+        <summary className="cursor-pointer underline underline-offset-2">자세히</summary>
+        <p className="mt-1">
+          계산서가 출금으로 확인되면 그 매입은 준 것입니다. 앱 매입 장부는 앱에서 입고한 인보이스 기준이라 처음엔
+          전부 「안 준 돈」으로 보이는 게 정상 — 「출금에서 지급 잡기」로 보는 달의 매입대금 출금을 이어 주면 장부가
+          실제와 같아집니다. 잘못 이었으면 아래 「되돌리기」로 언제든 풉니다.
+        </p>
+      </details>
       <PayablesUi
         data={data}
         links={links.rows}
