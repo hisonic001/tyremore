@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
-import { kstToday, ymAdd } from "@/lib/ym";
+import { DATA_START, kstToday, ymAdd } from "@/lib/ym";
 
 /**
  * ⭐ 달 넘기기 정본 (배치1, 2026-08-25 → 개선 2026-08-26)
@@ -11,7 +11,6 @@ import { kstToday, ymAdd } from "@/lib/ym";
  *   가운데 달 표시를 **고르는 칸**으로 바꾸고(자료 시작 2025-01부터 한 번에 이동),
  *   ◀◀/▶▶ 로 1년씩도 점프한다. 미래 달은 잠근다.
  */
-const DATA_START = "2025-01"; // 통장·계산서 자료 시작
 
 export function MonthNav({ ym, basePath, keep }: { ym: string; basePath: string; keep?: Record<string, string> }) {
   const router = useRouter();

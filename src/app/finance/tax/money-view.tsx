@@ -268,7 +268,11 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
                 <span className="tabular shrink-0 font-bold">{won(r.total)}원</span>
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                {r.bankCovered > 0 ? (
+                {r.isFix ? (
+                  <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-800">
+                    마이너스(수정) 계산서
+                  </span>
+                ) : r.bankCovered > 0 ? (
                   <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-800">
                     일부 확인 · 남은 {won(r.total - r.bankCovered)}원
                   </span>
@@ -292,6 +296,15 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
                   </button>
                 )}
               </div>
+              {/* 🔴 2025 감사 F4: 수정 계산서는 통장이 아니라 원본과 상쇄 — 정리 뷰로 보낸다 */}
+              {r.isFix && (
+                <p className="mt-1.5 rounded-control bg-rose-50 p-2 text-xs text-rose-900">
+                  통장으로는 끝낼 수 없습니다 — 같은 상대의 원본 계산서와 상쇄해 정리하세요:{" "}
+                  <Link href={`/finance/tax?view=sort&ym=${data.ym}&direction=${data.direction}`} className="font-semibold underline">
+                    계산서 정리로 →
+                  </Link>
+                </p>
+              )}
               {r.bankCombo && (
                 <div className="mt-1.5 rounded-control bg-brand-50 p-2 text-xs">
                   <p className="font-semibold text-brand-700">
@@ -314,9 +327,13 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
               )}
               {r.autoBank.length > 0 && (
                 <PickList
-                  hint={`이 상대의 ${isIn ? "입금" : "출금"} — 맞는 것을 고르세요:`}
+                  hint={
+                    r.autoBank.some((b) => b.known)
+                      ? `이 상대의 ${isIn ? "입금" : "출금"} — 맞는 것을 고르세요:`
+                      : `금액만 같은 ${isIn ? "입금" : "출금"} — 상대가 맞는지 꼭 확인하세요:`
+                  }
                   pending={pending}
-                  strong
+                  strong={r.autoBank.some((b) => b.known)}
                   items={r.autoBank.map((b) => ({
                     key: b.id,
                     label: b.label,
@@ -325,18 +342,18 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
                   buttonLabel={isIn ? "이 입금과 잇기" : "이 출금과 잇기"}
                 />
               )}
-              {r.autoBank.length > 0 ? (
+              {r.isFix ? null : r.autoBank.length > 0 ? (
                 <details className="mt-1.5">
                   <summary className="cursor-pointer text-xs text-slate-500 underline underline-offset-2">
                     통장에서 직접 찾기 ▾
                   </summary>
                   <div className="mt-1">
-                    <BankSearch direction={data.direction} pending={pending} onPick={(id) => link(r.id, id)} />
+                    <BankSearch direction={data.direction} pending={pending} onPick={(id) => link(r.id, id)} anchor={r.writeDate} />
                   </div>
                 </details>
               ) : (
                 <div className="mt-1.5">
-                  <BankSearch direction={data.direction} pending={pending} onPick={(id) => link(r.id, id)} />
+                  <BankSearch direction={data.direction} pending={pending} onPick={(id) => link(r.id, id)} anchor={r.writeDate} />
                   {!r.bankCombo && (
                     <p className="mt-1 text-[11px] text-slate-400">
                       이 상대와 한 번 이어 두면 다음부터 후보·묶음 추천이 자동으로 켜집니다

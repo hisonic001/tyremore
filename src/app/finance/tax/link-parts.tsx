@@ -59,10 +59,13 @@ export function BankSearch({
   direction,
   pending,
   onPick,
+  anchor,
 }: {
   direction: "매입" | "매출";
   pending: boolean;
   onPick: (cashTxnId: number) => void;
+  /** 계산서 날짜 — 이 날짜에 가까운 줄부터 (2025 감사 F9) */
+  anchor?: string;
 }) {
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<BankHit[] | null>(null);
@@ -72,7 +75,7 @@ export function BankSearch({
   const search = () =>
     startSearch(async () => {
       setErr(null);
-      const r = await searchBankLines(direction, q);
+      const r = await searchBankLines(direction, q, anchor);
       if (!r.ok) return setErr(r.error);
       setHits(r.rows);
     });

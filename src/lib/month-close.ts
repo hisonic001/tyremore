@@ -16,7 +16,6 @@ import { getSession } from "./auth";
 import { finHealth } from "./fin-health";
 import { kstToday, monthRange } from "./ym";
 import { CARD_SETTLE_PATTERN_SQL, EXPENSE_IN_PL } from "./expense-cats";
-import { TAX_APP_START } from "./tax-recon";
 
 export interface CloseCheck {
   ok: boolean;
@@ -57,21 +56,18 @@ export async function closeChecklist(ym: string, healthOk?: boolean): Promise<Cl
     SELECT count(*)::int n FROM cash_txn
     WHERE ${inMonth} AND out_amount > 0 AND category IS NULL
   `);
-  let taxCheck: CloseCheck;
-  if (nextStart <= TAX_APP_START) {
-    taxCheck = { ok: true, text: "세금계산서 — 대조 도입 전 달이라 건너뜀", href: "/finance/tax" };
-  } else {
-    const [tax] = await db.execute<{ n: number }>(sql`
-      SELECT count(*)::int n FROM tax_invoice
-      WHERE is_active AND recon_status IN ('미대조', '제안')
-        AND write_date >= ${start}::date AND write_date < ${nextStart}::date
-    `);
-    taxCheck = {
-      ok: Number(tax.n) === 0,
-      text: Number(tax.n) === 0 ? "세금계산서 다 맞춰짐" : `세금계산서 확인 안 됨 ${tax.n}건`,
-      href: "/finance/tax",
-    };
-  }
+  /* 🔴 2025 감사 F6(2026-08-26): 「대조 도입 전 달이라 건너뜀」 분기 삭제 — 2025-05를 21건
+     미확인인 채 마감할 수 있었다. 모든 달이 같은 기준. */
+  const [tax] = await db.execute<{ n: number }>(sql`
+    SELECT count(*)::int n FROM tax_invoice
+    WHERE is_active AND recon_status IN ('미대조', '제안')
+      AND write_date >= ${start}::date AND write_date < ${nextStart}::date
+  `);
+  const taxCheck: CloseCheck = {
+    ok: Number(tax.n) === 0,
+    text: Number(tax.n) === 0 ? "세금계산서 다 맞춰짐" : `세금계산서 확인 안 됨 ${tax.n}건`,
+    href: `/finance/tax?view=money&ym=${ym}`,
+  };
   const hOk = healthOk ?? (await finHealth()).allOk;
 
   return [

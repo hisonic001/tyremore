@@ -30,12 +30,21 @@ export const normName = norm;
 /** 앞에서부터 몇 자가 같으면 같은 상대로 볼 것인가 (잘림 대비) */
 const HEAD = 5;
 
-/** 두 이름이 같은 상대인가 — 표기 차이·잘림을 견딘다 */
+/**
+ * 🔴 2025 감사 F16(2026-08-26): 상호가 「타이어」 한 단어인 상대(타이어365 양양점의 다른 표기)가
+ *    모든 타이어 거래처의 포함 검사에 걸렸다. 업종·지역 같은 일반어는 이름 근거가 못 된다.
+ */
+const GENERIC_WORDS = new Set(["타이어", "주식회사", "양양점", "속초점", "속초", "양양", "코리아", "타이어365", "카센타", "카센터"]);
+const isGeneric = (x: string) => GENERIC_WORDS.has(x);
+
+/** 두 이름이 같은 상대인가 — 표기 차이·잘림을 견딘다 (일반어 한 단어는 근거로 안 친다) */
 export function samePartyName(a: string | null | undefined, b: string | null | undefined): boolean {
   const x = norm(a);
   const y = norm(b);
   if (x.length < 2 || y.length < 2) return false;
-  if (x.includes(y) || y.includes(x)) return true;
+  if (isGeneric(x) || isGeneric(y)) return x === y;
+  const short = x.length <= y.length ? x : y;
+  if (short.length >= 3 && (x.includes(y) || y.includes(x))) return true;
   const n = Math.min(x.length, y.length, HEAD);
   return n >= 4 && x.slice(0, n) === y.slice(0, n);
 }
@@ -52,6 +61,7 @@ export function partyMatchSql(names: (string | null | undefined)[], col = "descr
   const pats = new Set<string>();
   for (const n of names) {
     const x = norm(n);
+    if (isGeneric(x)) continue; // 「타이어」 같은 일반어 하나로는 통장을 긁지 않는다 (F16)
     if (x.length >= 2) pats.add(x);
     if (x.length >= HEAD) pats.add(x.slice(0, HEAD));
   }
@@ -174,7 +184,8 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
 
   const pat = await db.execute<{ n: number; s: string }>(sql`
     SELECT count(*)::int n, COALESCE(SUM(in_amount), 0)::bigint s FROM cash_txn
-    WHERE ${inMonth} AND recon_status = '미대조' AND ${CARD_PAT}
+    WHERE ${inMonth} AND recon_status = '미대조' AND category IS NULL AND ${CARD_PAT}
+    -- 🔴 2025 감사 F5(2026-08-26): 이미 '카드정산'으로 분류된 줄까지 세어 2025-12에 147건 거짓 할 일
   `);
 
   const counts = await db.execute<{ st: string; n: number }>(sql`
@@ -536,14 +547,16 @@ export interface PayLinkRow {
   suggest: { supplier: string; remain: number } | null;
 }
 
-export async function payLinkData(): Promise<{ rows: PayLinkRow[]; supplierNames: string[] }> {
-  // '매입대금' 출금 중 지급 기록과 안 이어진 것 — 실사용 기간(8월~)만
+export async function payLinkData(ym: string): Promise<{ rows: PayLinkRow[]; supplierNames: string[] }> {
+  // '매입대금' 출금 중 지급 기록과 안 이어진 것 — 보는 달 (2025 감사 F18: '2026-08-01' 하드코딩 폐지)
+  const { start: pStart, nextStart: pNext } = monthRange(ym);
   const outs = await db.execute<{ id: number; at: string; description: string; out_amount: number }>(sql`
     SELECT c.id, to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD') at, c.description,
            (c.out_amount - ${cashUsedSql("c")})::int out_amount
     FROM cash_txn c
     WHERE c.source = '통장' AND c.is_active AND c.category = '매입대금'
-      AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date >= '2026-08-01'
+      AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${pStart}::date
+      AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${pNext}::date
       -- 🔴 감사 B4(2026-08-25): 계산서 확인·지급이 이미 쓴 몫을 뺀 잔액만 — 이중 소진 차단
       AND c.out_amount > ${cashUsedSql("c")}
     ORDER BY c.occurred_at DESC LIMIT 60

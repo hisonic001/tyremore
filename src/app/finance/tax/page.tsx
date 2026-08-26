@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
  * ⭐ 세금계산서 (재설계 2026-08-25, 사장님 요구: "실제로 출금·입금 됐는지 검토 가능")
  *
  *   기본 뷰 = 「돈 확인」 — 매입=출금·매출=입금이 실제로 오갔는지 (bank_ok 기준 진행률).
- *   두 번째 뷰 = 「계산서 정리」 — 상대 유형·앱 기록 잇기·과거분 (기존 화면).
+ *   두 번째 뷰 = 「계산서 정리」 — 상대 유형·앱 기록 잇기·수정 계산서 상쇄.
  */
 export default async function FinanceTaxPage({
   searchParams,
@@ -31,6 +31,8 @@ export default async function FinanceTaxPage({
   // 🔴 뷰를 오가도 달·방향이 유지된다 (사장님 지적 2026-08-25)
   const direction = sp.direction === "매출" ? ("매출" as const) : ("매입" as const);
   const ym = pickYm(sp.ym);
+  // 🔴 2025 감사 F19: 「최근 돈 확인·최근 확정」도 보는 달 — 2025-01 화면의 되돌리기가 2026-08 건을 가리켰다
+  const { start: mStart, nextStart: mNext } = monthRange(ym);
   const segCls = (on: boolean) =>
     `flex-1 rounded-lg py-2.5 text-center text-sm font-semibold transition-colors ${
       on ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 active:bg-slate-200"
@@ -53,6 +55,7 @@ export default async function FinanceTaxPage({
       SELECT id, to_char(write_date, 'MM-DD') d, direction, counterparty_name name, total
       FROM tax_invoice
       WHERE is_active AND recon_reason IN ('출금연결', '입금연결', '상계연결')
+        AND write_date >= ${mStart}::date AND write_date < ${mNext}::date
       ORDER BY (direction = ${direction}) DESC, id DESC LIMIT 20
     `);
     const recentBank: RecentBankRow[] = recent.map((r) => ({
@@ -85,10 +88,10 @@ export default async function FinanceTaxPage({
              WHERE m.src_table = 'tax_invoice' AND m.src_id = t.id) refs
     FROM tax_invoice t
     WHERE t.is_active AND t.recon_status = '확정'
+      AND t.write_date >= ${mStart}::date AND t.write_date < ${mNext}::date
     ORDER BY t.id DESC LIMIT 30
   `);
-  // 🔴 후속(2026-08-25): 8월 하드코딩 → 보는 달 — 7월 무시(과거분) 건도 되살릴 수 있게
-  const { start: mStart, nextStart: mNext } = monthRange(ym);
+  // 🔴 후속(2026-08-25): 8월 하드코딩 → 보는 달
   const cleared = await db.execute<{
     id: number; direction: string; d: string; name: string; total: number; reason: string | null;
   }>(sql`
@@ -105,8 +108,8 @@ export default async function FinanceTaxPage({
     <FinShell tab="tax" monthNav={{ ym, basePath: "/finance/tax", keep: { view: "sort" } }}>
       {segNav}
       <p className="mt-2 text-sm text-slate-500">
-        계산서의 <strong>신원</strong>을 정리합니다 — 상대 유형(경비·정산사·거래처)·앱 기록 잇기·
-        과거분. 대형 거래처 계산서는 보통 월말 일괄 발행이라 매입 기록이 먼저 있어도 정상입니다.
+        계산서의 <strong>신원</strong>을 정리합니다 — 상대 유형(경비·정산사·월정산·거래처)·앱 기록
+        잇기·수정 계산서 상쇄. 대형 거래처 계산서는 보통 월말 일괄 발행이라 매입 기록이 먼저 있어도 정상입니다.
       </p>
       <TaxRecon
         ym={ym}

@@ -14,7 +14,6 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { partyMatchSql, partyMonthlyCash, partyStrictNames } from "./recon-data";
-import { TAX_APP_START } from "./tax-recon";
 import { monthRange } from "./ym";
 
 export interface LedgerRow {
@@ -46,7 +45,7 @@ export interface PartyLedger {
   payableRemain: number;
   /** 받을 돈 — 외상 잔액 (전체 기간) */
   receivableRemain: number;
-  /** 출금 확인 안 된 매입 세금계산서 합 (실사용 기간) */
+  /** 출금 확인 안 된 매입 세금계산서 합 (보는 달까지 누적) */
   taxOpenSum: number;
   /** 달별 계산서 vs 지급 — 오래된 달부터, 누적 잔액 포함 */
   months: PartyMonthRow[];
@@ -254,7 +253,8 @@ export async function partyLedgerData(key: string, ym: string): Promise<PartyLed
   const [to] = await db.execute<{ s: string }>(sql`
     SELECT COALESCE(SUM(total), 0)::bigint s FROM tax_invoice
     WHERE is_active AND direction = '매입' AND recon_status IN ('미대조', '제안')
-      AND write_date >= ${TAX_APP_START}::date AND ${taxCond}
+      AND write_date < ${nextStart}::date AND ${taxCond}
+    -- 🔴 2025 감사 F12: 2026-08 이후만 세어 2025 원장에 엉뚱한 값(1,045,000)이 찍혔다 — 보는 달까지
   `);
 
   /* ⭐ 달별 계산서 vs 지급 (2026-08-25) — 미쉐린처럼 월말 합계 계산서를 쓰는 상대는

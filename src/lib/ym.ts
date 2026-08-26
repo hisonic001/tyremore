@@ -17,8 +17,13 @@ export function monthRange(ym: string): { start: string; nextStart: string } {
   return { start: `${ym}-01`, nextStart: `${ymAdd(ym, 1)}-01` };
 }
 
-/** ?ym= 쿼리 정리 — 형식이 틀리거나 미래면 이번 달 */
+/** 통장·계산서 자료 시작 달 — 달 넘기기·?ym= 하한 (2025 감사 F21, 2026-08-26) */
+export const DATA_START = "2025-01";
+
+/** ?ym= 쿼리 정리 — 형식이 틀리거나 미래·자료 시작 이전이면 이번 달 */
 export function pickYm(raw: unknown): string {
   const thisYm = kstToday().slice(0, 7);
-  return typeof raw === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(raw) && raw <= thisYm ? raw : thisYm;
+  return typeof raw === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(raw) && raw <= thisYm && raw >= DATA_START
+    ? raw
+    : thisYm;
 }

@@ -6,7 +6,8 @@
  *   ③경비성 매입(세무법인·네이버…)이 계속 화면에 남음.
  *
  *   v2 원칙:
- *   - 대조 대상 = 앱 도입(2026-08) 이후. 과거분은 접고 일괄 처리.
+ *   - 대조 대상 = 자료 전 기간(2025-01~). 🔴 2026-08-26: 「과거분 접기」 폐지 — 사장님 방침
+ *     "중요한 건 자료". 2025년은 앱 기록이 없으므로 통장 직접 잇기·월정산 잔액이 길이다.
  *   - 계산서 나열이 아니라 **상대(사업자번호) 단위 그룹** — 한 번 유형을 정하면 계속 자동.
  *   - 매출 매칭 풀 = 모든 판매(거래처·고객·비회원, 결제수단 무관) + **통장 입금 직접 연결**
  *     (대행사는 「월합계 계산서 = 이 입금」이 실질이다).
@@ -19,9 +20,6 @@ import { db } from "@/db";
 import { payerKeyOf } from "./expense-cats";
 import { cashUsedMap, normName, partyMonthlyCash, partyStrictNames, samePartyName } from "./recon-data";
 import { monthRange } from "./ym";
-
-/** 앱 실사용 시작 — 이전 계산서는 대조가 원리적으로 불가능하다 */
-export const TAX_APP_START = "2026-08-01";
 
 export interface TaxRow {
   id: number;
@@ -52,6 +50,8 @@ export interface BankRef {
   label: string;
   amount: number;
   date: string;
+  /** ★ 기억됐거나 이름이 닮은 상대 — false 면 금액만 같은 줄 (확인 필요) */
+  known: boolean;
 }
 
 export interface TaxSuggestion {
@@ -62,8 +62,8 @@ export interface TaxSuggestion {
   bankCands: BankRef[];
   /** 여러 통장 줄의 합이 계산서와 정확히 맞는 조합 — 한꺼번에 잇는다 */
   bankCombo: { ids: number[]; labels: string[]; total: number } | null;
-  /** 마이너스(수정) 계산서의 원본으로 보이는 짝 — 함께 상쇄 정리 */
-  fixPair: { id: number; label: string } | null;
+  /** 마이너스(수정) 계산서의 원본으로 보이는 짝들 — 같은 금액 원본이 여럿이면 다 보여준다 (2025 감사 F4) */
+  fixPairs: { id: number; label: string }[];
   supplierId: number | null;
   supplierName: string | null;
   learnable: boolean;
@@ -87,9 +87,34 @@ export interface TaxReconV2 {
   ignoredCount: number;
   reasonCounts: { reason: string; n: number }[];
   supplierOptions: { id: number; name: string }[];
+  /** 이 달 창에 앱 기록(매입 인보이스·판매)이 있나 — 없으면(2025) 「통장에서 직접」 안내 */
+  appRecordsN: number;
 }
 
 const won = (n: number) => n.toLocaleString("ko-KR");
+
+/**
+ * ⭐ 통장 줄 라벨 정본 (2025 감사 F3, 2026-08-26)
+ *   - 날짜는 연도 포함 `YY-MM-DD` — 20개월 자료에서 「01-30」이 2025인지 2026인지 알 수 없었다.
+ *   - 부호(+입금/−출금)는 금액 컬럼에서 — 시트명(account_label)은 방향이 아니다
+ *     (「신한출금」 시트에 입금 449줄). 시트명은 라벨에서 뺀다.
+ *   - 이름 근거 없이 금액만 같은 줄은 「이름 다름 — 확인 필요」를 붙인다 (F15).
+ */
+export function bankLabel(
+  x: { date: string; description: string; remain: number },
+  isIn: boolean,
+  known: boolean,
+  target?: number,
+): string {
+  const diff =
+    target === undefined || x.remain === target
+      ? ""
+      : ` · 계산서보다 ${won(Math.abs(x.remain - target))}원 ${x.remain > target ? "많음" : "적음"}`;
+  const warn = !known && target !== undefined && x.remain === target ? " · 이름 다름 — 확인 필요" : "";
+  return `${known ? "★ " : ""}${x.date.slice(2)} · ${x.description.slice(0, 24)} · ${isIn ? "+" : "−"}${won(x.remain)}원${diff}${warn}`;
+}
+const comboLabel = (c: { date: string; desc: string; amount: number }, isIn: boolean) =>
+  `${c.date.slice(2)} · ${c.desc.slice(0, 20)} · ${isIn ? "+" : "−"}${won(c.amount)}원`;
 
 /**
  * ⭐ 출금·입금 조합 찾기 (사장님 제보 2026-08-25 — 위즈오토 7월 계산서 1,531,222원이
@@ -135,15 +160,12 @@ const sameMonth = (a: string | null, b: string) => !!a && a.slice(0, 7) === b.sl
 const dayDiff = (a: string | null, b: string): number =>
   a ? Math.abs((new Date(a).getTime() - new Date(b).getTime()) / 86400000) : 999;
 
-export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
-  /* 월별 보기 (사장님 지적 2026-08-25) — ym 을 주면 그 달만. 과거 달(7월)도 열린다:
-     되돌린 7월 계산서가 「과거분」 통에 숨어 사라져 보이던 문제의 해결 */
-  const mr = ym ? monthRange(ym) : null;
-  const invWhere = mr
-    ? sql`write_date >= ${mr.start}::date AND write_date < ${mr.nextStart}::date`
-    : sql`write_date >= ${TAX_APP_START}::date`;
-  const poolStart = mr ? mr.start : TAX_APP_START;
-  // ① 열린 계산서 — 실사용 기간만
+export async function taxReconV2(ym: string): Promise<TaxReconV2> {
+  /* 월별 보기 (사장님 지적 2026-08-25) — 항상 그 달만. 🔴 2025 감사 F12: ym 없는 기본값
+     (2026-08 이후)은 2025를 통째로 빼는 함정이라 폐지 — ym 필수 */
+  const mr = monthRange(ym);
+  const invWhere = sql`write_date >= ${mr.start}::date AND write_date < ${mr.nextStart}::date`;
+  // ① 열린 계산서 — 이 달
   const invs = await db.execute<{
     id: number; direction: "매출" | "매입"; approval_no: string; write_date: string;
     counterparty_biz_no: string; counterparty_name: string;
@@ -163,13 +185,14 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
     WHERE is_active AND recon_status IN ('미대조', '제안') AND ${invWhere}
   `);
 
-  // ② 상태·사유·과거분 집계
+  // ② 상태·사유 집계 — 🔴 2025 감사 F13: 전체 DB 값이 아니라 보는 달 (2025-01 화면에
+  //    2026-08 「확정 36건」이 찍히던 문제)
   const counts = await db.execute<{ s: string; n: number }>(sql`
-    SELECT recon_status s, count(*)::int n FROM tax_invoice WHERE is_active GROUP BY 1 LIMIT 5
+    SELECT recon_status s, count(*)::int n FROM tax_invoice WHERE is_active AND ${invWhere} GROUP BY 1 LIMIT 5
   `);
   const reasons = await db.execute<{ reason: string; n: number }>(sql`
     SELECT COALESCE(recon_reason, '직접') reason, count(*)::int n FROM tax_invoice
-    WHERE is_active AND recon_status = '무시' GROUP BY 1 ORDER BY 2 DESC LIMIT 10
+    WHERE is_active AND recon_status = '무시' AND ${invWhere} GROUP BY 1 ORDER BY 2 DESC LIMIT 10
   `);
 
   // ③ 거래처·별명·상대 유형 사전
@@ -192,9 +215,11 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
     SELECT id, supplier, invoice_no,
            COALESCE(issued_at, to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')) d, total
     FROM purchase_invoice WHERE status <> '취소'
-      -- 🔴 재설계 C3: 최신순 컷 → quotes(감사 M6)와 같은 날짜창
+      -- 🔴 재설계 C3: 최신순 컷 → quotes(감사 M6)와 같은 날짜창. 2025 감사 F14: 보는 달 ±창
       AND COALESCE(issued_at, to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD'))
-          >= to_char(${TAX_APP_START}::date - 75, 'YYYY-MM-DD')
+          >= to_char(${mr.start}::date - 75, 'YYYY-MM-DD')
+      AND COALESCE(issued_at, to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD'))
+          < to_char(${mr.nextStart}::date + 75, 'YYYY-MM-DD')
     ORDER BY id DESC LIMIT 1000
   `);
 
@@ -207,8 +232,9 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
            COALESCE(q.supplier_name, c.name) who, q.payment_method pm
     FROM quote q LEFT JOIN customer c ON c.id = q.customer_id
     WHERE q.status = '성사' AND q.total_amount > 0
-      -- 🔴 감사 M6: 최신순 컷이 아니라 날짜창 — 계산서(8월~) ±창을 다 덮게
-      AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${TAX_APP_START}::date - 75
+      -- 🔴 감사 M6: 최신순 컷이 아니라 날짜창 — 보는 달 ±창 (2025 감사 F14)
+      AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${mr.start}::date - 75
+      AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${mr.nextStart}::date + 75
     ORDER BY q.id DESC LIMIT 1000
   `);
 
@@ -232,8 +258,10 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
     FROM cash_txn
     WHERE source = '통장' AND is_active AND in_amount > 0 AND category IS NULL
       AND recon_status <> '확정' -- 🔴 감사 H7: 외상 수금 등으로 이미 정리된 입금은 후보에서 뺀다
-      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${poolStart}::date - 7
-    ORDER BY id DESC LIMIT 800
+      -- 🔴 2025 감사 F10: 상한 없이 id DESC 800 이면 2025 달의 풀이 2026 줄로 채워진다(id 는 시간순도 아님)
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${mr.start}::date - 45
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${mr.nextStart}::date + 150
+    ORDER BY occurred_at DESC LIMIT 800
   `);
   const freeDeposits = deposits
     .map((x) => ({ ...x, remain: Number(x.in_amount) - (cashLinked.get(Number(x.id)) ?? 0) }))
@@ -248,8 +276,9 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
     WHERE source = '통장' AND is_active AND out_amount > 0
       AND (category IS NULL OR category = '매입대금')
       AND recon_status <> '확정' -- 🔴 재설계 C2: 이미 정리된 출금은 후보에서 뺀다 (deposits와 대칭)
-      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${poolStart}::date - 7
-    ORDER BY id DESC LIMIT 800
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${mr.start}::date - 45
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${mr.nextStart}::date + 150
+    ORDER BY occurred_at DESC LIMIT 800
   `);
   const freeWithdrawals = withdrawals
     .map((x) => ({ ...x, remain: Number(x.out_amount) - (cashLinked.get(Number(x.id)) ?? 0) }))
@@ -285,7 +314,7 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
         candidates: [],
         bankCands: [],
         bankCombo: null,
-        fixPair: null,
+        fixPairs: [],
         supplierId: null,
         supplierName: null,
         learnable: false,
@@ -362,13 +391,12 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
         .filter(({ known }) => known)
         .map(({ x }) => ({ id: Number(x.id), amount: x.remain, date: x.date, desc: x.description, l: x.l }));
       const combo = buyPool.some(({ exact }) => exact) ? null : findAmountCombo(comboSrc, inv.total);
-      const buyBank = buyPool.slice(0, 4).map(({ x, known, exact }) => ({
+      const buyBank = buyPool.slice(0, 4).map(({ x, known }) => ({
         id: Number(x.id),
-        label:
-          `${known ? "★ " : ""}${x.date.slice(5)} · ${x.description.slice(0, 24)} · −${won(x.remain)}원 (${x.l})` +
-          (exact ? "" : ` · 계산서보다 ${won(Math.abs(x.remain - inv.total))}원 ${x.remain > inv.total ? "많음" : "적음"}`),
+        label: bankLabel(x, false, known, inv.total),
         amount: x.remain,
         date: x.date,
+        known,
       }));
       suggestions.push({
         inv,
@@ -379,11 +407,11 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
         bankCombo: combo
           ? {
               ids: combo.map((c) => c.id),
-              labels: combo.map((c) => `${c.date.slice(5)} · ${c.desc.slice(0, 20)} · −${won(c.amount)}원`),
+              labels: combo.map((c) => comboLabel(c, false)),
               total: combo.reduce((s, c) => s + c.amount, 0),
             }
           : null,
-        fixPair: null,
+        fixPairs: [],
         supplierId: sup ? Number(sup.id) : null,
         supplierName: sup?.name ?? null,
         learnable: !!sup && !sup.biz_no,
@@ -428,7 +456,7 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
       /* ⭐ 대행정산 상대는 계산서 금액 ≠ 입금 금액일 수 있다 (수수료 차감·여러 계산서 합산 —
        *   사장님 제보 2026-08-25). 기억된 입금자·대행정산 유형이면 차액이 있어도 보여주고
        *   차액을 라벨에 적는다. 부분 연결된 입금은 남은 금액으로 견준다. */
-      const partyKind = ruleMap.get(inv.counterBizNo) ?? null;
+      // (2025 감사 F20: 대행정산 유형은 후보 생성에 영향이 없다 — 미사용 변수 정리)
       const sellPool = freeDeposits
         .map((x) => {
           const payer = payerKeyOf("통장", x.description);
@@ -455,13 +483,12 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
         .filter(({ known }) => known)
         .map(({ x }) => ({ id: Number(x.id), amount: x.remain, date: x.date, desc: x.description, l: x.l }));
       const combo2 = sellPool.some(({ exact }) => exact) ? null : findAmountCombo(comboSrc2, inv.total);
-      const bankCands = sellPool.slice(0, 4).map(({ x, known, exact }) => ({
+      const bankCands = sellPool.slice(0, 4).map(({ x, known }) => ({
         id: Number(x.id),
-        label:
-          `${known ? "★ " : ""}${x.date.slice(5)} · ${x.description.slice(0, 24)} · +${won(x.remain)}원 (${x.l})` +
-          (exact ? "" : ` · 계산서보다 ${won(Math.abs(x.remain - inv.total))}원 ${x.remain > inv.total ? "많음" : "적음"}`),
+        label: bankLabel(x, true, known, inv.total),
         amount: x.remain,
         date: x.date,
+        known,
       }));
       suggestions.push({
         inv,
@@ -472,11 +499,11 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
         bankCombo: combo2
           ? {
               ids: combo2.map((c) => c.id),
-              labels: combo2.map((c) => `${c.date.slice(5)} · ${c.desc.slice(0, 20)} · +${won(c.amount)}원`),
+              labels: combo2.map((c) => comboLabel(c, true)),
               total: combo2.reduce((s, c) => s + c.amount, 0),
             }
           : null,
-        fixPair: null,
+        fixPairs: [],
         supplierId: null,
         supplierName: namePool[0]?.who ?? null,
         learnable: false,
@@ -486,21 +513,25 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
 
   /* ⑦-3 수정·마이너스 계산서 짝 — 같은 상대, 금액이 정확히 상쇄되는 열린 계산서
    *   (잘못 발행 → 나중에 마이너스 발행하는 관행, 사장님 제보 2026-08-25) */
+  /* 🔴 2025 감사 F4·D3: 원본이 둘(재발행 세트 833,000×2 + −833,000)이면 하나만 고르지 않고
+     전부 보여줘 사장님이 고른다. 마이너스 계산서에는 통장 후보를 만들지 않는다. */
   for (const s of suggestions) {
     if (s.inv.total >= 0) continue;
-    const origin = suggestions.find(
-      (o) =>
-        o.inv.id !== s.inv.id &&
-        o.inv.counterBizNo === s.inv.counterBizNo &&
-        o.inv.total === -s.inv.total &&
-        o.inv.writeDate <= s.inv.writeDate,
-    );
-    if (origin) {
-      s.fixPair = {
-        id: origin.inv.id,
-        label: `${origin.inv.writeDate.slice(5)} · ${won(origin.inv.total)}원 (원본으로 보임)`,
-      };
-    }
+    s.bankCands = [];
+    s.bankCombo = null;
+    s.candidates = [];
+    s.fixPairs = suggestions
+      .filter(
+        (o) =>
+          o.inv.id !== s.inv.id &&
+          o.inv.counterBizNo === s.inv.counterBizNo &&
+          o.inv.total === -s.inv.total &&
+          o.inv.writeDate <= s.inv.writeDate,
+      )
+      .map((o) => ({
+        id: o.inv.id,
+        label: `${o.inv.writeDate.slice(2)} · ${won(o.inv.total)}원${o.inv.itemSummary ? ` · ${o.inv.itemSummary}` : ""}`,
+      }));
   }
 
   // ⑧ 상대(사업자번호)별 그룹 — 미지정 상대 먼저, 건수 많은 순
@@ -535,6 +566,7 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
     ignoredCount: counts.find((c) => c.s === "무시")?.n ?? 0,
     reasonCounts: reasons.map((r) => ({ reason: r.reason, n: Number(r.n) })),
     supplierOptions: suppliers.map((s) => ({ id: Number(s.id), name: s.name })),
+    appRecordsN: purchases.length + quotes.length,
   };
 }
 
@@ -547,15 +579,19 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
 export interface TaxCashRow {
   id: number;
   d: string;
+  /** YYYY-MM-DD — 통장 검색 앵커 */
+  writeDate: string;
   name: string;
   total: number;
   /** 앱 기록(매입/판매)과는 이어져 있음 — 돈만 미확인 */
   appLinked: boolean;
   /** 지금까지 직접 확인된 통장 금액(+차액 조정) — 0<이 값<total 이면 「일부 확인」 */
   bankCovered: number;
-  autoBank: { id: number; label: string }[];
+  autoBank: { id: number; label: string; known: boolean }[];
   /** 여러 통장 줄의 합이 남은 금액과 정확히 맞는 조합 */
   bankCombo: { ids: number[]; labels: string[]; total: number } | null;
+  /** 마이너스(수정) 계산서 — 통장이 아니라 원본과 상쇄해야 끝난다 (「계산서 정리」로) */
+  isFix: boolean;
 }
 
 /**
@@ -570,7 +606,7 @@ export interface MonthlyParty {
   invSum: number;
   paidN: number;
   paidSum: number;
-  /** 누적 미지급 = 전체 기간 계산서 − 전체 기간 지급 */
+  /** 누적 미지급 = 보는 달까지의 계산서 − 보는 달까지의 지급 (원장의 그 달 누적과 같은 값) */
   balance: number;
   /** 이 달 계산서를 「맞음」으로 확인했나 */
   confirmed: boolean;
@@ -635,15 +671,21 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
   /* 🔴 감사 B3(2026-08-25): 월정산 흐름은 「이 방향·이 달에 계산서가 있는 상대」만 —
      방향 무관 제외는 반대 방향 계산서를 영구 실종시키고(미쉐린 8월 매입 1,045,000원)
      0건짜리 죽은 카드를 만들었다 */
-  const monthlyRules = await db.execute<{ biz_no: string; name_raw: string }>(sql`
-    SELECT r.biz_no, r.name_raw FROM tax_party_rule r
-    WHERE r.kind = '월정산'
-      AND EXISTS (SELECT 1 FROM tax_invoice t2 WHERE t2.is_active
-                    AND t2.direction = ${direction}
-                    AND t2.counterparty_biz_no = r.biz_no
-                    AND t2.write_date >= ${start}::date AND t2.write_date < ${nextStart}::date)
-    LIMIT 50
-  `);
+  /* 🔴 2025 감사 F2(2026-08-26): 월정산은 채무(매입) 장부다. 매출 방향에 적용하면 우리가 준
+     돈이 「못 받은 돈」에 더해져 부호가 뒤집힌다(맥스런 "이 달 입금 −6,907,520"). 매출 계산서는
+     월정산 상대라도 일반 행(상계 후보)으로 본다. */
+  const monthlyRules =
+    direction === "매입"
+      ? await db.execute<{ biz_no: string; name_raw: string }>(sql`
+          SELECT r.biz_no, r.name_raw FROM tax_party_rule r
+          WHERE r.kind = '월정산'
+            AND EXISTS (SELECT 1 FROM tax_invoice t2 WHERE t2.is_active
+                          AND t2.direction = ${direction}
+                          AND t2.counterparty_biz_no = r.biz_no
+                          AND t2.write_date >= ${start}::date AND t2.write_date < ${nextStart}::date)
+          LIMIT 50
+        `)
+      : [];
   const monthlyBiz = monthlyRules.map((r) => r.biz_no);
   const notMonthly =
     monthlyBiz.length > 0
@@ -677,7 +719,9 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
                                 AND recon_reason = '월정산')::int done_n,
              count(*) FILTER (WHERE write_date >= ${start}::date AND write_date < ${nextStart}::date
                                 AND recon_status IN ('미대조', '제안'))::int open_n,
-             COALESCE(SUM(total), 0)::bigint all_s, -- 잔액은 「무시」 포함 (발행된 건 다 채무)
+             -- 잔액은 「무시」 포함 (발행된 건 다 채무). 🔴 2025 감사 F1: 보는 달까지만 —
+             -- 전 기간 합이면 2025-01 카드에도 오늘 잔액(4,364만)이 찍혀 원장(741만)과 어긋났다
+             COALESCE(SUM(total) FILTER (WHERE write_date < ${nextStart}::date), 0)::bigint all_s,
              COALESCE(max(counterparty_name), ${mr.name_raw}) nm
       FROM tax_invoice
       WHERE is_active AND direction = ${direction} AND counterparty_biz_no = ${mr.biz_no}
@@ -690,8 +734,8 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
     const isIn2 = direction === "매출";
     const mm = cashByYm.get(ym) ?? { outS: 0, inS: 0, n: 0 };
     const paidMonth = isIn2 ? mm.inS - mm.outS : mm.outS - mm.inS;
-    let paidAll = 0;
-    for (const v of cashByYm.values()) paidAll += isIn2 ? v.inS - v.outS : v.outS - v.inS;
+    let paidAll = 0; // 보는 달까지의 누적 지급 (F1)
+    for (const [ym2, v] of cashByYm) if (ym2 <= ym) paidAll += isIn2 ? v.inS - v.outS : v.outS - v.inS;
     monthlyOpenN += Number(inv?.open_n ?? 0);
     monthly.push({
       bizNo: mr.biz_no,
@@ -717,8 +761,10 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
     WHERE source = '통장' AND is_active AND ${isIn ? sql.raw("in_amount > 0") : sql.raw("out_amount > 0")}
       ${isIn ? sql`AND category IS NULL` : sql`AND (category IS NULL OR category = '매입대금')`}
       AND recon_status <> '확정'
-      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date - 7
-    ORDER BY id DESC LIMIT 800
+      -- 🔴 2025 감사 F10: 양단 날짜 고정 (상한 없는 id DESC 800 은 2025 달의 풀을 2026 줄로 채운다)
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date - 45
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date + 150
+    ORDER BY occurred_at DESC LIMIT 800
   `);
   const free = pool
     .map((x) => ({ ...x, remain: Number(x.amt) - (used.get(Number(x.id)) ?? 0) }))
@@ -734,6 +780,15 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
 
   const outRows: TaxCashRow[] = rows.map((r) => {
     const total = Number(r.total) - Number(r.bank_covered); // 후보 매칭은 남은 금액 기준
+    /* 🔴 2025 감사 F4: 마이너스(수정) 계산서는 통장으로 못 끝낸다 — 후보를 만들지 않고
+       「계산서 정리」에서 원본과 상쇄하라고 안내한다 (전에는 +833,000 입금을 추천했다) */
+    if (Number(r.total) < 0) {
+      return {
+        id: Number(r.id), d: r.d, writeDate: r.write_date, name: r.name, total: Number(r.total),
+        appLinked: !!r.app_linked, bankCovered: Number(r.bank_covered),
+        autoBank: [], bankCombo: null, isFix: true,
+      };
+    }
     const pool2 = free
       .map((x) => {
         const payer = payerKeyOf("통장", x.description);
@@ -761,15 +816,15 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
       .filter(({ known }) => known)
       .map(({ x }) => ({ id: Number(x.id), amount: x.remain, date: x.date, desc: x.description }));
     const combo3 = pool2.some(({ exact }) => exact) ? null : findAmountCombo(comboSrc3, total);
-    const cands = pool2.slice(0, 3).map(({ x, known, exact }) => ({
+    const cands = pool2.slice(0, 3).map(({ x, known }) => ({
       id: Number(x.id),
-      label:
-        `${known ? "★ " : ""}${x.date.slice(5)} · ${x.description.slice(0, 24)} · ${isIn ? "+" : "−"}${won(x.remain)}원 (${x.l})` +
-        (exact ? "" : ` · 계산서보다 ${won(Math.abs(x.remain - total))}원 ${x.remain > total ? "많음" : "적음"}`),
+      label: bankLabel(x, isIn, known, total),
+      known,
     }));
     return {
       id: Number(r.id),
       d: r.d,
+      writeDate: r.write_date,
       name: r.name,
       total: Number(r.total),
       appLinked: !!r.app_linked,
@@ -778,10 +833,11 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
       bankCombo: combo3
         ? {
             ids: combo3.map((c) => c.id),
-            labels: combo3.map((c) => `${c.date.slice(5)} · ${c.desc.slice(0, 20)} · ${isIn ? "+" : "−"}${won(c.amount)}원`),
+            labels: combo3.map((c) => comboLabel(c, isIn)),
             total: combo3.reduce((s, c) => s + c.amount, 0),
           }
         : null,
+      isFix: false,
     };
   });
 

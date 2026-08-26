@@ -115,12 +115,12 @@ export function TaxRecon({
         <button
           type="button"
           disabled={pending}
-          title="규칙 취소 — 이 상대의 자동 정리분(8월 이후)을 되살립니다"
+          title="규칙 취소 — 이 상대의 자동 정리분을 모든 달 되살립니다"
           onClick={async () => {
             if (
               !(await ask({
                 title: `${g.kind} 규칙을 취소할까요?`,
-                body: `「${g.name}」 — 자동 정리됐던 계산서(8월 이후)가 다시 확인 목록으로 돌아옵니다.`,
+                body: `「${g.name}」 — 자동 정리됐던 계산서가 모든 달에서 다시 확인 목록으로 돌아옵니다.`,
                 confirmLabel: "규칙 취소",
               }))
             )
@@ -316,9 +316,10 @@ export function TaxRecon({
             <ul className="mt-2 space-y-2">
               {g.items.map((s) => {
                 // 🔴 가독성의 핵심: 가장 확실한 길 하나만 밖에 보여준다
+                // 🔴 2025 감사 F15: ★ 없는(이름 근거 없는) 통장 후보는 추천 자리에 못 올라온다
                 const primary = s.auto
                   ? "auto"
-                  : s.fixPair
+                  : s.fixPairs.length > 0
                     ? "fix"
                     : s.bundle
                       ? "bundle"
@@ -326,7 +327,7 @@ export function TaxRecon({
                         ? "combo"
                         : s.candidates.length > 0
                           ? "cands"
-                          : s.bankCands.length > 0
+                          : s.bankCands.some((b) => b.known)
                             ? "bank"
                             : "none";
                 const moreBits = [
@@ -368,21 +369,27 @@ export function TaxRecon({
                         </button>
                       </div>
                     )}
-                    {primary === "fix" && s.fixPair && (
-                      <div className="mt-1.5 flex items-center justify-between gap-2 rounded bg-rose-50 p-1.5 text-xs">
-                        <span className="min-w-0 truncate text-rose-900">
-                          마이너스(수정) 계산서 — 원본: {s.fixPair.label}
-                        </span>
-                        <button
-                          type="button"
-                          disabled={pending}
-                          onClick={() =>
-                            act(() => markTaxFixPair(s.inv.id, s.fixPair!.id), () => "원본과 상쇄해 정리했습니다.")
-                          }
-                          className="shrink-0 rounded bg-rose-600 px-2.5 py-1 font-semibold text-white disabled:opacity-40"
-                        >
-                          원본과 정리
-                        </button>
+                    {primary === "fix" && (
+                      <div className="mt-1.5 rounded bg-rose-50 p-1.5 text-xs">
+                        <p className="font-medium text-rose-900">
+                          마이너스(수정) 계산서 — 원본{s.fixPairs.length > 1 ? `로 보이는 ${s.fixPairs.length}건 중 하나` : ""}와
+                          상쇄해 정리합니다
+                        </p>
+                        <ul className="mt-1 space-y-1">
+                          {s.fixPairs.map((fp) => (
+                            <li key={fp.id} className="flex items-center justify-between gap-2">
+                              <span className="min-w-0 truncate text-rose-900">{fp.label}</span>
+                              <button
+                                type="button"
+                                disabled={pending}
+                                onClick={() => act(() => markTaxFixPair(s.inv.id, fp.id), () => "원본과 상쇄해 정리했습니다.")}
+                                className="shrink-0 rounded bg-rose-600 px-2.5 py-1 font-semibold text-white disabled:opacity-40"
+                              >
+                                이 원본과 정리
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
                       </div>
                     )}
                     {primary === "bundle" && s.bundle && (
@@ -495,7 +502,7 @@ export function TaxRecon({
                         )}
                         {primary !== "bank" && s.bankCands.length > 0 && (
                           <PickList
-                            hint={`같은 금액의 통장 ${s.inv.direction === "매입" ? "출금" : "입금"}`}
+                            hint={`같은 금액의 통장 ${s.inv.direction === "매입" ? "출금" : "입금"} — 상대가 맞는지 꼭 확인`}
                             pending={pending}
                             items={s.bankCands.map((b) => ({ key: b.id, label: b.label, onPick: () => bankLink(s, b.id) }))}
                           />
@@ -503,7 +510,7 @@ export function TaxRecon({
                         <div>
                           <p className="font-medium text-slate-600">통장에서 직접 찾기 (선입금·적립 등 금액이 달라도)</p>
                           <div className="mt-1">
-                            <BankSearch direction={s.inv.direction} pending={pending} onPick={(id) => bankLink(s, id)} />
+                            <BankSearch direction={s.inv.direction} pending={pending} onPick={(id) => bankLink(s, id)} anchor={s.inv.writeDate} />
                           </div>
                         </div>
                         <div className="flex items-center justify-end gap-3 border-t border-slate-100 pt-1.5">

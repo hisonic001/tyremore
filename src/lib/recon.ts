@@ -15,7 +15,7 @@ import { db } from "@/db";
 import { getSession, isOwner } from "@/lib/auth";
 import { payerKeyOf } from "./expense-cats";
 import { cashUsedMap, cashUsedSql, normDescSql, normName } from "./recon-data";
-import { TAX_APP_START, taxReconV2 } from "./tax-recon";
+import { taxReconV2 } from "./tax-recon";
 
 export interface MatchRef {
   table: "purchase_invoice" | "quote";
@@ -201,7 +201,7 @@ export async function linkCounterpartyToSupplier(
 
 /** 자동확정 가능한 것(정확 일치·유일·사업자번호 확실)을 서버가 다시 계산해 한꺼번에 확정 */
 export async function autoConfirmTax(
-  ym?: string,
+  ym: string,
 ): Promise<{ ok: true; confirmed: number } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
@@ -329,7 +329,7 @@ export async function ignoreTaxInvoice(
 }
 
 /* ================================================================== */
-/* 대조 v2 — 상대 유형·과거분·입금 연결 (사장님 승인 2026-08-25)          */
+/* 대조 v2 — 상대 유형·입금 연결 (사장님 승인 2026-08-25)                 */
 
 /**
  * 상대(사업자번호) 유형 지정 — 한 번 정하면 과거·미래 계산서가 계속 자동 처리된다.
@@ -362,41 +362,6 @@ export async function setTaxPartyRule(input: {
   revalidatePath("/finance/tax");
   revalidatePath("/finance");
   return { ok: true, applied };
-}
-
-/**
- * ⭐ 그 달 과거분 되살리기 (사장님 요청 2026-08-25 — "7월부터 전부 맞춰보고 싶다")
- *    「과거분」으로 접어 둔 계산서를 그 달만 골라 확인 목록으로 돌린다.
- *    지난달을 소급해서 맞출 때 쓴다 — markPastTax 의 역방향.
- */
-export async function revivePastTax(
-  ym: string,
-): Promise<{ ok: true; revived: number } | { ok: false; error: string }> {
-  const g = await guard();
-  if (!g.ok) return g;
-  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return { ok: false, error: "달이 이상합니다" };
-  const rows = await db.execute<{ id: number }>(sql`
-    UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL
-    WHERE is_active AND recon_status = '무시' AND recon_reason = '과거분'
-      AND write_date >= (${ym} || '-01')::date
-      AND write_date < ((${ym} || '-01')::date + INTERVAL '1 month')
-    RETURNING id
-  `);
-  revalidatePath("/finance/tax");
-  return { ok: true, revived: rows.length };
-}
-
-/** 과거분(앱 도입 전) 일괄 처리 — 재업로드로 되살아난 것 포함 */
-export async function markPastTax(): Promise<{ ok: true; applied: number } | { ok: false; error: string }> {
-  const g = await guard();
-  if (!g.ok) return g;
-  const rows = await db.execute<{ id: number }>(sql`
-    UPDATE tax_invoice SET recon_status = '무시', recon_reason = '과거분'
-    WHERE is_active AND recon_status IN ('미대조', '제안') AND write_date < ${TAX_APP_START}::date
-    RETURNING id
-  `);
-  revalidatePath("/finance/tax");
-  return { ok: true, applied: rows.length };
 }
 
 /**
@@ -681,7 +646,8 @@ export async function markTaxExpense(
   return { ok: true, applied, item: itemKey.length >= 2 ? inv.item_summary : null };
 }
 
-/** 상대 유형 규칙 취소 — 잘못 지정했을 때. 실사용 기간의 자동 정리분을 되살린다 (과거분은 유지) */
+/** 상대 유형 규칙 취소 — 잘못 지정했을 때. 자동 정리분을 **모든 달** 되살린다
+ *  (🔴 2025 감사 F7: 지정은 전 기간인데 취소는 2026-08 이후만 되살려 20개월치가 묻혔다) */
 export async function removeTaxPartyRule(
   bizNo: string,
 ): Promise<{ ok: true; revived: number } | { ok: false; error: string }> {
@@ -697,7 +663,7 @@ export async function removeTaxPartyRule(
     const rows = await db.execute<{ id: number }>(sql`
       UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL
       WHERE is_active AND counterparty_biz_no = ${biz} AND recon_status = '무시'
-        AND recon_reason = ${r.kind} AND write_date >= ${TAX_APP_START}::date
+        AND recon_reason = ${r.kind}
       RETURNING id
     `);
     revived = rows.length;
@@ -759,6 +725,9 @@ export interface BankHit {
 export async function searchBankLines(
   direction: "매출" | "매입",
   query: string,
+  /** 계산서 날짜(YYYY-MM-DD) — 주면 그 날짜에 가까운 줄부터 (🔴 2025 감사 F9: 최신순 80건 컷은
+   *  20개월 거래처의 2025 줄에 영원히 못 닿았다) */
+  anchor?: string,
 ): Promise<{ ok: true; rows: BankHit[] } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
@@ -803,7 +772,11 @@ export async function searchBankLines(
       AND (c.description ILIKE ${"%" + qEsc + "%"}
            OR (${nameCond})
            OR (${amt} > 0 AND (c.in_amount = ${amt} OR c.out_amount = ${amt})))
-    ORDER BY c.occurred_at DESC LIMIT 80
+    ORDER BY ${
+      anchor && /^\d{4}-\d{2}-\d{2}$/.test(anchor)
+        ? sql`abs((c.occurred_at AT TIME ZONE 'Asia/Seoul')::date - ${anchor}::date)`
+        : sql`c.occurred_at DESC`
+    } LIMIT 60
   `);
   const out = rows
     .map((r) => {
@@ -817,7 +790,8 @@ export async function searchBankLines(
     .slice(0, 12)
     .map((r) => ({
       id: Number(r.id),
-      label: `${r.isIn !== wantIn ? "↔ " : ""}${r.date.slice(5)} · ${payerKeyOf("통장", r.description).slice(0, 20)} · ${r.isIn ? "+" : "−"}${r.remain.toLocaleString()}원 (${r.l})`,
+      // 연도 포함 날짜, 시트명 제거 (2025 감사 F3 — 라벨 정본 bankLabel 과 같은 꼴)
+      label: `${r.isIn !== wantIn ? "↔ " : ""}${r.date.slice(2)} · ${payerKeyOf("통장", r.description).slice(0, 20)} · ${r.isIn ? "+" : "−"}${r.remain.toLocaleString()}원`,
       opposite: r.isIn !== wantIn,
     }));
   return { ok: true, rows: out };
