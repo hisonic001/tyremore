@@ -296,6 +296,17 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
 
   const norm = normName;
 
+  /* ⭐ 사장님 지적(2026-08-26, 속초건설): 계산서 1,565,000 카드에 옆 계산서(140,000) 몫인 입금
+     +140,000 이 ★ 후보로 떠서, 누르면 엉뚱한 부분 연결이 됐다. 같은 상대·같은 방향의 **다른 열린
+     계산서와 금액이 정확히 맞는** 통장 줄은 그 계산서 몫이므로 이 계산서 후보에서 뺀다. */
+  const openTotals = new Map<string, number[]>();
+  for (const r of invs) {
+    const k = `${r.counterparty_biz_no}|${r.direction}`;
+    openTotals.set(k, [...(openTotals.get(k) ?? []), Number(r.total)]);
+  }
+  const siblingAmt = (amt: number, inv: TaxRow) =>
+    amt !== inv.total && (openTotals.get(`${inv.counterBizNo}|${inv.direction}`) ?? []).some((t) => t === amt);
+
   const suggestions: TaxSuggestion[] = [];
   for (const r of invs) {
     const inv: TaxRow = {
@@ -389,7 +400,7 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
           /* 🔴 창 넓힘(2026-08-25 위즈오토): 월말 합계 계산서는 그 달 내내의 결제를 담는다 —
              7/31 계산서에 7/8·7/12 출금이 짝인데 -7일 창이라 잘려 조합을 못 찾았다. */
           const inWindow = t >= w - 45 * 86400000 && t <= w + (known ? 150 : 90) * 86400000;
-          return inWindow && (exact || known || similar); // 기억된 지급처는 차액이 있어도 보여준다
+          return inWindow && (exact || known || similar) && !siblingAmt(x.remain, inv); // 기억된 지급처는 차액이 있어도 보여준다 (다른 계산서 몫은 제외)
         })
         .sort(
           (a, b) =>
@@ -486,7 +497,7 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
           /* 🔴 감사 B7(2026-08-25): 대행정산이라도 이름이 닮은(known) 입금만 —
              무차별 후보는 오픈링크에 쫑아수산이 추천되는 오염을 만들었다.
              금액 차이는 known 이면 이미 허용된다 */
-          return inWindow && (exact || known || similar);
+          return inWindow && (exact || known || similar) && !siblingAmt(x.remain, inv);
         })
         .sort(
           (a, b) =>
@@ -846,9 +857,18 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
     LIMIT 200
   `);
   const negKeys = new Set(negs.map((n) => `${n.biz}|${-Number(n.total)}`));
+  // 같은 상대의 다른 열린 계산서 금액 — 그 몫인 통장 줄은 이 계산서 후보에서 뺀다 (사장님 지적 2026-08-26)
+  const openInv = await db.execute<{ biz: string; total: number }>(sql`
+    SELECT t.counterparty_biz_no biz, t.total FROM tax_invoice t ${CASH_LAT}
+    WHERE ${inMonth} AND t.recon_status <> '무시' AND NOT ${DONE} LIMIT 2000
+  `);
+  const openByBiz = new Map<string, number[]>();
+  for (const o of openInv) openByBiz.set(o.biz, [...(openByBiz.get(o.biz) ?? []), Number(o.total)]);
 
   const outRows: TaxCashRow[] = rows.map((r) => {
     const total = Number(r.total) - Number(r.bank_covered); // 후보 매칭은 남은 금액 기준
+    const siblingCash = (amt: number) =>
+      amt !== total && amt !== Number(r.total) && (openByBiz.get(r.biz) ?? []).some((t) => t === amt);
     if (negKeys.has(`${r.biz}|${Number(r.total)}`)) {
       return {
         id: Number(r.id), d: r.d, writeDate: r.write_date, name: r.name, total: Number(r.total),
@@ -880,7 +900,7 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
         // 월말 합계 계산서 대비 — 그 달 초의 결제까지 후보로 (2026-08-25)
         const inWindow = t >= w - 45 * 86400000 && t <= w + back * 86400000;
         // 🔴 감사 B7: 이름 무관 후보(대행정산 loose) 폐지 — 오염 추천의 근원
-        return inWindow && (exact || known || similar);
+        return inWindow && (exact || known || similar) && !siblingCash(x.remain);
       })
       .sort(
         (a, b) =>
