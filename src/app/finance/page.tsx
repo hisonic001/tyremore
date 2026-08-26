@@ -10,6 +10,7 @@ import { taxOpenCounts } from "@/lib/tax-recon";
 import { depositOpenCount, expenseOpen } from "@/lib/recon-data";
 import { uploadCoverage, coverageStatus } from "@/lib/upload-coverage";
 import { cardDaySums } from "@/lib/card-recon";
+import { posDaysSummary } from "@/lib/pos-close";
 import { cancelFinUpload } from "@/lib/fin-upload";
 import { FinShell } from "@/components/fin/shell";
 import { won } from "@/components/fin/money";
@@ -127,6 +128,9 @@ export default async function FinancePage({
   // ⭐ 2026 감사 R2·R3 — 이 달 자료 컷오프·카드 차이 (올리기·카드 화면·체크리스트와 같은 정본)
   const covSt = coverageStatus(await uploadCoverage(), ym);
   const cardSum = await cardDaySums(ym);
+  const posDays = await posDaysSummary(ym);
+  const posToday = posDays.find((d) => d.day === kstToday());
+  const posOpenDays = posDays.filter((d) => !d.closed).length;
 
   // ③ 최근 올린 파일 (배치) — 내역 보기일 때만
   const uploads = view !== "내역" ? [] : await db.execute<{
@@ -191,10 +195,25 @@ export default async function FinancePage({
       warn: !covSt.ok,
     },
     {
-      href: `/finance/card?ym=${ym}`,
-      title: "카드 매출 맞추기",
-      status: !cardSum.assocLast ? "여신협회 자료 없음 →" : cardSum.diffDays > 0 ? `차이 난 날 ${cardSum.diffDays}일 →` : "다 맞음 ✓",
-      warn: !cardSum.assocLast || cardSum.diffDays > 0,
+      href: `/finance/card?ym=${ym}${ym === thisYm ? `&d=${kstToday()}` : ""}`,
+      title: "카드 일마감 · 매출 맞추기",
+      status:
+        ym === thisYm
+          ? !posToday
+            ? "오늘 POS 자료 없음 — 매출리포트 올리기 →"
+            : posToday.closed
+              ? `오늘 마감 ✓${posOpenDays > 0 ? ` · 안 된 날 ${posOpenDays}일` : ""}`
+              : `오늘 남은 ${posToday.open}건 →`
+          : posDays.length > 0
+            ? posOpenDays > 0
+              ? `일마감 안 된 날 ${posOpenDays}일 →`
+              : `일마감 ${posDays.length}일 다 됨 ✓`
+            : !cardSum.assocLast
+              ? "여신협회 자료 없음 →"
+              : cardSum.diffDays > 0
+                ? `차이 난 날 ${cardSum.diffDays}일 →`
+                : "다 맞음 ✓",
+      warn: ym === thisYm ? !posToday || !posToday.closed : posOpenDays > 0 || !cardSum.assocLast || cardSum.diffDays > 0,
     },
     { href: `/finance/deposits?ym=${ym}`, title: "입금 정리", status: depOpen > 0 ? `정리할 입금 ${depOpen}건 →` : "다 됨 ✓", warn: depOpen > 0 },
     {

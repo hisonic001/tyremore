@@ -996,7 +996,7 @@ export const finUpload = pgTable(
   (t) => [
     check(
       "fin_upload_source",
-      sql`${t.source} IN ('홈택스매출','홈택스매입','법인카드','통장','카드매출승인','카드매출입금')`,
+      sql`${t.source} IN ('홈택스매출','홈택스매입','법인카드','통장','카드매출승인','카드매출입금','토스포스')`,
     ),
     check("fin_upload_status", sql`${t.status} IN ('반영','취소')`),
   ],
@@ -1082,7 +1082,7 @@ export const reconMatch = pgTable(
   "recon_match",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
-    /** '매입계산서'|'매출계산서'|'이체입금'|'카드정산입금'|'카드승인' */
+    /** '매입계산서'|'매출계산서'|'이체입금'|'카드정산입금'|'카드승인'|'매입지급'|'포스결제' */
     kind: text("kind").notNull(),
     /** FK 없는 범용 참조 (import_issue 전례) — 확정 액션이 코드로 검증 */
     srcTable: text("src_table").notNull(),
@@ -1099,7 +1099,7 @@ export const reconMatch = pgTable(
     createdAt,
   },
   (t) => [
-    check("recon_match_kind", sql`${t.kind} IN ('매입계산서','매출계산서','이체입금','카드정산입금','카드승인')`),
+    check("recon_match_kind", sql`${t.kind} IN ('매입계산서','매출계산서','이체입금','카드정산입금','카드승인','매입지급','포스결제')`),
     check("recon_match_status", sql`${t.status} IN ('제안','확정')`),
     index("idx_recon_src").on(t.srcTable, t.srcId),
     index("idx_recon_ref").on(t.refTable, t.refId),

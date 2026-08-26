@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { cancelSale, updateSaleHead } from "@/lib/sale-edit";
+import Link from "@/lib/link";
 import type { SaleRow } from "@/lib/sale-history";
 import { EXCLUSIVE, SPLITTABLE, splitLabel } from "@/lib/payments";
 import { signedStr, showSigned } from "@/lib/signed-input";
@@ -224,6 +225,13 @@ export function SaleCard({
                 <span className="ml-1.5 font-semibold text-emerald-700">완납</span>
               );
             })()}
+            {/* ⭐ 카드 일마감 표식 (2026-08-26) — POS 결제와 이어졌나 */}
+            {!canceled && s.posMatch === "ok" && <span className="ml-1.5 font-semibold text-sky-700">포스 ✓</span>}
+            {!canceled && s.posMatch === "missing" && (
+              <Link href={`/finance/card?ym=${s.workDate.slice(0, 7)}&d=${s.workDate}`} className="ml-1.5 font-semibold text-amber-600 underline">
+                POS에 없음
+              </Link>
+            )}
             {/* ⭐ MARS 표식 (사장님 지시 2026-08-09) — ✓ 올라감 · 올리는 중 = 체크 후 대기 */}
             {s.marsStatus === "전송완료" && <span className="ml-1.5 font-semibold text-indigo-600">MARS ✓</span>}
             {s.marsStatus === "미전송" && !canceled && (

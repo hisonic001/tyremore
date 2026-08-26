@@ -14,6 +14,7 @@ const PATHS = [
   "/finance/payables",
   "/finance/party",
   "/finance/card",
+  "/sales",
 ] as const;
 
 export function revalidateFinance(): void {

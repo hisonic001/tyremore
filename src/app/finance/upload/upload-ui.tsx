@@ -9,6 +9,7 @@ import { applyFinUpload, previewFinUpload, type FinPreview } from "@/lib/fin-upl
 function nextStepOf(source: string, ym: string): { href: string; label: string } {
   if (source.includes("통장")) return { href: `/finance/deposits?ym=${ym}`, label: "입금 정리로 →" };
   if (source.includes("법인카드")) return { href: `/finance/expenses?ym=${ym}`, label: "지출 분류로 →" };
+  if (source.includes("토스포스")) return { href: `/finance/card?ym=${ym}`, label: "카드 일마감으로 →" };
   if (source.includes("카드매출")) return { href: `/finance/card?ym=${ym}`, label: "카드 매출 맞추기로 →" };
   if (source.includes("홈택스")) return { href: `/finance/tax?view=money&ym=${ym}`, label: "세금계산서 돈 확인으로 →" };
   return { href: `/finance?ym=${ym}`, label: "현황으로 →" };
@@ -77,14 +78,14 @@ export function FinUpload({ ym }: { ym: string }) {
       <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
         <h2 className="font-semibold">엑셀 올리기</h2>
         <p className="mt-1 text-sm text-slate-500">
-          은행 거래내역 · 법인카드 이용내역(KB 확인서 · 우리카드) · 홈택스 전자세금계산서 목록을
+          은행 거래내역 · 법인카드 이용내역 · 여신협회 카드매출 · 홈택스 전자세금계산서 · 토스 포스 매출리포트(zip 그대로)를
           올리면 무엇으로 읽었는지 먼저 보여 드립니다.{" "}
           <strong>같은 파일을 또 올려도 두 번 계산되지 않습니다.</strong>
         </p>
         <input
           ref={input}
           type="file"
-          accept=".xls,.xlsx"
+          accept=".xls,.xlsx,.zip"
           onChange={(e) => onPick(e.target.files?.[0] ?? null)}
           className="mt-3 block w-full rounded-xl border border-slate-300 p-3 text-sm"
         />

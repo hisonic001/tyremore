@@ -69,6 +69,8 @@ export interface SaleRow {
   tyrePositions: string[];
   /** 등록한 시각 'HH:MM' — 작업일과 별개다 */
   createdAt: string | null;
+  /** ⭐ 카드 일마감 (2026-08-26): 'ok' = POS 결제와 이어짐 · 'missing' = 그 날 POS 자료는 있는데 이 건이 없음 · null = 카드 아님/POS 자료 없음 */
+  posMatch: "ok" | "missing" | null;
   lines: SaleLine[];
 }
 
@@ -201,6 +203,8 @@ export async function saleHistory(opts: {
     list_price: number | null;
     tyre_positions: string | null;
     created_hm: string | null;
+    pos_n: number;
+    pos_day_n: number;
     pay_split: string | null;
     collections: { id: number; amount: number; method: string; paid_on: string; memo: string | null }[] | null;
   }>(sql`
@@ -230,6 +234,11 @@ export async function saleHistory(opts: {
                    || ' ' || a.stage || COALESCE(' — ' || left(a.error, 140), '')
               FROM mars_attempt a WHERE a.quote_id = q.id ORDER BY a.id DESC LIMIT 1) mars_last_try,
            to_char(q.created_at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') created_hm,
+           -- ⭐ 카드 일마감 자국 (2026-08-26) — 이 판매(단일·분할)가 POS 결제와 이어졌나 / 그 날 POS 자료가 있나
+           (SELECT count(*)::int FROM recon_match m WHERE m.kind = '포스결제' AND m.status = '확정'
+              AND ((m.ref_table = 'quote' AND m.ref_id = q.id)
+                OR (m.ref_table = 'quote_payment' AND m.ref_id IN (SELECT id FROM quote_payment WHERE quote_id = q.id)))) pos_n,
+           (SELECT count(*)::int FROM pos_txn p WHERE p.is_active AND p.day = COALESCE(q.work_date, q.created_at::date)) pos_day_n,
            qi.id item_id, qi.line_type, qi.description, qi.qty, qi.final_price, qi.memo line_memo,
            -- ⭐ 규격은 저장된 폭/편평비/인치로 조립한다 (225/45R17 · 145R13)
            --    편평비 80 은 생략 (사장님 지시 2026-08-08 — 145R13·195R15 가 익숙하다)
@@ -312,6 +321,14 @@ export async function saleHistory(opts: {
         marsLastTry: r.mars_last_try,
         tyrePositions: r.tyre_positions ? r.tyre_positions.split(",").map((x) => x.trim()).filter(Boolean) : [],
         createdAt: r.created_hm,
+        posMatch:
+          r.payment_method === "카드" || (r.pay_split ?? "").includes("카드:")
+            ? Number(r.pos_n) > 0
+              ? "ok"
+              : Number(r.pos_day_n) > 0
+                ? "missing"
+                : null
+            : null,
         lines: [],
       };
       map.set(id, s);

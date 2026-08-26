@@ -16,7 +16,7 @@
 import * as XLSX from "xlsx";
 
 /** 업로드 자료의 종류 — fin_upload.source 와 글자 그대로 같다 */
-export type FinSource = "홈택스매출" | "홈택스매입" | "법인카드" | "통장" | "카드매출승인" | "카드매출입금";
+export type FinSource = "홈택스매출" | "홈택스매입" | "법인카드" | "통장" | "카드매출승인" | "카드매출입금" | "토스포스";
 
 /** 자금 움직임 정규화 행 — cash_txn 한 줄이 된다 (팝빌 승급 시에도 이 타입이 계약) */
 export interface NormalizedCashTxn {
@@ -308,7 +308,8 @@ export type AnyFinParse =
   | ({ kind: "tax" } & TaxParseResult)
   | ({ kind: "cardday" } & CardDayParseResult)
   | ({ kind: "cardtxn" } & CardTxnParseResult)
-  | ({ kind: "carddeposit" } & CardDepositParseResult);
+  | ({ kind: "carddeposit" } & CardDepositParseResult)
+  | ({ kind: "postxn" } & PosParseResult);
 
 /**
  * 파일 종류를 가리지 않는 입구 — 업로드 화면은 이것만 부른다.
@@ -316,6 +317,9 @@ export type AnyFinParse =
  */
 export function parseAnyFin(buf: Buffer, myBizNo: string | null, fileName?: string): AnyFinParse {
   const wb = XLSX.read(buf, { type: "buffer" });
+  // ⭐ 토스 포스 매출리포트 (2026-08-26) — 시트 이름으로 바로 알아본다
+  const posSheet = wb.SheetNames.find((n) => normHead(n) === "결제상세내역");
+  if (posSheet) return { kind: "postxn", ...parseTossPosSheet(wb, posSheet) };
   const name = wb.SheetNames.find((n) => normHead(n) === "세금계산서") ?? wb.SheetNames[0];
   if (name) {
     const rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[name], { header: 1, raw: false, defval: "" });
@@ -624,6 +628,103 @@ function parseCardTxnSheet(ws: XLSX.WorkSheet, rows: unknown[][]): CardTxnParseR
     periodFrom: dates[0] ?? null,
     periodTo: dates[dates.length - 1] ?? null,
     sumTotal: out.reduce((s, r) => s + r.amount, 0),
+  };
+}
+
+/* ================================================================== */
+/* 토스 포스 매출리포트 「결제 상세내역」 (사장님 요청 2026-08-26 — 카드 일마감)   */
+
+export interface NormalizedPosTxn {
+  /** 결제기준일자 YYYY-MM-DD */
+  day: string;
+  /** 결제시각 KST "YYYY-MM-DD HH:mm:ss" */
+  paidAt: string;
+  channel: string | null;
+  orderNo: string | null;
+  /** 카드·현금·QR결제·계좌이체·선불지급수단·기타 */
+  method: string;
+  cardCo: string | null;
+  /** 취소는 음수 */
+  amount: number;
+  vat: number | null;
+  isCancel: boolean;
+  cancelAt: string | null;
+}
+
+export interface PosParseResult {
+  source: "토스포스";
+  formatName: string;
+  rows: NormalizedPosTxn[];
+  skipped: { line: number; reason: string }[];
+  rawCsv: string;
+  periodFrom: string | null;
+  periodTo: string | null;
+  /** 카드 결제 합 (취소 반영) */
+  sumTotal: number;
+}
+
+/**
+ * 실측(2026-08-26): 머리행 = 결제기준일자·결제시각·주문채널·주문번호·결제건수·결제금액·부가세·결제수단·
+ * 매입사·결제상태·결제취소시각. 2행은 설명 행(주문번호 칸에 "결제가 포함된 주문의 주문번호").
+ * 🔴 승인번호가 없다 — 건 식별은 결제시각(초)+금액+매입사+상태 (fin-ingest dedup).
+ */
+function parseTossPosSheet(wb: XLSX.WorkBook, sheetName: string): PosParseResult {
+  const ws = wb.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, raw: false, defval: "" });
+  const h = findHeader(rows, ["결제기준일자", "결제시각", "결제금액", "결제수단", "결제상태"]);
+  if (!h) throw new Error("토스 포스 매출리포트의 「결제 상세내역」 머리행을 찾지 못했습니다");
+  const out: NormalizedPosTxn[] = [];
+  const skipped: { line: number; reason: string }[] = [];
+  for (let i = h.at + 1; i < rows.length; i++) {
+    const r = rows[i];
+    const day = toKstDateTime(cell(r, h.col, "결제기준일자"))?.slice(0, 10) ?? null;
+    const paidAt = toKstDateTime(cell(r, h.col, "결제시각"));
+    const amount = toWon(cell(r, h.col, "결제금액"));
+    const status = String(cell(r, h.col, "결제상태") ?? "").trim();
+    if (!day && !paidAt && amount === null) continue; // 설명 행·빈 행
+    if (!day || !paidAt || amount === null) {
+      skipped.push({ line: i + 1, reason: "일자·시각·금액을 못 읽음" });
+      continue;
+    }
+    const isCancel = status.includes("취소");
+    const signed = isCancel && amount > 0 ? -amount : amount;
+    const cardCo = String(cell(r, h.col, "매입사") ?? "").trim();
+    out.push({
+      day,
+      paidAt,
+      channel: String(cell(r, h.col, "주문채널") ?? "").trim() || null,
+      orderNo: String(cell(r, h.col, "주문번호") ?? "").trim() || null,
+      method: String(cell(r, h.col, "결제수단") ?? "").trim() || "기타",
+      cardCo: cardCo || null,
+      amount: signed,
+      vat: toWon(cell(r, h.col, "부가세")),
+      isCancel,
+      cancelAt: toKstDateTime(cell(r, h.col, "결제취소시각")),
+    });
+  }
+  // 「결제 합계」 시트의 결제금액과 견줘 본다 — 다르면 못 읽은 줄이 있다는 뜻
+  const sumSheet = wb.SheetNames.find((n) => normHead(n) === "결제합계");
+  if (sumSheet) {
+    const srows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[sumSheet], { header: 1, raw: false, defval: "" });
+    const sh = findHeader(srows, ["기간", "결제금액"], 5);
+    if (sh) {
+      let declared = 0;
+      for (let i = sh.at + 1; i < srows.length; i++) declared += toWon(cell(srows[i], sh.col, "결제금액")) ?? 0;
+      const got = out.filter((r) => !r.isCancel).reduce((s, r) => s + r.amount, 0) + out.filter((r) => r.isCancel).reduce((s, r) => s + r.amount, 0);
+      if (declared > 0 && declared !== got) skipped.push({ line: 0, reason: `결제 합계 시트 ${declared.toLocaleString()}원과 상세 합 ${got.toLocaleString()}원이 다릅니다` });
+    }
+  }
+  if (out.length === 0) throw new Error("읽을 수 있는 결제 줄이 없습니다 — 그 날 결제가 없었거나 다른 파일입니다");
+  const days = out.map((r) => r.day).sort();
+  return {
+    source: "토스포스",
+    formatName: "토스 포스 매출리포트 (결제 상세내역)",
+    rows: out,
+    skipped,
+    rawCsv: XLSX.utils.sheet_to_csv(ws),
+    periodFrom: days[0] ?? null,
+    periodTo: days[days.length - 1] ?? null,
+    sumTotal: out.filter((r) => r.method === "카드").reduce((s, r) => s + r.amount, 0),
   };
 }
 

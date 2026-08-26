@@ -16,7 +16,8 @@ import { db } from "@/db";
 import { getSession, isOwner } from "@/lib/auth";
 import { getShopInfo } from "@/lib/shop";
 import { parseAnyFin } from "./fin-sheet";
-import { cancelFinUploadBatch, ingestCardDays, ingestCardDeposits, ingestCardTxns, ingestCashTxns, ingestTaxInvoices } from "./fin-ingest";
+import { cancelFinUploadBatch, ingestCardDays, ingestCardDeposits, ingestCardTxns, ingestCashTxns, ingestPosTxns, ingestTaxInvoices } from "./fin-ingest";
+import { extractFirst, isZip } from "./zip-crypto";
 
 const MAX_BYTES = 8 * 1024 * 1024;
 
@@ -26,13 +27,25 @@ async function toBuffer(fd: FormData): Promise<Taken> {
   const f = fd.get("file");
   if (!(f instanceof File) || f.size === 0) return { ok: false, error: "엑셀 파일을 골라 주세요" };
   if (f.size > MAX_BYTES) return { ok: false, error: "파일이 너무 큽니다 (8MB 까지)" };
-  if (!/\.xlsx?$/i.test(f.name)) return { ok: false, error: "엑셀 파일(.xls · .xlsx)만 올릴 수 있습니다" };
-  return { ok: true, buf: Buffer.from(await f.arrayBuffer()), name: f.name };
+  if (!/\.(xlsx?|zip)$/i.test(f.name)) return { ok: false, error: "엑셀 파일(.xls · .xlsx) 또는 토스 포스 zip 만 올릴 수 있습니다" };
+  const raw = Buffer.from(await f.arrayBuffer());
+  /* ⭐ 토스 포스 매출리포트는 비밀번호 zip 으로 내려온다 (2026-08-26) — 그대로 올리면 여기서 푼다.
+     비밀번호는 env POS_ZIP_PASSWORD (Vercel 설정), 코드·저장소엔 없다 */
+  if (/\.zip$/i.test(f.name) || isZip(raw)) {
+    try {
+      const entry = extractFirst(raw, process.env.POS_ZIP_PASSWORD ?? null, (n) => /\.xlsx?$/i.test(n));
+      if (!entry) return { ok: false, error: "zip 안에 엑셀 파일이 없습니다" };
+      return { ok: true, buf: entry.data, name: entry.name };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+  return { ok: true, buf: raw, name: f.name };
 }
 
 export interface FinPreview {
   /** cash = 통장·법인카드(계정 이름 필요), tax = 세금계산서(계정 이름 불필요) */
-  kind: "cash" | "tax" | "cardday" | "carddeposit" | "cardtxn";
+  kind: "cash" | "tax" | "cardday" | "carddeposit" | "cardtxn" | "postxn";
   source: string;
   formatName: string;
   rowCount: number;
@@ -81,6 +94,31 @@ export async function previewFinUpload(
             desc: `${r.counterName}${r.itemSummary ? ` · ${r.itemSummary}` : ""}`,
             inAmount: r.direction === "매출" ? r.total : 0,
             outAmount: r.direction === "매입" ? r.total : 0,
+          })),
+          labels: [],
+        },
+      };
+    }
+    if (p.kind === "postxn") {
+      return {
+        ok: true,
+        preview: {
+          kind: "postxn",
+          source: p.source,
+          formatName: p.formatName,
+          rowCount: p.rows.length,
+          skippedCount: p.skipped.length,
+          skippedSample: p.skipped.slice(0, 5).map((s) => (s.line > 0 ? `${s.line}줄: ` : "") + s.reason),
+          periodFrom: p.periodFrom,
+          periodTo: p.periodTo,
+          sumIn: 0,
+          sumOut: 0,
+          sumTotal: p.sumTotal,
+          sample: p.rows.slice(0, 8).map((r) => ({
+            when: r.paidAt.slice(0, 16),
+            desc: `${r.method}${r.cardCo ? ` · ${r.cardCo}` : ""}${r.isCancel ? " (취소)" : ""}`,
+            inAmount: r.amount > 0 ? r.amount : 0,
+            outAmount: r.amount < 0 ? -r.amount : 0,
           })),
           labels: [],
         },
@@ -198,6 +236,13 @@ export async function applyFinUpload(
       return { ok: true, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount };
     }
 
+    if (p.kind === "postxn") {
+      const r = await ingestPosTxns(p, session?.uid ?? null, t.name);
+      revalidatePath("/finance");
+      revalidatePath("/finance/card");
+      revalidatePath("/sales");
+      return { ok: true, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount };
+    }
     if (p.kind === "cardtxn") {
       const r = await ingestCardTxns(p, session?.uid ?? null, t.name);
       revalidatePath("/finance");

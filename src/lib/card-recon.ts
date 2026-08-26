@@ -17,6 +17,8 @@ export interface CardDayRow {
   cnt: number;
   cancelled: number;
   app: number;
+  /** 승인합의 원천 — 여신협회 / 토스 포스(여신 자료 없는 날) / 없음 */
+  src: "여신" | "POS" | null;
 }
 
 export interface CardDaySums {
@@ -62,12 +64,23 @@ export async function cardDaySums(ym: string): Promise<CardDaySums> {
     GROUP BY 1 LIMIT 40
   `);
 
+  /* ⭐ 토스 포스 일별 카드 합 (2026-08-26) — 여신협회 자료가 아직 없는 날은 POS 를 승인합으로 쓴다
+     (8/24~26 공백이 이걸로 메워진다). 여신이 있는 날은 여신이 정본(승인번호·월 정산과 이어짐). */
+  const pos = await db.execute<{ d: string; total: string; cnt: number }>(sql`
+    SELECT to_char(day, 'YYYY-MM-DD') d, COALESCE(SUM(amount), 0)::bigint total,
+           count(*) FILTER (WHERE amount > 0)::int cnt
+    FROM pos_txn WHERE is_active AND method = '카드' AND day >= ${start}::date AND day < ${nextStart}::date
+    GROUP BY 1 ORDER BY 1 LIMIT 40
+  `);
   const appMap = new Map<string, number>();
   for (const r of [...appDan, ...appSplit, ...appColl]) appMap.set(r.d, (appMap.get(r.d) ?? 0) + Number(r.amt));
   const days = new Map<string, CardDayRow>();
-  for (const a of assoc) days.set(a.d, { assoc: Number(a.total), cnt: Number(a.cnt), cancelled: Number(a.cancelled), app: 0 });
+  for (const a of assoc) days.set(a.d, { assoc: Number(a.total), cnt: Number(a.cnt), cancelled: Number(a.cancelled), app: 0, src: "여신" });
+  for (const p of pos) {
+    if (!days.has(p.d)) days.set(p.d, { assoc: Number(p.total), cnt: Number(p.cnt), cancelled: 0, app: 0, src: "POS" });
+  }
   for (const [d, amt] of appMap) {
-    const row = days.get(d) ?? { assoc: 0, cnt: 0, cancelled: 0, app: 0 };
+    const row = days.get(d) ?? { assoc: 0, cnt: 0, cancelled: 0, app: 0, src: null };
     row.app = amt;
     days.set(d, row);
   }
@@ -75,7 +88,7 @@ export async function cardDaySums(ym: string): Promise<CardDaySums> {
   const assocLast = assoc.length > 0 ? assoc[assoc.length - 1].d : null;
   const sumAssoc = dayRows.reduce((s, [, r]) => s + r.assoc, 0);
   const sumApp = dayRows.reduce((s, [, r]) => s + r.app, 0);
-  const comparable = ([d]: [string, CardDayRow]) => assocLast !== null && d <= assocLast;
+  const comparable = ([, r]: [string, CardDayRow]) => r.src !== null;
   const diffDays = dayRows.filter((x) => comparable(x) && x[1].assoc !== x[1].app).length;
   const after = dayRows.filter((x) => !comparable(x));
   return {

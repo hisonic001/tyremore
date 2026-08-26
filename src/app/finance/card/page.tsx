@@ -9,6 +9,9 @@ import { FinShell } from "@/components/fin/shell";
 import { won } from "@/components/fin/money";
 import { TableWrap } from "@/components/fin/table";
 import { cardDaySums } from "@/lib/card-recon";
+import { posDayData } from "@/lib/pos-close";
+import { kstToday } from "@/lib/ym";
+import { PosCloseUi } from "./pos-close-ui";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +39,11 @@ export default async function FinanceCardPage({
 
   const sp = await searchParams;
   const ym = pickYm(sp.ym);
+  // ⭐ 카드 일마감 날짜 — ?d=, 없으면 오늘(보는 달이 이번 달이면) / 그 달 말일
+  const today = kstToday();
+  const dRaw = typeof sp.d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(sp.d) ? sp.d : null;
+  const day = dRaw ?? (ym === today.slice(0, 7) ? today : `${ym}-${String(new Date(Date.UTC(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0)).getUTCDate()).padStart(2, "0")}`);
+  const pos = await posDayData(day);
   const start = `${ym}-01`;
   const nextStart = `${ymAdd(ym, 1)}-01`;
   /** 앱 판매의 「판 날」 — 리포트와 같은 기준 */
@@ -118,15 +126,18 @@ export default async function FinanceCardPage({
 
   return (
     <FinShell tab="card" monthNav={{ ym, basePath: "/finance/card" }}>
-      <h2 className="mt-3 text-lg font-bold">카드 매출 맞추기</h2>
+      {/* ⭐ 카드 일마감 (사장님 요청 2026-08-26) — 토스 포스 매출리포트 ↔ 앱 판매 */}
+      <PosCloseUi data={pos} ym={ym} />
+
+      <h2 className="mt-6 text-lg font-bold">카드 매출 맞추기 (달)</h2>
       <p className="mt-1 text-sm text-slate-500">
         여신협회 승인(카드사가 실제로 승인한 금액)과 앱에 적은 카드 판매를 <strong>날짜별로</strong> 견줍니다 —
         차이 난 날만 열어 보면 됩니다.
       </p>
       {assocLast && afterCutoffDays > 0 && (
         <p className="tabular mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-900">
-          여신협회 자료가 {assocLast.slice(5)}까지입니다 — 그 뒤 {afterCutoffDays}일(앱 카드 매출 {won(afterCutoffApp)}원)은 비교할
-          수 없어 회색으로 둡니다. 자료가 오면{" "}
+          여신협회 자료가 {assocLast.slice(5)}까지입니다 — 그 뒤 {afterCutoffDays}일(앱 카드 매출 {won(afterCutoffApp)}원)은 POS
+          자료도 없어 비교할 수 없습니다(회색). 매출리포트나 여신 자료가 오면{" "}
           <Link href={`/finance/upload?ym=${ym}`} className="underline">올리기</Link>에서 올려 주세요.
         </p>
       )}
@@ -177,7 +188,7 @@ export default async function FinanceCardPage({
               <thead>
                 <tr className="text-xs text-slate-500">
                   <th className="py-1 text-left">날짜</th>
-                  <th className="text-right">여신협회</th>
+                  <th className="text-right">승인합 (여신/POS)</th>
                   <th className="text-right">앱</th>
                   <th className="text-right">차이</th>
                 </tr>
@@ -191,7 +202,10 @@ export default async function FinanceCardPage({
                       key={d}
                       className={`border-t border-slate-100 ${!cmp ? "text-slate-400" : diff !== 0 ? "bg-amber-50 font-medium" : ""}`}
                     >
-                      <td className="py-1">{d.slice(5)}</td>
+                      <td className="py-1">
+                        <Link href={`/finance/card?ym=${ym}&d=${d}`} className="underline-offset-2 hover:underline">{d.slice(5)}</Link>
+                        {r.src === "POS" && <span className="ml-1 rounded bg-sky-100 px-1 text-[10px] text-sky-800">POS</span>}
+                      </td>
                       <td className="text-right">{r.assoc !== 0 ? `${won(r.assoc)}` : <span className="text-slate-300">—</span>}</td>
                       <td className="text-right">{r.app !== 0 ? `${won(r.app)}` : <span className="text-slate-300">—</span>}</td>
                       <td className={`text-right ${!cmp ? "text-slate-300" : diff === 0 ? "text-slate-300" : "text-amber-700"}`}>

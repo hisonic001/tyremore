@@ -21,6 +21,7 @@ import { finPL } from "./fin-pl";
 import { revalidateFinance } from "./fin-revalidate";
 import { uploadCoverage, coverageStatus } from "./upload-coverage";
 import { cardDaySums } from "./card-recon";
+import { posDaysSummary } from "./pos-close";
 import { zeroTotalInvoiceCount } from "./invoice";
 
 export interface CloseCheck {
@@ -97,7 +98,19 @@ export async function closeChecklist(ym: string, healthOk?: boolean): Promise<Cl
       href: `/finance/card?ym=${ym}`,
     },
   ];
+  const posDays = await posDaysSummary(ym);
+  const posOpen = posDays.filter((d) => !d.closed);
   const softTail: CloseCheck[] = [
+    ...(posDays.length > 0
+      ? [
+          {
+            ok: posOpen.length === 0,
+            soft: true,
+            text: posOpen.length === 0 ? `카드 일마감 ${posDays.length}일 다 됨` : `카드 일마감 안 된 날 ${posOpen.length}일`,
+            href: `/finance/card?ym=${ym}&d=${posOpen[0]?.day ?? ym + "-01"}`,
+          },
+        ]
+      : []),
     {
       ok: pay.suppliers.length === 0,
       soft: true,

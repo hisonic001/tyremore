@@ -35,6 +35,8 @@ export async function uploadCoverage(): Promise<CoverageRow[]> {
     FROM cash_txn WHERE source = '법인카드' AND is_active GROUP BY 1 ORDER BY 1 LIMIT 10
   `);
   for (const r of card) rows.push({ key: `card:${r.l}`, label: `법인카드 ${r.l}`, last: r.d, granularity: "day", next: "/finance/expenses" });
+  const [posLast] = await db.execute<{ d: string | null }>(sql`SELECT max(day)::text d FROM pos_txn WHERE is_active`);
+  rows.push({ key: "pos", label: "토스 포스 매출리포트(일)", last: posLast?.d ?? null, granularity: "day", next: "/finance/card" });
   const [assoc] = await db.execute<{ d: string | null }>(sql`SELECT max(day)::text d FROM card_day WHERE is_active`);
   rows.push({ key: "assoc", label: "여신협회 카드매출(일별)", last: assoc?.d ?? null, granularity: "day", next: "/finance/card" });
   const [dep] = await db.execute<{ m: string | null }>(sql`SELECT max(month) m FROM card_deposit WHERE is_active`);
@@ -79,7 +81,7 @@ export function coverageStatus(rows: CoverageRow[], ym: string): CoverageStatus 
   const lagSet = new Set(lagging.map((r) => r.key));
   const text = rows
     .map((r) => {
-      const short = r.label.replace("법인카드 ", "").replace("여신협회 카드매출(일별)", "여신").replace("카드사 정산(월)", "정산").replace("홈택스 ", "").replace(" 계산서", "");
+      const short = r.label.replace("법인카드 ", "").replace("여신협회 카드매출(일별)", "여신").replace("토스 포스 매출리포트(일)", "포스").replace("카드사 정산(월)", "정산").replace("홈택스 ", "").replace(" 계산서", "");
       const d = r.last ? (r.granularity === "month" ? r.last.slice(2) : r.last.slice(5)) : "없음";
       return `${short} ~${d}${lagSet.has(r.key) ? " ⚠" : ""}`;
     })

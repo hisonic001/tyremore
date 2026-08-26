@@ -15,7 +15,8 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { CARD_SETTLE_PATTERN_SQL } from "./expense-cats";
 import { normName } from "./recon-data";
-import type { CardDayParseResult, CardDepositParseResult, CardTxnParseResult, FinParseResult, NormalizedCashTxn, TaxParseResult } from "./fin-sheet";
+import type { CardDayParseResult, CardDepositParseResult, CardTxnParseResult, FinParseResult, NormalizedCashTxn, PosParseResult, TaxParseResult } from "./fin-sheet";
+import { autoMatchPosDayCore } from "./pos-close";
 
 export interface IngestResult {
   uploadId: number;
@@ -157,10 +158,19 @@ export async function cancelFinUploadBatch(uploadId: number): Promise<number> {
         ? sql.raw("card_day")
         : up.source === "카드매출입금"
           ? sql.raw("card_deposit")
-          : sql.raw("cash_txn");
+          : up.source === "토스포스"
+            ? sql.raw("pos_txn")
+            : sql.raw("cash_txn");
   const rows = await db.execute<{ id: number }>(sql`
     UPDATE ${table} SET is_active = false WHERE upload_id = ${uploadId} AND is_active RETURNING id
   `);
+  // 토스 포스 배치 취소 — 그 결제 건에 붙은 일마감 자국도 지운다 (2026-08-26)
+  if (up.source === "토스포스") {
+    await db.execute(sql`
+      DELETE FROM recon_match WHERE kind = '포스결제' AND src_table = 'pos_txn'
+        AND src_id IN (SELECT id FROM pos_txn WHERE upload_id = ${uploadId})
+    `);
+  }
   // 🔴 감사 M9: '카드매출승인' 배치는 card_day(집계)와 card_txn(건별) 둘 다 잠재운다
   if (up.source === "카드매출승인") {
     await db.execute(sql`
@@ -342,6 +352,52 @@ export async function ingestCardDeposits(
 
 /* ================================================================== */
 /* 카드 매출 건별 승인 반영 (2026-08-25)                                */
+
+/**
+ * ⭐ 토스 포스 결제 건 — pos_txn 에 넣고, 반영한 날짜마다 앱 판매와 자동 대조 (2026-08-26)
+ *   dedup = 토스포스|일자|결제시각|수단|매입사|금액|상태 (승인번호가 없는 형식)
+ */
+export async function ingestPosTxns(
+  parsed: PosParseResult,
+  userId: number | null,
+  fileName: string,
+): Promise<IngestResult & { matched: number }> {
+  const [up] = await db.execute<{ id: number }>(sql`
+    INSERT INTO fin_upload (source, file_name, raw_text, row_count, period_from, period_to, created_by)
+    VALUES (${parsed.source}, ${fileName}, ${parsed.rawCsv.slice(0, 2_000_000)},
+            ${parsed.rows.length}, ${parsed.periodFrom}, ${parsed.periodTo}, ${userId})
+    RETURNING id
+  `);
+  const uploadId = Number(up.id);
+  let newCount = 0;
+  for (let i = 0; i < parsed.rows.length; i += 100) {
+    const chunk = parsed.rows.slice(i, i + 100);
+    const keys = chunk.map(
+      (r) => `토스포스|${r.day}|${r.paidAt}|${r.method}|${r.cardCo ?? ""}|${r.amount}|${r.isCancel ? "취소" : "승인"}`,
+    );
+    const values = chunk.map(
+      (r, j) => sql`(${r.day}::date, ${r.paidAt + "+09"}::timestamptz, ${r.channel}, ${r.orderNo}, ${r.method}, ${r.cardCo},
+        ${r.amount}, ${r.vat}, ${r.isCancel}, ${r.cancelAt ? r.cancelAt + "+09" : null}::timestamptz, ${keys[j]}, ${uploadId})`,
+    );
+    const ins = await db.execute<{ id: number }>(sql`
+      INSERT INTO pos_txn (day, paid_at, channel, order_no, method, card_co, amount, vat, is_cancel, cancel_at, dedup_key, upload_id)
+      VALUES ${sql.join(values, sql`, `)}
+      ON CONFLICT (dedup_key) DO NOTHING
+      RETURNING id
+    `);
+    newCount += ins.length;
+    await db.execute(sql`
+      UPDATE pos_txn SET is_active = true
+      WHERE is_active = false AND dedup_key IN (${sql.join(keys.map((k) => sql`${k}`), sql`, `)})
+    `);
+  }
+  // 반영한 날짜마다 자동 대조 — 올리면 바로 짝이 맞는다
+  let matched = 0;
+  for (const day of [...new Set(parsed.rows.map((r) => r.day))].sort()) matched += await autoMatchPosDayCore(day, userId);
+  const dupCount = parsed.rows.length - newCount;
+  await db.execute(sql`UPDATE fin_upload SET new_count = ${newCount}, dup_count = ${dupCount} WHERE id = ${uploadId}`);
+  return { uploadId, rowCount: parsed.rows.length, newCount, dupCount, matched };
+}
 
 /** 건별 승인 — card_txn 에 넣고, 일별 합계(card_day)도 세부에서 집계해 같이 얹는다 */
 export async function ingestCardTxns(
