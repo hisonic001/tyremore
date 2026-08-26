@@ -11,11 +11,9 @@ import {
   confirmTaxToBanks,
   ignoreTaxInvoice,
   linkCounterpartyToSupplier,
-  markPastTax,
   markTaxExpense,
   markTaxFixPair,
   removeTaxPartyRule,
-  revivePastTax,
   setTaxPartyRule,
   undoTaxMatch,
 } from "@/lib/recon";
@@ -53,14 +51,11 @@ export interface ClearedRow {
  */
 export function TaxRecon({
   ym,
-  pastInMonth,
   data,
   recent,
   cleared,
 }: {
   ym: string;
-  /** 이 달에 「과거분」으로 접어 둔 계산서 — 소급해 맞출 때 되살린다 */
-  pastInMonth: { n: number; sum: number };
   data: TaxReconV2;
   recent: RecentRow[];
   cleared: ClearedRow[];
@@ -181,47 +176,7 @@ export function TaxRecon({
       {error && <p className="mt-2 rounded-lg bg-red-50 p-2 text-sm text-red-700">⚠️ {error}</p>}
       {msg && <p className="mt-2 rounded-lg bg-emerald-50 p-2 text-sm text-emerald-800">✅ {msg}</p>}
 
-      {/* ⭐ 이 달 과거분 되살리기 (사장님 요청 2026-08-25 — 지난달 소급 대사) */}
-      {pastInMonth.n > 0 && (
-        <section className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-card border border-sky-300 bg-sky-50 p-3">
-          <p className="tabular text-sm text-sky-900">
-            {Number(ym.slice(5, 7))}월 계산서 <strong>{pastInMonth.n}건 · {won(pastInMonth.sum)}원</strong>이
-            「과거분」으로 접혀 있습니다 — 이 달을 맞춰 보시려면 되살리세요
-          </p>
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() =>
-              act(
-                () => revivePastTax(ym),
-                (r: { revived: number }) => `${r.revived}건을 되살렸습니다 — 아래 목록에서 정리하세요.`,
-              )
-            }
-            className="rounded-control bg-sky-700 px-3 py-2 text-sm font-semibold text-white active:bg-sky-800 disabled:opacity-40"
-          >
-            {Number(ym.slice(5, 7))}월 과거분 되살리기
-          </button>
-        </section>
-      )}
-
-      {/* 과거분 — 재업로드로 되살아난 것 */}
-      {data.pastCount > 0 && ym >= "2026-08" && (
-        <section className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-300 bg-slate-50 p-3">
-          <p className="tabular text-sm text-slate-600">
-            앱 도입(8월) 이전 과거분 {data.pastCount}건 · {won(data.pastSum)}원 — 대조할 앱 기록이 없던 시절입니다
-          </p>
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => act(() => markPastTax(), (r: { applied: number }) => `과거분 ${r.applied}건을 정리했습니다.`)}
-            className="rounded-lg border border-slate-400 bg-white px-3 py-1.5 text-sm font-medium"
-          >
-            과거분 일괄 정리
-          </button>
-        </section>
-      )}
-
-      {data.openCount === 0 && data.pastCount === 0 && (
+      {data.openCount === 0 && (
         <section className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
           확인할 세금계산서가 없습니다 🎉
         </section>

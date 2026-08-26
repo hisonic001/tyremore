@@ -100,12 +100,6 @@ export default async function FinanceTaxPage({
     ORDER BY id DESC LIMIT 50
   `);
 
-  // ⭐ 그 달 「과거분」으로 접어 둔 건수 — 지난달을 소급해 맞출 때 되살리기 버튼에 쓴다
-  const [pastRow] = await db.execute<{ n: number; s: string }>(sql`
-    SELECT count(*)::int n, COALESCE(SUM(total), 0)::bigint s FROM tax_invoice
-    WHERE is_active AND recon_status = '무시' AND recon_reason = '과거분'
-      AND write_date >= ${mStart}::date AND write_date < ${mNext}::date
-  `);
 
   return (
     <FinShell tab="tax" monthNav={{ ym, basePath: "/finance/tax", keep: { view: "sort" } }}>
@@ -116,7 +110,6 @@ export default async function FinanceTaxPage({
       </p>
       <TaxRecon
         ym={ym}
-        pastInMonth={{ n: Number(pastRow.n), sum: Number(pastRow.s) }}
         data={data}
         recent={recent.map((r) => ({
           id: Number(r.id),

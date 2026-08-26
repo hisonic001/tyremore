@@ -85,9 +85,6 @@ export interface TaxReconV2 {
   autoCount: number;
   doneCount: number;
   ignoredCount: number;
-  /** 아직 미대조로 남은 과거분 (재업로드 등) — [일괄 처리]의 대상 */
-  pastCount: number;
-  pastSum: number;
   reasonCounts: { reason: string; n: number }[];
   supplierOptions: { id: number; name: string }[];
 }
@@ -169,10 +166,6 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
   // ② 상태·사유·과거분 집계
   const counts = await db.execute<{ s: string; n: number }>(sql`
     SELECT recon_status s, count(*)::int n FROM tax_invoice WHERE is_active GROUP BY 1 LIMIT 5
-  `);
-  const past = await db.execute<{ n: number; s: string }>(sql`
-    SELECT count(*)::int n, COALESCE(SUM(total), 0)::bigint s FROM tax_invoice
-    WHERE is_active AND recon_status IN ('미대조', '제안') AND write_date < ${TAX_APP_START}::date
   `);
   const reasons = await db.execute<{ reason: string; n: number }>(sql`
     SELECT COALESCE(recon_reason, '직접') reason, count(*)::int n FROM tax_invoice
@@ -540,8 +533,6 @@ export async function taxReconV2(ym?: string): Promise<TaxReconV2> {
     autoCount: suggestions.filter((s) => s.auto).length,
     doneCount: counts.find((c) => c.s === "확정")?.n ?? 0,
     ignoredCount: counts.find((c) => c.s === "무시")?.n ?? 0,
-    pastCount: Number(past[0]?.n ?? 0),
-    pastSum: Number(past[0]?.s ?? 0),
     reasonCounts: reasons.map((r) => ({ reason: r.reason, n: Number(r.n) })),
     supplierOptions: suppliers.map((s) => ({ id: Number(s.id), name: s.name })),
   };

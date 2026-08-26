@@ -227,14 +227,10 @@ export async function ingestTaxInvoices(
   }
 
   /**
-   * ⭐ 자동 정리 (대조 v2, 2026-08-25) — 새로 들어온 계산서에 규칙을 바로 적용:
-   *    ①앱 도입 전 과거분 → 무시/과거분  ②상대 유형(경비·무시) 학습분 → 자동 무시.
-   *    화면에는 진짜 판단이 필요한 것만 남는다.
+   * ⭐ 자동 정리 — 상대 유형(경비·무시) 학습분만 자동 무시.
+   * 🔴 과거분 자동 접힘은 폐지 (사장님 방침 2026-08-26: "중요한 건 자료들 —
+   *    이전 내용 전부 살려 달라"). 2025년 계산서도 통장(2025-01~)과 대조한다.
    */
-  await db.execute(sql`
-    UPDATE tax_invoice SET recon_status = '무시', recon_reason = '과거분'
-    WHERE upload_id = ${uploadId} AND recon_status = '미대조' AND write_date < '2026-08-01'
-  `);
   await db.execute(sql`
     UPDATE tax_invoice t SET recon_status = '무시', recon_reason = r.kind
     FROM tax_party_rule r
