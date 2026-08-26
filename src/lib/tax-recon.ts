@@ -60,8 +60,8 @@ export interface TaxSuggestion {
   bundle: CandidateRef[] | null;
   candidates: CandidateRef[];
   bankCands: BankRef[];
-  /** 여러 통장 줄의 합이 계산서와 정확히 맞는 조합 — 한꺼번에 잇는다 */
-  bankCombo: { ids: number[]; labels: string[]; total: number } | null;
+  /** 여러 통장 줄의 합이 계산서와 맞는(허용 오차 안) 조합 — 한꺼번에 잇는다. diff = 합 − 계산서 */
+  bankCombo: { ids: number[]; labels: string[]; total: number; diff: number } | null;
   /** 마이너스(수정) 계산서의 원본으로 보이는 짝들 — 같은 금액 원본이 여럿이면 다 보여준다 (2025 감사 F4) */
   fixPairs: { id: number; label: string }[];
   /** 이 계산서가 어떤 마이너스 계산서의 원본 후보다 — 통장보다 상쇄가 먼저 (2026 감사 G9) */
@@ -164,40 +164,58 @@ const comboLabel = (c: { date: string; desc: string; amount: number }, isIn: boo
  *    7/8 840,092 + 7/8 500,940 + 7/12 190,190 세 건의 합과 정확히 같았다).
  *
  *    월합계 계산서를 쓰는 곳은 결제를 건별로 나눠 하므로, 한 건씩 골라 잇는 대신
- *    **합이 딱 맞는 조합**을 찾아 한꺼번에 이어 준다. 정확히 맞을 때만 제안한다
- *    (근사값은 오히려 헷갈린다). 후보가 많으면(>14) 탐색을 접는다.
+ *    **합이 딱 맞는 조합**을 찾아 한꺼번에 이어 준다.
+ *
+ * 🔴 사장님 요청(2026-08-26, 유일이엔티): 198,860 + 2,323,200 = 2,522,060 이 계산서 2,521,860 과
+ *    200원 어긋나 조합이 안 떴다 — 이체 수수료·반올림 몫. **허용 오차**(1,000원 또는 0.1% 중 큰 쪽)
+ *    안이면 조합으로 제안하고 차이를 정직하게 적는다. 정확 일치가 있으면 그것을 우선.
+ *    폭도 넓힌다: 최대 6줄 · 후보 20개 (부분집합 탐색 ≈ 6만 회, 즉시).
  */
+export const nearTolerance = (target: number): number => Math.max(1000, Math.round(Math.abs(target) * 0.001));
+
+export function findAmountComboNear<T extends { id: number; amount: number }>(
+  cands: T[],
+  target: number,
+  tol: number,
+  maxPick = 6,
+): { picks: T[]; sum: number } | null {
+  if (target <= 0 || cands.length < 2) return null;
+  // 후보가 많으면 앞쪽(호출자가 관련도 순으로 정렬해 옴) 20개만 탐색 (감사 C3 계보)
+  const pool = cands.filter((c) => c.amount > 0 && c.amount <= target + tol).slice(0, 20);
+  if (pool.length < 2) return null;
+  pool.sort((a, b) => b.amount - a.amount); // 건수가 적은 조합을 먼저 찾도록 큰 금액부터
+  const st = { best: null as T[] | null, diff: Number.POSITIVE_INFINITY };
+  const pick: T[] = [];
+  const dfs = (i: number, sum: number) => {
+    if (st.best && st.diff === 0) return; // 정확 일치면 충분
+    if (pick.length >= 2) {
+      const dd = Math.abs(sum - target);
+      if (dd <= tol && dd < st.diff) {
+        st.best = [...pick];
+        st.diff = dd;
+      }
+    }
+    if (i >= pool.length || pick.length >= maxPick || sum > target + tol) return;
+    for (let j = i; j < pool.length; j++) {
+      if (sum + pool[j].amount > target + tol) continue;
+      pick.push(pool[j]);
+      dfs(j + 1, sum + pool[j].amount);
+      pick.pop();
+      if (st.best && st.diff === 0) return;
+    }
+  };
+  dfs(0, 0);
+  const best = st.best;
+  return best ? { picks: best, sum: best.reduce((a, c) => a + c.amount, 0) } : null;
+}
+
+/** 정확히 맞는 조합만 (묶음 잇기 등) */
 export function findAmountCombo<T extends { id: number; amount: number }>(
   cands: T[],
   target: number,
-  maxPick = 4,
+  maxPick = 6,
 ): T[] | null {
-  if (target <= 0 || cands.length < 2) return null;
-  // 🔴 감사 C3(2026-08-25): 후보가 많으면 침묵하는 대신 앞쪽(호출자가 관련도 순으로
-  //    정렬해 옴) 14개만 탐색 — 다건 거래처에서 조합 추천이 먼저 꺼지던 문제
-  const pool = cands.filter((c) => c.amount > 0 && c.amount <= target).slice(0, 14);
-  if (pool.length < 2) return null;
-  let best: T[] | null = null;
-  const pick: T[] = [];
-  const dfs = (i: number, left: number) => {
-    if (best) return; // 첫 정답이면 충분 (건수 적은 것부터 찾는다)
-    if (left === 0 && pick.length >= 2) {
-      best = [...pick];
-      return;
-    }
-    if (i >= pool.length || pick.length >= maxPick || left < 0) return;
-    for (let j = i; j < pool.length; j++) {
-      if (pool[j].amount > left) continue;
-      pick.push(pool[j]);
-      dfs(j + 1, left - pool[j].amount);
-      pick.pop();
-      if (best) return;
-    }
-  };
-  // 건수가 적은 조합을 먼저 찾도록 큰 금액부터
-  pool.sort((a, b) => b.amount - a.amount);
-  dfs(0, target);
-  return best;
+  return findAmountComboNear(cands, target, 0, maxPick)?.picks ?? null;
 }
 const sameMonth = (a: string | null, b: string) => !!a && a.slice(0, 7) === b.slice(0, 7);
 const dayDiff = (a: string | null, b: string): number =>
@@ -452,7 +470,7 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
       const comboSrc = buyPool
         .filter(({ known }) => known)
         .map(({ x }) => ({ id: Number(x.id), amount: x.remain, date: x.date, desc: x.description, l: x.l }));
-      const combo = buyPool.some(({ exact }) => exact) ? null : findAmountCombo(comboSrc, inv.total);
+      const combo = buyPool.some(({ exact }) => exact) ? null : findAmountComboNear(comboSrc, inv.total, nearTolerance(inv.total));
       const buyBank = buyPool.slice(0, 4).map(({ x, known, similar }) => ({
         id: Number(x.id),
         label: bankLabel(x, false, known, inv.total, similar),
@@ -468,9 +486,10 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
         bankCands: buyBank,
         bankCombo: combo
           ? {
-              ids: combo.map((c) => c.id),
-              labels: combo.map((c) => comboLabel(c, false)),
-              total: combo.reduce((s, c) => s + c.amount, 0),
+              ids: combo.picks.map((c) => c.id),
+              labels: combo.picks.map((c) => comboLabel(c, false)),
+              total: combo.sum,
+              diff: combo.sum - inv.total,
             }
           : null,
         fixPairs: [],
@@ -555,7 +574,7 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
       const comboSrc2 = sellPool
         .filter(({ known }) => known)
         .map(({ x }) => ({ id: Number(x.id), amount: x.remain, date: x.date, desc: x.description, l: x.l }));
-      const combo2 = sellPool.some(({ exact }) => exact) ? null : findAmountCombo(comboSrc2, inv.total);
+      const combo2 = sellPool.some(({ exact }) => exact) ? null : findAmountComboNear(comboSrc2, inv.total, nearTolerance(inv.total));
       const bankCands = sellPool.slice(0, 4).map(({ x, known, similar }) => ({
         id: Number(x.id),
         label: bankLabel(x, true, known, inv.total, similar),
@@ -571,9 +590,10 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
         bankCands,
         bankCombo: combo2
           ? {
-              ids: combo2.map((c) => c.id),
-              labels: combo2.map((c) => comboLabel(c, true)),
-              total: combo2.reduce((s, c) => s + c.amount, 0),
+              ids: combo2.picks.map((c) => c.id),
+              labels: combo2.picks.map((c) => comboLabel(c, true)),
+              total: combo2.sum,
+              diff: combo2.sum - inv.total,
             }
           : null,
         fixPairs: [],
@@ -723,8 +743,8 @@ export interface TaxCashRow {
   autoBank: { id: number; label: string; known: boolean; amount: number }[];
   /** 통장 한 줄이 이 상대의 계산서 여러 장 합과 정확히 맞음 — 한꺼번에 잇기 (같은 줄이 관련 행마다 붙는다) */
   bankBundle: BankBundle | null;
-  /** 여러 통장 줄의 합이 남은 금액과 정확히 맞는 조합 */
-  bankCombo: { ids: number[]; labels: string[]; total: number } | null;
+  /** 여러 통장 줄의 합이 남은 금액과 맞는(허용 오차 안) 조합. diff = 합 − 남은 금액 */
+  bankCombo: { ids: number[]; labels: string[]; total: number; diff: number } | null;
   /** 마이너스(수정) 계산서 — 통장이 아니라 원본과 상쇄해야 끝난다 (「계산서 정리」로) */
   isFix: boolean;
   /** 같은 상대의 열린 마이너스 계산서가 이 금액을 상쇄한다 — 통장보다 상쇄가 먼저 (2026 감사 G9) */
@@ -979,7 +999,7 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
     const comboSrc3 = pool2
       .filter(({ known }) => known)
       .map(({ x }) => ({ id: Number(x.id), amount: x.remain, date: x.date, desc: x.description }));
-    const combo3 = pool2.some(({ exact }) => exact) ? null : findAmountCombo(comboSrc3, total);
+    const combo3 = pool2.some(({ exact }) => exact) ? null : findAmountComboNear(comboSrc3, total, nearTolerance(total));
     const cands = pool2.slice(0, 3).map(({ x, known, similar }) => ({
       id: Number(x.id),
       label: bankLabel(x, isIn, known, total, similar),
@@ -997,9 +1017,10 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
       autoBank: cands,
       bankCombo: combo3
         ? {
-            ids: combo3.map((c) => c.id),
-            labels: combo3.map((c) => comboLabel(c, isIn)),
-            total: combo3.reduce((s, c) => s + c.amount, 0),
+            ids: combo3.picks.map((c) => c.id),
+            labels: combo3.picks.map((c) => comboLabel(c, isIn)),
+            total: combo3.sum,
+            diff: combo3.sum - total,
           }
         : null,
       bankBundle: null,

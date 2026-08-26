@@ -21,7 +21,7 @@ import {
 } from "@/lib/recon";
 import { useConfirm } from "@/components/ui/confirm";
 import { won } from "@/components/fin/money";
-import { BankSearch, PickList } from "./link-parts";
+import { BankSearch, MultiPickBar, PickList, type Picked, type PickItem } from "./link-parts";
 
 export interface RecentBankRow {
   id: number;
@@ -38,6 +38,34 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
   const [error, setError] = useState<string | null>(null);
   const [ask, confirmDialog] = useConfirm();
   const isIn = data.direction === "매출";
+  /** 골라서 잇기 — 계산서 id → (통장 줄 id → 남은 금액) */
+  const [sel, setSel] = useState<Record<number, Picked>>({});
+  const toggle = (invId: number, it: PickItem) =>
+    setSel((p) => {
+      const cur = { ...(p[invId] ?? {}) };
+      const k = Number(it.key);
+      if (k in cur) delete cur[k];
+      else cur[k] = it.amount ?? 0;
+      return { ...p, [invId]: cur };
+    });
+  const comboMsg = (r: { applied: number; remaining: number; shortfall: number; absorbed: number; settled: number }) =>
+    `${r.applied}줄을 합쳐 이었습니다` +
+    (r.absorbed > 0 ? ` — 통장에 남은 ${won(r.absorbed)}원은 수수료·반올림으로 정리했습니다` : "") +
+    (r.settled > 0 ? ` — 계산서에 모자란 ${won(r.settled)}원은 차액으로 정리했습니다` : "") +
+    (r.shortfall > 0 ? ` — 계산서에 ${won(r.shortfall)}원이 남았습니다 (더 이어 잇거나 「확인 끝」)` : "") +
+    (r.remaining > 0 ? ` — 통장 줄에 ${won(r.remaining)}원이 남았습니다` : "") +
+    (r.absorbed === 0 && r.settled === 0 && r.shortfall === 0 && r.remaining === 0 ? " — 금액이 정확히 맞습니다." : ".");
+  const linkPicked = (invId: number) =>
+    start(async () => {
+      setMsg(null);
+      setError(null);
+      const ids = Object.keys(sel[invId] ?? {}).map(Number);
+      const r = await confirmTaxToBanks(invId, ids);
+      if (!r.ok) return setError(r.error);
+      setSel((p) => ({ ...p, [invId]: {} }));
+      setMsg(comboMsg(r));
+      router.refresh();
+    });
 
   const link = (invId: number, cashId: number) =>
     start(async () => {
@@ -75,7 +103,7 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
       setError(null);
       const r = await confirmTaxToBanks(invId, ids);
       if (!r.ok) return setError(r.error);
-      setMsg(`${r.applied}건을 합쳐 확인했습니다 — 금액이 정확히 맞습니다.`);
+      setMsg(comboMsg(r));
       router.refresh();
     });
 
@@ -353,7 +381,12 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
               {r.bankCombo && (
                 <div className="mt-1.5 rounded-control bg-brand-50 p-2 text-xs">
                   <p className="font-semibold text-brand-700">
-                    ✔ {isIn ? "입금" : "출금"} {r.bankCombo.ids.length}건을 합치면 {won(r.bankCombo.total)}원 — 정확히 맞습니다
+                    ✔ {isIn ? "입금" : "출금"} {r.bankCombo.ids.length}건을 합치면 {won(r.bankCombo.total)}원 —{" "}
+                    {r.bankCombo.diff === 0
+                      ? "정확히 맞습니다"
+                      : r.bankCombo.diff > 0
+                        ? `계산서보다 ${won(r.bankCombo.diff)}원 많음 (수수료·반올림 — 잔돈은 자동 정리)`
+                        : `계산서보다 ${won(-r.bankCombo.diff)}원 모자람 (차액은 자동 정리)`}
                   </p>
                   <ul className="mt-0.5 space-y-0.5 text-slate-600">
                     {r.bankCombo.labels.map((l, i) => (
@@ -370,11 +403,20 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
                   </button>
                 </div>
               )}
+              {!r.isFix && !r.fixFirst && (
+                <MultiPickBar
+                  picked={sel[r.id] ?? {}}
+                  target={r.total - r.bankCovered}
+                  pending={pending}
+                  onLink={() => linkPicked(r.id)}
+                  onClear={() => setSel((p) => ({ ...p, [r.id]: {} }))}
+                />
+              )}
               {r.autoBank.length > 0 && (
                 <PickList
                   hint={
                     r.autoBank.some((b) => b.known)
-                      ? `이 상대의 ${isIn ? "입금" : "출금"} — 맞는 것을 고르세요:`
+                      ? `이 상대의 ${isIn ? "입금" : "출금"} — 맞는 것을 고르거나, 여러 줄이면 체크해서 한 번에:`
                       : `금액만 같은 ${isIn ? "입금" : "출금"} — 상대가 맞는지 꼭 확인하세요:`
                   }
                   pending={pending}
@@ -382,9 +424,12 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
                   items={r.autoBank.map((b) => ({
                     key: b.id,
                     label: b.label,
+                    amount: b.amount,
                     onPick: () => link(r.id, b.id),
                   }))}
                   buttonLabel={isIn ? "이 입금과 잇기" : "이 출금과 잇기"}
+                  picked={sel[r.id] ?? {}}
+                  onToggle={(it) => toggle(r.id, it)}
                 />
               )}
               {r.isFix || r.fixFirst ? null : r.autoBank.length > 0 ? (
@@ -393,12 +438,26 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
                     통장에서 직접 찾기 ▾
                   </summary>
                   <div className="mt-1">
-                    <BankSearch direction={data.direction} pending={pending} onPick={(id) => link(r.id, id)} anchor={r.writeDate} />
+                    <BankSearch
+                      direction={data.direction}
+                      pending={pending}
+                      onPick={(id) => link(r.id, id)}
+                      anchor={r.writeDate}
+                      picked={sel[r.id] ?? {}}
+                      onToggle={(it) => toggle(r.id, it)}
+                    />
                   </div>
                 </details>
               ) : (
                 <div className="mt-1.5">
-                  <BankSearch direction={data.direction} pending={pending} onPick={(id) => link(r.id, id)} anchor={r.writeDate} />
+                  <BankSearch
+                    direction={data.direction}
+                    pending={pending}
+                    onPick={(id) => link(r.id, id)}
+                    anchor={r.writeDate}
+                    picked={sel[r.id] ?? {}}
+                    onToggle={(it) => toggle(r.id, it)}
+                  />
                   {!r.bankCombo && (
                     <p className="mt-1 text-[11px] text-slate-400">
                       이 상대와 한 번 이어 두면 다음부터 후보·묶음 추천이 자동으로 켜집니다

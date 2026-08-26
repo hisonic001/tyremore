@@ -15,7 +15,7 @@ import { db } from "@/db";
 import { getSession, isOwner } from "@/lib/auth";
 import { payerKeyOf } from "./expense-cats";
 import { cashUsedMap, cashUsedSql, normDescSql, normName } from "./recon-data";
-import { taxReconV2 } from "./tax-recon";
+import { nearTolerance, taxReconV2 } from "./tax-recon";
 import { restoreCashLine } from "./cash-restore";
 import { revalidateFinance } from "./fin-revalidate";
 
@@ -488,13 +488,17 @@ export async function confirmTaxToBank(
 export async function confirmTaxToBanks(
   taxInvoiceId: number,
   cashTxnIds: number[],
-): Promise<{ ok: true; applied: number; remaining: number } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; applied: number; remaining: number; shortfall: number; absorbed: number; settled: number }
+  | { ok: false; error: string }
+> {
   const g = await guard();
   if (!g.ok) return g;
   const ids = [...new Set((cashTxnIds ?? []).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 12);
   if (ids.length === 0) return { ok: false, error: "이을 통장 줄을 골라 주세요" };
   let applied = 0;
   let remaining = 0;
+  let lastId = 0;
   for (const id of ids) {
     const r = await confirmTaxToBank(taxInvoiceId, id);
     if (!r.ok) {
@@ -504,8 +508,50 @@ export async function confirmTaxToBanks(
     }
     applied++;
     remaining = r.remaining;
+    lastId = id;
   }
-  return { ok: true, applied, remaining };
+  /* ⭐ 허용 오차 정리 (사장님 요청 2026-08-26, 유일이엔티): 여러 줄 합이 계산서와 몇백 원 어긋나면
+     ①통장에 남은 잔돈(수수료·반올림)은 계산서에 붙여 소진 — 후보에 200원짜리가 얼쩡거리지 않게
+     ②계산서에 모자라는 몇백 원은 「차액 확인 끝」(adjust)으로 자동 마감. 둘 다 오차 안일 때만. */
+  const [inv] = await db.execute<{ direction: string; total: number }>(sql`
+    SELECT direction, total FROM tax_invoice WHERE id = ${taxInvoiceId}
+  `);
+  const total = Number(inv?.total ?? 0);
+  const tol = nearTolerance(total);
+  const kind = inv?.direction === "매출" ? "매출계산서" : "매입계산서";
+  const [covRow] = await db.execute<{ s: string }>(sql`
+    SELECT COALESCE(SUM(amount), 0)::bigint s FROM recon_match
+    WHERE src_table = 'tax_invoice' AND src_id = ${taxInvoiceId} AND status = '확정'
+      AND kind IN ('매입계산서', '매출계산서') AND ref_table IN ('cash_txn', 'adjust')
+  `);
+  let shortfall = total - Number(covRow.s);
+  let absorbed = 0;
+  let settled = 0;
+  if (shortfall > 0 && shortfall <= tol) {
+    await db.execute(sql`
+      INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
+      VALUES (${kind}, 'tax_invoice', ${taxInvoiceId}, 'adjust', ${taxInvoiceId}, ${shortfall}, '확정', '조정', ${g.uid}, now())
+    `);
+    settled = shortfall;
+    shortfall = 0;
+  }
+  if (remaining > 0 && remaining <= tol && lastId > 0) {
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`
+        INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
+        VALUES (${kind}, 'tax_invoice', ${taxInvoiceId}, 'cash_txn', ${lastId}, ${remaining}, '확정', '조정', ${g.uid}, now())
+      `);
+      await tx.execute(sql`
+        UPDATE cash_txn SET recon_status = '확정',
+               category = CASE WHEN ${kind} = '매입계산서' AND out_amount > 0 THEN COALESCE(category, '매입대금') ELSE category END
+        WHERE id = ${lastId}
+      `);
+    });
+    absorbed = remaining;
+    remaining = 0;
+  }
+  revalidateFinance();
+  return { ok: true, applied, remaining, shortfall, absorbed, settled };
 }
 
 /**
@@ -731,6 +777,8 @@ export async function markTaxFixPair(
 export interface BankHit {
   id: number;
   label: string;
+  /** 남은 금액 — 「골라서 잇기」 합계 계산용 */
+  amount: number;
   /** 계산서 방향과 반대인 줄 — 상계(정산에서 차감·매입과 상계)로 처리된 건 */
   opposite: boolean;
 }
@@ -816,6 +864,7 @@ export async function searchBankLines(
       id: Number(r.id),
       // 연도 포함 날짜, 시트명 제거 (2025 감사 F3 — 라벨 정본 bankLabel 과 같은 꼴)
       label: `${r.isIn !== wantIn ? "↔ " : ""}${r.date.slice(2)} · ${payerKeyOf("통장", r.description).slice(0, 20)} · ${r.isIn ? "+" : "−"}${r.remain.toLocaleString()}원`,
+      amount: r.remain,
       opposite: r.isIn !== wantIn,
     }));
   return { ok: true, rows: out };

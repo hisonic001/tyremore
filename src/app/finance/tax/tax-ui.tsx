@@ -20,7 +20,7 @@ import {
 } from "@/lib/recon";
 import { won } from "@/components/fin/money";
 import { useConfirm } from "@/components/ui/confirm";
-import { BankSearch, PickList } from "./link-parts";
+import { BankSearch, MultiPickBar, PickList, type Picked, type PickItem } from "./link-parts";
 
 const bizFmt = (d: string) => (d.length === 10 ? `${d.slice(0, 3)}-${d.slice(3, 5)}-${d.slice(5)}` : d);
 
@@ -67,6 +67,31 @@ export function TaxRecon({
   const [error, setError] = useState<string | null>(null);
   const [ask, confirmDialog] = useConfirm(); // 배치5 — 브라우저 confirm() 대체
   const [supPick, setSupPick] = useState<Record<string, string>>({});
+  /** 골라서 잇기 — 계산서 id → (통장 줄 id → 남은 금액) */
+  const [sel, setSel] = useState<Record<number, Picked>>({});
+  const toggle = (invId: number, it: PickItem) =>
+    setSel((p) => {
+      const cur = { ...(p[invId] ?? {}) };
+      const k = Number(it.key);
+      if (k in cur) delete cur[k];
+      else cur[k] = it.amount ?? 0;
+      return { ...p, [invId]: cur };
+    });
+  const comboMsg = (r: { applied: number; remaining: number; shortfall: number; absorbed: number; settled: number }) =>
+    `${r.applied}줄을 합쳐 이었습니다` +
+    (r.absorbed > 0 ? ` — 통장에 남은 ${won(r.absorbed)}원은 수수료·반올림으로 정리했습니다` : "") +
+    (r.settled > 0 ? ` — 계산서에 모자란 ${won(r.settled)}원은 차액으로 정리했습니다` : "") +
+    (r.shortfall > 0 ? ` — 계산서에 ${won(r.shortfall)}원이 남았습니다 (더 이어 잇거나 「확인 끝」)` : "") +
+    (r.remaining > 0 ? ` — 통장 줄에 ${won(r.remaining)}원이 남았습니다` : "") +
+    (r.absorbed === 0 && r.settled === 0 && r.shortfall === 0 && r.remaining === 0 ? " — 금액이 정확히 맞습니다." : ".");
+  const linkPicked = (invId: number) =>
+    act(
+      () => confirmTaxToBanks(invId, Object.keys(sel[invId] ?? {}).map(Number)),
+      (r: { applied: number; remaining: number; shortfall: number; absorbed: number; settled: number }) => {
+        setSel((p) => ({ ...p, [invId]: {} }));
+        return comboMsg(r);
+      },
+    );
 
   const act = (fn: () => Promise<{ ok: boolean } & Record<string, unknown>>, okMsg: (r: never) => string) =>
     start(async () => {
@@ -106,7 +131,7 @@ export function TaxRecon({
   const linkCombo = (s: TaxSuggestion) =>
     act(
       () => confirmTaxToBanks(s.inv.id, s.bankCombo!.ids),
-      (r: { applied: number }) => `${r.applied}건을 합쳐 이었습니다 — 금액이 정확히 맞습니다.`,
+      (r: { applied: number; remaining: number; shortfall: number; absorbed: number; settled: number }) => comboMsg(r),
     );
 
   const kindBadge = (g: PartyGroup) =>
@@ -463,7 +488,12 @@ export function TaxRecon({
                     {primary === "combo" && s.bankCombo && (
                       <div className="mt-1.5 rounded bg-brand-50 p-1.5 text-xs">
                         <p className="font-medium text-brand-700">
-                          ✔ 통장 {s.bankCombo.ids.length}건을 합치면 {won(s.bankCombo.total)}원 — 정확히 맞습니다
+                          ✔ 통장 {s.bankCombo.ids.length}건을 합치면 {won(s.bankCombo.total)}원 —{" "}
+                          {s.bankCombo.diff === 0
+                            ? "정확히 맞습니다"
+                            : s.bankCombo.diff > 0
+                              ? `계산서보다 ${won(s.bankCombo.diff)}원 많음 (수수료·반올림 — 잔돈은 자동 정리)`
+                              : `계산서보다 ${won(-s.bankCombo.diff)}원 모자람 (차액은 자동 정리)`}
                         </p>
                         <ul className="mt-0.5 space-y-0.5 text-slate-600">
                           {s.bankCombo.labels.map((l, i) => (
@@ -496,11 +526,20 @@ export function TaxRecon({
                     )}
                     {primary === "bank" && (
                       <div className="mt-1.5 rounded bg-sky-50 p-1.5 text-xs">
+                        <MultiPickBar
+                          picked={sel[s.inv.id] ?? {}}
+                          target={s.inv.total}
+                          pending={pending}
+                          onLink={() => linkPicked(s.inv.id)}
+                          onClear={() => setSel((p) => ({ ...p, [s.inv.id]: {} }))}
+                        />
                         <PickList
-                          hint={`이 상대의 통장 ${s.inv.direction === "매입" ? "출금" : "입금"} — 맞는 것을 고르세요:`}
+                          hint={`이 상대의 통장 ${s.inv.direction === "매입" ? "출금" : "입금"} — 맞는 것을 고르거나, 여러 줄이면 체크해서 한 번에:`}
                           pending={pending}
                           strong
-                          items={s.bankCands.map((b) => ({ key: b.id, label: b.label, onPick: () => bankLink(s, b.id) }))}
+                          items={s.bankCands.map((b) => ({ key: b.id, label: b.label, amount: b.amount, onPick: () => bankLink(s, b.id) }))}
+                          picked={sel[s.inv.id] ?? {}}
+                          onToggle={(it) => toggle(s.inv.id, it)}
                         />
                       </div>
                     )}
@@ -531,7 +570,8 @@ export function TaxRecon({
                         {primary !== "combo" && s.bankCombo && (
                           <div>
                             <p className="font-medium text-brand-700">
-                              통장 {s.bankCombo.ids.length}건 합계 {won(s.bankCombo.total)}원 — 정확히 맞음
+                              통장 {s.bankCombo.ids.length}건 합계 {won(s.bankCombo.total)}원 —{" "}
+                              {s.bankCombo.diff === 0 ? "정확히 맞음" : `계산서와 ${won(Math.abs(s.bankCombo.diff))}원 차이(자동 정리)`}
                             </p>
                             <button
                               type="button"
@@ -554,17 +594,37 @@ export function TaxRecon({
                             }))}
                           />
                         )}
+                        {primary !== "bank" && (
+                          <MultiPickBar
+                            picked={sel[s.inv.id] ?? {}}
+                            target={s.inv.total}
+                            pending={pending}
+                            onLink={() => linkPicked(s.inv.id)}
+                            onClear={() => setSel((p) => ({ ...p, [s.inv.id]: {} }))}
+                          />
+                        )}
                         {primary !== "bank" && s.bankCands.length > 0 && (
                           <PickList
                             hint={`같은 금액의 통장 ${s.inv.direction === "매입" ? "출금" : "입금"} — 상대가 맞는지 꼭 확인`}
                             pending={pending}
-                            items={s.bankCands.map((b) => ({ key: b.id, label: b.label, onPick: () => bankLink(s, b.id) }))}
+                            items={s.bankCands.map((b) => ({ key: b.id, label: b.label, amount: b.amount, onPick: () => bankLink(s, b.id) }))}
+                            picked={sel[s.inv.id] ?? {}}
+                            onToggle={(it) => toggle(s.inv.id, it)}
                           />
                         )}
                         <div>
-                          <p className="font-medium text-slate-600">통장에서 직접 찾기 (선입금·적립 등 금액이 달라도)</p>
+                          <p className="font-medium text-slate-600">
+                            통장에서 직접 찾기 (선입금·적립 등 금액이 달라도 — 여러 줄이면 체크해서 「고른 줄 한 번에 잇기」)
+                          </p>
                           <div className="mt-1">
-                            <BankSearch direction={s.inv.direction} pending={pending} onPick={(id) => bankLink(s, id)} anchor={s.inv.writeDate} />
+                            <BankSearch
+                              direction={s.inv.direction}
+                              pending={pending}
+                              onPick={(id) => bankLink(s, id)}
+                              anchor={s.inv.writeDate}
+                              picked={sel[s.inv.id] ?? {}}
+                              onToggle={(it) => toggle(s.inv.id, it)}
+                            />
                           </div>
                         </div>
                         <div className="flex items-center justify-end gap-3 border-t border-slate-100 pt-1.5">
