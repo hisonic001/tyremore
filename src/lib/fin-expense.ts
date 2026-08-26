@@ -12,7 +12,7 @@ import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { isOwner } from "@/lib/auth";
-import { EXPENSE_CATS, payerKeyOf } from "./expense-cats";
+import { EXPENSE_CATS, PAYER_KEY_SQL, payerKeyOf } from "./expense-cats";
 
 export async function setExpenseCategory(
   cashTxnId: number,
@@ -44,9 +44,7 @@ export async function setExpenseCategory(
     const bulk = await db.execute<{ id: number }>(sql`
       UPDATE cash_txn SET category = ${category}
       WHERE category IS NULL AND is_active AND out_amount > 0
-        AND (CASE WHEN source = '통장'
-              THEN trim(regexp_replace(description, '^\[[^\]]*\] *', ''))
-              ELSE trim(description) END) = ${key}
+        AND (${sql.raw(PAYER_KEY_SQL)}) = ${key} -- 정본 (2026 감사 G6)
       RETURNING id
     `);
     applied += bulk.length;

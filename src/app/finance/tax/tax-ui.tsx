@@ -362,6 +362,13 @@ export function TaxRecon({
                       <span className="tabular shrink-0 font-bold">{won(s.inv.total)}원</span>
                     </div>
 
+                    {/* 🔴 2026 감사 G9: 마이너스 계산서의 원본 — 통장보다 상쇄가 먼저 */}
+                    {s.fixOrigin && (
+                      <p className="mt-1.5 rounded bg-rose-50 p-1.5 text-xs text-rose-900">
+                        이 상대의 마이너스(수정) 계산서가 이 금액을 상쇄합니다 — 그 카드의 [이 원본과 정리]를
+                        먼저 누르세요. 통장 후보는 그 뒤에 봅니다.
+                      </p>
+                    )}
                     {/* ① 추천 — 하나만 */}
                     {primary === "auto" && s.auto && (
                       <div className="mt-1.5 flex items-center justify-between gap-2 rounded bg-emerald-50 p-1.5 text-xs">
@@ -470,6 +477,7 @@ export function TaxRecon({
                     {/* 🔴 2025 감사 F14: 앱 기록이 없는 달(2025)은 "짝이 없다→경비"가 아니라 통장에서 찾는 것 */}
                     {primary === "none" &&
                       g.kind !== "월정산" &&
+                      !s.fixOrigin &&
                       ((s.inv.direction === "매입" ? data.appPurchasesN : data.appQuotesN) === 0 ? (
                         <p className="mt-1.5 rounded bg-sky-50 p-1.5 text-xs text-sky-900">
                           이 달은 앱 기록이 없어 <strong>통장에서 직접</strong> 찾습니다 — 「다른 방법 ▾」의 통장 검색이

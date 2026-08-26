@@ -16,6 +16,7 @@ import { getSession, isOwner } from "@/lib/auth";
 import { payerKeyOf } from "./expense-cats";
 import { cashUsedMap, cashUsedSql, normDescSql, normName } from "./recon-data";
 import { taxReconV2 } from "./tax-recon";
+import { restoreCashLine } from "./cash-restore";
 
 export interface MatchRef {
   table: "purchase_invoice" | "quote";
@@ -240,20 +241,11 @@ export async function undoTaxMatch(
       ${scope === "통장" ? sql`AND ref_table IN ('cash_txn', 'adjust')` : sql``}
     RETURNING ref_table, ref_id
   `);
+  /* 🔴 2026 감사 G4(2026-08-26): 계산서의 마지막 사유 하나로 N개 통장 줄을 일괄 복원하던 것을
+     줄 단위 정본(restoreCashLine)으로 — 다른 확정 연결이 남은 줄은 '제안', '매입대금'은 매입
+     연결이 하나도 안 남았을 때만 해제 */
   for (const mrow of gone) {
-    if (mrow.ref_table === "cash_txn") {
-      if (invRow?.recon_reason === "출금연결") {
-        // 이을 때 우리가 붙였던 '매입대금' 분류도 함께 되돌린다 (사장님 확인 2026-08-25)
-        await db.execute(sql`
-          UPDATE cash_txn SET recon_status = '미대조',
-                 category = CASE WHEN category = '매입대금' THEN NULL ELSE category END
-          WHERE id = ${mrow.ref_id}
-        `);
-      } else {
-        // 입금연결·상계연결 — 상태만 복원 (분류는 붙인 적 없음)
-        await db.execute(sql`UPDATE cash_txn SET recon_status = '미대조' WHERE id = ${mrow.ref_id}`);
-      }
-    }
+    if (mrow.ref_table === "cash_txn") await restoreCashLine(db, Number(mrow.ref_id));
   }
   /* 🔴 감사 H8(2026-08-25): 확정 때 배운 별명을 함께 지운다 — 안 지우면 잘못된 학습이
      다음 자동확정 후보 1순위로 계속 되살아난다 ("고쳐도 그대로"의 근원) */
@@ -294,6 +286,9 @@ export async function undoTaxMatch(
     await db.execute(sql`UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL WHERE id = ${taxInvoiceId}`);
   }
   revalidatePath("/finance/tax");
+  revalidatePath("/finance");
+  revalidatePath("/finance/deposits");
+  revalidatePath("/finance/expenses");
   return { ok: true };
 }
 
@@ -769,6 +764,7 @@ export async function searchBankLines(
     WHERE c.source = '통장' AND c.is_active
       AND (c.in_amount > 0 OR c.out_amount > 0)
       AND (c.category IS NULL OR c.category = '매입대금') -- 카드정산·내부이체·급여는 후보 아님(C7)
+      AND (c.in_amount + c.out_amount) > ${cashUsedSql("c")} -- 남은 금액 있는 줄만 (2026 감사 N8: 상위 60줄이 전부 소진이면 "없음"이 뜨던 것)
       AND (c.description ILIKE ${"%" + qEsc + "%"}
            OR (${nameCond})
            OR (${amt} > 0 AND (c.in_amount = ${amt} OR c.out_amount = ${amt})))

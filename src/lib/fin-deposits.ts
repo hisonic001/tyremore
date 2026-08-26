@@ -15,9 +15,10 @@ import { db } from "@/db";
 import { getSession, isOwner } from "@/lib/auth";
 import { CARD_SETTLE_PATTERN_SQL, payerKeyOf } from "./expense-cats";
 import { monthRange } from "./ym";
-import { normName } from "./recon-data";
+import { cashUsedSql, normName } from "./recon-data";
 import { planSettlement } from "./receivable-plan";
 import { settleReceivables } from "./receivable";
+import { restoreCashLine } from "./cash-restore";
 
 async function guard(): Promise<{ ok: true; uid: number | null } | { ok: false; error: string }> {
   if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
@@ -43,15 +44,18 @@ async function learnAlias(aliasRaw: string, partyKey: string, partyLabel: string
 
 const payerOf = (description: string): string => payerKeyOf("통장", description); // 감사 L2: 정본
 
+/* 🔴 2026 감사 G1(2026-08-26): 입금 줄은 **남은 금액**(소진량 정본 cashUsedSql 을 뺀 값)으로 다룬다.
+   매출 계산서에 일부 이어진 입금(미대조 유지)이 수금·판매 잇기에 전액 다시 배분되던 이중계상 경로 차단 */
 async function getDeposit(id: number) {
   const [d] = await db.execute<{
-    id: number; in_amount: number; recon_status: string; date: string; l: string; description: string;
+    id: number; in_amount: number; remain: number; recon_status: string; date: string; l: string; description: string;
   }>(sql`
-    SELECT id, in_amount, recon_status, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') date,
-           account_label l, description
-    FROM cash_txn WHERE id = ${id} AND source = '통장' AND is_active AND in_amount > 0
+    SELECT c.id, c.in_amount, (c.in_amount - ${cashUsedSql("c")})::bigint remain, c.recon_status,
+           to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') date,
+           c.account_label l, c.description
+    FROM cash_txn c WHERE c.id = ${id} AND c.source = '통장' AND c.is_active AND c.in_amount > 0
   `);
-  return d ?? null;
+  return d ? { ...d, in_amount: Number(d.in_amount), remain: Number(d.remain) } : null;
 }
 
 /** 이 달의 카드 정산 패턴 입금(FB자금·매출표)을 한꺼번에 「카드 정산」으로 표시 */
@@ -84,11 +88,13 @@ export async function linkDepositToQuote(
   if (!g.ok) return g;
   const dep = await getDeposit(cashTxnId);
   if (!dep) return { ok: false, error: "입금 줄을 찾을 수 없습니다" };
-  if (dep.recon_status === "확정") return { ok: false, error: "이미 대조된 입금입니다" };
-  const [q] = await db.execute<{ id: number }>(sql`
-    SELECT id FROM quote WHERE id = ${quoteId} AND status = '성사'
+  if (dep.recon_status === "확정") return { ok: false, error: "이미 정리된 입금입니다" };
+  if (dep.remain <= 0) return { ok: false, error: "이 입금은 남은 금액이 없습니다 — 계산서 확인이 이미 썼습니다" };
+  const [q] = await db.execute<{ id: number; total: number }>(sql`
+    SELECT id, total_amount total FROM quote WHERE id = ${quoteId} AND status = '성사'
   `);
   if (!q) return { ok: false, error: "판매를 찾을 수 없습니다" };
+  const linkAmt = Math.min(dep.remain, Number(q.total)); // 남은 금액 안에서만
   const dupe = await db.execute<{ id: number }>(sql`
     SELECT id FROM recon_match WHERE kind = '이체입금' AND ref_table = 'quote' AND ref_id = ${quoteId} LIMIT 1
   `);
@@ -97,7 +103,7 @@ export async function linkDepositToQuote(
   await db.transaction(async (tx) => {
     await tx.execute(sql`
       INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
-      VALUES ('이체입금', 'cash_txn', ${cashTxnId}, 'quote', ${quoteId}, ${dep.in_amount}, '확정', '수동', ${g.uid}, now())
+      VALUES ('이체입금', 'cash_txn', ${cashTxnId}, 'quote', ${quoteId}, ${linkAmt}, '확정', '수동', ${g.uid}, now())
     `);
     await tx.execute(sql`UPDATE cash_txn SET recon_status = '확정' WHERE id = ${cashTxnId}`);
   });
@@ -112,6 +118,7 @@ export async function linkDepositToQuote(
   else if (qp?.customer_id) await learnAlias(payer, `C:${qp.customer_id}`, qp.cname ?? `고객 ${qp.customer_id}`);
 
   revalidatePath("/finance/deposits");
+  revalidatePath("/finance");
   return { ok: true };
 }
 
@@ -130,7 +137,8 @@ export async function collectFromDeposit(
   if (!g.ok) return g;
   const dep = await getDeposit(cashTxnId);
   if (!dep) return { ok: false, error: "입금 줄을 찾을 수 없습니다" };
-  if (dep.recon_status === "확정") return { ok: false, error: "이미 대조된 입금입니다" };
+  if (dep.recon_status === "확정") return { ok: false, error: "이미 정리된 입금입니다" };
+  if (dep.remain <= 0) return { ok: false, error: "이 입금은 남은 금액이 없습니다 — 계산서 확인이 이미 썼습니다" };
 
   // 대상 조건 — receivable-book 의 KEY 와 글자 그대로 같은 규칙
   let cond;
@@ -150,7 +158,7 @@ export async function collectFromDeposit(
 
   const plan = planSettlement(
     rows.map((r) => ({ quoteId: Number(r.id), quoteNo: r.quote_no, remain: Number(r.total) - Number(r.paid) })),
-    dep.in_amount,
+    dep.remain, // 남은 금액만 배분 (G1)
   );
   if (plan.plan.length === 0) return { ok: false, error: "배분할 금액이 없습니다" };
 
@@ -161,19 +169,23 @@ export async function collectFromDeposit(
     quoteIds: plan.plan.map((p) => p.quoteId),
     method: "계좌이체",
     paidOn: dep.date,
-    received: Math.min(dep.in_amount, planned),
+    received: Math.min(dep.remain, planned),
     memo: `통장 입금 대조 (${dep.l} ${dep.date})`,
   });
   if (!r.ok) return r;
 
-  // 연결 자국 — 어느 입금이 어느 판매를 털었는지
-  for (const p of plan.plan) {
-    await db.execute(sql`
-      INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
-      VALUES ('이체입금', 'cash_txn', ${cashTxnId}, 'quote', ${p.quoteId}, ${p.amount}, '확정', '수동', ${g.uid}, now())
-    `);
-  }
-  await db.execute(sql`UPDATE cash_txn SET recon_status = '확정' WHERE id = ${cashTxnId}`);
+  /* 연결 자국 — 어느 입금이 어느 판매를 털었는지. 🔴 2026 감사 G5: 자국+확정을 한 트랜잭션으로
+     (settleReceivables 는 자기 트랜잭션이라 여기 못 넣는다 — 수금은 남고 자국만 없는 사고를
+     되돌리기(undoDepositLink)가 memo 로 찾아 지운다) */
+  await db.transaction(async (tx) => {
+    for (const p of plan.plan) {
+      await tx.execute(sql`
+        INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
+        VALUES ('이체입금', 'cash_txn', ${cashTxnId}, 'quote', ${p.quoteId}, ${p.amount}, '확정', '수동', ${g.uid}, now())
+      `);
+    }
+    await tx.execute(sql`UPDATE cash_txn SET recon_status = '확정' WHERE id = ${cashTxnId}`);
+  });
 
   // 별명 학습 — 다음부터 이 입금자명이 오면 이 외상 대상을 맨 위에 보여준다
   {
@@ -190,9 +202,54 @@ export async function collectFromDeposit(
   }
 
   revalidatePath("/finance/deposits");
+  revalidatePath("/finance");
   revalidatePath("/receivables");
   revalidatePath("/sales");
   return { ok: true, applied: r.applied, settled: r.settled, leftover: plan.leftover };
+}
+
+/**
+ * ⭐ 입금 연결 되돌리기 (2026 감사 G3, 2026-08-26) — 판매 잇기·외상 수금으로 이은 입금을 원상복구.
+ *   자국(recon_match 이체입금) 삭제 → 그 자국이 만든 수금 기록(memo '통장 입금 대조 …'·같은 날·같은
+ *   금액)만 삭제(손으로 넣은 수금은 안 건드림) → 통장 줄 상태 복원(줄 단위 정본).
+ */
+export async function undoDepositLink(
+  cashTxnId: number,
+): Promise<{ ok: true; removed: number; payments: number } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  const dep = await getDeposit(cashTxnId);
+  if (!dep) return { ok: false, error: "입금 줄을 찾을 수 없습니다" };
+  const marks = await db.execute<{ id: number; ref_table: string; ref_id: number; amount: number }>(sql`
+    SELECT id, ref_table, ref_id, amount FROM recon_match
+    WHERE kind = '이체입금' AND src_table = 'cash_txn' AND src_id = ${cashTxnId} AND status = '확정'
+    ORDER BY id LIMIT 100
+  `);
+  if (marks.length === 0) return { ok: false, error: "이 입금에 이어진 판매·수금이 없습니다" };
+  let payments = 0;
+  await db.transaction(async (tx) => {
+    for (const m of marks) {
+      if (m.ref_table === "quote") {
+        const del = await tx.execute<{ id: number }>(sql`
+          DELETE FROM receivable_payment WHERE id IN (
+            SELECT id FROM receivable_payment
+            WHERE quote_id = ${m.ref_id} AND method = '계좌이체' AND amount = ${m.amount}
+              AND paid_on = ${dep.date}::date AND memo LIKE '통장 입금 대조%'
+            ORDER BY id DESC LIMIT 1)
+          RETURNING id
+        `);
+        payments += del.length;
+      }
+      await tx.execute(sql`DELETE FROM recon_match WHERE id = ${m.id}`);
+    }
+    await restoreCashLine(tx, cashTxnId);
+  });
+  revalidatePath("/finance/deposits");
+  revalidatePath("/finance");
+  revalidatePath("/finance/tax");
+  revalidatePath("/receivables");
+  revalidatePath("/sales");
+  return { ok: true, removed: marks.length, payments };
 }
 
 /** 무시 / 무시 해제 */

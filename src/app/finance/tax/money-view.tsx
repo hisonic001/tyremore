@@ -272,6 +272,10 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
                   <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-800">
                     마이너스(수정) 계산서
                   </span>
+                ) : r.fixFirst ? (
+                  <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-800">
+                    상쇄할 수정 계산서 있음
+                  </span>
                 ) : r.bankCovered > 0 ? (
                   <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-800">
                     일부 확인 · 남은 {won(r.total - r.bankCovered)}원
@@ -297,6 +301,14 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
                 )}
               </div>
               {/* 🔴 2025 감사 F4: 수정 계산서는 통장이 아니라 원본과 상쇄 — 정리 뷰로 보낸다 */}
+              {r.fixFirst && (
+                <p className="mt-1.5 rounded-control bg-rose-50 p-2 text-xs text-rose-900">
+                  같은 상대의 마이너스(수정) 계산서가 이 금액을 상쇄합니다 — 통장을 찾기 전에 먼저 정리하세요:{" "}
+                  <Link href={`/finance/tax?view=sort&ym=${data.ym}&direction=${data.direction}`} className="font-semibold underline">
+                    계산서 정리로 →
+                  </Link>
+                </p>
+              )}
               {r.isFix && (
                 <p className="mt-1.5 rounded-control bg-rose-50 p-2 text-xs text-rose-900">
                   통장으로는 끝낼 수 없습니다 — 같은 상대의 원본 계산서와 상쇄해 정리하세요:{" "}
@@ -342,7 +354,7 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
                   buttonLabel={isIn ? "이 입금과 잇기" : "이 출금과 잇기"}
                 />
               )}
-              {r.isFix ? null : r.autoBank.length > 0 ? (
+              {r.isFix || r.fixFirst ? null : r.autoBank.length > 0 ? (
                 <details className="mt-1.5">
                   <summary className="cursor-pointer text-xs text-slate-500 underline underline-offset-2">
                     통장에서 직접 찾기 ▾

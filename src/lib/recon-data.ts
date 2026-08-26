@@ -10,7 +10,7 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { CARD_SETTLE_PATTERN_SQL, payerKeyOf } from "./expense-cats";
+import { CARD_SETTLE_PATTERN_SQL, PAYER_KEY_SQL, payerKeyOf } from "./expense-cats";
 import { monthRange } from "./ym";
 
 const norm = (s: string | null | undefined): string =>
@@ -37,16 +37,39 @@ const HEAD = 5;
 const GENERIC_WORDS = new Set(["타이어", "주식회사", "양양점", "속초점", "속초", "양양", "코리아", "타이어365", "카센타", "카센터"]);
 const isGeneric = (x: string) => GENERIC_WORDS.has(x);
 
-/** 두 이름이 같은 상대인가 — 표기 차이·잘림을 견딘다 (일반어 한 단어는 근거로 안 친다) */
+/**
+ * 두 이름이 같은 상대인가 (★ 등급) — 같거나 한쪽이 다른 쪽을 품는다. 표기 차이·잘림을 견딘다.
+ * 🔴 2026 감사 G8(2026-08-26): ①정규화 2글자 「(주)제로」가 자기 자신과도 false 였다 → 같으면 무조건 true
+ *    ②앞5자 규칙은 「타이어프로 판교점」↔「타이어프로속초」를 ★로 오인 → 약한 등급(similarPartyName)으로 강등
+ */
 export function samePartyName(a: string | null | undefined, b: string | null | undefined): boolean {
   const x = norm(a);
   const y = norm(b);
   if (x.length < 2 || y.length < 2) return false;
-  if (isGeneric(x) || isGeneric(y)) return x === y;
+  if (x === y) return true;
+  if (isGeneric(x) || isGeneric(y)) return false;
   const short = x.length <= y.length ? x : y;
-  if (short.length >= 3 && (x.includes(y) || y.includes(x))) return true;
+  return short.length >= 3 && (x.includes(y) || y.includes(x));
+}
+
+/**
+ * 비슷한 상대인가 (≈ 등급 — 후보엔 올리되 ★·자동은 아니다):
+ *   앞5자가 같거나(지점 차이·잘림), 적요를 괄호·공백으로 나눈 조각(3자 이상)이 상호의 앞부분이다
+ *   — 「송명숙(대건종」 ↔ 대건종합상사, 「김재준(진양윤」 ↔ 진양윤활유 (2026 감사 R9)
+ */
+export function similarPartyName(payer: string | null | undefined, name: string | null | undefined): boolean {
+  const x = norm(payer);
+  const y = norm(name);
+  if (x.length < 2 || y.length < 2) return false;
+  if (samePartyName(payer, name)) return true;
+  if (isGeneric(x) || isGeneric(y)) return false;
   const n = Math.min(x.length, y.length, HEAD);
-  return n >= 4 && x.slice(0, n) === y.slice(0, n);
+  if (n >= 4 && x.slice(0, n) === y.slice(0, n)) return true;
+  const parts = String(payer ?? "")
+    .split(/[\s()\[\]A_/·,\-]+/)
+    .map((p) => norm(p))
+    .filter((p) => p.length >= 3 && !isGeneric(p));
+  return parts.some((p) => y.startsWith(p) || (p.length >= 4 && y.includes(p)));
 }
 
 /** 정규화한 적요 컬럼 — SQL 쪽 규칙(normName 과 같은 것을 지운다) */
@@ -151,8 +174,12 @@ export interface DepositSuggestion {
 
 export interface DepositReconData {
   open: DepositSuggestion[];
-  /** 카드정산으로 표시된 입금(이 달) — 잘못 표시했으면 되돌린다 (감사 H10) */
+  /** 카드정산으로 표시된 입금(이 달) — 잘못 표시했으면 되돌린다 (감사 H10). 목록은 40건까지 */
   settledCard: { id: number; at: string; amount: number; payer: string }[];
+  /** 카드정산 표시 총 건수 (목록 절단과 무관한 실제 수 — 2026 감사 N4) */
+  settledCardTotal: number;
+  /** 이 달 판매·외상 수금과 이어진 입금 — 잘못 이었으면 되돌린다 (2026 감사 G3) */
+  linked: { id: number; at: string; amount: number; payer: string; used: number; n: number }[];
   /** 적요 패턴(FB자금·매출표)으로 카드 정산으로 보이는 미대조 입금 */
   cardPatternCount: number;
   cardPatternSum: number;
@@ -287,9 +314,31 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
     FROM cash_txn WHERE ${inMonth} AND category = '카드정산'
     ORDER BY occurred_at DESC LIMIT 40
   `);
+  const [settledCnt] = await db.execute<{ n: number }>(sql`
+    SELECT count(*)::int n FROM cash_txn WHERE ${inMonth} AND category = '카드정산'
+  `);
+  // 이 달 입금 중 판매·수금과 이어진 것 (recon_match 이체입금) — 되돌리기 목록
+  const linkedRows = await db.execute<{ id: number; at: string; in_amount: number; description: string; used: string; n: number }>(sql`
+    SELECT c.id, to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at, c.in_amount, c.description,
+           SUM(m.amount)::bigint used, count(*)::int n
+    FROM cash_txn c JOIN recon_match m ON m.src_table = 'cash_txn' AND m.src_id = c.id AND m.kind = '이체입금' AND m.status = '확정'
+    WHERE c.source = '통장' AND c.is_active AND c.in_amount > 0
+      AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
+      AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date
+    GROUP BY c.id ORDER BY c.occurred_at DESC LIMIT 40
+  `);
 
   return {
     open,
+    settledCardTotal: Number(settledCnt?.n ?? 0),
+    linked: linkedRows.map((r) => ({
+      id: Number(r.id),
+      at: r.at,
+      amount: Number(r.in_amount),
+      payer: payerKeyOf("통장", r.description),
+      used: Number(r.used),
+      n: Number(r.n),
+    })),
     settledCard: settledCardRows.map((r) => ({
       id: Number(r.id),
       at: r.at,
@@ -308,7 +357,6 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
 
 // 🔴 분류 상수는 expense-cats.ts (순수 모듈) — 클라이언트 화면이 값으로 쓰기 때문
 //    (여기서 내보내면 DB 모듈이 브라우저 번들에 끌려가 빌드가 깨진다, 2026-08-25 실사고)
-export { payerKeyOf }; // 상단 import 재수출 (중복 import 정리 — 감사수리 C)
 
 export interface ExpenseRow {
   id: number;
@@ -384,10 +432,7 @@ export async function expenseData(ym: string): Promise<ExpenseData> {
 
   // 감사 M5 — 상대별 묶음 (전체 미분류 대상, LIMIT 없는 집계)
   const byPayerRows = await db.execute<{ p: string; n: number; s: string; any_id: number }>(sql`
-    SELECT CASE WHEN source = '통장'
-             -- 🔴 감사 B2(2026-08-25): 템플릿 리터럴이 백슬래시를 먹어 접두어가 안 잘렸다
-             THEN trim(regexp_replace(description, '^\\[[^\\]]*\\] *', ''))
-             ELSE trim(description) END p,
+    SELECT ${sql.raw(PAYER_KEY_SQL)} p, -- 정본 (감사 B2 → 2026 감사 G6 정본화)
            count(*)::int n, COALESCE(SUM(out_amount), 0)::bigint s, min(id)::int any_id
     FROM cash_txn WHERE ${inMonth} AND category IS NULL
     GROUP BY 1 ORDER BY 3 DESC LIMIT 60
@@ -547,7 +592,19 @@ export interface PayLinkRow {
   suggest: { supplier: string; remain: number } | null;
 }
 
-export async function payLinkData(ym: string): Promise<{ rows: PayLinkRow[]; supplierNames: string[] }> {
+export interface PayLinkedRow {
+  id: number;
+  at: string;
+  payer: string;
+  amount: number;
+  /** 지급으로 배분된 합 */
+  used: number;
+  n: number;
+}
+
+export async function payLinkData(
+  ym: string,
+): Promise<{ rows: PayLinkRow[]; supplierNames: string[]; linked: PayLinkedRow[] }> {
   // '매입대금' 출금 중 지급 기록과 안 이어진 것 — 보는 달 (2025 감사 F18: '2026-08-01' 하드코딩 폐지)
   const { start: pStart, nextStart: pNext } = monthRange(ym);
   const outs = await db.execute<{ id: number; at: string; description: string; out_amount: number }>(sql`
@@ -609,7 +666,28 @@ export async function payLinkData(ym: string): Promise<{ rows: PayLinkRow[]; sup
   const names = await db.execute<{ s: string }>(sql`
     SELECT DISTINCT supplier s FROM purchase_invoice WHERE status <> '취소' ORDER BY 1 LIMIT 100
   `);
-  return { rows, supplierNames: names.map((r) => r.s) };
+  // 이 달 「지급 잡기」로 이은 출금 — 되돌리기 목록 (2026 감사 G2)
+  const linkedRows = await db.execute<{ id: number; at: string; out_amount: number; description: string; used: string; n: number }>(sql`
+    SELECT c.id, to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD') at, c.out_amount, c.description,
+           SUM(m.amount)::bigint used, count(*)::int n
+    FROM cash_txn c JOIN recon_match m ON m.src_table = 'cash_txn' AND m.src_id = c.id AND m.kind = '매입지급' AND m.status = '확정'
+    WHERE c.source = '통장' AND c.is_active AND c.out_amount > 0
+      AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${pStart}::date
+      AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${pNext}::date
+    GROUP BY c.id ORDER BY c.occurred_at DESC LIMIT 40
+  `);
+  return {
+    rows,
+    supplierNames: names.map((r) => r.s),
+    linked: linkedRows.map((r) => ({
+      id: Number(r.id),
+      at: r.at,
+      payer: payerKeyOf("통장", r.description),
+      amount: Number(r.out_amount),
+      used: Number(r.used),
+      n: Number(r.n),
+    })),
+  };
 }
 
 /* ================================================================== */

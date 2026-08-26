@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
 import type { DepositReconData, DepositSuggestion } from "@/lib/recon-data";
-import { collectFromDeposit, ignoreDeposit, linkDepositToQuote, markCardSettlements, unmarkCardSettlement } from "@/lib/fin-deposits";
+import { collectFromDeposit, ignoreDeposit, linkDepositToQuote, markCardSettlements, undoDepositLink, unmarkCardSettlement } from "@/lib/fin-deposits";
 import { won } from "@/components/fin/money";
 import { useConfirm } from "@/components/ui/confirm";
 
@@ -186,7 +186,7 @@ export function DepositsRecon({ data, ym }: { data: DepositReconData; ym: string
       {data.settledCard.length > 0 && (
         <details className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
           <summary className="cursor-pointer text-sm font-semibold text-slate-600">
-            카드정산으로 표시된 입금 {data.settledCard.length}건 (이 달) — 잘못 표시됐으면 되돌리기
+            카드정산으로 표시된 입금 {data.settledCardTotal}건 (이 달{data.settledCardTotal > data.settledCard.length ? ` · 최근 ${data.settledCard.length}건 표시` : ""}) — 잘못 표시됐으면 되돌리기
           </summary>
           <ul className="mt-2 divide-y divide-slate-100 text-sm">
             {data.settledCard.map((r) => (
@@ -208,9 +208,49 @@ export function DepositsRecon({ data, ym }: { data: DepositReconData; ym: string
         </details>
       )}
 
+      {/* 🔴 2026 감사 G3 — 판매·수금과 이은 입금 되돌리기 (전에는 되돌릴 길이 없었다) */}
+      {data.linked.length > 0 && (
+        <details className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-600">
+            판매·수금과 이은 입금 {data.linked.length}건 (이 달) — 잘못 이었으면 되돌리기
+          </summary>
+          <ul className="mt-2 divide-y divide-slate-100 text-sm">
+            {data.linked.map((r) => (
+              <li key={r.id} className="flex items-center justify-between gap-2 py-1.5">
+                <span className="tabular min-w-0 truncate text-xs">
+                  {r.at} · {r.payer} · +{won(r.amount)}원 → {r.n}건에 {won(r.used)}원
+                </span>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={async () => {
+                    if (
+                      !(await ask({
+                        title: "이 입금의 연결을 되돌릴까요?",
+                        body: "이 입금으로 등록한 수금 기록도 함께 지워지고, 입금은 정리 목록으로 돌아옵니다.",
+                        tone: "danger",
+                        confirmLabel: "되돌리기",
+                      }))
+                    )
+                      return;
+                    act(
+                      () => undoDepositLink(r.id),
+                      (res: { removed: number; payments: number }) =>
+                        `되돌렸습니다 — 연결 ${res.removed}건${res.payments > 0 ? ` · 수금 기록 ${res.payments}건` : ""} 지움. 입금이 정리 목록으로 돌아왔습니다.`,
+                    );
+                  }}
+                  className="shrink-0 text-xs text-slate-400 underline"
+                >
+                  되돌리기
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
       <p className="mt-4 text-xs text-slate-400">
-        수금 등록을 되돌리려면 정비 내역·외상 장부의 수금 내역에서 지우면 됩니다 — 여기 연결 자국은
-        장부와 별개의 표시일 뿐입니다.
+        잘못 이은 입금은 위 「판매·수금과 이은 입금」에서 되돌리면 수금 기록까지 함께 풀립니다.
       </p>
       {confirmDialog}
     </>

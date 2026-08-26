@@ -12,8 +12,9 @@ import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, isOwner } from "@/lib/auth";
-import { normName } from "./recon-data";
+import { cashUsedSql, normName } from "./recon-data";
 import { planSettlement } from "./receivable-plan";
+import { restoreCashLine } from "./cash-restore";
 
 const METHODS = ["계좌이체", "현금", "카드", "기타"];
 
@@ -78,18 +79,71 @@ export async function payToSupplier(input: {
   }
 }
 
-/** 지급 기록 지우기 — 잘못 넣었을 때 (수금 removeCollection 의 거울상) */
+/** 지급 기록 지우기 — 잘못 넣었을 때 (수금 removeCollection 의 거울상).
+ *  🔴 2026 감사 G2: 「출금에서 지급 잡기」로 생긴 지급이면 짝 자국(recon_match 매입지급)도 지우고
+ *     통장 줄을 복원한다 — 전에는 지급만 지워 그 출금이 영구 소진 상태로 남았다 */
 export async function removePurchasePayment(
   paymentId: number,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
-  const rows = await db.execute<{ id: number }>(sql`
-    DELETE FROM purchase_payment WHERE id = ${paymentId} RETURNING id
+  const [pp] = await db.execute<{ id: number; invoice_id: number; amount: number; memo: string | null }>(sql`
+    SELECT id, invoice_id, amount, memo FROM purchase_payment WHERE id = ${paymentId}
   `);
-  if (rows.length === 0) return { ok: false, error: "지급 기록을 찾을 수 없습니다" };
+  if (!pp) return { ok: false, error: "지급 기록을 찾을 수 없습니다" };
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`DELETE FROM purchase_payment WHERE id = ${paymentId}`);
+    if (pp.memo && pp.memo.startsWith("통장 출금 연결")) {
+      const gone = await tx.execute<{ src_id: number }>(sql`
+        DELETE FROM recon_match WHERE id IN (
+          SELECT id FROM recon_match
+          WHERE kind = '매입지급' AND ref_table = 'purchase_invoice' AND ref_id = ${pp.invoice_id}
+            AND amount = ${pp.amount} AND status = '확정'
+          ORDER BY id DESC LIMIT 1)
+        RETURNING src_id
+      `);
+      for (const gRow of gone) await restoreCashLine(tx, Number(gRow.src_id));
+    }
+  });
   revalidatePath("/finance/payables");
   revalidatePath("/finance");
+  revalidatePath("/finance/tax");
+  revalidatePath("/finance/expenses");
   return { ok: true };
+}
+
+/**
+ * ⭐ 「출금에서 지급 잡기」 되돌리기 (2026 감사 G2, 2026-08-26) — 출금 한 줄의 지급 전체를 원상복구.
+ *   자국(매입지급) 삭제 → 그 자국이 만든 지급 기록(memo '통장 출금 연결 …'·같은 금액)만 삭제 →
+ *   통장 줄 상태·'매입대금' 분류 복원(줄 단위 정본 restoreCashLine).
+ */
+export async function undoPayFromWithdrawal(
+  cashTxnId: number,
+): Promise<{ ok: true; removed: number } | { ok: false; error: string }> {
+  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  const marks = await db.execute<{ id: number; ref_id: number; amount: number }>(sql`
+    SELECT id, ref_id, amount FROM recon_match
+    WHERE kind = '매입지급' AND src_table = 'cash_txn' AND src_id = ${cashTxnId} AND status = '확정'
+    ORDER BY id LIMIT 100
+  `);
+  if (marks.length === 0) return { ok: false, error: "이 출금에 이어진 지급이 없습니다" };
+  await db.transaction(async (tx) => {
+    for (const m of marks) {
+      await tx.execute(sql`
+        DELETE FROM purchase_payment WHERE id IN (
+          SELECT id FROM purchase_payment
+          WHERE invoice_id = ${m.ref_id} AND amount = ${m.amount} AND memo LIKE '통장 출금 연결%'
+          ORDER BY id DESC LIMIT 1)
+      `);
+      await tx.execute(sql`DELETE FROM recon_match WHERE id = ${m.id}`);
+    }
+    await restoreCashLine(tx, cashTxnId);
+  });
+  revalidatePath("/finance/payables");
+  revalidatePath("/finance");
+  revalidatePath("/finance/tax");
+  revalidatePath("/finance/expenses");
+  revalidatePath("/finance/party");
+  return { ok: true, removed: marks.length };
 }
 
 /**
@@ -124,17 +178,11 @@ export async function payFromWithdrawal(input: {
   `);
   if (dupe.length > 0) return { ok: false, error: "이미 지급으로 이어진 출금입니다" };
   /* 🔴 감사 B4(2026-08-25): 계산서 확인·수금이 이미 쓴 몫을 빼고 배분 — 같은 출금
-     이중 소진 차단 (소진량 정본과 같은 식) */
+     이중 소진 차단. 2026 감사 G7: 손 복제본 대신 소진량 정본 cashUsedSql */
   const [usedRow] = await db.execute<{ s: string }>(sql`
-    SELECT COALESCE(SUM(amount), 0)::bigint s FROM (
-      SELECT amount FROM recon_match WHERE ref_table = 'cash_txn' AND ref_id = ${input.cashTxnId}
-        AND kind IN ('매입계산서', '매출계산서') AND status = '확정'
-      UNION ALL
-      SELECT amount FROM recon_match WHERE src_table = 'cash_txn' AND src_id = ${input.cashTxnId}
-        AND kind IN ('매입지급', '이체입금') AND status = '확정'
-    ) x
+    SELECT ${cashUsedSql("c")}::bigint s FROM cash_txn c WHERE c.id = ${input.cashTxnId}
   `);
-  const avail = Number(dep.out_amount) - Number(usedRow.s);
+  const avail = Number(dep.out_amount) - Number(usedRow?.s ?? 0);
   if (avail <= 0)
     return { ok: false, error: "이 출금은 남은 금액이 없습니다 — 계산서 확인이 이미 썼습니다" };
 
@@ -194,6 +242,8 @@ export async function payFromWithdrawal(input: {
 
       revalidatePath("/finance/payables");
       revalidatePath("/finance/expenses");
+      revalidatePath("/finance/tax"); // CASH_LAT 의 간접 확인(ind)이 바뀐다 (2026 감사 N9)
+      revalidatePath("/finance/party");
       revalidatePath("/finance");
       return { ok: true as const, applied, settled, leftover: Number(dep.out_amount) - applied };
     });

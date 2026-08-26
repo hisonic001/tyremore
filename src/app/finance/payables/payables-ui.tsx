@@ -3,8 +3,8 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
-import type { PayLinkRow, PayablesData, PayableSupplier } from "@/lib/recon-data";
-import { payFromWithdrawal, payToSupplier, removePurchasePayment } from "@/lib/purchase-pay";
+import type { PayLinkRow, PayLinkedRow, PayablesData, PayableSupplier } from "@/lib/recon-data";
+import { payFromWithdrawal, payToSupplier, removePurchasePayment, undoPayFromWithdrawal } from "@/lib/purchase-pay";
 import { won } from "@/components/fin/money";
 import { useConfirm } from "@/components/ui/confirm";
 
@@ -15,11 +15,14 @@ const METHODS = ["계좌이체", "현금", "카드", "기타"];
 export function PayablesUi({
   data,
   links,
+  linked,
   supplierNames,
   cashSummary,
 }: {
   data: PayablesData;
   links: PayLinkRow[];
+  /** 이 달 「지급 잡기」로 이은 출금 — 되돌리기 목록 */
+  linked: PayLinkedRow[];
   supplierNames: string[];
   cashSummary: { ym: string; n: number; sum: number };
 }) {
@@ -245,7 +248,51 @@ export function PayablesUi({
         ))}
       </datalist>
 
-      {/* 최근 지급 — 잘못 넣었으면 지우기 */}
+      {/* 🔴 2026 감사 G2 — 「출금에서 지급 잡기」로 이은 출금 되돌리기 (출금 한 줄 = 지급 전체 원상복구) */}
+      {linked.length > 0 && (
+        <details className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-600">
+            출금에서 이은 지급 {linked.length}건 (이 달) — 잘못 이었으면 되돌리기
+          </summary>
+          <ul className="mt-2 divide-y divide-slate-100 text-sm">
+            {linked.map((r) => (
+              <li key={r.id} className="flex items-center justify-between gap-2 py-1.5">
+                <span className="tabular min-w-0 truncate text-xs">
+                  {r.at} · {r.payer} · −{won(r.amount)}원 → 매입 {r.n}건에 {won(r.used)}원
+                </span>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={async () => {
+                    if (
+                      !(await ask({
+                        title: "이 출금의 지급 연결을 되돌릴까요?",
+                        body: "이 출금으로 넣은 지급 기록이 지워지고 미지급 잔액이 도로 늘어납니다. 출금은 다시 이을 수 있습니다.",
+                        tone: "danger",
+                        confirmLabel: "되돌리기",
+                      }))
+                    )
+                      return;
+                    start(async () => {
+                      setMsg(null);
+                      setError(null);
+                      const res = await undoPayFromWithdrawal(r.id);
+                      if (!res.ok) return setError(res.error);
+                      setMsg(`되돌렸습니다 — 지급 ${res.removed}건을 지우고 출금을 다시 열었습니다.`);
+                      router.refresh();
+                    });
+                  }}
+                  className="shrink-0 text-xs text-slate-400 underline"
+                >
+                  되돌리기
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
+      {/* 최근 지급 — 잘못 넣었으면 되돌리기 */}
       {data.recent.length > 0 && (
         <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
           <h2 className="text-sm font-semibold text-slate-600">최근 지급 기록</h2>
@@ -259,20 +306,20 @@ export function PayablesUi({
                   type="button"
                   disabled={pending}
                   onClick={async () => {
-                    if (!(await ask({ title: "이 지급 기록을 지울까요?", body: "잔액이 도로 늘어납니다.", tone: "danger", confirmLabel: "지우기" })))
+                    if (!(await ask({ title: "이 지급 기록을 되돌릴까요?", body: "미지급 잔액이 도로 늘어납니다. 출금에서 이은 지급이면 그 출금도 다시 열립니다.", tone: "danger", confirmLabel: "되돌리기" })))
                       return;
                     start(async () => {
                       setMsg(null);
                       setError(null);
                       const res = await removePurchasePayment(r.id);
                       if (!res.ok) return setError(res.error);
-                      setMsg("지웠습니다.");
+                      setMsg("되돌렸습니다.");
                       router.refresh();
                     });
                   }}
                   className="shrink-0 text-xs text-slate-400 underline"
                 >
-                  지우기
+                  되돌리기
                 </button>
               </li>
             ))}
