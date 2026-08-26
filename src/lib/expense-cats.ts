@@ -42,4 +42,5 @@ export const PAYER_KEY_SQL =
  *  🔴 감사 L1(2026-08-25): 세 곳에 복제돼 있던 것을 정본화 — 카드사 추가는 여기서만. */
 export const CARD_SETTLE_PATTERN_SQL =
   // 🔴 2026 감사 G10: 「[FB이체] 현대5816」 — '현' 뒤에 '대'가 와서 놓쳤다 → 현대?
-  "(description LIKE '%FB자금%' OR description LIKE '%매출표%' OR description ~ '\\] ?(KB|NH|하나|현대?|우|삼성|롯데|신한|비씨|BC|SHC)[0-9]')";
+  // 🔴 사장님 지적(2026-08-26): 「[FB자금] MAXRUN」은 온라인몰 맥스런의 판매 대금 정산 — 카드정산이 아니다
+  "((description LIKE '%FB자금%' OR description LIKE '%매출표%' OR description ~ '\\] ?(KB|NH|하나|현대?|우|삼성|롯데|신한|비씨|BC|SHC)[0-9]') AND description NOT ILIKE '%MAXRUN%')";

@@ -4,13 +4,39 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
 import type { DepositReconData, DepositSuggestion } from "@/lib/recon-data";
-import { collectFromDeposit, ignoreDeposit, linkDepositToQuote, markCardSettlements, undoDepositLink, unmarkCardSettlement } from "@/lib/fin-deposits";
+import type { DepositBreakdown, DepositTaxCands } from "@/lib/deposit-tax";
+import {
+  collectFromDeposit,
+  confirmSureDeposits,
+  linkDepositToQuote,
+  markCardSettlements,
+  setDepositKind,
+  undoDepositKind,
+  undoDepositLink,
+  unmarkCardSettlement,
+} from "@/lib/fin-deposits";
+import { confirmTaxToBank } from "@/lib/recon";
 import { won } from "@/components/fin/money";
 import { useConfirm } from "@/components/ui/confirm";
 
 
 /** ⭐ 통장 입금을 카드 정산·이체 판매·외상 수금으로 정리 (ERP 4단계, 2026-08-24) */
-export function DepositsRecon({ data, ym }: { data: DepositReconData; ym: string }) {
+export function DepositsRecon({
+  data,
+  ym,
+  taxCands,
+  sureIds,
+  breakdown,
+}: {
+  data: DepositReconData;
+  ym: string;
+  /** 입금 id → 열린 계산서 후보 (같은 상대·같은 금액) */
+  taxCands: DepositTaxCands;
+  /** 짝이 확실한 입금 id — 한 번에 잇기 */
+  sureIds: number[];
+  breakdown: DepositBreakdown;
+}) {
+  const sureSet = new Set(sureIds);
   const router = useRouter();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
@@ -77,12 +103,34 @@ export function DepositsRecon({ data, ym }: { data: DepositReconData; ym: string
         </section>
       )}
 
-      <section className="mt-4 flex items-center justify-between text-sm">
+      <section className="mt-4 flex flex-wrap items-center justify-between gap-2 text-sm">
         <span className="tabular">
           정리할 입금 <strong>{data.openTotal}건</strong>
-          {data.openTotal > data.open.length && ` (금액 큰 ${data.open.length}건부터 표시)`} · 정리됨 {data.doneCount}건 · 무시{" "}
+          {data.openTotal > 0 && (
+            <span className="text-xs text-slate-500">
+              {" "}(계산서 짝 {breakdown.tax} · 판매 짝 {breakdown.quote} · 외상 {breakdown.party} · 확인 필요 {breakdown.none})
+            </span>
+          )}
+          {data.openTotal > data.open.length && ` · 최근 ${data.open.length}건 표시`} · 정리됨 {data.doneCount}건 · 무시{" "}
           {data.ignoredCount}건
         </span>
+        {/* ⭐ 짝이 확실한 것 한 번에 (사장님 요청 2026-08-26) */}
+        {sureIds.length > 0 && (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() =>
+              act(
+                () => confirmSureDeposits(ym),
+                (r: { tax: number; quote: number; failed: number }) =>
+                  `짝이 확실한 ${r.tax + r.quote}건을 이었습니다 (계산서 ${r.tax} · 판매 ${r.quote})${r.failed > 0 ? ` · ${r.failed}건은 실패` : ""}.`,
+              )
+            }
+            className="shrink-0 rounded-control bg-brand-600 px-3 py-2 text-sm font-semibold text-white active:bg-brand-700 disabled:opacity-40"
+          >
+            ✔ 짝이 확실한 {sureIds.length}건 모두 잇기
+          </button>
+        )}
       </section>
 
       {/* 🔴 2026 감사 R5: 「자료 없음」과 「다 됐다」를 가른다 */}
@@ -104,18 +152,60 @@ export function DepositsRecon({ data, ym }: { data: DepositReconData; ym: string
 
       <ul className="mt-2 grid grid-cols-1 gap-3 lg:grid-cols-2 lg:items-start">
         {data.open.map((s) => (
-          <li key={s.dep.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+          <li
+            key={s.dep.id}
+            className={`rounded-2xl border bg-white p-4 ${sureSet.has(s.dep.id) ? "border-brand-500" : "border-slate-200"}`}
+          >
             <div className="flex items-baseline justify-between gap-2">
               <span className="min-w-0 truncate">
                 <span className="tabular text-xs text-slate-400">{s.dep.at}</span>{" "}
                 <span className="font-medium">{s.dep.description}</span>
+                {sureSet.has(s.dep.id) && (
+                  <span className="ml-1.5 rounded-full bg-brand-100 px-2 py-0.5 text-[11px] font-semibold text-brand-700">짝 확실</span>
+                )}
               </span>
               <span className="tabular shrink-0 font-bold text-emerald-700">+{won(s.dep.amount)}원</span>
             </div>
 
-            {s.taxHint && (
+            {/* ⭐ 세금계산서 바로 잇기 (사장님 요청 2026-08-26) — 전엔 "계산서 화면에서 이으세요"만 있고 버튼이 없었다 */}
+            {(taxCands[s.dep.id]?.length ?? 0) > 0 && (
+              <div className="mt-2 rounded-lg bg-violet-50 p-2 text-sm">
+                <p className="text-xs text-violet-900">
+                  세금계산서 대금으로 보입니다 — 맞는 계산서와 이으세요
+                  {taxCands[s.dep.id].some((c) => c.direction === "매입") && " (↔ = 수수료를 떼고 받은 정산, 매입 계산서와 상쇄)"}
+                </p>
+                <ul className="mt-1 space-y-1">
+                  {taxCands[s.dep.id].map((c) => (
+                    <li key={c.invId} className="flex items-center justify-between gap-2">
+                      <span className="tabular min-w-0 truncate text-xs">{c.label}</span>
+                      <button
+                        type="button"
+                        disabled={pending}
+                        onClick={() =>
+                          act(
+                            () => confirmTaxToBank(c.invId, s.dep.id),
+                            (r: { remaining: number; shortfall: number }) =>
+                              r.shortfall > 0
+                                ? `이었습니다 — 계산서에 ${won(r.shortfall)}원이 남았습니다 (다른 입금을 이어서 잇거나 계산서 화면에서 「확인 끝」)`
+                                : r.remaining > 0
+                                  ? `이었습니다 — 이 입금에 ${won(r.remaining)}원이 남았습니다 (다른 계산서 몫이면 이어서)`
+                                  : "이었습니다 — 금액이 정확히 맞습니다.",
+                          )
+                        }
+                        className={`shrink-0 rounded-control px-2.5 py-1.5 text-xs font-semibold disabled:opacity-40 ${
+                          c.exact && c.known ? "bg-brand-600 text-white active:bg-brand-700" : "border border-slate-300 bg-white"
+                        }`}
+                      >
+                        이 계산서와 잇기
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {s.taxHint && !(taxCands[s.dep.id]?.length > 0) && (
               <p className="mt-2 rounded-lg bg-violet-50 p-2 text-xs text-violet-800">
-                ★ {s.taxHint} — 세금계산서 대조 화면에서 그 계산서와 이으면 정리됩니다
+                ★ {s.taxHint} — 열린 계산서가 이 달 근처에 없습니다. 계산서가 아직 안 올라왔으면 나중에, 아니면 아래에서 분류하세요
               </p>
             )}
             {s.parties.length > 0 && (
@@ -154,7 +244,9 @@ export function DepositsRecon({ data, ym }: { data: DepositReconData; ym: string
 
             {s.quotes.length > 0 && (
               <div className="mt-2 text-sm">
-                <p className="text-xs text-slate-500">같은 금액의 계좌이체 판매 — 같은 건이면 이으세요</p>
+                <p className="text-xs text-slate-500">
+                  같은 금액의 판매 — 같은 건이면 이으세요 (앱에 카드·현금으로 적혀 있어도 실제 이체였으면 잇기)
+                </p>
                 <ul className="mt-1 space-y-1">
                   {s.quotes.map((q) => (
                     <li key={q.quoteId} className="flex items-center justify-between gap-2">
@@ -175,25 +267,56 @@ export function DepositsRecon({ data, ym }: { data: DepositReconData; ym: string
               </div>
             )}
 
-            {s.parties.length === 0 && s.quotes.length === 0 && (
+            {s.parties.length === 0 && s.quotes.length === 0 && !(taxCands[s.dep.id]?.length > 0) && (
               <p className="mt-2 text-xs text-slate-400">
-                이을 만한 판매·외상을 못 찾았습니다 — 판매와 무관한 입금(지원금·이자 등)이면 무시하세요
+                판매·계산서·외상 짝을 못 찾았습니다 — 계산서가 나중에 올라오면 다시 나타나고, 판매와 무관한 돈이면 아래에서 골라 주세요
               </p>
             )}
 
-            <div className="mt-2 text-right">
-              <button
-                type="button"
-                disabled={pending}
-                onClick={() => act(() => ignoreDeposit(s.dep.id), () => "무시했습니다.")}
-                className="text-xs text-slate-400 underline"
-              >
-                무시
-              </button>
+            {/* 「무시」 대신 무엇인지 고르기 (사장님 요청 2026-08-26 — 매출 입금을 무시로 접지 않게) */}
+            <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5 text-xs">
+              <span className="text-slate-400">판매와 무관한 돈이면:</span>
+              {(["이자·지원금", "환불", "기타입금"] as const).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  disabled={pending}
+                  onClick={() => act(() => setDepositKind(s.dep.id, k), () => `「${k}」으로 정리했습니다.`)}
+                  className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-slate-600 active:bg-slate-100 disabled:opacity-40"
+                >
+                  {k}
+                </button>
+              ))}
             </div>
           </li>
         ))}
       </ul>
+
+      {/* 판매와 무관으로 분류한 입금 — 되돌리기 */}
+      {data.kinds.length > 0 && (
+        <details className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-600">
+            판매와 무관으로 정리한 입금 {data.kinds.length}건 (이 달) — 잘못 골랐으면 되돌리기
+          </summary>
+          <ul className="mt-2 divide-y divide-slate-100 text-sm">
+            {data.kinds.map((r) => (
+              <li key={r.id} className="flex items-center justify-between gap-2 py-1.5">
+                <span className="tabular min-w-0 truncate text-xs">
+                  {r.at} · {r.payer} · +{won(r.amount)}원 · {r.category}
+                </span>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => act(() => undoDepositKind(r.id), () => "되돌렸습니다 — 정리 목록으로 돌아갔습니다.")}
+                  className="shrink-0 text-xs text-slate-400 underline"
+                >
+                  되돌리기
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
 
       {/* 🔴 감사 H10 — 카드정산으로 표시된 입금 되돌리기 (우연히 패턴에 걸린 진짜 입금 구제) */}
       {data.settledCard.length > 0 && (

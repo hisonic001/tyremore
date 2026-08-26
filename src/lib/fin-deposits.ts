@@ -19,6 +19,9 @@ import { cashUsedSql, normName } from "./recon-data";
 import { planSettlement } from "./receivable-plan";
 import { settleReceivables } from "./receivable";
 import { restoreCashLine } from "./cash-restore";
+import { depositReconData } from "./recon-data";
+import { depositTaxCandidates, depositSurePicks } from "./deposit-tax";
+import { confirmTaxToBank } from "./recon";
 
 async function guard(): Promise<{ ok: true; uid: number | null } | { ok: false; error: string }> {
   if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
@@ -250,6 +253,71 @@ export async function undoDepositLink(
   revalidatePath("/receivables");
   revalidatePath("/sales");
   return { ok: true, removed: marks.length, payments };
+}
+
+/** 판매와 무관한 입금 분류 — 이자·지원금·환불·기타 (사장님 요청 2026-08-26: 「무시」로 매출 입금을 접지 않게) */
+export const DEPOSIT_KINDS = ["이자·지원금", "환불", "기타입금"] as const;
+
+export async function setDepositKind(
+  cashTxnId: number,
+  kind: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  if (!(DEPOSIT_KINDS as readonly string[]).includes(kind)) return { ok: false, error: "분류가 올바르지 않습니다" };
+  const dep = await getDeposit(cashTxnId);
+  if (!dep) return { ok: false, error: "입금 줄을 찾을 수 없습니다" };
+  if (dep.remain < dep.in_amount) return { ok: false, error: "이미 계산서·판매에 일부 이어진 입금입니다 — 먼저 되돌려 주세요" };
+  await db.execute(sql`
+    UPDATE cash_txn SET category = ${kind}, recon_status = '확정' WHERE id = ${cashTxnId} AND source = '통장'
+  `);
+  revalidatePath("/finance/deposits");
+  revalidatePath("/finance");
+  return { ok: true };
+}
+
+export async function undoDepositKind(cashTxnId: number): Promise<{ ok: true } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  const rows = await db.execute<{ id: number }>(sql`
+    UPDATE cash_txn SET category = NULL, recon_status = '미대조'
+    WHERE id = ${cashTxnId} AND category IN ('이자·지원금', '환불', '기타입금') RETURNING id
+  `);
+  if (rows.length === 0) return { ok: false, error: "판매와 무관으로 분류한 줄이 아닙니다" };
+  revalidatePath("/finance/deposits");
+  revalidatePath("/finance");
+  return { ok: true };
+}
+
+/**
+ * ⭐ 짝이 확실한 입금 모두 잇기 (사장님 요청 2026-08-26) — 정확 일치 + 아는 상대 하나뿐인 계산서,
+ *    또는 이름 맞는 판매 하나뿐인 것. 서버가 같은 규칙으로 다시 계산한다(화면 목록을 믿지 않음).
+ */
+export async function confirmSureDeposits(
+  ym: string,
+): Promise<{ ok: true; tax: number; quote: number; failed: number } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return { ok: false, error: "달이 올바르지 않습니다" };
+  const data = await depositReconData(ym);
+  const cands = await depositTaxCandidates(
+    ym,
+    data.open.map((s) => ({ id: s.dep.id, date: s.dep.date, amount: s.dep.amount, payerName: s.dep.payerName })),
+  );
+  const sure = depositSurePicks(data.open, cands);
+  let tax = 0;
+  let quote = 0;
+  let failed = 0;
+  for (const [cashId, pick] of sure) {
+    const r = pick.kind === "tax" ? await confirmTaxToBank(pick.invId, cashId) : await linkDepositToQuote(cashId, pick.quoteId);
+    if (!r.ok) failed++;
+    else if (pick.kind === "tax") tax++;
+    else quote++;
+  }
+  revalidatePath("/finance/deposits");
+  revalidatePath("/finance");
+  revalidatePath("/finance/tax");
+  return { ok: true, tax, quote, failed };
 }
 
 /** 무시 / 무시 해제 */

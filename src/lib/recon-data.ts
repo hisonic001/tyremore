@@ -152,6 +152,10 @@ export interface DepositQuoteRef {
   label: string;
   amount: number;
   date: string;
+  /** 앱에 적힌 결제수단 — 이체가 아닌 것으로 적혀 있어도 실제 이체였으면 잇는다 (2026-08-26) */
+  pm: string | null;
+  /** 입금자명과 판매 상대 이름이 같다 (★) */
+  nameOk: boolean;
 }
 
 export interface DepositPartyRef {
@@ -184,6 +188,8 @@ export interface DepositReconData {
   settledCardTotal: number;
   /** 이 달 판매·외상 수금과 이어진 입금 — 잘못 이었으면 되돌린다 (2026 감사 G3) */
   linked: { id: number; at: string; amount: number; payer: string; used: number; n: number }[];
+  /** 「판매와 무관」으로 분류한 입금(이자·지원금·환불·기타) — 되돌리기 목록 (2026-08-26) */
+  kinds: { id: number; at: string; amount: number; payer: string; category: string }[];
   /** 적요 패턴(FB자금·매출표)으로 카드 정산으로 보이는 미대조 입금 */
   cardPatternCount: number;
   cardPatternSum: number;
@@ -248,26 +254,32 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
     -- 🔴 2025 감사 F5(2026-08-26): 이미 '카드정산'으로 분류된 줄까지 세어 2025-12에 147건 거짓 할 일
   `);
 
+  // 🔴 사장님 지적(2026-08-26): 자동 분류(카드정산 백필)된 줄은 recon_status 가 미대조라 "정리됨 1건"으로 셌다
   const counts = await db.execute<{ st: string; n: number }>(sql`
-    SELECT recon_status st, count(*)::int n FROM cash_txn WHERE ${inMonth} GROUP BY 1 LIMIT 5
+    SELECT CASE WHEN recon_status = '무시' THEN '무시'
+                WHEN recon_status = '확정' OR category IS NOT NULL THEN '확정'
+                ELSE '열림' END st, count(*)::int n
+    FROM cash_txn WHERE ${inMonth} GROUP BY 1 LIMIT 5
   `);
 
-  // ② 이을 만한 계좌이체 판매 (±3일 여유)
+  /* ② 이을 만한 판매 (±3일 여유) — 🔴 사장님 요청(2026-08-26): 계좌이체로 적힌 판매만 보면
+     MARS 이관분(1~7월, 수단이 카드·현금으로 적힘)은 후보가 안 떠 "무시하세요"로 몰렸다.
+     같은 금액이면 수단 무관 후보로 올리고 수단을 라벨에 적는다 */
   const startPad = new Date(new Date(start + "T00:00:00Z").getTime() - 3 * 86400000).toISOString().slice(0, 10);
   const endPad = new Date(new Date(nextStart + "T00:00:00Z").getTime() + 3 * 86400000).toISOString().slice(0, 10);
   const transfers = await db.execute<{
-    id: number; quote_no: string; total: number; d: string; who: string; plate_no: string | null;
+    id: number; quote_no: string; total: number; d: string; who: string; plate_no: string | null; pm: string | null;
   }>(sql`
     SELECT q.id, q.quote_no, q.total_amount total,
            to_char(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date), 'YYYY-MM-DD') d,
-           COALESCE(q.supplier_name, c.name, '손님') who, v.plate_no
+           COALESCE(q.supplier_name, c.name, '손님') who, v.plate_no, q.payment_method pm
     FROM quote q
     LEFT JOIN customer c ON c.id = q.customer_id
     LEFT JOIN vehicle  v ON v.id = q.vehicle_id
-    WHERE q.status = '성사' AND q.payment_method = '계좌이체' AND q.total_amount > 0
+    WHERE q.status = '성사' AND q.total_amount > 0
       AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${startPad}::date
       AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${endPad}::date
-    ORDER BY q.id DESC LIMIT 200
+    ORDER BY q.id DESC LIMIT 800
   `);
 
   // ③ 이미 이은 판매는 후보에서 뺀다
@@ -296,12 +308,18 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
     const pn = norm(payerName);
     const quotes = freeTransfers
       .filter((q) => Number(q.total) === Number(r.in_amount) && dayDiff3(q.d, r.date))
+      .map((q) => ({ q, nameOk: samePartyName(payerName, q.who) }))
+      .sort((a, b) => Number(b.nameOk) - Number(a.nameOk))
       .slice(0, 5)
-      .map((q) => ({
+      .map(({ q, nameOk }) => ({
         quoteId: Number(q.id),
-        label: `${q.quote_no} · ${q.who}${q.plate_no ? ` ${q.plate_no}` : ""} · ${Number(q.total).toLocaleString()}원 (${q.d.slice(5)})`,
+        label:
+          `${nameOk ? "★ " : ""}${q.quote_no} · ${q.who}${q.plate_no ? ` ${q.plate_no}` : ""} · ${Number(q.total).toLocaleString()}원 (${q.d.slice(5)})` +
+          (q.pm && q.pm !== "계좌이체" ? ` · 앱엔 ${q.pm}로 적힘` : ""),
         amount: Number(q.total),
         date: q.d,
+        pm: q.pm,
+        nameOk,
       }));
     const aliasParty = aliasMap.get(pn) ?? null;
     // 한 입금자가 여러 계산서 상대로 기억될 수 있다 (카랑 → 현대캐피탈·쏘카)
@@ -363,10 +381,22 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
 
   const openTotal = await depositOpenCount(ym);
   const [inCnt] = await db.execute<{ n: number }>(sql`SELECT count(*)::int n FROM cash_txn WHERE ${inMonth}`);
+  const kindRows = await db.execute<{ id: number; at: string; in_amount: number; description: string; category: string }>(sql`
+    SELECT id, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at, in_amount, description, category
+    FROM cash_txn WHERE ${inMonth} AND category IN ('이자·지원금', '환불', '기타입금')
+    ORDER BY occurred_at DESC LIMIT 40
+  `);
 
   return {
     open,
     openTotal,
+    kinds: kindRows.map((r) => ({
+      id: Number(r.id),
+      at: r.at,
+      amount: Number(r.in_amount),
+      payer: payerKeyOf("통장", r.description),
+      category: r.category,
+    })),
     monthInCount: Number(inCnt?.n ?? 0),
     settledCardTotal: Number(settledCnt?.n ?? 0),
     linked: linkedRows.map((r) => ({
