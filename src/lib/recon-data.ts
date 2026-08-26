@@ -383,7 +383,7 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
   const [inCnt] = await db.execute<{ n: number }>(sql`SELECT count(*)::int n FROM cash_txn WHERE ${inMonth}`);
   const kindRows = await db.execute<{ id: number; at: string; in_amount: number; description: string; category: string }>(sql`
     SELECT id, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at, in_amount, description, category
-    FROM cash_txn WHERE ${inMonth} AND category IN ('이자·지원금', '환불', '기타입금')
+    FROM cash_txn WHERE ${inMonth} AND category IN ('판매입금', '이자·지원금', '환불', '기타입금')
     ORDER BY occurred_at DESC LIMIT 40
   `);
 

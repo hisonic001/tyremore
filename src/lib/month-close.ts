@@ -148,7 +148,7 @@ export async function closeChecklist(ym: string, healthOk?: boolean): Promise<Cl
 async function computeHeadline(ym: string) {
   const pl = await finPL(ym);
   return {
-    earned: pl.earned,
+    earned: pl.earnedTotal,
     bought: pl.bought,
     cardOut: pl.cardOut,
     fee: pl.feeShown,

@@ -4,7 +4,8 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
 import type { DepositReconData, DepositSuggestion } from "@/lib/recon-data";
-import type { DepositBreakdown, DepositTaxCands } from "@/lib/deposit-tax";
+import type { DepositBreakdown, DepositTaxBundles, DepositTaxCands, TransferSale } from "@/lib/deposit-tax";
+import { clearPosNote, fixSaleMethod, setPosNote } from "@/lib/pos-actions";
 import {
   collectFromDeposit,
   confirmSureDeposits,
@@ -15,7 +16,7 @@ import {
   undoDepositLink,
   unmarkCardSettlement,
 } from "@/lib/fin-deposits";
-import { confirmTaxToBank } from "@/lib/recon";
+import { confirmBankToTaxes, confirmTaxToBank } from "@/lib/recon";
 import { won } from "@/components/fin/money";
 import { useConfirm } from "@/components/ui/confirm";
 
@@ -25,13 +26,19 @@ export function DepositsRecon({
   data,
   ym,
   taxCands,
+  bundles,
   sureIds,
   breakdown,
+  transfers,
 }: {
   data: DepositReconData;
   ym: string;
   /** 입금 id → 열린 계산서 후보 (같은 상대·같은 금액) */
   taxCands: DepositTaxCands;
+  /** 입금 id → 계산서 여러 장 합이 입금과 맞는 묶음 */
+  bundles: DepositTaxBundles;
+  /** 앱엔 계좌이체인데 법인 통장에 없는 판매 */
+  transfers: TransferSale[];
   /** 짝이 확실한 입금 id — 한 번에 잇기 */
   sureIds: number[];
   breakdown: DepositBreakdown;
@@ -167,6 +174,30 @@ export function DepositsRecon({
               <span className="tabular shrink-0 font-bold text-emerald-700">+{won(s.dep.amount)}원</span>
             </div>
 
+            {/* ⭐ 입금 한 줄 = 계산서 여러 장 (레드캡 624,800 = 528,000 + 96,800) */}
+            {bundles[s.dep.id] && (
+              <div className="mt-2 rounded-lg bg-brand-50 p-2 text-sm">
+                <p className="text-xs font-semibold text-brand-700">
+                  ✔ 이 입금은 계산서 {bundles[s.dep.id].invoiceIds.length}장 합({bundles[s.dep.id].parts.join(" + ")})과{" "}
+                  {bundles[s.dep.id].diff === 0
+                    ? "정확히 맞습니다"
+                    : `${won(Math.abs(bundles[s.dep.id].diff))}원 차이(수수료·반올림 — 자동 정리)`}
+                </p>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() =>
+                    act(
+                      () => confirmBankToTaxes(s.dep.id, bundles[s.dep.id].invoiceIds),
+                      (r: { applied: number }) => `계산서 ${r.applied}장을 이 입금 하나에 이었습니다.`,
+                    )
+                  }
+                  className="mt-1.5 rounded-control bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white active:bg-brand-700 disabled:opacity-40"
+                >
+                  이 입금으로 {bundles[s.dep.id].invoiceIds.length}장 한꺼번에 잇기
+                </button>
+              </div>
+            )}
             {/* ⭐ 세금계산서 바로 잇기 (사장님 요청 2026-08-26) — 전엔 "계산서 화면에서 이으세요"만 있고 버튼이 없었다 */}
             {(taxCands[s.dep.id]?.length ?? 0) > 0 && (
               <div className="mt-2 rounded-lg bg-violet-50 p-2 text-sm">
@@ -273,9 +304,18 @@ export function DepositsRecon({
               </p>
             )}
 
-            {/* 「무시」 대신 무엇인지 고르기 (사장님 요청 2026-08-26 — 매출 입금을 무시로 접지 않게) */}
+            {/* 「무시」 대신 무엇인지 고르기 (사장님 요청 2026-08-26) — 앱에 기록 없는 판매 대금이 가장 흔하다 */}
             <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5 text-xs">
-              <span className="text-slate-400">판매와 무관한 돈이면:</span>
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => act(() => setDepositKind(s.dep.id, "판매입금"), () => "「판매 대금(앱 기록 없음)」으로 정리 — 손익의 번 돈에 들어갑니다.")}
+                title="앱에 판매 기록이 없는 대금 — 손익에 매출로 잡히고, 나중에 정비내역을 등록하면 되돌려 이으면 됩니다"
+                className="rounded-full border border-brand-500 bg-brand-50 px-2.5 py-0.5 font-semibold text-brand-700 active:bg-brand-100 disabled:opacity-40"
+              >
+                판매 대금 (앱 기록 없음)
+              </button>
+              <span className="text-slate-400">· 판매와 무관하면:</span>
               {(["이자·지원금", "환불", "기타입금"] as const).map((k) => (
                 <button
                   key={k}
@@ -292,11 +332,63 @@ export function DepositsRecon({
         ))}
       </ul>
 
+      {/* ⭐ 계좌이체로 적혔는데 법인 통장에 없는 판매 (사장님 제보 2026-08-26 — 개인 통장으로 보내는 손님) */}
+      {transfers.length > 0 && (
+        <section className="mt-4 rounded-2xl border border-amber-300 bg-white p-4">
+          <h2 className="text-sm font-semibold">
+            앱엔 「계좌이체」인데 법인 통장에 안 보이는 판매 {transfers.filter((t) => !t.note).length}건
+            {transfers.some((t) => t.note) && <span className="font-normal text-slate-400"> · 정리됨 {transfers.filter((t) => t.note).length}건</span>}
+          </h2>
+          <p className="mt-0.5 text-xs text-slate-500">
+            개인 통장으로 받았거나 현금으로 받은 걸 이체로 적은 경우가 대부분입니다 — 무엇이었는지 한 번만 골라 주세요.
+          </p>
+          <ul className="mt-2 space-y-1.5 text-sm">
+            {transfers.map((t) => (
+              <li key={t.key} className={`rounded-lg border p-2 ${t.note ? "border-slate-100 bg-slate-50" : "border-amber-200 bg-amber-50"}`}>
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="tabular min-w-0 truncate text-xs">
+                    <span className="text-slate-400">{t.day.slice(5)}</span> {t.quoteNo} · {t.who}
+                  </span>
+                  <strong className="tabular shrink-0">{won(t.amount)}원</strong>
+                </div>
+                {t.note ? (
+                  <p className="mt-1 flex items-center justify-between text-xs text-slate-500">
+                    <span>{t.note.reason}{t.note.memo ? ` — ${t.note.memo}` : ""}</span>
+                    <button type="button" disabled={pending} onClick={() => act(() => clearPosNote(t.key), () => "되돌렸습니다.")} className="underline">되돌리기</button>
+                  </p>
+                ) : (
+                  <div className="mt-1 space-y-1 text-xs">
+                    {t.cands.map((c) => (
+                      <div key={c.cashId} className="flex items-center justify-between gap-2">
+                        <span className="min-w-0 truncate">통장에 같은 금액: {c.label}</span>
+                        <button type="button" disabled={pending} onClick={() => act(() => linkDepositToQuote(c.cashId, t.quoteId), () => "이었습니다.")}
+                          className="shrink-0 rounded-control bg-brand-600 px-2.5 py-1 font-semibold text-white active:bg-brand-700 disabled:opacity-40">이 입금과 잇기</button>
+                      </div>
+                    ))}
+                    <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                      <button type="button" disabled={pending}
+                        onClick={() => act(() => setPosNote({ day: t.day, kind: "transfer", ref: t.key, reason: "개인통장 입금" }), () => "「개인 통장으로 받음」으로 정리했습니다.")}
+                        className="rounded-full border border-brand-500 bg-brand-50 px-2.5 py-0.5 font-semibold text-brand-700 disabled:opacity-40">개인 통장으로 받음</button>
+                      <button type="button" disabled={pending}
+                        onClick={() => act(() => fixSaleMethod(t.quoteId, "현금"), () => "결제수단을 현금으로 고쳤습니다.")}
+                        className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-slate-600 disabled:opacity-40">현금으로 받음 (수단 고치기)</button>
+                      <button type="button" disabled={pending}
+                        onClick={() => act(() => setPosNote({ day: t.day, kind: "transfer", ref: t.key, reason: "아직 안 들어옴" }), () => "「아직 안 들어옴」으로 남겼습니다 — 들어오면 되돌리고 이으세요.")}
+                        className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-slate-600 disabled:opacity-40">아직 안 들어옴</button>
+                    </div>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {/* 판매와 무관으로 분류한 입금 — 되돌리기 */}
       {data.kinds.length > 0 && (
         <details className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
           <summary className="cursor-pointer text-sm font-semibold text-slate-600">
-            판매와 무관으로 정리한 입금 {data.kinds.length}건 (이 달) — 잘못 골랐으면 되돌리기
+            분류로 정리한 입금 {data.kinds.length}건 (이 달 · 판매 대금/이자/환불/기타) — 잘못 골랐으면 되돌리기
           </summary>
           <ul className="mt-2 divide-y divide-slate-100 text-sm">
             {data.kinds.map((r) => (

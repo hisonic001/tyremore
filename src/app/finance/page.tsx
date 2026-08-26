@@ -153,7 +153,7 @@ export default async function FinancePage({
     ORDER BY occurred_at DESC, id DESC LIMIT 60
   `);
 
-  const gEarned = pl.earned;
+  const gEarned = pl.earnedTotal;
   const gBought = pl.bought;
   const gCardOut = pl.cardOut;
   const gBankExp = pl.bankExp;
@@ -281,6 +281,12 @@ export default async function FinancePage({
             <span>번 돈 (판매)</span>
             <strong className="text-emerald-700">{won(gEarned)}원</strong>
           </p>
+          {pl.salesUnrecorded > 0 && (
+            <p className="flex justify-between pl-3 text-xs text-slate-500">
+              <span>· 그중 앱에 기록 없는 판매 입금(통장)</span>
+              <span>{won(pl.salesUnrecorded)}원</span>
+            </p>
+          )}
           <p className="flex justify-between">
             <span>쓴 돈</span>
             <strong className="text-red-600">{won(gSpent)}원</strong>

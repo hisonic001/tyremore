@@ -17,8 +17,12 @@ import { monthRange } from "./ym";
 
 export interface FinPL {
   ym: string;
-  /** 번 돈 (판매, 판매일 기준) */
+  /** 번 돈 (앱 판매, 판매일 기준) */
   earned: number;
+  /** 앱에 기록 없는 판매 대금 — 통장 입금을 「판매입금」으로 분류한 것 (2026-08-26) */
+  salesUnrecorded: number;
+  /** 번 돈 합 = earned + salesUnrecorded */
+  earnedTotal: number;
   /** 상품 매입 (앱 매입 인보이스, 발행일 기준) */
   bought: number;
   /** 법인카드로 쓴 돈 (미분류 + 경비 분류) */
@@ -80,6 +84,10 @@ export async function finPL(ym: string): Promise<FinPL> {
     SELECT COALESCE(SUM(out_amount), 0)::bigint s FROM cash_txn
     WHERE ${inMonth} AND source = '통장' AND category IN (${CATS})
   `);
+  const [unrec] = await db.execute<{ s: string }>(sql`
+    SELECT COALESCE(SUM(in_amount), 0)::bigint s FROM cash_txn
+    WHERE ${inMonth} AND source = '통장' AND category = '판매입금'
+  `);
 
   const e = Number(earned.s);
   const b = Number(bought.s);
@@ -91,10 +99,13 @@ export async function finPL(ym: string): Promise<FinPL> {
   const feeEstimated = f === 0 && a > 0 && feeRate ? Math.round(a * feeRate) : 0;
   const feeShown = f > 0 ? f : feeEstimated;
   const x = Number(bankExp.s);
+  const u = Number(unrec?.s ?? 0);
   const spent = b + c + feeShown + x;
   return {
     ym,
     earned: e,
+    salesUnrecorded: u,
+    earnedTotal: e + u,
     bought: b,
     cardOut: c,
     fee: f,
@@ -104,7 +115,7 @@ export async function finPL(ym: string): Promise<FinPL> {
     bankExp: x,
     assocMonth: a,
     spent,
-    profit: e - spent,
-    dataComplete: e > 0 || b > 0,
+    profit: e + u - spent,
+    dataComplete: e > 0 || b > 0 || u > 0,
   };
 }

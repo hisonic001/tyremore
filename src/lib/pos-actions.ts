@@ -15,7 +15,7 @@ import { revalidateFinance } from "./fin-revalidate";
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const REF_TABLE = { quote: "quote", qp: "quote_payment", rp: "receivable_payment" } as const;
-const POS_REASONS = ["단말기 누락", "앱 미등록", "취소", "다른 날", "기타"] as const;
+const POS_REASONS = ["단말기 누락", "앱 미등록", "취소", "다른 날", "기타", "개인통장 입금", "현금으로 받음", "아직 안 들어옴"] as const;
 
 async function guard(): Promise<{ ok: true; uid: number | null } | { ok: false; error: string }> {
   if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
@@ -74,7 +74,7 @@ export async function unlinkPos(posId: number): Promise<{ ok: true } | { ok: fal
 /** 미매칭 건에 사유 남기기 — 단말기 누락·앱 미등록·취소·다른 날·기타 */
 export async function setPosNote(input: {
   day: string;
-  kind: "pos_only" | "app_only";
+  kind: "pos_only" | "app_only" | "transfer";
   ref: string;
   reason: string;
   memo?: string | null;
@@ -110,6 +110,17 @@ export async function fixSaleToCard(quoteId: number, day: string): Promise<{ ok:
   const matched = DAY_RE.test(day) ? await autoMatchPosDayCore(day, g.uid) : 0;
   refresh();
   return { ok: true, matched };
+}
+
+/** 결제수단 고치기 (계좌이체로 적혔는데 현금이었다 등) — 정비내역의 「날짜·결제 고치기」와 같은 정본 */
+export async function fixSaleMethod(quoteId: number, method: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  if (!["현금", "카드", "계좌이체", "지역화폐", "외상"].includes(method)) return { ok: false, error: "수단이 올바르지 않습니다" };
+  const r = await updateSaleHead({ quoteId, paymentMethod: method, payments: null });
+  if (!r.ok) return r;
+  refresh();
+  return { ok: true };
 }
 
 /** 날짜 착오 — 그 판매의 작업일을 이 날로 옮기고 바로 자동 대조 */

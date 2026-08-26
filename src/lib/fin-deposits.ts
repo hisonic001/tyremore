@@ -21,7 +21,7 @@ import { settleReceivables } from "./receivable";
 import { restoreCashLine } from "./cash-restore";
 import { depositReconData } from "./recon-data";
 import { depositTaxCandidates, depositSurePicks } from "./deposit-tax";
-import { confirmTaxToBank } from "./recon";
+import { confirmBankToTaxes, confirmTaxToBank } from "./recon";
 
 async function guard(): Promise<{ ok: true; uid: number | null } | { ok: false; error: string }> {
   if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
@@ -256,7 +256,9 @@ export async function undoDepositLink(
 }
 
 /** 판매와 무관한 입금 분류 — 이자·지원금·환불·기타 (사장님 요청 2026-08-26: 「무시」로 매출 입금을 접지 않게) */
-const DEPOSIT_KINDS = ["이자·지원금", "환불", "기타입금"] as const;
+/* 🔴 사장님 지적(2026-08-26): 「판매와 무관」으로 뺀 것 대부분이 실은 **앱에 기록이 없는 판매 대금**이었다 —
+   따로 분류해 손익의 번 돈에 넣고, 나중에 정비내역을 등록하면 되돌려 잇는다 */
+const DEPOSIT_KINDS = ["판매입금", "이자·지원금", "환불", "기타입금"] as const;
 
 export async function setDepositKind(
   cashTxnId: number,
@@ -281,7 +283,7 @@ export async function undoDepositKind(cashTxnId: number): Promise<{ ok: true } |
   if (!g.ok) return g;
   const rows = await db.execute<{ id: number }>(sql`
     UPDATE cash_txn SET category = NULL, recon_status = '미대조'
-    WHERE id = ${cashTxnId} AND category IN ('이자·지원금', '환불', '기타입금') RETURNING id
+    WHERE id = ${cashTxnId} AND category IN ('판매입금', '이자·지원금', '환불', '기타입금') RETURNING id
   `);
   if (rows.length === 0) return { ok: false, error: "판매와 무관으로 분류한 줄이 아닙니다" };
   revalidatePath("/finance/deposits");
@@ -300,19 +302,24 @@ export async function confirmSureDeposits(
   if (!g.ok) return g;
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return { ok: false, error: "달이 올바르지 않습니다" };
   const data = await depositReconData(ym);
-  const cands = await depositTaxCandidates(
+  const { cands, bundles } = await depositTaxCandidates(
     ym,
     data.open.map((s) => ({ id: s.dep.id, date: s.dep.date, amount: s.dep.amount, payerName: s.dep.payerName })),
   );
-  const sure = depositSurePicks(data.open, cands);
+  const sure = depositSurePicks(data.open, cands, bundles);
   let tax = 0;
   let quote = 0;
   let failed = 0;
   for (const [cashId, pick] of sure) {
-    const r = pick.kind === "tax" ? await confirmTaxToBank(pick.invId, cashId) : await linkDepositToQuote(cashId, pick.quoteId);
+    const r =
+      pick.kind === "tax"
+        ? await confirmTaxToBank(pick.invId, cashId)
+        : pick.kind === "bundle"
+          ? await confirmBankToTaxes(cashId, pick.invoiceIds)
+          : await linkDepositToQuote(cashId, pick.quoteId);
     if (!r.ok) failed++;
-    else if (pick.kind === "tax") tax++;
-    else quote++;
+    else if (pick.kind === "quote") quote++;
+    else tax++;
   }
   revalidatePath("/finance/deposits");
   revalidatePath("/finance");

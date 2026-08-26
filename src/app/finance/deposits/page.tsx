@@ -3,7 +3,7 @@ import { getSession } from "@/lib/auth";
 import { pickYm } from "@/lib/ym";
 import { FinShell } from "@/components/fin/shell";
 import { depositReconData } from "@/lib/recon-data";
-import { arrangeDeposits, depositSurePicks, depositTaxCandidates } from "@/lib/deposit-tax";
+import { arrangeDeposits, depositSurePicks, depositTaxCandidates, transferSalesMissing } from "@/lib/deposit-tax";
 import { DepositsRecon } from "./deposits-ui";
 
 export const dynamic = "force-dynamic";
@@ -30,13 +30,15 @@ export default async function FinanceDepositsPage({
 
   const raw = await depositReconData(ym);
   // ⭐ 2026-08-26: 계산서 후보를 이 화면에서 바로 — 짝 확실 → 짝 있음 → 없음 순으로
-  const taxCands = await depositTaxCandidates(
+  const { cands: taxCands, bundles } = await depositTaxCandidates(
     ym,
     raw.open.map((s) => ({ id: s.dep.id, date: s.dep.date, amount: s.dep.amount, payerName: s.dep.payerName })),
   );
-  const sure = depositSurePicks(raw.open, taxCands);
-  const { open, breakdown } = arrangeDeposits(raw.open, taxCands, sure);
+  const sure = depositSurePicks(raw.open, taxCands, bundles);
+  const { open, breakdown } = arrangeDeposits(raw.open, taxCands, sure, bundles);
   const data = { ...raw, open };
+  // ⭐ 계좌이체로 적혔는데 법인 통장에 없는 판매 (개인 통장 입금 등, 사장님 제보 2026-08-26)
+  const transfers = await transferSalesMissing(ym);
 
   return (
     <FinShell tab="deposits" monthNav={{ ym, basePath: "/finance/deposits" }}>
@@ -44,7 +46,7 @@ export default async function FinanceDepositsPage({
         통장에 들어온 돈이 무엇인지 정리합니다 — 카드 정산 · 세금계산서 대금 · 판매 · 외상 수금 · 판매와 무관(이자·지원금·환불).
         짝이 확실한 것은 한 번에, 나머지는 카드마다 고르면 됩니다.
       </p>
-      <DepositsRecon data={data} ym={ym} taxCands={taxCands} sureIds={[...sure.keys()]} breakdown={breakdown} />
+      <DepositsRecon data={data} ym={ym} taxCands={taxCands} bundles={bundles} sureIds={[...sure.keys()]} breakdown={breakdown} transfers={transfers} />
     </FinShell>
   );
 }
