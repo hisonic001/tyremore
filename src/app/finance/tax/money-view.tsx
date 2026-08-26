@@ -15,6 +15,7 @@ import {
   confirmMonthlyParty,
   confirmTaxToBank,
   confirmTaxToBanks,
+  confirmBankToTaxes,
   undoMonthlyParty,
   undoTaxMatch,
 } from "@/lib/recon";
@@ -53,6 +54,17 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
               ? `확인했습니다 — 이 통장 줄에 ${won(r.remaining)}원이 남았습니다 (다른 계산서 몫이면 이어서 확인하세요)`
               : "확인했습니다 — 금액이 정확히 맞습니다."),
       );
+      router.refresh();
+    });
+
+  /* ⭐ 통장 한 줄에 계산서 N장 (타이어프로 속초점 케이스) */
+  const linkBundle = (cashId: number, invIds: number[]) =>
+    start(async () => {
+      setMsg(null);
+      setError(null);
+      const r = await confirmBankToTaxes(cashId, invIds);
+      if (!r.ok) return setError(r.error);
+      setMsg(`계산서 ${r.applied}장을 통장 줄 하나에 이었습니다 — 금액이 정확히 맞습니다.`);
       router.refresh();
     });
 
@@ -321,6 +333,22 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
                     계산서 정리로 →
                   </Link>
                 </p>
+              )}
+              {r.bankBundle && (
+                <div className="mt-1.5 rounded-control bg-brand-50 p-2 text-xs">
+                  <p className="font-semibold text-brand-700">
+                    ✔ {isIn ? "입금" : "출금"} 한 줄({won(r.bankBundle.total)}원)이 이 상대 계산서 {r.bankBundle.invoiceIds.length}장 합과
+                    정확히 맞습니다 — {r.bankBundle.parts.join(" + ")}
+                  </p>
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => linkBundle(r.bankBundle!.cashId, r.bankBundle!.invoiceIds)}
+                    className="mt-1.5 rounded-control bg-brand-600 px-3 py-1.5 font-semibold text-white active:bg-brand-700 disabled:opacity-40"
+                  >
+                    이 {isIn ? "입금" : "출금"}으로 {r.bankBundle.invoiceIds.length}장 한꺼번에 잇기
+                  </button>
+                </div>
               )}
               {r.bankCombo && (
                 <div className="mt-1.5 rounded-control bg-brand-50 p-2 text-xs">

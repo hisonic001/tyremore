@@ -71,6 +71,16 @@ export interface TaxSuggestion {
   learnable: boolean;
 }
 
+/** ⭐ 통장 한 줄 = 이 상대 계산서 여러 장 합 (사장님 케이스 2026-08-26 — 타이어프로 속초점
+ *  +842,160 = 242,160 + 600,000). 한 번에 잇는다. */
+export interface BankBundle {
+  cashId: number;
+  label: string;
+  total: number;
+  invoiceIds: number[];
+  parts: string[];
+}
+
 export interface PartyGroup {
   bizNo: string;
   name: string;
@@ -79,6 +89,34 @@ export interface PartyGroup {
   count: number;
   sum: number;
   items: TaxSuggestion[];
+  /** 입금·출금 한 줄이 이 상대 계산서 N장(≥2) 합과 정확히 맞으면 — 그룹 머리에 한꺼번에 잇기 */
+  bankBundle: BankBundle | null;
+}
+
+/** 통장 줄들 중 계산서 부분집합(≥2장) 합과 정확히 맞는 첫 줄 — 정리 뷰·돈 확인 뷰가 같이 쓴다 */
+export function findBankBundle(
+  invoices: { id: number; total: number; label: string }[],
+  lines: { id: number; amount: number; label: string }[],
+): BankBundle | null {
+  const cands = invoices.filter((i) => i.total > 0);
+  if (cands.length < 2) return null;
+  const seen = new Set<number>();
+  for (const line of lines) {
+    if (seen.has(line.id) || line.amount <= 0) continue;
+    seen.add(line.id);
+    if (cands.some((c) => c.total === line.amount)) continue; // 한 장과 정확히 맞으면 그 장의 일반 후보
+    const combo = findAmountCombo(cands.map((c) => ({ id: c.id, amount: c.total, label: c.label })), line.amount);
+    if (combo) {
+      return {
+        cashId: line.id,
+        label: line.label,
+        total: line.amount,
+        invoiceIds: combo.map((c) => c.id),
+        parts: combo.map((c) => c.label),
+      };
+    }
+  }
+  return null;
 }
 
 export interface TaxReconV2 {
@@ -469,9 +507,17 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
       // 수정·추가 발행은 나중 달에 온다 — 후보는 ±60일까지 (사장님 제보 2026-08-25)
       let candidates = namePool.filter((q) => dayDiff(q.d, inv.writeDate) <= 60).slice(0, 6).map(toRef);
       if (!auto && candidates.length === 0) {
-        // 이름으로 못 찾으면 같은 금액 (결제수단 무관 — 계좌이체 판매 포함)
+        /* 이름으로 못 찾으면 같은 금액 — 🔴 사장님 케이스(2026-08-26 타이어프로 속초점): 남의 카드 판매
+           (「고객 · 600,000원 · 카드」)가 금액만 같다고 사업자 매출 계산서 후보로 떴다. 카드·현금 판매는
+           계산서와 짝이 아니므로 뺀다(계좌이체·외상·혼합만) */
         candidates = freeQuotes
-          .filter((q) => Number(q.total) === Math.abs(inv.total) && dayDiff(q.d, inv.writeDate) <= 60)
+          .filter(
+            (q) =>
+              Number(q.total) === Math.abs(inv.total) &&
+              dayDiff(q.d, inv.writeDate) <= 60 &&
+              q.pm !== "카드" &&
+              q.pm !== "현금",
+          )
           .slice(0, 5)
           .map(toRef);
       }
@@ -614,12 +660,30 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
         count: 0,
         sum: 0,
         items: [],
+        bankBundle: null,
       };
       byParty.set(s.inv.counterBizNo, g);
     }
     g.count++;
     g.sum += s.inv.total;
     g.items.push(s);
+  }
+  /* 그룹별 「통장 한 줄 = 계산서 N장」 — 같은 방향 계산서끼리, 후보에 오른 줄(★·≈) 중에서 */
+  for (const g of byParty.values()) {
+    if (g.kind === "월정산") continue;
+    for (const dir of ["매입", "매출"] as const) {
+      const items = g.items.filter((s) => s.inv.direction === dir && !s.fixOrigin && s.inv.total > 0);
+      if (items.length < 2) continue;
+      const lines = items.flatMap((s) => s.bankCands.map((b) => ({ id: b.id, amount: b.amount, label: b.label })));
+      const bundle = findBankBundle(
+        items.map((s) => ({ id: s.inv.id, total: s.inv.total, label: `${s.inv.writeDate.slice(5)} ${won(s.inv.total)}원` })),
+        lines,
+      );
+      if (bundle) {
+        g.bankBundle = bundle;
+        break;
+      }
+    }
   }
   const groups = [...byParty.values()].sort((a, b) => {
     if (!!a.kind !== !!b.kind) return a.kind ? 1 : -1;
@@ -656,7 +720,9 @@ export interface TaxCashRow {
   appLinked: boolean;
   /** 지금까지 직접 확인된 통장 금액(+차액 조정) — 0<이 값<total 이면 「일부 확인」 */
   bankCovered: number;
-  autoBank: { id: number; label: string; known: boolean }[];
+  autoBank: { id: number; label: string; known: boolean; amount: number }[];
+  /** 통장 한 줄이 이 상대의 계산서 여러 장 합과 정확히 맞음 — 한꺼번에 잇기 (같은 줄이 관련 행마다 붙는다) */
+  bankBundle: BankBundle | null;
   /** 여러 통장 줄의 합이 남은 금액과 정확히 맞는 조합 */
   bankCombo: { ids: number[]; labels: string[]; total: number } | null;
   /** 마이너스(수정) 계산서 — 통장이 아니라 원본과 상쇄해야 끝난다 (「계산서 정리」로) */
@@ -873,7 +939,7 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
       return {
         id: Number(r.id), d: r.d, writeDate: r.write_date, name: r.name, total: Number(r.total),
         appLinked: !!r.app_linked, bankCovered: Number(r.bank_covered),
-        autoBank: [], bankCombo: null, isFix: false, fixFirst: true,
+        autoBank: [], bankCombo: null, bankBundle: null, isFix: false, fixFirst: true,
       };
     }
     /* 🔴 2025 감사 F4: 마이너스(수정) 계산서는 통장으로 못 끝낸다 — 후보를 만들지 않고
@@ -882,7 +948,7 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
       return {
         id: Number(r.id), d: r.d, writeDate: r.write_date, name: r.name, total: Number(r.total),
         appLinked: !!r.app_linked, bankCovered: Number(r.bank_covered),
-        autoBank: [], bankCombo: null, isFix: true, fixFirst: false,
+        autoBank: [], bankCombo: null, bankBundle: null, isFix: true, fixFirst: false,
       };
     }
     const pool2 = free
@@ -918,6 +984,7 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
       id: Number(x.id),
       label: bankLabel(x, isIn, known, total, similar),
       known,
+      amount: x.remain,
     }));
     return {
       id: Number(r.id),
@@ -935,10 +1002,25 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
             total: combo3.reduce((s, c) => s + c.amount, 0),
           }
         : null,
+      bankBundle: null,
       isFix: false,
       fixFirst: false,
     };
   });
+  /* 상대별 「통장 한 줄 = 계산서 N장」 (사장님 케이스 2026-08-26) — 관련 행마다 같은 묶음을 붙인다 */
+  const byBiz = new Map<string, TaxCashRow[]>();
+  for (const r of rows) {
+    const row = outRows.find((o) => o.id === Number(r.id));
+    if (row && !row.isFix && !row.fixFirst && row.bankCovered === 0) byBiz.set(r.biz, [...(byBiz.get(r.biz) ?? []), row]);
+  }
+  for (const group of byBiz.values()) {
+    if (group.length < 2) continue;
+    const bundle = findBankBundle(
+      group.map((o) => ({ id: o.id, total: o.total, label: `${o.d} ${won(o.total)}원` })),
+      group.flatMap((o) => o.autoBank.map((b) => ({ id: b.id, amount: b.amount, label: b.label }))),
+    );
+    if (bundle) for (const o of group) if (bundle.invoiceIds.includes(o.id)) o.bankBundle = bundle;
+  }
 
   return {
     direction,

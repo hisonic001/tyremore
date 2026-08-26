@@ -509,6 +509,33 @@ export async function confirmTaxToBanks(
 }
 
 /**
+ * ⭐ 통장 한 줄 → 계산서 여러 장 한꺼번에 (사장님 케이스 2026-08-26 — 타이어프로 속초점 입금 842,160 =
+ *    계산서 242,160 + 600,000). confirmTaxToBank 를 차례로 부르면 남은 금액이 정확히 이어진다.
+ */
+export async function confirmBankToTaxes(
+  cashTxnId: number,
+  taxInvoiceIds: number[],
+): Promise<{ ok: true; applied: number; remaining: number } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  const ids = [...new Set((taxInvoiceIds ?? []).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 12);
+  if (ids.length === 0) return { ok: false, error: "이을 계산서를 골라 주세요" };
+  let applied = 0;
+  let remaining = 0;
+  for (const id of ids) {
+    const r = await confirmTaxToBank(id, cashTxnId);
+    if (!r.ok) {
+      return applied === 0
+        ? { ok: false, error: r.error }
+        : { ok: false, error: `${applied}장까지 이었고 그다음에서 멈췄습니다 — ${r.error}` };
+    }
+    applied++;
+    remaining = r.remaining;
+  }
+  return { ok: true, applied, remaining };
+}
+
+/**
  * ⭐ 월정산 상대의 「이 달 맞음」 (사장님 승인 2026-08-25)
  *
  *   미쉐린처럼 월말 합계 계산서를 쓰는 상대는 계산서 ↔ 출금이 1:1로 대응하지 않는다.

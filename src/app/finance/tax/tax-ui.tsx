@@ -9,6 +9,7 @@ import {
   confirmTaxMatch,
   confirmTaxToBank,
   confirmTaxToBanks,
+  confirmBankToTaxes,
   ignoreTaxInvoice,
   linkCounterpartyToSupplier,
   markTaxExpense,
@@ -322,6 +323,29 @@ export function TaxRecon({
                 >
                   돈 확인에서 잔액 보기 →
                 </Link>
+              </div>
+            )}
+
+            {/* ⭐ 통장 한 줄 = 계산서 N장 (사장님 케이스 2026-08-26) — 그룹 머리에서 한 번에 */}
+            {g.bankBundle && (
+              <div className="mt-2 rounded-control bg-brand-50 p-2.5 text-xs">
+                <p className="font-semibold text-brand-700">
+                  ✔ {g.bankBundle.label.startsWith("★") || g.bankBundle.label.startsWith("≈") ? g.bankBundle.label.split(" · 계산서보다")[0] : g.bankBundle.label} — 이 상대 계산서{" "}
+                  {g.bankBundle.invoiceIds.length}장 합({g.bankBundle.parts.join(" + ")})과 정확히 맞습니다
+                </p>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() =>
+                    act(
+                      () => confirmBankToTaxes(g.bankBundle!.cashId, g.bankBundle!.invoiceIds),
+                      (r: { applied: number }) => `계산서 ${r.applied}장을 이 통장 줄 하나에 이었습니다 — 금액이 정확히 맞습니다.`,
+                    )
+                  }
+                  className="mt-1.5 rounded-control bg-brand-600 px-3 py-1.5 font-semibold text-white active:bg-brand-700 disabled:opacity-40"
+                >
+                  이 {g.items[0]?.inv.direction === "매입" ? "출금" : "입금"}으로 {g.bankBundle.invoiceIds.length}장 한꺼번에 잇기
+                </button>
               </div>
             )}
 
