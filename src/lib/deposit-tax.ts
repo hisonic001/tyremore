@@ -13,6 +13,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { CASH_LAT, DONE, findAmountComboNear, nearTolerance } from "./tax-recon";
 import { cashUsedSql, normName, samePartyName, similarPartyName, type DepositSuggestion } from "./recon-data";
+import { payerKeyOf } from "./expense-cats";
 import { monthRange } from "./ym";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
@@ -160,43 +161,84 @@ export interface TransferSale {
   quoteNo: string;
   who: string;
   amount: number;
+  /** 이미 이어진 입금 합 (나눠 받은 것 일부) */
+  linked: number;
   day: string;
   note: { reason: string; memo: string | null } | null;
-  cands: { cashId: number; label: string }[];
+  /** 같은 금액 또는 같은 이름의 입금 — 잇기 후보. exact=금액 일치, nameOk=이름 일치 */
+  cands: { cashId: number; label: string; amount: number; exact: boolean; nameOk: boolean }[];
+  /** 나눠 받은 경우 — 같은 이름 입금 여러 줄 합이 남은 금액과 맞음 (염대현 535,000 = 425,000 + 110,000) */
+  bundle: { cashIds: number[]; parts: string[]; total: number; diff: number } | null;
 }
 
 export async function transferSalesMissing(ym: string): Promise<TransferSale[]> {
   const { start, nextStart } = monthRange(ym);
   const D = sql`COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)`;
-  const rows = await db.execute<{ id: number; quote_no: string; who: string; total: number; d: string; reason: string | null; memo: string | null }>(sql`
-    SELECT q.id, q.quote_no, COALESCE(q.supplier_name, c.name, '손님') who, q.total_amount total, to_char(${D}, 'YYYY-MM-DD') d,
-           n.reason, n.memo
+  const rows = await db.execute<{ id: number; quote_no: string; who: string; total: number; d: string; reason: string | null; memo: string | null; linked: string }>(sql`
+    SELECT q.id, q.quote_no, COALESCE(q.supplier_name, c.name, NULLIF(split_part(COALESCE(q.mars_memo, ''), ' ', 2), ''), '손님') who,
+           q.total_amount total, to_char(${D}, 'YYYY-MM-DD') d, n.reason, n.memo,
+           COALESCE((SELECT SUM(m.amount) FROM recon_match m WHERE m.kind = '이체입금' AND m.ref_table = 'quote' AND m.ref_id = q.id AND m.status = '확정'), 0)::bigint linked
     FROM quote q LEFT JOIN customer c ON c.id = q.customer_id
     LEFT JOIN pos_note n ON n.kind = 'transfer' AND n.ref = 'quote:' || q.id
     WHERE q.status = '성사' AND q.payment_method = '계좌이체' AND q.total_amount > 0
       AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
-      AND NOT EXISTS (SELECT 1 FROM recon_match m WHERE m.kind = '이체입금' AND m.ref_table = 'quote' AND m.ref_id = q.id AND m.status = '확정')
+      -- 🔴 사장님 지적(2026-08-26): 나눠 받은 판매(535,000 = 425,000 + 110,000)는 일부만 이어져도 남은 금액이 있다
+      AND q.total_amount > COALESCE((SELECT SUM(m.amount) FROM recon_match m WHERE m.kind = '이체입금' AND m.ref_table = 'quote' AND m.ref_id = q.id AND m.status = '확정'), 0)
     ORDER BY ${D} DESC, q.id DESC LIMIT 100
   `);
   const out: TransferSale[] = [];
   for (const r of rows) {
-    const cands = await db.execute<{ id: number; d: string; description: string }>(sql`
-      SELECT c.id, to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') d, c.description
+    const remainQ = Number(r.total) - Number(r.linked);
+    /* 후보: ±10일 안의 통장 입금 중 (미분류 또는 「판매입금」으로 분류해 둔 것) 남은 금액이 있고,
+       금액이 같거나 이름이 같은 것 — 「판매입금」은 사장님이 "앱에 기록 없는 판매"라고 골라 둔 줄이지만
+       실은 이 판매의 대금일 수 있어 후보에 넣는다 (염대현 425,000·110,000) */
+    const lines = await db.execute<{ id: number; d: string; description: string; remain: string }>(sql`
+      SELECT c.id, to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') d, c.description,
+             (c.in_amount - ${cashUsedSql("c")})::bigint remain
       FROM cash_txn c
-      WHERE c.source = '통장' AND c.is_active AND c.category IS NULL AND c.in_amount = ${Number(r.total)}
+      WHERE c.source = '통장' AND c.is_active AND c.in_amount > 0 AND (c.category IS NULL OR c.category = '판매입금')
         AND c.in_amount > ${cashUsedSql("c")}
-        AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date BETWEEN ${r.d}::date - 3 AND ${r.d}::date + 3
-      ORDER BY abs((c.occurred_at AT TIME ZONE 'Asia/Seoul')::date - ${r.d}::date) LIMIT 3
+        AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date BETWEEN ${r.d}::date - 10 AND ${r.d}::date + 10
+      ORDER BY abs((c.occurred_at AT TIME ZONE 'Asia/Seoul')::date - ${r.d}::date), c.occurred_at LIMIT 400
     `);
+    const scored = lines
+      .map((c) => {
+        const payer = payerKeyOf("통장", c.description);
+        const remain = Number(c.remain);
+        return {
+          cashId: Number(c.id),
+          d: c.d,
+          payer,
+          remain,
+          exact: remain === remainQ,
+          nameOk: samePartyName(payer, r.who) || similarPartyName(payer, r.who),
+        };
+      })
+      .filter((c) => c.exact || c.nameOk)
+      .sort((a, b) => Number(b.exact && b.nameOk) - Number(a.exact && a.nameOk) || Number(b.exact) - Number(a.exact) || Number(b.nameOk) - Number(a.nameOk));
+    let bundle: TransferSale["bundle"] = null;
+    if (!scored.some((c) => c.exact)) {
+      const pool = scored.filter((c) => c.nameOk).map((c) => ({ id: c.cashId, amount: c.remain, label: `${c.d.slice(0, 5)} ${won(c.remain)}원` }));
+      const combo = findAmountComboNear(pool, remainQ, nearTolerance(remainQ));
+      if (combo) bundle = { cashIds: combo.picks.map((p) => p.id), parts: combo.picks.map((p) => p.label), total: combo.sum, diff: combo.sum - remainQ };
+    }
     out.push({
       key: `quote:${r.id}`,
       quoteId: Number(r.id),
       quoteNo: r.quote_no,
       who: r.who,
       amount: Number(r.total),
+      linked: Number(r.linked),
       day: r.d,
       note: r.reason ? { reason: r.reason, memo: r.memo } : null,
-      cands: cands.map((c) => ({ cashId: Number(c.id), label: `${c.d} · ${c.description.replace(/^\[[^\]]*\]\s*/, "")} · +${won(Number(r.total))}원` })),
+      cands: scored.slice(0, 4).map((c) => ({
+        cashId: c.cashId,
+        amount: c.remain,
+        exact: c.exact,
+        nameOk: c.nameOk,
+        label: `${c.nameOk ? "★ " : ""}${c.d} · ${c.payer} · +${won(c.remain)}원${c.exact ? "" : ` · 판매보다 ${won(Math.abs(c.remain - remainQ))}원 ${c.remain > remainQ ? "큼" : "작음"}`}${!c.nameOk ? " · 이름 다름" : ""}`,
+      })),
+      bundle,
     });
   }
   return out;

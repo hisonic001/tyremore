@@ -93,22 +93,28 @@ export async function linkDepositToQuote(
   if (!dep) return { ok: false, error: "입금 줄을 찾을 수 없습니다" };
   if (dep.recon_status === "확정") return { ok: false, error: "이미 정리된 입금입니다" };
   if (dep.remain <= 0) return { ok: false, error: "이 입금은 남은 금액이 없습니다 — 계산서 확인이 이미 썼습니다" };
-  const [q] = await db.execute<{ id: number; total: number }>(sql`
-    SELECT id, total_amount total FROM quote WHERE id = ${quoteId} AND status = '성사'
+  const [q] = await db.execute<{ id: number; total: number; linked: string }>(sql`
+    SELECT q.id, q.total_amount total,
+           COALESCE((SELECT SUM(m.amount) FROM recon_match m WHERE m.kind = '이체입금' AND m.ref_table = 'quote' AND m.ref_id = q.id AND m.status = '확정'), 0)::bigint linked
+    FROM quote q WHERE q.id = ${quoteId} AND q.status = '성사'
   `);
   if (!q) return { ok: false, error: "판매를 찾을 수 없습니다" };
-  const linkAmt = Math.min(dep.remain, Number(q.total)); // 남은 금액 안에서만
-  const dupe = await db.execute<{ id: number }>(sql`
-    SELECT id FROM recon_match WHERE kind = '이체입금' AND ref_table = 'quote' AND ref_id = ${quoteId} LIMIT 1
-  `);
-  if (dupe.length > 0) return { ok: false, error: "그 판매는 이미 다른 입금과 이어져 있습니다" };
+  /* 🔴 사장님 지적(2026-08-26): 한 판매를 여러 번에 나눠 받는 손님이 있다(염대현 535,000 = 425,000 + 110,000)
+     — 판매에 남은 금액이 있는 한 계속 잇는다. 「판매입금」으로 분류해 둔 줄을 이으면 분류는 푼다(이제 판매와 이어졌으니) */
+  const remainQ = Number(q.total) - Number(q.linked);
+  if (remainQ <= 0) return { ok: false, error: "그 판매는 이미 금액이 다 이어져 있습니다" };
+  const linkAmt = Math.min(dep.remain, remainQ);
 
   await db.transaction(async (tx) => {
     await tx.execute(sql`
       INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
       VALUES ('이체입금', 'cash_txn', ${cashTxnId}, 'quote', ${quoteId}, ${linkAmt}, '확정', '수동', ${g.uid}, now())
     `);
-    await tx.execute(sql`UPDATE cash_txn SET recon_status = '확정' WHERE id = ${cashTxnId}`);
+    await tx.execute(sql`
+      UPDATE cash_txn SET recon_status = ${linkAmt === dep.remain ? "확정" : "제안"},
+             category = CASE WHEN category = '판매입금' THEN NULL ELSE category END
+      WHERE id = ${cashTxnId}
+    `);
   });
 
   // 별명 학습 — 이 입금자명이 누구였는지 기억한다
@@ -123,6 +129,24 @@ export async function linkDepositToQuote(
   revalidatePath("/finance/deposits");
   revalidatePath("/finance");
   return { ok: true };
+}
+
+/** 나눠 받은 판매 — 입금 여러 줄을 한 판매에 차례로 (염대현 425,000 + 110,000 → 535,000) */
+export async function linkDepositsToQuote(
+  quoteId: number,
+  cashTxnIds: number[],
+): Promise<{ ok: true; applied: number } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  const ids = [...new Set((cashTxnIds ?? []).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 8);
+  if (ids.length === 0) return { ok: false, error: "이을 입금을 골라 주세요" };
+  let applied = 0;
+  for (const id of ids) {
+    const r = await linkDepositToQuote(id, quoteId);
+    if (!r.ok) return applied === 0 ? r : { ok: false, error: `${applied}줄까지 이었고 그다음에서 멈췄습니다 — ${r.error}` };
+    applied++;
+  }
+  return { ok: true, applied };
 }
 
 /**

@@ -9,6 +9,7 @@ import { clearPosNote, fixSaleMethod, setPosNote } from "@/lib/pos-actions";
 import {
   collectFromDeposit,
   confirmSureDeposits,
+  linkDepositsToQuote,
   linkDepositToQuote,
   markCardSettlements,
   setDepositKind,
@@ -17,6 +18,7 @@ import {
   unmarkCardSettlement,
 } from "@/lib/fin-deposits";
 import { confirmBankToTaxes, confirmTaxToBank } from "@/lib/recon";
+import { BankSearch } from "../tax/link-parts";
 import { won } from "@/components/fin/money";
 import { useConfirm } from "@/components/ui/confirm";
 
@@ -336,11 +338,12 @@ export function DepositsRecon({
       {transfers.length > 0 && (
         <section className="mt-4 rounded-2xl border border-amber-300 bg-white p-4">
           <h2 className="text-sm font-semibold">
-            앱엔 「계좌이체」인데 법인 통장에 안 보이는 판매 {transfers.filter((t) => !t.note).length}건
-            {transfers.some((t) => t.note) && <span className="font-normal text-slate-400"> · 정리됨 {transfers.filter((t) => t.note).length}건</span>}
+            앱엔 「계좌이체」인데 통장에서 짝을 못 찾은 판매 {transfers.filter((t) => !t.note).length}건
+            {transfers.some((t) => t.note) && <span className="font-normal text-slate-400"> · 사유 남김 {transfers.filter((t) => t.note).length}건</span>}
           </h2>
           <p className="mt-0.5 text-xs text-slate-500">
-            개인 통장으로 받았거나 현금으로 받은 걸 이체로 적은 경우가 대부분입니다 — 무엇이었는지 한 번만 골라 주세요.
+            같은 금액이나 같은 이름의 입금이 있으면 아래에 후보로 뜹니다(나눠 받은 것은 묶음으로). 후보가 없으면 다른 이름으로
+            왔거나 개인 통장·현금이었을 수 있어요 — 「통장에서 찾기」로 찾거나 사유를 남기면 됩니다.
           </p>
           <ul className="mt-2 space-y-1.5 text-sm">
             {transfers.map((t) => (
@@ -348,6 +351,7 @@ export function DepositsRecon({
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="tabular min-w-0 truncate text-xs">
                     <span className="text-slate-400">{t.day.slice(5)}</span> {t.quoteNo} · {t.who}
+                    {t.linked > 0 && <span className="ml-1 text-sky-700">· {won(t.linked)}원은 이어짐, 남은 {won(t.amount - t.linked)}원</span>}
                   </span>
                   <strong className="tabular shrink-0">{won(t.amount)}원</strong>
                 </div>
@@ -358,13 +362,28 @@ export function DepositsRecon({
                   </p>
                 ) : (
                   <div className="mt-1 space-y-1 text-xs">
+                    {t.bundle && (
+                      <div className="flex items-center justify-between gap-2 rounded bg-brand-50 p-1.5">
+                        <span className="min-w-0 truncate font-semibold text-brand-700">
+                          ✔ 나눠 받음 — 입금 {t.bundle.cashIds.length}줄 합({t.bundle.parts.join(" + ")}){t.bundle.diff === 0 ? "이 정확히 맞습니다" : ` · ${won(Math.abs(t.bundle.diff))}원 차이`}
+                        </span>
+                        <button type="button" disabled={pending} onClick={() => act(() => linkDepositsToQuote(t.quoteId, t.bundle!.cashIds), (r: { applied: number }) => `입금 ${r.applied}줄을 이 판매에 이었습니다.`)}
+                          className="shrink-0 rounded-control bg-brand-600 px-2.5 py-1 font-semibold text-white active:bg-brand-700 disabled:opacity-40">{t.bundle.cashIds.length}줄 한꺼번에 잇기</button>
+                      </div>
+                    )}
                     {t.cands.map((c) => (
                       <div key={c.cashId} className="flex items-center justify-between gap-2">
-                        <span className="min-w-0 truncate">통장에 같은 금액: {c.label}</span>
+                        <span className="min-w-0 truncate">{c.exact ? "같은 금액" : "같은 이름"}: {c.label}</span>
                         <button type="button" disabled={pending} onClick={() => act(() => linkDepositToQuote(c.cashId, t.quoteId), () => "이었습니다.")}
-                          className="shrink-0 rounded-control bg-brand-600 px-2.5 py-1 font-semibold text-white active:bg-brand-700 disabled:opacity-40">이 입금과 잇기</button>
+                          className={`shrink-0 rounded-control px-2.5 py-1 font-semibold disabled:opacity-40 ${c.exact && c.nameOk ? "bg-brand-600 text-white active:bg-brand-700" : "border border-slate-300 bg-white"}`}>이 입금과 잇기</button>
                       </div>
                     ))}
+                    <details>
+                      <summary className="cursor-pointer text-slate-500 underline underline-offset-2">통장에서 찾기 (다른 이름·다른 금액으로 왔을 때)</summary>
+                      <div className="mt-1">
+                        <BankSearch direction="매출" pending={pending} onPick={(id) => act(() => linkDepositToQuote(id, t.quoteId), () => "이었습니다.")} anchor={t.day} />
+                      </div>
+                    </details>
                     <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                       <button type="button" disabled={pending}
                         onClick={() => act(() => setPosNote({ day: t.day, kind: "transfer", ref: t.key, reason: "개인통장 입금" }), () => "「개인 통장으로 받음」으로 정리했습니다.")}
