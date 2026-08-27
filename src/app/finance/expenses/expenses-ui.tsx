@@ -4,9 +4,44 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
 import { EXPENSE_CATS } from "@/lib/expense-cats";
-import type { ExpenseData, ExpenseRow } from "@/lib/recon-data";
+import type { ExpenseData, ExpenseRow, RelatedTxn } from "@/lib/recon-data";
 import { setExpenseCategory } from "@/lib/fin-expense";
 import { won } from "@/components/fin/money";
+
+/**
+ * ⭐ 「이게 무슨 돈인가」 단서 (사장님 지적 2026-08-27)
+ *
+ *   "지출 부분에서 이렇게만 보니까 정확히 뭘로 분류해야할지 알기가 어려워."
+ *
+ * 같은 상대의 다른 기록을 나란히 놓는다. 특히 **같은 금액이 반대로 오간 짝**은
+ * 거의 언제나 「받았던 돈을 돌려줬다」이다 — 사장님이 말로 알려주셔야 했던
+ * 박성준(제이) 예약금 반환이 정확히 이 모양이었다(07-21 입금 → 07-26 출금).
+ */
+function Clues({ row }: { row: ExpenseRow }) {
+  const mirror = row.related.find((x) => x.amount === row.amount);
+  if (!row.what && row.related.length === 0) return null;
+  return (
+    <div className="mt-1.5 space-y-1 text-xs leading-relaxed">
+      {row.what && <p className="text-slate-500">※ {row.what}</p>}
+      {mirror && (
+        <p className="rounded-lg bg-amber-50 px-2 py-1 text-amber-900">
+          {mirror.at} 에 같은 이름으로 <strong>{won(mirror.amount)}원이 들어왔습니다</strong>
+          {mirror.category ? ` (${mirror.category})` : ""} — 받았던 돈을 돌려준 것일 수 있습니다.
+        </p>
+      )}
+      {row.related.length > 0 && (
+        <ul className="tabular space-y-0.5 text-slate-400">
+          {row.related.map((x: RelatedTxn) => (
+            <li key={x.id}>
+              ↔ {x.at} {x.amount > 0 ? "들어옴" : "나감"} {won(Math.abs(x.amount))}원
+              {x.category ? ` · ${x.category}` : " · 분류 안 됨"}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 
 /** ⭐ 지출 분류 화면 (ERP ⑥, 2026-08-25) — 제안 원터치 + 분류 고르기 */
@@ -50,10 +85,23 @@ export function ExpensesUi({ data, ym }: { data: ExpenseData; ym: string }) {
         </section>
       )}
 
-      {/* 🔴 감사 M5 — 상대별 묶어 붙이기: 한 상대를 붙이면 그 상대 전체(과거 포함)에 전파된다 */}
+      {/*
+        🔴 감사 M5 — 한 상대를 붙이면 그 상대 전체(과거 포함)에 전파된다.
+
+        🔴 사장님 지적(2026-08-27): "무슨 기능인지도 잘 모르겠음. 필요한거임?"
+           1건짜리까지 담는 바람에 **아래 목록과 똑같은 목록이 위에 한 번 더** 있었다.
+           이제 `recon-data` 가 2건 이상만 담는다 — 7월처럼 겹치는 상대가 없는 달엔
+           이 칸 자체가 안 나온다. 6월(103건)·1월(88건)처럼 같은 상대가 여러 번인
+           달에는 한 번에 붙일 수 있어 이 칸이 훨씬 빠르다.
+      */}
       {data.byPayer.length > 0 && (
         <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-          <h2 className="font-semibold">상대별 묶어 붙이기</h2>
+          <h2 className="font-semibold">
+            같은 상대 여러 건 — 한 번에 붙이기
+            <span className="ml-2 text-xs font-normal text-slate-500">
+              이 달에 두 번 이상 나온 상대입니다. 한 번 붙이면 그 상대의 과거 것까지 같이 붙습니다.
+            </span>
+          </h2>
           <ul className="mt-2 space-y-1.5 text-sm">
             {data.byPayer.slice(0, 20).map((g) => (
               <li key={g.payer} className="flex flex-wrap items-center justify-between gap-1.5">
@@ -128,13 +176,22 @@ export function ExpensesUi({ data, ym }: { data: ExpenseData; ym: string }) {
           {data.unclassified.map((row) => (
             <li key={row.id} className="rounded-2xl border border-slate-200 bg-white p-3">
               <div className="flex items-baseline justify-between gap-2">
-                <span className="min-w-0 truncate">
+                <span className="min-w-0">
                   <span className="tabular text-xs text-slate-400">{row.at}</span>{" "}
                   <span className="text-xs text-slate-400">{row.source === "법인카드" ? "💳" : "🏦"}</span>{" "}
+                  {row.via && (
+                    <span className="mr-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
+                      {row.via}
+                    </span>
+                  )}
                   <span className="font-medium">{row.payer}</span>
+                  {row.place && <span className="ml-1 text-xs text-slate-400">{row.place}</span>}
                 </span>
                 <span className="tabular shrink-0 font-bold text-red-600">−{won(row.amount)}원</span>
               </div>
+
+              <Clues row={row} />
+
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
                 {row.suggest && (
                   <button
@@ -167,6 +224,36 @@ export function ExpensesUi({ data, ym }: { data: ExpenseData; ym: string }) {
                   붙이기
                 </button>
               </div>
+
+              {/*
+                원문을 접어 둔다 — 이름만으로 모를 때 여는 곳이다.
+                사업자번호가 있으면 홈택스·검색으로 확인할 수 있어 가장 확실한 단서다.
+              */}
+              <details className="mt-1.5">
+                <summary className="cursor-pointer text-xs text-slate-400">자세히</summary>
+                <dl className="tabular mt-1 space-y-0.5 text-xs text-slate-500">
+                  <div>
+                    <dt className="inline text-slate-400">어디서 </dt>
+                    <dd className="inline">{row.label}</dd>
+                  </div>
+                  <div>
+                    <dt className="inline text-slate-400">원문 </dt>
+                    <dd className="inline break-all">{row.description}</dd>
+                  </div>
+                  {row.bizNo && (
+                    <div>
+                      <dt className="inline text-slate-400">사업자번호 </dt>
+                      <dd className="inline">{row.bizNo}</dd>
+                    </div>
+                  )}
+                  {row.approvalNo && (
+                    <div>
+                      <dt className="inline text-slate-400">승인번호 </dt>
+                      <dd className="inline">{row.approvalNo}</dd>
+                    </div>
+                  )}
+                </dl>
+              </details>
             </li>
           ))}
         </ul>

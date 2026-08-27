@@ -10,7 +10,8 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { CARD_SETTLE_PATTERN_SQL, PAYER_KEY_SQL, payerKeyOf } from "./expense-cats";
+import { CARD_SETTLE_PATTERN_SQL, PAYER_KEY_SQL, payerKeyOf, payerKeySql } from "./expense-cats";
+import { readPayer } from "./payer-name";
 import { monthRange } from "./ym";
 
 const norm = (s: string | null | undefined): string =>
@@ -433,6 +434,24 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
 // 🔴 분류 상수는 expense-cats.ts (순수 모듈) — 클라이언트 화면이 값으로 쓰기 때문
 //    (여기서 내보내면 DB 모듈이 브라우저 번들에 끌려가 빌드가 깨진다, 2026-08-25 실사고)
 
+/**
+ * ⭐ 같은 상대의 다른 기록 (사장님 지적 2026-08-27)
+ *
+ *   "박성준(제이)는 예약금 받아놓은 것을 돌려준것."
+ *
+ * 이 한 줄을 사장님이 말로 알려주셔야 했다는 게 화면의 잘못이다 — 앱은 이미 알고 있었다.
+ * 07-21 에 같은 이름으로 **500,000원이 들어왔고**(판매입금) 07-26 에 같은 금액이 나갔다.
+ * 그 짝을 나란히 보여주면 설명 없이도 무슨 돈인지 보인다.
+ */
+export interface RelatedTxn {
+  id: number;
+  at: string;
+  /** 들어온 돈이면 양수, 나간 돈이면 음수 */
+  amount: number;
+  category: string | null;
+  source: string;
+}
+
 export interface ExpenseRow {
   id: number;
   source: string;
@@ -444,12 +463,31 @@ export interface ExpenseRow {
   category: string | null;
   /** 규칙 사전이 제안하는 분류 */
   suggest: string | null;
+  /** 결제를 거쳐 온 곳 — `네이버페이`. 없으면 null (payer-name) */
+  via: string | null;
+  /** 적요 끝에 붙어 있던 지역 — `강원 속초시` */
+  place: string | null;
+  /** 「이런 곳입니다」 한 줄. 모르면 null */
+  what: string | null;
+  /** 가맹점 사업자번호 (카드 확인서에 있는 것만) */
+  bizNo: string | null;
+  /** 카드 승인번호 */
+  approvalNo: string | null;
+  /** 같은 상대의 다른 기록 (앞뒤 120일, 가까운 것부터 3건) */
+  related: RelatedTxn[];
 }
 
 export interface ExpenseData {
   /** 분류 안 된 지출 (통장 출금 + 법인카드) — 금액 큰 것부터 */
   unclassified: ExpenseRow[];
-  /** 🔴 감사 M5: 같은 상대끼리 묶음 — 한 번에 분류(한 건 분류=같은 상대 전파를 그대로 씀) */
+  /**
+   * 🔴 감사 M5: 같은 상대끼리 묶음 — 한 번에 분류(한 건 분류=같은 상대 전파를 그대로 씀)
+   *
+   * 🔴 **2건 이상만 담는다** (사장님 지적 2026-08-27: "무슨 기능인지도 잘 모르겠음").
+   *    1건짜리까지 담으니 아래 목록과 **똑같은 목록이 위에 한 번 더** 있는 꼴이었다.
+   *    7월은 12건 중 11명이 1건씩이라 완전히 겹쳐 보였다. 여러 건인 상대만 남기면
+   *    "이건 한 번에 붙이는 곳" 이라는 뜻이 화면에서 저절로 드러난다.
+   */
   byPayer: { payer: string; n: number; sum: number; anyId: number; suggest: string | null }[];
   /** 분류된 지출(이 달) — 잘못 붙였으면 해제 (감사 H10 계열) */
   classified: ExpenseRow[];
@@ -477,14 +515,58 @@ export async function expenseData(ym: string): Promise<ExpenseData> {
 
   const rows = await db.execute<{
     id: number; source: string; l: string; at: string; out_amount: number; description: string;
+    biz_no: string | null; approval_no: string | null;
   }>(sql`
     SELECT id, source, account_label l,
            to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at,
-           out_amount, description
+           out_amount, description, biz_no, approval_no
     FROM cash_txn
     WHERE ${inMonth} AND category IS NULL
     ORDER BY out_amount DESC, id DESC LIMIT 80
   `);
+
+  /**
+   * ⭐ 같은 상대의 다른 기록 — 「이게 무슨 돈인가」의 가장 강한 단서 (2026-08-27)
+   *
+   * 앞뒤 120일 안에서 상대 이름이 같은 줄을 가까운 것부터 3건. 한 질의로 전부 가져온다
+   * (줄마다 따로 물으면 80번이 된다).
+   */
+  const relMap = new Map<number, RelatedTxn[]>();
+  if (rows.length > 0) {
+    const ids = sql.raw(`(${rows.map((r) => Number(r.id)).join(",")})`);
+    const rel = await db.execute<{
+      tid: number; id: number; at: string; in_amount: number; out_amount: number;
+      category: string | null; source: string;
+    }>(sql`
+      WITH t AS (
+        SELECT id, ${sql.raw(payerKeySql())} k, occurred_at FROM cash_txn WHERE id IN ${ids}
+      ), r AS (
+        SELECT t.id tid, c.id, c.in_amount, c.out_amount, c.category, c.source,
+               to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD') at,
+               row_number() OVER (
+                 PARTITION BY t.id
+                 ORDER BY abs(extract(epoch FROM c.occurred_at - t.occurred_at))
+               ) rn
+        FROM t JOIN cash_txn c
+          ON c.is_active AND c.id <> t.id
+         AND ${sql.raw(payerKeySql("c."))} = t.k
+         AND c.occurred_at >= t.occurred_at - interval '120 days'
+         AND c.occurred_at <= t.occurred_at + interval '120 days'
+      )
+      SELECT tid, id, at, in_amount, out_amount, category, source FROM r WHERE rn <= 3
+    `);
+    for (const x of rel) {
+      const list = relMap.get(Number(x.tid)) ?? [];
+      list.push({
+        id: Number(x.id),
+        at: x.at,
+        amount: Number(x.in_amount) - Number(x.out_amount),
+        category: x.category,
+        source: x.source,
+      });
+      relMap.set(Number(x.tid), list);
+    }
+  }
   const totalRow = await db.execute<{ s: string; n: number }>(sql`
     SELECT COALESCE(SUM(out_amount), 0)::bigint s, count(*)::int n FROM cash_txn
     WHERE ${inMonth} AND category IS NULL
@@ -496,17 +578,24 @@ export async function expenseData(ym: string): Promise<ExpenseData> {
   `);
 
   const unclassified = rows.map((r) => {
-    const payer = payerKeyOf(r.source, r.description);
+    const p = readPayer(r.source, r.description);
     return {
       id: Number(r.id),
       source: r.source,
       label: r.l,
       at: r.at,
       amount: Number(r.out_amount),
-      payer,
+      payer: p.name,
       description: r.description,
       category: null,
-      suggest: ruleMap.get(payer) ?? null,
+      /* 배운 규칙이 먼저다 — 사장님이 붙여 둔 것이 사전의 짐작보다 정확하다 */
+      suggest: ruleMap.get(p.key) ?? p.hint ?? null,
+      via: p.via,
+      place: p.place,
+      what: p.what,
+      bizNo: r.biz_no,
+      approvalNo: r.approval_no,
+      related: relMap.get(Number(r.id)) ?? [],
     };
   });
 
@@ -517,13 +606,16 @@ export async function expenseData(ym: string): Promise<ExpenseData> {
     FROM cash_txn WHERE ${inMonth} AND category IS NULL
     GROUP BY 1 ORDER BY 3 DESC LIMIT 60
   `);
-  const byPayer = byPayerRows.map((r) => ({
-    payer: r.p,
-    n: Number(r.n),
-    sum: Number(r.s),
-    anyId: Number(r.any_id),
-    suggest: ruleMap.get(r.p) ?? null,
-  }));
+  const byPayer = byPayerRows
+    // 🔴 1건짜리는 아래 목록과 겹칠 뿐이다 — 여러 건인 상대만 남긴다 (2026-08-27)
+    .filter((r) => Number(r.n) >= 2)
+    .map((r) => ({
+      payer: readPayer("법인카드", r.p).name, // 보여주기만 — 묶는 열쇠는 r.p 그대로다
+      n: Number(r.n),
+      sum: Number(r.s),
+      anyId: Number(r.any_id),
+      suggest: ruleMap.get(r.p) ?? readPayer("법인카드", r.p).hint ?? null,
+    }));
 
   const [outCnt] = await db.execute<{ n: number }>(sql`SELECT count(*)::int n FROM cash_txn WHERE ${inMonth}`);
   const classifiedRows = await db.execute<{
@@ -536,17 +628,27 @@ export async function expenseData(ym: string): Promise<ExpenseData> {
     WHERE ${inMonth} AND category IS NOT NULL
     ORDER BY occurred_at DESC LIMIT 40
   `);
-  const classified = classifiedRows.map((r) => ({
-    id: Number(r.id),
-    source: r.source,
-    label: r.l,
-    at: r.at,
-    amount: Number(r.out_amount),
-    payer: payerKeyOf(r.source, r.description),
-    description: r.description,
-    category: r.category,
-    suggest: null,
-  }));
+  const classified = classifiedRows.map((r) => {
+    const p = readPayer(r.source, r.description);
+    return {
+      id: Number(r.id),
+      source: r.source,
+      label: r.l,
+      at: r.at,
+      amount: Number(r.out_amount),
+      payer: p.name,
+      description: r.description,
+      category: r.category,
+      suggest: null,
+      via: p.via,
+      place: p.place,
+      what: p.what,
+      /* 이미 분류된 줄은 단서가 필요 없다 — 질의를 늘리지 않는다 */
+      bizNo: null,
+      approvalNo: null,
+      related: [],
+    };
+  });
 
   return {
     unclassified,
