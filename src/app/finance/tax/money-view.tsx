@@ -162,10 +162,16 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
   const pct = data.total.n > 0 ? Math.round((data.bankOk.n / data.total.n) * 100) : 0;
   /* ⭐ 짝이 확실한 것 — 정확 일치 + ★ + 정확 후보 하나뿐, 또는 정확 묶음 (서버가 같은 규칙으로 재계산) */
   const sureN = data.rows.filter((r) => {
-    if (r.isFix || r.fixFirst) return false;
+    if (r.isFix) return true; // 원본이 하나뿐이면 서버가 상쇄한다
+    if (r.fixFirst) return false;
     const remain = r.total - r.bankCovered;
     const exact = r.autoBank.filter((b) => b.amount === remain);
-    return (exact.length === 1 && exact[0].known) || (exact.length === 0 && !!r.bankCombo && r.bankCombo.diff === 0);
+    if (exact.length === 1 && exact[0].known) return true;
+    if (exact.length === 0 && !!r.bankCombo && r.bankCombo.diff === 0) return true;
+    // 이체 수수료 차이 — 허용 오차 안 ★ 후보가 딱 하나 (서버 sureTaxPicks 와 같은 규칙)
+    const tol = Math.max(1000, Math.round(remain * 0.001));
+    return exact.length === 0 && !r.bankCombo &&
+      r.autoBank.filter((b) => b.known && Math.abs(b.amount - remain) <= tol).length === 1;
   }).length;
   const linkSure = () =>
     start(async () => {
@@ -218,6 +224,9 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
           >
             ✔ 짝이 확실한 {sureN}건 모두 잇기
           </button>
+        )}
+        {sureN > 0 && (
+          <p className="mt-1 text-[11px] text-slate-500">정확 일치 ★ · ★ 묶음 · 수수료 차이(1,000원 안) · 원본 하나뿐인 마이너스 상쇄</p>
         )}
         <p className="tabular mt-1.5 text-xs text-slate-500">
           돈 확인할 것 {data.open.n}건 · {won(data.bankOk.sum)}원 확인 / 전체 {won(data.total.sum)}원

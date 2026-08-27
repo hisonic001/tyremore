@@ -36,6 +36,8 @@ const HEAD = 5;
  */
 const GENERIC_WORDS = new Set(["타이어", "주식회사", "양양점", "속초점", "속초", "양양", "코리아", "타이어365", "카센타", "카센터"]);
 const isGeneric = (x: string) => GENERIC_WORDS.has(x);
+/** 이름에서 지역·업종 일반어를 뺀다 — 「양양점현대자」→「현대자」 (2025 진행 2026-08-27) */
+const stripGeneric = (s: string) => [...GENERIC_WORDS].reduce((a, w) => a.split(w).join(""), s);
 
 /**
  * 두 이름이 같은 상대인가 (★ 등급) — 같거나 한쪽이 다른 쪽을 품는다. 표기 차이·잘림을 견딘다.
@@ -69,7 +71,12 @@ export function similarPartyName(payer: string | null | undefined, name: string 
     .split(/[\s()\[\]A_/·,\-]+/)
     .map((p) => norm(p))
     .filter((p) => p.length >= 3 && !isGeneric(p));
-  return parts.some((p) => y.startsWith(p) || (p.length >= 4 && y.includes(p)));
+  if (parts.some((p) => y.startsWith(p) || (p.length >= 4 && y.includes(p)))) return true;
+  /* 🔴 2025 진행(2026-08-27): 「박용익(양양점현대자」 ↔ 양양현대자동차 — 조각 안의 지역·업종 일반어를
+     빼고 비교한다 (양양점현대자 → 현대자 ↔ 현대자동차). 잘린 적요 + 지점명 조합을 견딘다 */
+  const y2 = stripGeneric(y);
+  const parts2 = parts.map(stripGeneric).filter((p) => p.length >= 3);
+  return y2.length >= 3 && parts2.some((p) => y2.startsWith(p) || (p.length >= 4 && y2.includes(p)));
 }
 
 /** 정규화한 적요 컬럼 — SQL 쪽 규칙(normName 과 같은 것을 지운다) */

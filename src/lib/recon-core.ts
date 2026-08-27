@@ -201,21 +201,74 @@ export async function confirmMonthlyPartyCore(
 }
 
 /**
- * ⭐ 짝이 확실한 계산서 — 돈 확인 뷰의 후보 중 「정확 일치 + ★ + 정확 일치 후보 하나뿐」, 또는
- *    묶음이 정확히 맞고 전부 ★인 것. 입금 화면의 「짝이 확실한 N건」과 같은 정신.
+ * ⭐ 수정·마이너스 세금계산서 상쇄 코어 (사장님 제보 2026-08-25) — 마이너스와 원본을 한 쌍으로 「무시」.
+ *    auto=true 면 사유를 '수정상쇄(자동)' 으로 남겨 연간 실행 되돌리기가 구분한다.
  */
-export type SureTaxPick = { kind: "one"; invId: number; cashId: number } | { kind: "combo"; invId: number; cashIds: number[] };
+export async function markTaxFixPairCore(minusId: number, originId: number, auto = false): Promise<{ ok: true } | { ok: false; error: string }> {
+  const rows = await db.execute<{ id: number; total: number; counterparty_biz_no: string; recon_status: string }>(sql`
+    SELECT id, total, counterparty_biz_no, recon_status FROM tax_invoice
+    WHERE id IN (${minusId}, ${originId}) AND is_active
+  `);
+  if (rows.length !== 2) return { ok: false, error: "계산서 두 건을 찾을 수 없습니다" };
+  const a = rows.find((x) => Number(x.id) === minusId)!;
+  const b = rows.find((x) => Number(x.id) === originId)!;
+  if (a.counterparty_biz_no !== b.counterparty_biz_no) return { ok: false, error: "상대가 다른 계산서입니다" };
+  if (Number(a.total) + Number(b.total) !== 0) return { ok: false, error: "두 계산서의 금액이 상쇄되지 않습니다" };
+  if (a.recon_status === "확정" || b.recon_status === "확정")
+    return { ok: false, error: "이미 확정된 계산서가 있습니다 — 먼저 되돌려 주세요" };
+  await db.execute(sql`
+    UPDATE tax_invoice SET recon_status = '무시', recon_reason = ${auto ? "수정상쇄(자동)" : "수정상쇄"}
+    WHERE id IN (${minusId}, ${originId})
+  `);
+  return { ok: true };
+}
+
+/**
+ * ⭐ 짝이 확실한 계산서 — 돈 확인 뷰의 후보 중
+ *    one   정확 일치 + ★ + 정확 일치 후보 하나뿐
+ *    combo 묶음(부분집합·날짜순 연속)이 정확히 맞고 전부 ★
+ *    fee   ★ 후보가 하나뿐이고 차이가 허용 오차(1,000원·0.1%) 안 — BZ뱅크 이체는 수수료 500원이 금액에 붙는다
+ *          ((주)제로 1,846,000 ↔ 1,846,500, 록산기전 405,900 ↔ 406,400 … 2025 진행 2026-08-27)
+ *    fix   마이너스 계산서의 원본 후보가 하나뿐(같은 상대·정확히 상쇄·열림) → 상쇄
+ *    입금 화면의 「짝이 확실한 N건」과 같은 정신.
+ */
+export type SureTaxPick =
+  | { kind: "one"; invId: number; cashId: number }
+  | { kind: "combo"; invId: number; cashIds: number[] }
+  | { kind: "fee"; invId: number; cashId: number }
+  | { kind: "fix"; minusId: number; originId: number };
 
 export async function sureTaxPicks(ym: string, direction: "매입" | "매출"): Promise<SureTaxPick[]> {
   const data = await taxCashData(direction, ym);
   const picks: SureTaxPick[] = [];
   for (const r of data.rows) {
-    if (r.isFix || r.fixFirst) continue;
+    if (r.fixFirst) continue;
+    if (r.isFix) {
+      const [inv] = await db.execute<{ biz: string; d: string }>(sql`
+        SELECT counterparty_biz_no biz, to_char(write_date, 'YYYY-MM-DD') d FROM tax_invoice WHERE id = ${r.id} AND is_active
+      `);
+      if (!inv) continue;
+      const origins = await db.execute<{ id: number }>(sql`
+        SELECT id FROM tax_invoice
+        WHERE is_active AND id <> ${r.id} AND counterparty_biz_no = ${inv.biz} AND direction = ${direction}
+          AND total = ${-r.total} AND recon_status IN ('미대조', '제안')
+          AND write_date >= ${inv.d}::date - 90 AND write_date <= ${inv.d}::date + 30
+        LIMIT 3
+      `);
+      if (origins.length === 1) picks.push({ kind: "fix", minusId: r.id, originId: Number(origins[0].id) });
+      continue;
+    }
     const remain = r.total - r.bankCovered;
     const exact = r.autoBank.filter((b) => b.amount === remain);
     const exactKnown = exact.filter((b) => b.known);
     if (exactKnown.length === 1 && exact.length === 1) picks.push({ kind: "one", invId: r.id, cashId: exactKnown[0].id });
     else if (exact.length === 0 && r.bankCombo && r.bankCombo.diff === 0) picks.push({ kind: "combo", invId: r.id, cashIds: r.bankCombo.ids });
+    else if (exact.length === 0 && !r.bankCombo) {
+      /* 이체 수수료 차이 — 허용 오차(1,000원·0.1%) 안에 드는 ★ 후보가 **딱 하나**일 때만
+         ((주)제로 1,846,000 ↔ 1,846,500 · 록산기전 405,900 ↔ 406,400 … 2025 진행 2026-08-27) */
+      const near = r.autoBank.filter((b) => b.known && Math.abs(b.amount - remain) <= nearTolerance(remain));
+      if (near.length === 1) picks.push({ kind: "fee", invId: r.id, cashId: near[0].id });
+    }
   }
   return picks;
 }
@@ -230,7 +283,14 @@ export async function confirmSureTaxCore(
   let applied = 0;
   let failed = 0;
   for (const p of picks) {
-    const r = p.kind === "one" ? await confirmTaxToBankCore(p.invId, p.cashId, uid, method) : await confirmTaxToBanksCore(p.invId, p.cashIds, uid, method);
+    const r =
+      p.kind === "one"
+        ? await confirmTaxToBankCore(p.invId, p.cashId, uid, method)
+        : p.kind === "combo"
+          ? await confirmTaxToBanksCore(p.invId, p.cashIds, uid, method)
+          : p.kind === "fee"
+            ? await confirmTaxToBanksCore(p.invId, [p.cashId], uid, method)
+            : await markTaxFixPairCore(p.minusId, p.originId, method === "자동");
     if (r.ok) applied++;
     else failed++;
   }

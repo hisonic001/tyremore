@@ -153,7 +153,14 @@ export function bankLabel(
     target === undefined || x.remain === target
       ? ""
       : ` · 계산서보다 ${won(Math.abs(x.remain - target))}원 ${x.remain > target ? "많음" : "적음"}`;
-  const warn = known ? "" : similar ? " · 비슷한 이름 — 확인" : target !== undefined && x.remain === target ? " · 이름 다름 — 확인 필요" : "";
+  /* 🔴 2025 진행(2026-08-27): 이체 수수료 500원이 붙은 금액도 「이름 다름 — 확인」으로 (진양윤활유 3,696,000 ↔ 김재준 3,696,500) */
+  const warn = known
+    ? ""
+    : similar
+      ? " · 비슷한 이름 — 확인"
+      : target !== undefined && Math.abs(x.remain - target) <= nearTolerance(target)
+        ? " · 이름 다름 — 확인 필요"
+        : "";
   return `${known ? "★ " : similar ? "≈ " : ""}${x.date.slice(2)} · ${x.description.slice(0, 24)} · ${isIn ? "+" : "−"}${won(x.remain)}원${diff}${warn}`;
 }
 const comboLabel = (c: { date: string; desc: string; amount: number }, isIn: boolean) =>
@@ -217,6 +224,42 @@ export function findAmountCombo<T extends { id: number; amount: number }>(
 ): T[] | null {
   return findAmountComboNear(cands, target, 0, maxPick)?.picks ?? null;
 }
+/**
+ * ⭐ 날짜순 연속 묶음 (2025 진행 2026-08-27 — 양양현대자동차 6/30 계산서 4,908,000원 = 3/24~6/25 입금 11줄).
+ *    월·분기 합계 계산서는 같은 상대의 결제가 **시간순으로 쭉** 쌓인 것이라, 부분집합 탐색(6줄 한도) 대신
+ *    날짜순 연속 구간의 합이 맞는지 본다. ★ 상대만 넣는다(호출자 책임). 정확 일치 우선.
+ */
+export function findAmountRun<T extends { id: number; amount: number; date: string }>(
+  cands: T[],
+  target: number,
+  tol: number,
+  maxLen = 15,
+): { picks: T[]; sum: number } | null {
+  if (target <= 0 || cands.length < 2) return null;
+  const pool = cands
+    .filter((c) => c.amount > 0 && c.amount <= target + tol)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
+  let best: { picks: T[]; sum: number } | null = null;
+  for (let i = 0; i < pool.length; i++) {
+    let sum = 0;
+    for (let j = i; j < pool.length && j - i < maxLen; j++) {
+      sum += pool[j].amount;
+      if (sum > target + tol) break;
+      if (j - i >= 1 && Math.abs(sum - target) <= tol) {
+        if (!best || Math.abs(sum - target) < Math.abs(best.sum - target)) best = { picks: pool.slice(i, j + 1), sum };
+        if (sum === target) return best;
+      }
+    }
+  }
+  return best;
+}
+/** 부분집합 조합이 정확하면 그것, 아니면 연속 묶음, 그도 없으면 근사 조합 */
+const bestCombo = <T extends { id: number; amount: number; date: string }>(src: T[], target: number) => {
+  const tol = nearTolerance(target);
+  const c = findAmountComboNear(src, target, tol);
+  if (c && c.sum === target) return c;
+  return findAmountRun(src, target, tol) ?? c;
+};
 const sameMonth = (a: string | null, b: string) => !!a && a.slice(0, 7) === b.slice(0, 7);
 const dayDiff = (a: string | null, b: string): number =>
   a ? Math.abs((new Date(a).getTime() - new Date(b).getTime()) / 86400000) : 999;
@@ -325,7 +368,7 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
     WHERE source = '통장' AND is_active AND in_amount > 0 AND category IS NULL
       AND recon_status <> '확정' -- 🔴 감사 H7: 외상 수금 등으로 이미 정리된 입금은 후보에서 뺀다
       -- 🔴 2025 감사 F10: 상한 없이 id DESC 800 이면 2025 달의 풀이 2026 줄로 채워진다(id 는 시간순도 아님)
-      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${mr.start}::date - 45
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${mr.start}::date - 120 -- ★ 뒤창 120일(분기 합계 계산서, 2025 진행 2026-08-27)
       AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${mr.nextStart}::date + 150
     ORDER BY occurred_at DESC LIMIT 800
   `);
@@ -342,7 +385,7 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
     WHERE source = '통장' AND is_active AND out_amount > 0
       AND (category IS NULL OR category = '매입대금')
       AND recon_status <> '확정' -- 🔴 재설계 C2: 이미 정리된 출금은 후보에서 뺀다 (deposits와 대칭)
-      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${mr.start}::date - 45
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${mr.start}::date - 120 -- ★ 뒤창 120일(분기 합계 계산서, 2025 진행 2026-08-27)
       AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${mr.nextStart}::date + 150
     ORDER BY occurred_at DESC LIMIT 800
   `);
@@ -448,14 +491,20 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
             samePartyName(payer, inv.counterName) ||
             (!!sup && samePartyName(payer, sup.name));
           const similar = !known && (similarPartyName(payer, inv.counterName) || (!!sup && similarPartyName(payer, sup.name)));
-          return { x, known, similar, exact: x.remain === inv.total };
+          /* ⭐ 수수료 포함 금액 (2025 진행 2026-08-27): 지급은 거의 늘 「사람 이름」·「산 물건 메모」로 나가고
+             BZ뱅크 이체 수수료 500원이 붙어, 이름도 금액도 안 맞아 후보에 아예 안 떴다
+             (진양윤활유 3,696,000 ↔ 3/15 김재준 3,696,500 · 일리터 2,802,000 ↔ 7/22 이재협 2,802,500).
+             허용 오차(1,000원·0.1%) 안 + ±30일이면 후보로는 올린다 — 자동으로 잇지는 않는다(이름 근거 없음) */
+          const nearAmt = x.remain !== inv.total && Math.abs(x.remain - inv.total) <= nearTolerance(inv.total);
+          return { x, known, similar, exact: x.remain === inv.total, nearAmt };
         })
-        .filter(({ x, known, similar, exact }) => {
+        .filter(({ x, known, similar, exact, nearAmt }) => {
           const t = new Date(x.date).getTime();
           const w = new Date(inv.writeDate).getTime();
+          if (nearAmt && !known && !similar) return Math.abs(t - w) <= 30 * 86400000 && !siblingAmt(x.remain, inv);
           /* 🔴 창 넓힘(2026-08-25 위즈오토): 월말 합계 계산서는 그 달 내내의 결제를 담는다 —
              7/31 계산서에 7/8·7/12 출금이 짝인데 -7일 창이라 잘려 조합을 못 찾았다. */
-          const inWindow = t >= w - 45 * 86400000 && t <= w + (known ? 150 : 90) * 86400000;
+          const inWindow = t >= w - (known ? 120 : 45) * 86400000 && t <= w + (known ? 150 : 90) * 86400000; // ★는 앞 90일 (2025 진행)
           return inWindow && (exact || known || similar) && !siblingAmt(x.remain, inv); // 기억된 지급처는 차액이 있어도 보여준다 (다른 계산서 몫은 제외)
         })
         .sort(
@@ -463,6 +512,7 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
             Number(b.exact) - Number(a.exact) ||
             Number(b.known) - Number(a.known) ||
             Number(b.similar) - Number(a.similar) ||
+            Number(b.nearAmt) - Number(a.nearAmt) ||
             // 계산서 날짜에 가까운 것 먼저 (8월 것이 7월 계산서 위로 오던 문제)
             dayDiff(a.x.date, inv.writeDate) - dayDiff(b.x.date, inv.writeDate),
         );
@@ -470,7 +520,7 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
       const comboSrc = buyPool
         .filter(({ known }) => known)
         .map(({ x }) => ({ id: Number(x.id), amount: x.remain, date: x.date, desc: x.description, l: x.l }));
-      const combo = buyPool.some(({ exact }) => exact) ? null : findAmountComboNear(comboSrc, inv.total, nearTolerance(inv.total));
+      const combo = buyPool.some(({ exact }) => exact) ? null : bestCombo(comboSrc, inv.total);
       const buyBank = buyPool.slice(0, 4).map(({ x, known, similar }) => ({
         id: Number(x.id),
         label: bankLabel(x, false, known, inv.total, similar),
@@ -553,12 +603,14 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
           const known =
             aliasMap.has(`${norm(payer)}@${inv.counterBizNo}`) || samePartyName(payer, inv.counterName);
           const similar = !known && similarPartyName(payer, inv.counterName);
-          return { x, known, similar, exact: x.remain === inv.total };
+          const nearAmt = x.remain !== inv.total && Math.abs(x.remain - inv.total) <= nearTolerance(inv.total);
+          return { x, known, similar, exact: x.remain === inv.total, nearAmt };
         })
-        .filter(({ x, known, similar, exact }) => {
+        .filter(({ x, known, similar, exact, nearAmt }) => {
           const t = new Date(x.date).getTime();
           const w = new Date(inv.writeDate).getTime();
-          const inWindow = t >= w - 45 * 86400000 && t <= w + (known ? 120 : 60) * 86400000;
+          if (nearAmt && !known && !similar) return Math.abs(t - w) <= 30 * 86400000 && !siblingAmt(x.remain, inv); // 수수료 포함 (2025 진행)
+          const inWindow = t >= w - (known ? 120 : 45) * 86400000 && t <= w + (known ? 120 : 60) * 86400000; // ★는 앞 120일 (2025 진행)
           /* 🔴 감사 B7(2026-08-25): 대행정산이라도 이름이 닮은(known) 입금만 —
              무차별 후보는 오픈링크에 쫑아수산이 추천되는 오염을 만들었다.
              금액 차이는 known 이면 이미 허용된다 */
@@ -569,12 +621,13 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
             Number(b.exact) - Number(a.exact) ||
             Number(b.known) - Number(a.known) ||
             Number(b.similar) - Number(a.similar) ||
+            Number(b.nearAmt) - Number(a.nearAmt) ||
             dayDiff(a.x.date, inv.writeDate) - dayDiff(b.x.date, inv.writeDate),
         );
       const comboSrc2 = sellPool
         .filter(({ known }) => known)
         .map(({ x }) => ({ id: Number(x.id), amount: x.remain, date: x.date, desc: x.description, l: x.l }));
-      const combo2 = sellPool.some(({ exact }) => exact) ? null : findAmountComboNear(comboSrc2, inv.total, nearTolerance(inv.total));
+      const combo2 = sellPool.some(({ exact }) => exact) ? null : bestCombo(comboSrc2, inv.total);
       const bankCands = sellPool.slice(0, 4).map(({ x, known, similar }) => ({
         id: Number(x.id),
         label: bankLabel(x, true, known, inv.total, similar),
@@ -919,7 +972,7 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
       ${isIn ? sql`AND category IS NULL` : sql`AND (category IS NULL OR category = '매입대금')`}
       AND recon_status <> '확정'
       -- 🔴 2025 감사 F10: 양단 날짜 고정 (상한 없는 id DESC 800 은 2025 달의 풀을 2026 줄로 채운다)
-      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date - 45
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date - 120 -- ★ 뒤창 120일 (2025 진행)
       AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date + 150
     ORDER BY occurred_at DESC LIMIT 800
   `);
@@ -977,14 +1030,16 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
         // 기억된 이름 + 닮은 이름(적요 잘림 견딤) 둘 다 ★ (2026-08-25)
         const known = aliasKeys.has(`${normName(payer)}@${r.biz}`) || samePartyName(payer, r.name);
         const similar = !known && similarPartyName(payer, r.name);
-        return { x, known, similar, exact: x.remain === total };
+        const nearAmt = x.remain !== total && Math.abs(x.remain - total) <= nearTolerance(total);
+        return { x, known, similar, exact: x.remain === total, nearAmt };
       })
-      .filter(({ x, known, similar, exact }) => {
+      .filter(({ x, known, similar, exact, nearAmt }) => {
         const t = new Date(x.date).getTime();
         const w = new Date(r.write_date).getTime();
+        if (nearAmt && !known && !similar) return Math.abs(t - w) <= 30 * 86400000 && !siblingCash(x.remain); // 수수료 포함 (2025 진행)
         const back = isIn ? (known ? 120 : 60) : known ? 150 : 90;
         // 월말 합계 계산서 대비 — 그 달 초의 결제까지 후보로 (2026-08-25)
-        const inWindow = t >= w - 45 * 86400000 && t <= w + back * 86400000;
+        const inWindow = t >= w - (known ? 120 : 45) * 86400000 && t <= w + back * 86400000; // ★는 앞 90일 (2025 진행)
         // 🔴 감사 B7: 이름 무관 후보(대행정산 loose) 폐지 — 오염 추천의 근원
         return inWindow && (exact || known || similar) && !siblingCash(x.remain);
       })
@@ -993,14 +1048,15 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
           Number(b.exact) - Number(a.exact) ||
           Number(b.known) - Number(a.known) ||
           Number(b.similar) - Number(a.similar) ||
+          Number(b.nearAmt) - Number(a.nearAmt) ||
           Math.abs(new Date(a.x.date).getTime() - new Date(r.write_date).getTime()) -
             Math.abs(new Date(b.x.date).getTime() - new Date(r.write_date).getTime()),
       );
     const comboSrc3 = pool2
       .filter(({ known }) => known)
       .map(({ x }) => ({ id: Number(x.id), amount: x.remain, date: x.date, desc: x.description }));
-    const combo3 = pool2.some(({ exact }) => exact) ? null : findAmountComboNear(comboSrc3, total, nearTolerance(total));
-    const cands = pool2.slice(0, 3).map(({ x, known, similar }) => ({
+    const combo3 = pool2.some(({ exact }) => exact) ? null : bestCombo(comboSrc3, total);
+    const cands = pool2.slice(0, 4).map(({ x, known, similar }) => ({
       id: Number(x.id),
       label: bankLabel(x, isIn, known, total, similar),
       known,

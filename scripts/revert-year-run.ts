@@ -39,6 +39,11 @@ async function main() {
       UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL
       WHERE is_active AND recon_reason = '월정산' AND to_char(write_date, 'YYYY') = ${year}
       RETURNING id`;
+    const fixed = await sql`
+      UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL
+      WHERE recon_reason = '수정상쇄(자동)' AND write_date >= (${year + "-01-01"})::date - 90 AND write_date < (${year + "-12-31"})::date + 31
+      RETURNING id`;
+    console.log(`   자동 상쇄 ${fixed.length}장 되돌림`);
     console.log(`✅ 자국 ${gone.length}건 삭제 · 통장 ${cashIds.size}줄 복원 · 계산서 ${taxIds.size}장 복원 · 월정산 ${mon.length}장 되돌림`);
   } finally {
     await sql.end();

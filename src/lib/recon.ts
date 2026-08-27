@@ -16,7 +16,7 @@ import { getSession, isOwner } from "@/lib/auth";
 import { payerKeyOf } from "./expense-cats";
 import { cashUsedMap, cashUsedSql, normDescSql, normName } from "./recon-data";
 import { taxReconV2 } from "./tax-recon";
-import { confirmBankToTaxesCore, confirmMonthlyPartyCore, confirmSureTaxCore, confirmTaxToBankCore, confirmTaxToBanksCore } from "./recon-core";
+import { confirmBankToTaxesCore, confirmMonthlyPartyCore, confirmSureTaxCore, confirmTaxToBankCore, confirmTaxToBanksCore, markTaxFixPairCore } from "./recon-core";
 import { restoreCashLine } from "./cash-restore";
 import { revalidateFinance } from "./fin-revalidate";
 
@@ -570,21 +570,8 @@ export async function markTaxFixPair(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  const rows = await db.execute<{ id: number; total: number; counterparty_biz_no: string; recon_status: string }>(sql`
-    SELECT id, total, counterparty_biz_no, recon_status FROM tax_invoice
-    WHERE id IN (${minusId}, ${originId}) AND is_active
-  `);
-  if (rows.length !== 2) return { ok: false, error: "계산서 두 건을 찾을 수 없습니다" };
-  const a = rows.find((x) => Number(x.id) === minusId)!;
-  const b = rows.find((x) => Number(x.id) === originId)!;
-  if (a.counterparty_biz_no !== b.counterparty_biz_no) return { ok: false, error: "상대가 다른 계산서입니다" };
-  if (Number(a.total) + Number(b.total) !== 0) return { ok: false, error: "두 계산서의 금액이 상쇄되지 않습니다" };
-  if (a.recon_status === "확정" || b.recon_status === "확정")
-    return { ok: false, error: "이미 확정된 계산서가 있습니다 — 먼저 되돌려 주세요" };
-  await db.execute(sql`
-    UPDATE tax_invoice SET recon_status = '무시', recon_reason = '수정상쇄'
-    WHERE id IN (${minusId}, ${originId})
-  `);
+  const r = await markTaxFixPairCore(minusId, originId);
+  if (!r.ok) return r;
   revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   return { ok: true };
 }

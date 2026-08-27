@@ -1101,6 +1101,8 @@ export const reconMatch = pgTable(
   (t) => [
     check("recon_match_kind", sql`${t.kind} IN ('매입계산서','매출계산서','이체입금','카드정산입금','카드승인','매입지급','포스결제')`),
     check("recon_match_status", sql`${t.status} IN ('제안','확정')`),
+    // 2026-08-27: '조정' = 허용 오차 잔돈·차액 자국 (scripts/add-recon-method-adjust.ts) — 전엔 CHECK 에 없어 항상 실패
+    check("recon_match_method_check", sql`${t.method} IN ('자동','수동','조정')`),
     index("idx_recon_src").on(t.srcTable, t.srcId),
     index("idx_recon_ref").on(t.refTable, t.refId),
   ],

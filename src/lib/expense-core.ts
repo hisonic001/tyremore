@@ -19,6 +19,10 @@ export interface AutoCatResult {
   cardSettle: number;
   localPay: number;
   shareholder: number;
+  /** 입금: 예금이자(기간 적요 「12.21~06.20」·이자) → 이자·지원금 */
+  interest: number;
+  /** 입금: 세무서 환급·카드사 환급 → 기타입금 */
+  refund: number;
 }
 
 /** scope: 업로드 배치 하나 또는 달 하나 */
@@ -57,8 +61,24 @@ export async function applyAutoCategories(scope: { uploadId: number } | { ym: st
   const shareholder = await db.execute<{ id: number }>(sql`
     UPDATE cash_txn c SET category = '주주거래'
     WHERE ${where} AND c.is_active AND c.category IS NULL AND c.source = '통장' AND c.out_amount > 0
-      AND (c.description LIKE '%조준호%' OR c.description LIKE '%이현숙%')
+      AND (c.description LIKE '%조준호%' OR c.description LIKE '%이현숙%' OR c.description LIKE '%가수금%')
     RETURNING c.id
   `);
-  return { rule: rule.length, internal: internal.length, cardSettle: cardSettle.length, localPay: localPay.length, shareholder: shareholder.length };
+  /* 2025 진행(2026-08-27): 한 해 내내 열려 있던 잡음 — 예금이자(「[이자] 12.21~06.20」)·세무서 환급·카드사 환급 */
+  const interest = await db.execute<{ id: number }>(sql`
+    UPDATE cash_txn c SET category = '이자·지원금'
+    WHERE ${where} AND c.is_active AND c.category IS NULL AND c.source = '통장' AND c.in_amount > 0
+      AND (c.description ~ '\] *[0-9]{2}\.[0-9]{2}~[0-9]{2}\.[0-9]{2}' OR c.description LIKE '%예금이자%' OR c.description LIKE '%결산이자%' OR c.description LIKE '[이자]%')
+    RETURNING c.id
+  `);
+  const refund = await db.execute<{ id: number }>(sql`
+    UPDATE cash_txn c SET category = '기타입금'
+    WHERE ${where} AND c.is_active AND c.category IS NULL AND c.source = '통장' AND c.in_amount > 0
+      AND (c.description LIKE '%세무서%' OR c.description LIKE '%환급%')
+    RETURNING c.id
+  `);
+  return {
+    rule: rule.length, internal: internal.length, cardSettle: cardSettle.length, localPay: localPay.length,
+    shareholder: shareholder.length, interest: interest.length, refund: refund.length,
+  };
 }

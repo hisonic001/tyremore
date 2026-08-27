@@ -26,8 +26,12 @@ export const EXPENSE_CATS = [
 export const EXPENSE_IN_PL = ["임차료", "인건비", "공과금", "세금·보험", "수수료", "기타경비"] as const;
 
 /** 통장 「[적요] 내용」/카드 가맹점명 → 상대명 원문 (expense_rule 의 key) */
-export const payerKeyOf = (source: string, description: string): string =>
-  source === "통장" ? description.replace(/^\[[^\]]*\]\s*/, "").trim() : description.trim();
+export const payerKeyOf = (source: string, description: string): string => {
+  if (source !== "통장") return description.trim();
+  const body = description.replace(/^\[[^\]]*\]\s*/, "").trim();
+  // 🔴 2025 진행(2026-08-27): 「[현금]」「[CD입금]」처럼 적요가 머리표뿐이면 이름이 빈칸이 됐다 → 머리표를 이름으로
+  return body || (description.match(/^\[([^\]]*)\]/)?.[1] ?? "").trim() || description.trim();
+};
 
 /**
  * payerKeyOf 와 같은 규칙의 SQL 조각 — `sql.raw(PAYER_KEY_SQL)` 로 쓴다.
@@ -36,7 +40,7 @@ export const payerKeyOf = (source: string, description: string): string =>
  *    정규식은 여기 한 벌만. (일반 문자열이라 `\\[` 가 런타임에 `\[` 가 된다)
  */
 export const PAYER_KEY_SQL =
-  "CASE WHEN source = '통장' THEN trim(regexp_replace(description, '^\\[[^\\]]*\\] *', '')) ELSE trim(description) END";
+  "CASE WHEN source = '통장' THEN COALESCE(NULLIF(trim(regexp_replace(description, '^\\[[^\\]]*\\] *', '')), ''), trim(substring(description from '^\\[([^\\]]*)\\]')), trim(description)) ELSE trim(description) END";
 
 /** 카드 정산 입금 적요 패턴 — SQL 3곳(fin-ingest·recon-data·카드 대사)이 이 한 벌을 쓴다.
  *  🔴 감사 L1(2026-08-25): 세 곳에 복제돼 있던 것을 정본화 — 카드사 추가는 여기서만. */
