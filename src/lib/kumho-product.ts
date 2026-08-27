@@ -207,6 +207,10 @@ export async function resolveKumhoProduct(
              OR p.display_name ILIKE ${"%" + m.patternCode + "%"})
         AND (${m.loadIndex}::text IS NULL OR p.load_index IS NULL OR p.load_index = ${m.loadIndex})
         AND (${m.speedRating}::text IS NULL OR p.speed_rating IS NULL OR upper(p.speed_rating) = ${m.speedRating})
+        -- 🔴 겹수도 본다 (2026-08-27). 안 보면 8겹 자재코드에 6겹 상품이 후보로 걸린다 —
+        --    실제로 205/70R15 KC53 이 8겹(#8388)·6겹(#8419) 둘 다 걸려 「애매」로 막혔다.
+        --    겹수가 다르면 값도 다른 물건이다 (124,300 ↔ 116,000)
+        AND (${f.plyRating}::int IS NULL OR p.ply_rating IS NULL OR p.ply_rating = ${f.plyRating})
       LIMIT 3`);
     if (cands.length === 1) {
       if (remember) await learn(c, Number(cands[0].id), m.name, "규격+패턴");
