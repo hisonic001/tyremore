@@ -47,9 +47,12 @@ export async function setProductActive(productId: number, active: boolean) {
  * ⚠️ `raw_name`·`pattern` 은 건드리지 않는다. MARS 입력은 원문으로 해야 한다 (D-08).
  */
 export async function setDisplayName(productId: number, name: string | null) {
+  // 🔴 2026-08-27: 같은 파일의 setListPrice·hideUnpricedTires 는 전부 isOwner() 가 있는데
+  //    이것만 빠져 있었다 — 손님에게 보이는 이름을 아무 계정이나 바꿀 수 있었다
+  if (!(await isOwner())) return { ok: false as const, error: "사장님 계정에서만 할 수 있습니다" };
   const v = name?.trim() || null;
   await db.update(product).set({ displayName: v, updatedAt: new Date() }).where(eq(product.id, productId));
-  refresh("/", `/stock/${productId}`);
+  refresh("/", `/stock/${productId}`, "/settings/products");
   return { ok: true as const };
 }
 

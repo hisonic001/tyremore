@@ -30,6 +30,9 @@ const OE_OPTIONS: [string, string][] = [
   ["GRNX", "저연비"],
 ];
 
+/** 겹수 — 승용 4겹, 경상용 6~12겹. 트럭(14겹 이상)은 여기서 안 고른다 */
+const PLY_OPTIONS = [4, 6, 8, 10, 12] as const;
+
 const CHIP = "rounded-full border px-3 py-2 text-sm font-medium transition-colors";
 const ON = "border-slate-900 bg-slate-900 text-white";
 const OFF = "border-slate-300 bg-white text-slate-600";
@@ -56,13 +59,15 @@ export function AttrsEditor({
   const [oe, setOe] = useState<string[]>(
     current.oeMarks ? current.oeMarks.split(",").map((s) => s.trim()).filter(Boolean) : [],
   );
+  const [ply, setPly] = useState<number | null>(current.plyRating ?? null);
 
   const dirty =
     season !== current.season ||
     runflat !== current.isRunflat ||
     acoustic !== current.isAcoustic ||
     suv !== current.isSuv ||
-    oe.join(",") !== (current.oeMarks ?? "");
+    oe.join(",") !== (current.oeMarks ?? "") ||
+    ply !== (current.plyRating ?? null);
 
   if (!open) {
     return (
@@ -111,6 +116,24 @@ export function AttrsEditor({
           <button type="button" onClick={() => setSuv((v) => !v)} className={`${CHIP} ${suv ? ON : OFF}`}>
             SUV
           </button>
+        </div>
+      </div>
+
+      <div className="mt-3">
+        <h3 className="mb-1.5 text-sm font-semibold text-slate-700">
+          겹수 <span className="font-normal text-slate-400">승용은 대개 4겹 · 상용은 6겹부터</span>
+        </h3>
+        <div className="flex flex-wrap gap-2">
+          {PLY_OPTIONS.map((n) => (
+            <button
+              key={n}
+              type="button"
+              onClick={() => setPly((v) => (v === n ? null : n))}
+              className={`${CHIP} ${ply === n ? ON : OFF}`}
+            >
+              {n}겹
+            </button>
+          ))}
         </div>
       </div>
 

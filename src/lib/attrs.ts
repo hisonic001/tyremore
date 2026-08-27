@@ -40,6 +40,8 @@ export interface EditableAttrs {
   isSuv: boolean;
   /** 콤마로 구분: 'MO,GRNX' */
   oeMarks: string | null;
+  /** ⭐ 겹수(PR) — 이름에서 뺐으니 여기서 보고 고친다 (2026-08-27) */
+  plyRating: number | null;
 }
 
 /** 고른 값으로 상품을 고친다 */
@@ -93,6 +95,7 @@ export async function resetAttrs(productId: number): Promise<{ ok: true } | { ok
       isAcoustic: a.isAcoustic,
       isSuv: a.isSuv,
       oeMarks: null,
+      // 겹수는 자동 판정이 없다 — 되돌릴 값이 없으므로 그대로 둔다
       attrsOverride: null,
       updatedAt: new Date(),
     })
@@ -114,7 +117,8 @@ export async function reapplyOverrides(): Promise<number> {
         is_runflat  = COALESCE((attrs_override->>'isRunflat')::boolean, is_runflat),
         is_acoustic = COALESCE((attrs_override->>'isAcoustic')::boolean, is_acoustic),
         is_suv      = COALESCE((attrs_override->>'isSuv')::boolean, is_suv),
-        oe_marks    = COALESCE(attrs_override->>'oeMarks', oe_marks)
+        oe_marks    = COALESCE(attrs_override->>'oeMarks', oe_marks),
+        ply_rating  = COALESCE((attrs_override->>'plyRating')::int, ply_rating)
       WHERE attrs_override IS NOT NULL
       RETURNING 1
     ) SELECT count(*)::int n FROM u

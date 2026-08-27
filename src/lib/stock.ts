@@ -140,6 +140,7 @@ export interface StockDetail {
     isAcoustic: boolean;
     isSuv: boolean;
     oeMarks: string | null;
+    plyRating: number | null;
   };
   /** 사람이 고친 적이 있는가 */
   attrsEdited: boolean;
@@ -193,6 +194,7 @@ export async function getStockDetail(productId: number): Promise<StockDetail | n
     is_acoustic: boolean;
     is_suv: boolean;
     oe_marks: string | null;
+    ply_rating: number | null;
     attrs_edited: boolean;
     brand_code: string | null;
   }>(sql`
@@ -200,7 +202,7 @@ export async function getStockDetail(productId: number): Promise<StockDetail | n
            p.brand_code,
            p.width, p.aspect_ratio, p.rim_inch, p.item_type, p.is_serialized,
            p.stock_tracked, p.is_active, p.list_price,
-           p.season, p.is_runflat, p.is_acoustic, p.is_suv, p.oe_marks,
+           p.season, p.is_runflat, p.is_acoustic, p.is_suv, p.oe_marks, p.ply_rating,
            (p.attrs_override IS NOT NULL) AS attrs_edited
     FROM product p LEFT JOIN brand b ON b.code = p.brand_code
     WHERE p.id = ${productId}
@@ -239,6 +241,7 @@ export async function getStockDetail(productId: number): Promise<StockDetail | n
       isAcoustic: p.is_acoustic,
       isSuv: p.is_suv,
       oeMarks: p.oe_marks,
+      plyRating: p.ply_rating === null ? null : Number(p.ply_rating),
     },
     attrsEdited: p.attrs_edited,
     badges: n.badges,

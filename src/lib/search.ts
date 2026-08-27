@@ -379,6 +379,7 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
       isAcoustic: product.isAcoustic,
       isSuv: product.isSuv,
       oeMarks: product.oeMarks,
+      plyRating: product.plyRating,
       listPrice: product.listPrice,
       stockTracked: product.stockTracked,
       itemType: product.itemType,
@@ -441,8 +442,10 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
         .map((m) => m.trim())
         .filter(Boolean)
         .map((m) => ({ code: m, label: m, kind: "oe" as const })),
-      // 구조 표기(XL 등)는 이름에서 읽은 것을 그대로 쓴다
-      ...n.badges.filter((b) => b.kind === "structure" && b.code !== "SUV"),
+      // ⭐ 겹수는 저장값으로 (2026-08-27) — 이름에서 겹수를 뺐으니 이름 파싱으로는 안 나온다
+      ...(r.plyRating ? [{ code: `${r.plyRating}P`, label: `${r.plyRating}P`, kind: "structure" as const }] : []),
+      // 나머지 구조 표기(XL 등)는 이름에서 읽은 것을 그대로 쓴다. 겹수는 위에서 이미 넣었다
+      ...n.badges.filter((b) => b.kind === "structure" && b.code !== "SUV" && !/^\d+P$/.test(b.code)),
     ];
     return {
     salesRate: rate,

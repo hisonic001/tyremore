@@ -121,6 +121,7 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
             isAcoustic: d.attrs.isAcoustic,
             isSuv: d.attrs.isSuv,
             oeMarks: d.attrs.oeMarks,
+            plyRating: d.attrs.plyRating,
           }}
           edited={d.attrsEdited}
         />

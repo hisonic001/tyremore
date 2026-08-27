@@ -76,11 +76,15 @@ const ALIASES: [RegExp, string][] = [
   [/\bTA92\b/gi, "Majesty X Solus TA92"],
   [/\bTA91\b/gi, "Majesty 9 Solus TA91"],
   [/\bTA([1235]\d)\b/gi, "Solus TA$1"],
-  [/\bPS7(\d)\b/gi, "Ecsta PS7$1"],
+  [/\bPS7(\d)\b/gi, "ECSTA PS7$1"],
+  [/\bPA7(\d)\b/gi, "ECSTA PA7$1"],
   [/\bWP(\d\d)\b/gi, "WinterCraft WP$1"],
   [/\bWS(\d\d)\b/gi, "WinterCraft WS$1"],
   [/\bSW(\d\d)\b/gi, "WinterCraft SW$1"],
   [/\bKC(\d\d)\b/gi, "PorTran KC$1"],
+  [/\bCW(\d\d)\b/gi, "PorTran CW$1"],
+  [/\bAT5(\d)\b/gi, "Road Venture AT5$1"],
+  [/\bMT7(\d)\b/gi, "Road Venture MT7$1"],
 ];
 
 /* ============================================================
@@ -114,6 +118,17 @@ export const KUMHO_MODEL: Record<string, string> = {
   HP71: "Crugen HP71",
   HP72: "Crugen GT Pro HP72",
   VX51: "Ennov SuperMile VX51",
+  /* ⭐ 2026-08-27 추가 — 근거는 **우리 DB 에 이미 있는 이름**이다.
+     패턴마다 품목수·재고가 가장 많은 이름을 골랐다 (지어낸 것 없음):
+       AT52 (재고 4본) · MC55 (재고 8본) · KW17 (재고 8본) · TX31 (재고 219본)
+       CW51 (재고 14본) · AT51 · KRA50 (재고 4본) */
+  AT51: "Road Venture AT51",
+  AT52: "Road Venture AT52",
+  MC55: "Marshal MC55",
+  KW17: "WinterCraft KW17",
+  TX31: "SuperMile TX31",
+  CW51: "PorTran CW51",
+  KRA50: "KRA50",
 };
 
 /**
@@ -135,10 +150,25 @@ export const KUMHO_SEASON: Record<string, string> = {
   HP91: "사계절",
 };
 
-/** 패턴코드로 모델명을 만든다. 모르는 코드는 그대로 돌려준다 */
+/**
+ * 패턴코드로 모델명을 만든다. 모르는 코드는 그대로 돌려준다.
+ *
+ * 🔴 2026-08-27: 전엔 `KUMHO_MODEL`(12개)만 봤다. 그런데 바로 위 `ALIASES` 에는
+ *    `KC\d\d`→PorTran · `WP\d\d`/`WS\d\d`→WinterCraft · `PS7\d`→ECSTA 처럼 **더 많은 규칙**이
+ *    이미 있었고, 인보이스 경로(`readModelName`)만 그것을 썼다. 그래서 같은 `WP72` 가
+ *    인보이스에서는 「WinterCraft WP72」, 목록에서는 「WP72」가 되어 이름이 갈렸다.
+ *    이제 표에 없으면 ALIASES 를 거친다 — 두 경로가 같은 답을 낸다.
+ */
 export function modelForPattern(patternCode: string): string {
   const k = patternCode.trim().toUpperCase();
-  return KUMHO_MODEL[k] ?? k;
+  const hit = KUMHO_MODEL[k];
+  if (hit) return hit;
+  for (const [re, to] of ALIASES) {
+    // 전역(g) 플래그를 떼고 대소문자 무시로만 — 패턴코드 한 개짜리 문자열이라 한 번만 맞으면 된다
+    const out = k.replace(new RegExp(re.source, "i"), to);
+    if (out !== k) return out;
+  }
+  return k;
 }
 
 /**

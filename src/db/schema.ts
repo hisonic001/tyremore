@@ -131,6 +131,12 @@ export const product = pgTable(
      * ⚠️ `raw_name`·`pattern` 은 그대로 둔다 — MARS 입력은 원문으로 해야 한다 (D-08)
      */
     displayName: text("display_name"),
+    /**
+     * ⭐ 규칙이 만든 이름 (2026-08-27)
+     * 이름 규칙을 다시 돌릴 때 `display_name` 과 이 값이 **같으면** 아무도 손대지 않은 것이니
+     * 새 규칙으로 갱신하고, **다르면** 사장님이 고친 것이니 건드리지 않는다.
+     */
+    nameAuto: text("name_auto"),
 
     // --- 타이어 전용 (부품은 NULL) ---
     width: integer("width"), // 225
@@ -138,6 +144,12 @@ export const product = pgTable(
     rimInch: numeric("rim_inch", { precision: 4, scale: 1 }), // 17.0 (17.5 대비)
     loadIndex: text("load_index"),
     speedRating: text("speed_rating"),
+    /**
+     * ⭐ 겹수(PR) — 4·6·8·10·12, 트럭은 14~32 (2026-08-27 품목명 규칙화)
+     * 전에는 이름 글자(`8P`)로만 있어서, 이름에서 겹수를 빼자 갈 곳이 없어졌다.
+     * 승용은 대개 4겹이라 이름에 안 쓰고 여기에만 둔다. 세부사항 화면에서 고칠 수 있다.
+     */
+    plyRating: integer("ply_rating"),
     /** '여름'|'사계절'|'올웨더'|'겨울' — 모델명에서 판정 (src/lib/tire-attrs.ts) */
     season: text("season"),
     /** ⭐ 상담 필터 축. 손님이 "런플랫이요"라고 말한다 */
