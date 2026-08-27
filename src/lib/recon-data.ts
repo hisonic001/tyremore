@@ -475,6 +475,21 @@ export interface ExpenseRow {
   approvalNo: string | null;
   /** 같은 상대의 다른 기록 (앞뒤 120일, 가까운 것부터 3건) */
   related: RelatedTxn[];
+  /**
+   * ⭐ 이 이름으로 **매입 세금계산서를 받은 적이 있다** (2026-08-27)
+   *
+   * 미분류 4.16억 중 1.7억이 매입처였다 — 미쉐린코리아 8,154만 · 강릉강남타이어 4,832만 ·
+   * 스칼릿 2,522만 · 딜러타이어 2,300만. 이름이 통장에서 잘려(`미쉐린코리아(`) 규칙이
+   * 안 붙던 것들이다.
+   *
+   * 🔴 **단서일 뿐, 분류를 제안하지는 않는다** (2026-08-27 실수 정정).
+   *    처음엔 이걸로 「매입대금」을 제안하게 했는데 **「네이버 주식회사」에 매입대금이
+   *    붙어 버렸다.** 세금계산서는 상품 매입에만 오는 게 아니다 — 광고비·기장료·전기요금
+   *    전부 계산서가 온다. 「매입대금」은 타이어·부품을 산 것이어야 한다.
+   *    그래서 화면에는 "이 이름으로 계산서를 받은 적 있다"는 **사실만** 보여주고,
+   *    분류는 사장님이 고르시게 둔다.
+   */
+  taxParty: string | null;
 }
 
 export interface ExpenseData {
@@ -531,6 +546,37 @@ export async function expenseData(ym: string): Promise<ExpenseData> {
    * 앞뒤 120일 안에서 상대 이름이 같은 줄을 가까운 것부터 3건. 한 질의로 전부 가져온다
    * (줄마다 따로 물으면 80번이 된다).
    */
+  /**
+   * ⭐ 매입 세금계산서 발행처와 이름이 맞는가 (2026-08-27)
+   *
+   * 🔴 오탐을 막는 두 가지 —
+   *    ① `supplier` 표는 안 본다. 거기엔 「미쉐린」·「한국」 같은 짧은 별칭이 있어
+   *       `한국전력공사` 가 「한국」에 걸린다. **계산서 발행처(정식 상호)만** 본다.
+   *    ② 특수문자를 뺀 뒤 **5글자 이상**이 접두로 맞아야 한다.
+   * 전기요금·세금처럼 계산서가 오는 것들은 적요 규칙표가 **먼저** 잡으므로 여기 안 온다.
+   */
+  const taxMap = new Map<number, string>();
+  if (rows.length > 0) {
+    const ids = sql.raw(`(${rows.map((r) => Number(r.id)).join(",")})`);
+    const hit = await db.execute<{ id: number; nm: string }>(sql`
+      WITH t AS (
+        SELECT id, regexp_replace(${sql.raw(payerKeySql())}, '[^가-힣A-Za-z0-9]', '', 'g') k
+        FROM cash_txn WHERE id IN ${ids}
+      ), names AS (
+        SELECT DISTINCT counterparty_name nm,
+               regexp_replace(counterparty_name, '[^가-힣A-Za-z0-9]', '', 'g') k
+        FROM tax_invoice WHERE is_active AND direction = '매입' AND counterparty_name IS NOT NULL
+      )
+      SELECT t.id, (
+        SELECT n.nm FROM names n
+        WHERE length(t.k) >= 5 AND length(n.k) >= 5
+          AND (n.k LIKE t.k || '%' OR t.k LIKE n.k || '%')
+        ORDER BY length(n.k) LIMIT 1
+      ) nm FROM t
+    `);
+    for (const h of hit) if (h.nm) taxMap.set(Number(h.id), h.nm);
+  }
+
   const relMap = new Map<number, RelatedTxn[]>();
   if (rows.length > 0) {
     const ids = sql.raw(`(${rows.map((r) => Number(r.id)).join(",")})`);
@@ -588,8 +634,14 @@ export async function expenseData(ym: string): Promise<ExpenseData> {
       payer: p.name,
       description: r.description,
       category: null,
-      /* 배운 규칙이 먼저다 — 사장님이 붙여 둔 것이 사전의 짐작보다 정확하다 */
+      /**
+       * 제안의 순서 — 확실한 것부터
+       *   ① 배운 규칙 (사장님이 직접 붙인 것)
+       *   ② 사전의 짐작
+       * 계산서 발행처 일치(`taxParty`)는 **제안에 넣지 않는다** — 위 주석 참고.
+       */
       suggest: ruleMap.get(p.key) ?? p.hint ?? null,
+      taxParty: taxMap.get(Number(r.id)) ?? null,
       via: p.via,
       place: p.place,
       what: p.what,
@@ -647,6 +699,7 @@ export async function expenseData(ym: string): Promise<ExpenseData> {
       bizNo: null,
       approvalNo: null,
       related: [],
+      taxParty: null,
     };
   });
 

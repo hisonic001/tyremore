@@ -19,10 +19,16 @@ import { won } from "@/components/fin/money";
  */
 function Clues({ row }: { row: ExpenseRow }) {
   const mirror = row.related.find((x) => x.amount === row.amount);
-  if (!row.what && row.related.length === 0) return null;
+  if (!row.what && !row.taxParty && row.related.length === 0) return null;
   return (
     <div className="mt-1.5 space-y-1 text-xs leading-relaxed">
       {row.what && <p className="text-slate-500">※ {row.what}</p>}
+      {/* 계산서 발행처와 이름이 맞으면 매입처다 — 미분류 4.16억 중 1.7억이 이것이었다 */}
+      {row.taxParty && (
+        <p className="rounded-lg bg-sky-50 px-2 py-1 text-sky-900">
+          「{row.taxParty}」 에게 <strong>매입 세금계산서를 받은 적이 있습니다</strong> — 매입대금일 수 있습니다.
+        </p>
+      )}
       {mirror && (
         <p className="rounded-lg bg-amber-50 px-2 py-1 text-amber-900">
           {mirror.at} 에 같은 이름으로 <strong>{won(mirror.amount)}원이 들어왔습니다</strong>
