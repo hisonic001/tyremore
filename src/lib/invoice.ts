@@ -77,6 +77,24 @@ async function matchProduct(code: string, description = "", supplier = ""): Prom
     LIMIT 1
   `);
   if (byCode) return { ...byCode, via: "품번" };
+
+  /**
+   * ⭐ 금호는 **자재 마스터**(kumho_material)까지 본다 (사장님 요청 2026-08-27 —
+   *    "금호는 이제 자재코드가 있으므로 딱딱 들어맞아야함").
+   *    금호가 같은 타이어에 새 코드를 매기면 품번으로는 못 찾는다. 자재 마스터의
+   *    규격+패턴+하중속도로 딱 하나면 이어 주고 사전에 적어 둔다(옛 코드도 남는다).
+   *    미쉐린의 CAI 와 같은 자리다.
+   */
+  if (supplier === "금호") {
+    const { resolveKumhoProduct } = await import("./kumho-product");
+    const r = await resolveKumhoProduct(code); // create 는 안 한다 — 만들기는 사람이 누른다
+    if (r.ok) {
+      const [p] = await db.execute<{ id: number; pattern: string | null; excl: number | null }>(sql`
+        SELECT id, COALESCE(display_name, pattern) pattern, list_price_excl excl FROM product WHERE id = ${r.productId}`);
+      if (p) return { ...p, via: r.via === "규격+패턴" ? "규격+모델" : "품번" };
+    }
+  }
+
   if (!description.trim()) return null;
 
   const { parseTireSpec } = await import("./tire-spec");
@@ -662,6 +680,21 @@ export async function createProductFromInvoiceItem(
    *    이제 내부코드를 걷고 줄임말을 편다:
    *      → «Crugen HP72» · «ProContact RX ContiSilent» · «VanContact AP»
    */
+  /**
+   * ⭐ 금호는 **자재 마스터 한 벌**로 만든다 (사장님 요청 2026-08-27).
+   *    이름·규격·겹수·흡음재·기표가가 전부 같은 규칙에서 나오고, 사전에도 코드가 등록된다.
+   *    🔴 자재 마스터에 없는 코드로는 만들지 않는다 — 이름·규격·기표가가 전부 추측이 된다.
+   *       사장님께 「최신 기표가 목록을 올려 주세요」라고 알린다.
+   */
+  if (b.code === "KM" && line.cai?.trim()) {
+    const { resolveKumhoProduct } = await import("./kumho-product");
+    const r = await resolveKumhoProduct(line.cai.trim(), { create: true });
+    if (!r.ok) return { ok: false, error: r.message };
+    await db.update(purchaseInvoiceItem).set({ productId: r.productId }).where(eq(purchaseInvoiceItem.id, itemId));
+    refresh("/receiving", "/");
+    return { ok: true, productId: r.productId };
+  }
+
   const model = readModelName(line.description);
   const attrs = parseTireAttrs(model, line.description);
 

@@ -784,6 +784,46 @@ export const supplier = pgTable(
  * ⚠️ 상품이 지워지면 같이 지운다 — 가리키는 곳이 없는 사전은 쓰레기다.
  *    거래처는 글자로 둔다 (`supplier` 테이블과 같은 이유 — 옛 자료가 묶여 버린다).
  * ========================================================== */
+/* ============================================================
+ * 3-17. kumho_material — 금호 자재 마스터 ⭐ (사장님 요청 2026-08-27)
+ *
+ * "금호는 이제 자재코드가 있으므로 딱딱 들어맞아야함.
+ *  새로운 자재코드가 들어오면 검증 후에 같은 규칙으로 새 상품도 만들어져야함.
+ *  미쉐린이 cai 가 있는것과 같은 이치임."
+ *
+ * 미쉐린은 MARS 마스터(품번=CAI)가 DB 에 있어서 인보이스에 새 CAI 가 와도 대조가 된다.
+ * 금호는 그 자리에 이 표를 둔다 — 사장님이 「기표가 Master」 엑셀을 올리면 채워진다.
+ * 인보이스에 처음 보는 자재코드가 와도 **여기서 확인한 뒤에** 같은 규칙으로 상품을 만든다.
+ * 여기에 없는 코드는 만들지 않는다 — 근거 없이 만들면 이름·규격·기표가가 다 추측이 된다.
+ * ========================================================== */
+export const kumhoMaterial = pgTable(
+  "kumho_material",
+  {
+    /** 자재코드 `2420132` — 금호가 부르는 품번 */
+    code: text("code").primaryKey(),
+    /** 자재내역 `KH 245/45  R18 VXLL TA51  M;RK` — 규격·겹수·흡음재가 다 여기 있다 */
+    name: text("name").notNull(),
+    /** 패턴코드 `TA51` — 곧 모델이다 */
+    patternCode: text("pattern_code").notNull(),
+    /** 'PCR'|'LTR'|'TBR'|'TBR(S)'|'SPECIALTY'|'Racing' */
+    productGroup: text("product_group"),
+    /** '①'~'④' — **운영 여부의 정본.** ④ = 미운영·중단 */
+    opType: text("op_type"),
+    /** '정상'|'비정상'|'미정'|'요청시 생산'|'26.03' … */
+    opStatus: text("op_status"),
+    loadIndex: text("load_index"),
+    speedRating: text("speed_rating"),
+    /** 기표가 — **부가세 미포함** (자재검색의 「공장도가」와 다르다) */
+    priceExcl: integer("price_excl"),
+    origin: text("origin"),
+    /** 어느 파일에서 왔나 — `기표가(26년7월)` */
+    sourceLabel: text("source_label"),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [index("idx_kumho_material_pattern").on(t.patternCode)],
+);
+
 export const supplierItemCode = pgTable(
   "supplier_item_code",
   {

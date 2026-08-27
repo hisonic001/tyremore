@@ -82,7 +82,10 @@ export function ProductListUpload({ readers }: { readers: Reader[] }) {
       const r = await applyProductList(fd);
       if (!r.ok) return setError(r.error);
       setDone(
-        `상품 ${r.created}개를 새로 만들고, 품번 ${r.linked}개를 이었습니다` +
+        (r.materials
+          ? `금호 자재 목록에 ${r.materials.inserted}개가 새로 들어오고 ${r.materials.updated}개가 갱신됐습니다 · `
+          : "") +
+          `상품 ${r.created}개를 새로 만들고, 품번 ${r.linked}개를 이었습니다` +
           (r.priceUpdated ? ` · 기표가 ${r.priceUpdated}개 갱신` : ""),
       );
       reset();

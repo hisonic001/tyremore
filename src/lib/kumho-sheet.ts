@@ -412,6 +412,8 @@ export interface ApplyResult {
   created: number;
   priceUpdated: number;
   skipped: number;
+  /** ⭐ 기표가 Master 를 올렸을 때만 — 자재 마스터에 새로 들어온/갱신된 줄 (2026-08-27) */
+  materials?: { inserted: number; updated: number };
 }
 
 /**
