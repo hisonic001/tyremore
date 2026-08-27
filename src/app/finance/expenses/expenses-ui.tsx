@@ -26,7 +26,8 @@ function Clues({ row }: { row: ExpenseRow }) {
       {/* 계산서 발행처와 이름이 맞으면 매입처다 — 미분류 4.16억 중 1.7억이 이것이었다 */}
       {row.taxParty && (
         <p className="rounded-lg bg-sky-50 px-2 py-1 text-sky-900">
-          「{row.taxParty}」 에게 <strong>매입 세금계산서를 받은 적이 있습니다</strong> — 매입대금일 수 있습니다.
+          「{row.taxParty}」 에게 <strong>세금계산서를 받은 적이 있습니다</strong> — 사업자 거래처입니다.
+          타이어·부품을 산 것이면 매입대금, 광고·기장료 같은 것이면 그에 맞는 분류를 골라 주세요.
         </p>
       )}
       {mirror && (
