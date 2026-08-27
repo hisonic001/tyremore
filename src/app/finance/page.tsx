@@ -287,6 +287,13 @@ export default async function FinancePage({
               <span>{won(pl.salesUnrecorded)}원</span>
             </p>
           )}
+          {/* 받았던 돈을 돌려준 것 — 경비가 아니라 번 돈에서 뺀다 (2026-08-27) */}
+          {pl.refunded > 0 && (
+            <p className="flex justify-between pl-3 text-xs text-slate-500">
+              <span>· 돌려준 돈(예약금·환불) 뺀 뒤입니다</span>
+              <span>−{won(pl.refunded)}원</span>
+            </p>
+          )}
           <p className="flex justify-between">
             <span>쓴 돈</span>
             <strong className="text-red-600">{won(gSpent)}원</strong>

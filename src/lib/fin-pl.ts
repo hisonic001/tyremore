@@ -12,7 +12,7 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { EXPENSE_IN_PL } from "./expense-cats";
+import { EXPENSE_IN_PL, REFUND_CAT } from "./expense-cats";
 import { monthRange } from "./ym";
 
 export interface FinPL {
@@ -21,7 +21,15 @@ export interface FinPL {
   earned: number;
   /** 앱에 기록 없는 판매 대금 — 통장 입금을 「판매입금」으로 분류한 것 (2026-08-26) */
   salesUnrecorded: number;
-  /** 번 돈 합 = earned + salesUnrecorded */
+  /**
+   * ⭐ 받았던 돈을 돌려준 것 — 「예약금·환불」로 분류한 출금 (사장님 결정 2026-08-27)
+   *
+   * 경비가 아니라 **매출 취소**다. 「번 돈」에서 뺀다.
+   * 예약금을 받은 달과 돌려준 달이 다르면 돌려준 달의 매출이 깎인다 —
+   * 실제로 돈이 그때 나갔으므로 그게 맞다.
+   */
+  refunded: number;
+  /** 번 돈 합 = earned + salesUnrecorded − refunded */
   earnedTotal: number;
   /** 상품 매입 (앱 매입 인보이스, 발행일 기준) */
   bought: number;
@@ -88,6 +96,11 @@ export async function finPL(ym: string): Promise<FinPL> {
     SELECT COALESCE(SUM(in_amount), 0)::bigint s FROM cash_txn
     WHERE ${inMonth} AND source = '통장' AND category = '판매입금'
   `);
+  /* 받았던 돈을 돌려준 것 — 통장·카드 어느 쪽으로 나갔든 번 돈에서 뺀다 */
+  const [refund] = await db.execute<{ s: string }>(sql`
+    SELECT COALESCE(SUM(out_amount), 0)::bigint s FROM cash_txn
+    WHERE ${inMonth} AND category = ${REFUND_CAT}
+  `);
 
   const e = Number(earned.s);
   const b = Number(bought.s);
@@ -100,12 +113,14 @@ export async function finPL(ym: string): Promise<FinPL> {
   const feeShown = f > 0 ? f : feeEstimated;
   const x = Number(bankExp.s);
   const u = Number(unrec?.s ?? 0);
+  const rf = Number(refund?.s ?? 0);
   const spent = b + c + feeShown + x;
   return {
     ym,
     earned: e,
     salesUnrecorded: u,
-    earnedTotal: e + u,
+    refunded: rf,
+    earnedTotal: e + u - rf,
     bought: b,
     cardOut: c,
     fee: f,
@@ -115,7 +130,7 @@ export async function finPL(ym: string): Promise<FinPL> {
     bankExp: x,
     assocMonth: a,
     spent,
-    profit: e + u - spent,
+    profit: e + u - rf - spent,
     dataComplete: e > 0 || b > 0 || u > 0,
   };
 }
