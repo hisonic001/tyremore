@@ -129,6 +129,13 @@ export const KUMHO_MODEL: Record<string, string> = {
   TX31: "SuperMile TX31",
   CW51: "PorTran CW51",
   KRA50: "KRA50",
+  /* 사장님이 알려주신 모델명 (2026-08-27).
+     Ennov 계열은 V 로 시작한다 — VX51(SuperMile) · VP71(Winter) · VA91(Premium).
+     사장님이 처음 「vp91」이라 주셨는데 그런 패턴은 금호 목록에 없다 — VA91 오타임을 확인받았다. */
+  HA32: "Solus 4S HA32",
+  HT51: "Crugen HT51",
+  VP71: "Ennov Winter VP71",
+  VA91: "Ennov Premium VA91",
 };
 
 /**
