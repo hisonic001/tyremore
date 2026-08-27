@@ -112,7 +112,7 @@ async function main() {
     }
     if (!patternCode) { noPattern++; continue; }
 
-    const r = buildKumhoName({ patternCode, materialName, currentName: p.nm });
+    const r = buildKumhoName({ patternCode, materialName, currentName: p.nm, isAcoustic: p.ac });
 
     /* ② 세부사항 — 자재내역이 있을 때만 (없으면 판단 근거가 없다) */
     if (materialName) {

@@ -101,7 +101,8 @@ export function keepNote(oldName: string | null | undefined, model: string): str
   const at = words.findIndex(isMarker);
   if (at < 0) return null;
   // 표식이 나온 자리부터 끝까지가 주석이다 (`Tesla Model Y`, `스타리아 OE`)
-  const tail = words.slice(at).filter((w) => !/^(\d+P|XL|EV|TL)$/i.test(w));
+  // 겹수·XL·EV 는 세부사항 칸에 있고, 「흡음재」는 규칙이 따로 붙이므로 주석에서 뺀다
+  const tail = words.slice(at).filter((w) => !/^(\d+P|XL|EV|TL|흡음재|흡음)$/i.test(w));
   const note = tail.join(" ").trim();
   if (!note || note.toUpperCase() === model.toUpperCase()) return null;
   return note.length >= 2 ? note : null;
@@ -117,7 +118,22 @@ export interface KumhoNameInput {
   materialName?: string | null;
   /** 지금 쓰는 이름 — 차종 주석을 살리는 데 쓴다 */
   currentName?: string | null;
+  /**
+   * 이미 흡음재로 표시된 상품인가. 자재내역이 없으면(옛 코드만 있는 상품) 글자로는 알 수 없어서
+   * 저장된 값을 받는다 — 안 그러면 같은 규격 일반판과 이름이 같아진다 (2026-08-27).
+   */
+  isAcoustic?: boolean;
 }
+
+/**
+ * ⭐ 흡음재는 이름에 표시한다 (2026-08-27)
+ *
+ * 원래는 XL·흡음재·계절을 이름에서 빼기로 했다 — 화면이 따로 칸을 갖고 있으니까.
+ * 그런데 흡음재만은 **같은 규격·같은 모델에 일반판이 따로 있고 값이 다르다**
+ * (TA91 245/40R19: 일반 260,000 · 흡음재 276,900). 이름을 같게 두면 견적을 낼 때
+ * 어느 쪽인지 화면에서 구분이 안 되고, 중복 상품으로도 잡힌다.
+ */
+const ACOUSTIC_TAG = "흡음재";
 
 export interface KumhoNameResult {
   /** 규칙이 만든 이름. 모델명을 모르면 null (= 이름을 바꾸지 않는다) */
@@ -137,7 +153,12 @@ export function buildKumhoName(input: KumhoNameInput): KumhoNameResult {
   if (model.toUpperCase() === pat) return { name: null, model: null, load, note: null };
 
   const note = keepNote(input.currentName, model);
-  const name = [model, showPly(load.ply) ? `${load.ply}P` : "", note ? `(${note})` : ""]
+  const name = [
+    model,
+    showPly(load.ply) ? `${load.ply}P` : "",
+    load.acoustic || input.isAcoustic ? `(${ACOUSTIC_TAG})` : "",
+    note && note !== ACOUSTIC_TAG ? `(${note})` : "",
+  ]
     .filter(Boolean)
     .join(" ")
     .replace(/\s{2,}/g, " ")

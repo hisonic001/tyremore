@@ -83,6 +83,9 @@ export async function duplicateGroups(): Promise<DupGroup[]> {
              p.brand_code || '|' || p.width || '|' || COALESCE(p.aspect_ratio::text,'') || '|' ||
                COALESCE(p.rim_inch::text,'') || '|' || COALESCE(p.load_index::text,'') || '|' ||
                COALESCE(p.speed_rating::text,'') || '|' ||
+               -- 🔴 겹수도 키에 넣는다 (2026-08-27). 안 넣으면 315/80R22.5 MA03 의 20겹(488,500원)과
+               --    18겹(477,500원)이 「중복」으로 떠서 합칠 뻔했다 — 값이 다른 다른 물건이다
+               COALESCE(p.ply_rating::text,'') || '|' ||
                lower(regexp_replace(COALESCE(p.display_name, p.pattern, ''), '[^a-zA-Z0-9가-힣]', '', 'g')) AS gkey,
              p.brand_code || ' ' || p.width || '/' || COALESCE(p.aspect_ratio::text,'') || 'R' ||
                COALESCE(p.rim_inch::text,'') || ' ' || COALESCE(p.load_index::text,'') || COALESCE(p.speed_rating::text,'') AS label

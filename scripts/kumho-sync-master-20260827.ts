@@ -100,7 +100,14 @@ async function main() {
       priceFix++;
     }
     if (load.ply !== null && load.ply !== p.ply) { set.push(`ply_rating = ${load.ply}`); note.push(`겹 ${p.ply ?? "-"}→${load.ply}`); plyFix++; }
-    if (load.acoustic && !p.ac) { set.push(`is_acoustic = true`); note.push("흡음재"); acFix++; }
+    /* 🔴 흡음재는 자재 마스터가 **양방향으로** 정답이다 (2026-08-27).
+       전엔 켜기만 하고 끄지 않았는데, 바코드 꼬리표(`KM2298342흡음`) 때문에 잘못 켜진 것이
+       그대로 남았다 — #8946 은 사장님 확인 코드 2413032 가 `H04L`(끝 L)이라 흡음재가 아니다. */
+    if (load.acoustic !== p.ac) {
+      set.push(`is_acoustic = ${load.acoustic}`);
+      note.push(load.acoustic ? "흡음재 켬" : "흡음재 끔");
+      acFix++;
+    }
 
     if (set.length === 0) continue;
     fixes.push(`  #${p.id} ${(p.nm ?? "").slice(0, 30)} 재고${p.stock} [${pick.code}] ${note.join(" · ")}`);
