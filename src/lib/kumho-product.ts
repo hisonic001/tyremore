@@ -157,8 +157,19 @@ export type KumhoResolve =
  */
 export async function resolveKumhoProduct(
   code: string,
-  opts: { create?: boolean; uidLabel?: string } = {},
+  opts: {
+    /** 자재 마스터에 있으면 새로 만든다 */
+    create?: boolean;
+    /**
+     * 🔴 찾은 결과를 사전에 적을 것인가 (2026-08-27 — **기본은 안 적는다**).
+     * 전엔 늘 적었더니 **미리보기가 DB 를 고쳤다** — 인보이스 미리보기·스크립트 dry-run 만 돌려도
+     * 사전이 채워져서, 「미리보기 11건 → 반영하니 0건」 같은 일이 생겼다.
+     * 진짜로 반영하는 자리에서만 켠다.
+     */
+    learn?: boolean;
+  } = {},
 ): Promise<KumhoResolve> {
+  const remember = opts.learn ?? opts.create ?? false;
   const c = String(code ?? "").trim();
   if (!c) return { ok: false, reason: "자재코드없음", message: "자재코드가 없습니다" };
 
@@ -171,7 +182,7 @@ export async function resolveKumhoProduct(
   const [byNo] = await db.execute<{ id: number; nm: string | null }>(sql`
     SELECT id, COALESCE(display_name, pattern) nm FROM product WHERE mars_item_no = ${"KM" + c} LIMIT 1`);
   if (byNo) {
-    await learn(c, Number(byNo.id), null, "품번");
+    if (remember) await learn(c, Number(byNo.id), null, "품번");
     return { ok: true, productId: Number(byNo.id), via: "품번", name: byNo.nm };
   }
 
@@ -198,7 +209,7 @@ export async function resolveKumhoProduct(
         AND (${m.speedRating}::text IS NULL OR p.speed_rating IS NULL OR upper(p.speed_rating) = ${m.speedRating})
       LIMIT 3`);
     if (cands.length === 1) {
-      await learn(c, Number(cands[0].id), m.name, "규격+패턴");
+      if (remember) await learn(c, Number(cands[0].id), m.name, "규격+패턴");
       return { ok: true, productId: Number(cands[0].id), via: "규격+패턴", name: cands[0].nm };
     }
     if (cands.length > 1)

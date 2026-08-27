@@ -87,7 +87,8 @@ async function matchProduct(code: string, description = "", supplier = ""): Prom
    */
   if (supplier === "금호") {
     const { resolveKumhoProduct } = await import("./kumho-product");
-    const r = await resolveKumhoProduct(code); // create 는 안 한다 — 만들기는 사람이 누른다
+    // create·learn 둘 다 안 한다 — 이 함수는 **미리보기에서도** 불린다 (2026-08-27)
+    const r = await resolveKumhoProduct(code);
     if (r.ok) {
       const [p] = await db.execute<{ id: number; pattern: string | null; excl: number | null }>(sql`
         SELECT id, COALESCE(display_name, pattern) pattern, list_price_excl excl FROM product WHERE id = ${r.productId}`);
