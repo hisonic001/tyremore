@@ -62,7 +62,38 @@ export interface CatalogRow {
   rimInch: string | null;
   /** 사람이 읽을 모델명 `Solus TA51` */
   model: string;
+  /**
+   * ⭐ 기표가 Master 전용 (2026-08-27) — **부가세 미포함** 원본값.
+   *    자재검색의 「공장도가」는 VAT 포함이라 여기 값이 없다(null).
+   *    값이 있으면 `list_price_excl` 에 그대로, `list_price` 는 ×1.1 반올림으로 넣는다
+   *    (나눗셈 왕복 반올림으로 1원씩 어긋나는 것을 막는다).
+   */
+  priceExcl?: number | null;
+  /** 'PCR'|'LTR'|'TBR'|'TBR(S)'|'SPECIALTY'|'Racing' — 트럭·특수는 숨겨서 만든다 */
+  group?: string;
+  /** '정상'|'운영'|'중단'|'미운영'|'비정상'|'미정'|'요청시 생산'|'26.03' … */
+  status?: string;
+  /** '①'~'④' — **운영 여부는 여기 있다.** ④ = 미운영·중단 */
+  type?: string;
 }
+
+/**
+ * ⭐ 새로 만들 규격인가 (사장님 결정 2026-08-27, 기준 정정본)
+ *
+ * 🔴 처음엔 「시점」 칸이 정상·운영인 것만 살아 있다고 봤는데 **틀렸다.**
+ *    「운영」 칸은 935줄 전부 O 이고, 진짜 운영 여부는 **「유형」**에 있다 — ④(미운영 32·중단 27)만 죽은 것이다.
+ *    시점의 날짜(`'26.03` 등)는 「그때 새로 나왔다」는 뜻이다. 실제로 창고의 Crugen GT Pro HP72
+ *    235/55R19 22본이 `'26.03` 줄이다. 이 기준을 틀리면 살아 있는 규격 283줄이 통째로 빠진다.
+ *
+ * 만들 것 = 유형 ①②③ · 시점이 「비정상」이 아님 · 기표가가 있음
+ *   (기표가 0원 35줄은 전부 「요청시 생산」·「미정」 — 주문이 안 되는 것들이다)
+ */
+export const isMakeable = (r: { type?: string; status?: string; priceExcl?: number | null; listPrice: number | null }) =>
+  r.type !== "④" && r.status !== "비정상" && (r.priceExcl ?? r.listPrice ?? 0) > 0;
+/** 유형 ④ — 금호가 더 이상 안 만드는 규격 */
+export const isDead = (r: { type?: string }) => r.type === "④";
+/** 승용·SUV인가 — 트럭·버스·특수는 만들되 숨긴다 (사장님 결정 2026-08-27) */
+export const isPassenger = (g: string | undefined) => g === "PCR" || g === "LTR";
 
 const text = (v: unknown) => String(v ?? "").trim();
 const money = (v: unknown) => {
@@ -131,6 +162,8 @@ export type LinkKind =
   | "품번"
   /** 규격 + 패턴코드로 딱 하나 찾았다 */
   | "규격+패턴"
+  /** 같은 타이어에 금호가 **새 코드를 매겼다** — 이미 옛 코드가 붙어 있는 상품에 코드만 하나 더 (2026-08-27) */
+  | "재코드"
   /** 후보가 둘 이상이라 고르지 않았다 */
   | "애매"
   /** 우리에게 없다 — 새로 만든다 */
@@ -178,11 +211,17 @@ const SAME_PRICE = 0.01;
 
 export async function planCatalog(rows: Record<string, unknown>[]): Promise<CatalogPlan> {
   const { rows: cat, skipped } = readCatalog(rows);
+  return planRows(cat, skipped);
+}
+
+/** 카탈로그 줄 → 대조 계획. 자재검색·기표가 Master 가 같은 규칙을 쓴다 (2026-08-27) */
+export async function planRows(cat: CatalogRow[], skipped = 0): Promise<CatalogPlan> {
   const lines: PlanLine[] = [];
   const counts = {
     이미연결: 0,
     품번: 0,
     "규격+패턴": 0,
+    재코드: 0,
     애매: 0,
     신규: 0,
     규격없음: 0,
@@ -267,13 +306,17 @@ export async function planCatalog(rows: Record<string, unknown>[]): Promise<Cata
       continue;
     }
 
+    /* 🔴 2026-08-27: 전엔 `raw_name ILIKE '%kumho%'` 로 금호 상품을 골랐는데, 손으로 만든 상품은
+       이름이 「CRUNGEN GT PRO HP72 255/50R20」처럼 Kumho 가 없어 **후보에 아예 안 떴다** —
+       재고 22본짜리 HP72 가 여기 걸려 새로 만들어질 뻔했다. 브랜드로 고른다.
+       숨긴 상품도 본다 — 안 보면 숨겨진 쌍둥이가 다시 태어난다. */
     const cands = await db.execute<{ id: number; mars_item_no: string | null; pattern: string | null; list_price: number | null }>(sql`
       SELECT id, mars_item_no, COALESCE(display_name, pattern) pattern, list_price FROM product
-      WHERE item_type = 'tire' AND is_active
+      WHERE item_type = 'tire' AND brand_code = 'KM'
         AND width = ${row.width} AND rim_inch = ${row.rimInch}
         AND aspect_ratio IS NOT DISTINCT FROM ${row.aspectRatio}
-        AND (raw_name ILIKE '%kumho%' OR raw_name ILIKE '%금호%')
-        AND (pattern ILIKE ${"%" + row.patternCode + "%"} OR raw_name ILIKE ${"%" + row.patternCode + "%"})
+        AND (pattern ILIKE ${"%" + row.patternCode + "%"} OR raw_name ILIKE ${"%" + row.patternCode + "%"}
+             OR display_name ILIKE ${"%" + row.patternCode + "%"})
         -- 하중/속도가 적혀 있으면 같아야 한다. 안 적힌 상품은 통과시킨다
         AND (${row.loadIndex}::text IS NULL OR load_index IS NULL OR load_index = ${row.loadIndex})
         AND (${row.speedRating}::text IS NULL OR speed_rating IS NULL OR upper(speed_rating) = ${row.speedRating})
@@ -302,6 +345,28 @@ export async function planCatalog(rows: Record<string, unknown>[]): Promise<Cata
             itemNo: c.mars_item_no ?? "",
             name: c.pattern ?? "",
           })),
+        }),
+      );
+    } else if (cands.length === 1) {
+      /* ⭐ 임자가 있는데 후보가 그것 하나뿐 — 금호가 같은 타이어에 **새 코드**를 매긴 경우다
+         (2026-08-27: `2268612` → `5011492`, TA31 235/45R18 94V 그대로).
+         규격·패턴·하중속도가 모두 같고 후보가 유일할 때만. 사전은 코드→상품이라 한 상품에
+         코드가 여럿 붙어도 된다 — 옛 코드로 온 예전 인보이스도 계속 찾아진다. */
+      const id = Number(cands[0].id);
+      byCodeLine.set(
+        row.code,
+        mk(row, "재코드", {
+          productId: id,
+          productName: cands[0].pattern,
+          ourItemNo: cands[0].mars_item_no,
+          ourPrice: cands[0].list_price === null ? null : Number(cands[0].list_price),
+        }),
+      );
+    } else if (cands.length > 1) {
+      byCodeLine.set(
+        row.code,
+        mk(row, "애매", {
+          candidates: cands.map((c) => ({ id: Number(c.id), itemNo: c.mars_item_no ?? "", name: c.pattern ?? "" })),
         }),
       );
     } else {

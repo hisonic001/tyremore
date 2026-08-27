@@ -9,6 +9,8 @@ const KIND_STYLE: Record<LinkKind, string> = {
   신규: "bg-sky-100 text-sky-800",
   품번: "bg-emerald-100 text-emerald-800",
   "규격+패턴": "bg-emerald-50 text-emerald-700",
+  // 금호가 같은 타이어에 새 코드를 매긴 것 — 코드만 하나 더 붙인다 (2026-08-27)
+  재코드: "bg-emerald-50 text-emerald-700",
   이미연결: "bg-slate-100 text-slate-500",
   애매: "bg-amber-100 text-amber-800",
   규격없음: "bg-red-100 text-red-800",
