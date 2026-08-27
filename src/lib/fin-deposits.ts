@@ -13,15 +13,15 @@ import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, isOwner } from "@/lib/auth";
-import { CARD_SETTLE_PATTERN_SQL, payerKeyOf } from "./expense-cats";
-import { monthRange } from "./ym";
-import { cashUsedSql, normName } from "./recon-data";
+import { payerKeyOf } from "./expense-cats";
+import { getDeposit, learnAlias, linkDepositToQuoteCore, linkDepositsToQuoteCore, markCardSettlementsCore } from "./deposit-core";
+import { revalidateFinance } from "./fin-revalidate";
 import { planSettlement } from "./receivable-plan";
 import { settleReceivables } from "./receivable";
 import { restoreCashLine } from "./cash-restore";
 import { depositReconData } from "./recon-data";
 import { depositTaxCandidates, depositSurePicks } from "./deposit-tax";
-import { confirmBankToTaxes, confirmTaxToBank } from "./recon";
+import { confirmBankToTaxesCore, confirmTaxToBankCore } from "./recon-core";
 
 async function guard(): Promise<{ ok: true; uid: number | null } | { ok: false; error: string }> {
   if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
@@ -29,124 +29,42 @@ async function guard(): Promise<{ ok: true; uid: number | null } | { ok: false; 
   return { ok: true, uid: s?.uid ?? null };
 }
 
-/** ⭐ 이름 별명 학습 (사장님 요청 2026-08-24) — 한 번 이어준 입금자명은 다음부터 바로 알아본다 */
-async function learnAlias(aliasRaw: string, partyKey: string, partyLabel: string): Promise<void> {
-  const key = normName(aliasRaw);
-  if (key.length < 2) return;
-  try {
-    await db.execute(sql`
-      INSERT INTO party_alias (alias_key, alias_raw, party_key, party_label)
-      VALUES (${key}, ${aliasRaw}, ${partyKey}, ${partyLabel})
-      ON CONFLICT (alias_key) DO UPDATE SET party_key = EXCLUDED.party_key,
-        party_label = EXCLUDED.party_label, updated_at = now()
-    `);
-  } catch {
-    // 학습 실패는 본 동작을 막지 않는다
-  }
-}
-
 const payerOf = (description: string): string => payerKeyOf("통장", description); // 감사 L2: 정본
 
-/* 🔴 2026 감사 G1(2026-08-26): 입금 줄은 **남은 금액**(소진량 정본 cashUsedSql 을 뺀 값)으로 다룬다.
-   매출 계산서에 일부 이어진 입금(미대조 유지)이 수금·판매 잇기에 전액 다시 배분되던 이중계상 경로 차단 */
-async function getDeposit(id: number) {
-  const [d] = await db.execute<{
-    id: number; in_amount: number; remain: number; recon_status: string; date: string; l: string; description: string;
-  }>(sql`
-    SELECT c.id, c.in_amount, (c.in_amount - ${cashUsedSql("c")})::bigint remain, c.recon_status,
-           to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') date,
-           c.account_label l, c.description
-    FROM cash_txn c WHERE c.id = ${id} AND c.source = '통장' AND c.is_active AND c.in_amount > 0
-  `);
-  return d ? { ...d, in_amount: Number(d.in_amount), remain: Number(d.remain) } : null;
-}
-
-/** 이 달의 카드 정산 패턴 입금(FB자금·매출표)을 한꺼번에 「카드 정산」으로 표시 */
+/** 이 달의 카드 정산 패턴 입금을 한꺼번에 「카드 정산」으로 — 규칙은 deposit-core */
 export async function markCardSettlements(
   ym: string,
 ): Promise<{ ok: true; marked: number } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return { ok: false, error: "달이 올바르지 않습니다" };
-  const { start, nextStart } = monthRange(ym); // 감사 L3
-  const rows = await db.execute<{ id: number }>(sql`
-    UPDATE cash_txn SET recon_status = '확정', category = '카드정산'
-    WHERE source = '통장' AND is_active AND in_amount > 0 AND recon_status = '미대조'
-      AND ${sql.raw(CARD_SETTLE_PATTERN_SQL)}
-      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
-      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date
-    RETURNING id
-  `);
-  revalidatePath("/finance/deposits");
-  revalidatePath("/finance");
-  return { ok: true, marked: rows.length };
+  const marked = await markCardSettlementsCore(ym);
+  revalidateFinance();
+  return { ok: true, marked };
 }
 
-/** 입금 한 건을 계좌이체 판매 한 건과 잇는다 (기록만 — 판매·수금은 안 건드린다) */
+/** 입금 한 건 ↔ 판매 한 건 (부분 연결 가능) — 규칙은 deposit-core */
 export async function linkDepositToQuote(
   cashTxnId: number,
   quoteId: number,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  const dep = await getDeposit(cashTxnId);
-  if (!dep) return { ok: false, error: "입금 줄을 찾을 수 없습니다" };
-  if (dep.recon_status === "확정") return { ok: false, error: "이미 정리된 입금입니다" };
-  if (dep.remain <= 0) return { ok: false, error: "이 입금은 남은 금액이 없습니다 — 계산서 확인이 이미 썼습니다" };
-  const [q] = await db.execute<{ id: number; total: number; linked: string }>(sql`
-    SELECT q.id, q.total_amount total,
-           COALESCE((SELECT SUM(m.amount) FROM recon_match m WHERE m.kind = '이체입금' AND m.ref_table = 'quote' AND m.ref_id = q.id AND m.status = '확정'), 0)::bigint linked
-    FROM quote q WHERE q.id = ${quoteId} AND q.status = '성사'
-  `);
-  if (!q) return { ok: false, error: "판매를 찾을 수 없습니다" };
-  /* 🔴 사장님 지적(2026-08-26): 한 판매를 여러 번에 나눠 받는 손님이 있다(염대현 535,000 = 425,000 + 110,000)
-     — 판매에 남은 금액이 있는 한 계속 잇는다. 「판매입금」으로 분류해 둔 줄을 이으면 분류는 푼다(이제 판매와 이어졌으니) */
-  const remainQ = Number(q.total) - Number(q.linked);
-  if (remainQ <= 0) return { ok: false, error: "그 판매는 이미 금액이 다 이어져 있습니다" };
-  const linkAmt = Math.min(dep.remain, remainQ);
-
-  await db.transaction(async (tx) => {
-    await tx.execute(sql`
-      INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
-      VALUES ('이체입금', 'cash_txn', ${cashTxnId}, 'quote', ${quoteId}, ${linkAmt}, '확정', '수동', ${g.uid}, now())
-    `);
-    await tx.execute(sql`
-      UPDATE cash_txn SET recon_status = ${linkAmt === dep.remain ? "확정" : "제안"},
-             category = CASE WHEN category = '판매입금' THEN NULL ELSE category END
-      WHERE id = ${cashTxnId}
-    `);
-  });
-
-  // 별명 학습 — 이 입금자명이 누구였는지 기억한다
-  const [qp] = await db.execute<{ supplier_name: string | null; customer_id: number | null; cname: string | null }>(sql`
-    SELECT q.supplier_name, q.customer_id, c.name cname
-    FROM quote q LEFT JOIN customer c ON c.id = q.customer_id WHERE q.id = ${quoteId}
-  `);
-  const payer = payerOf(dep.description);
-  if (qp?.supplier_name) await learnAlias(payer, `S:${qp.supplier_name}`, `거래처 ${qp.supplier_name}`);
-  else if (qp?.customer_id) await learnAlias(payer, `C:${qp.customer_id}`, qp.cname ?? `고객 ${qp.customer_id}`);
-
-  revalidatePath("/finance/deposits");
-  revalidatePath("/finance");
-  return { ok: true };
+  const r = await linkDepositToQuoteCore(cashTxnId, quoteId, g.uid);
+  if (r.ok) revalidateFinance();
+  return r;
 }
 
-/** 나눠 받은 판매 — 입금 여러 줄을 한 판매에 차례로 (염대현 425,000 + 110,000 → 535,000) */
+/** 나눠 받은 판매 — 입금 여러 줄을 한 판매에 */
 export async function linkDepositsToQuote(
   quoteId: number,
   cashTxnIds: number[],
 ): Promise<{ ok: true; applied: number } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  const ids = [...new Set((cashTxnIds ?? []).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 8);
-  if (ids.length === 0) return { ok: false, error: "이을 입금을 골라 주세요" };
-  let applied = 0;
-  for (const id of ids) {
-    const r = await linkDepositToQuote(id, quoteId);
-    if (!r.ok) return applied === 0 ? r : { ok: false, error: `${applied}줄까지 이었고 그다음에서 멈췄습니다 — ${r.error}` };
-    applied++;
-  }
-  return { ok: true, applied };
+  const r = await linkDepositsToQuoteCore(quoteId, cashTxnIds, g.uid);
+  if (r.ok) revalidateFinance();
+  return r;
 }
 
 /**
@@ -337,17 +255,15 @@ export async function confirmSureDeposits(
   for (const [cashId, pick] of sure) {
     const r =
       pick.kind === "tax"
-        ? await confirmTaxToBank(pick.invId, cashId)
+        ? await confirmTaxToBankCore(pick.invId, cashId, g.uid)
         : pick.kind === "bundle"
-          ? await confirmBankToTaxes(cashId, pick.invoiceIds)
-          : await linkDepositToQuote(cashId, pick.quoteId);
+          ? await confirmBankToTaxesCore(cashId, pick.invoiceIds, g.uid)
+          : await linkDepositToQuoteCore(cashId, pick.quoteId, g.uid);
     if (!r.ok) failed++;
     else if (pick.kind === "quote") quote++;
     else tax++;
   }
-  revalidatePath("/finance/deposits");
-  revalidatePath("/finance");
-  revalidatePath("/finance/tax");
+  revalidateFinance();
   return { ok: true, tax, quote, failed };
 }
 

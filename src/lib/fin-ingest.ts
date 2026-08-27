@@ -17,6 +17,7 @@ import { CARD_SETTLE_PATTERN_SQL } from "./expense-cats";
 import { normName } from "./recon-data";
 import type { CardDayParseResult, CardDepositParseResult, CardTxnParseResult, FinParseResult, NormalizedCashTxn, PosParseResult, TaxParseResult } from "./fin-sheet";
 import { autoMatchPosDayCore } from "./pos-close";
+import { applyAutoCategories } from "./expense-core";
 
 export interface IngestResult {
   uploadId: number;
@@ -95,44 +96,9 @@ export async function ingestCashTxns(
     `);
   }
 
-  /**
-   * ⭐ 분류 자동 적용 (경비 분류, 2026-08-25) — 한 번 배운 상대(expense_rule)는
-   *    새로 올린 파일에도 바로 붙는다. 내부이체(우리 상호)도 자동.
-   */
-  await db.execute(sql`
-    UPDATE cash_txn c SET category = r.category
-    FROM expense_rule r
-    WHERE c.upload_id = ${uploadId} AND c.category IS NULL AND c.out_amount > 0
-      AND r.key = (CASE WHEN c.source = '통장'
-                    THEN trim(regexp_replace(c.description, '^\[[^\]]*\] *', ''))
-                    ELSE trim(c.description) END)
-  `);
-  await db.execute(sql`
-    UPDATE cash_txn SET category = '내부이체'
-    WHERE upload_id = ${uploadId} AND category IS NULL AND source = '통장'
-      AND description LIKE '%싸이오토모%'
-  `);
-  /* 🔴 감사 P1(2026-08-25): 카드정산 자동 분류가 업로드 시점에 빠져 미분류 입금
-     205건 1.15억이 쌓였다 — 이제 여기서 바로 붙는다 (패턴 정본: expense-cats) */
-  await db.execute(sql`
-    UPDATE cash_txn SET category = '카드정산'
-    WHERE upload_id = ${uploadId} AND category IS NULL AND source = '통장'
-      AND in_amount > 0 AND ${sql.raw(CARD_SETTLE_PATTERN_SQL)}
-  `);
-  // 지역화폐 정산 — 「속초정산」 = 속초 지역상품권(모바일) 정산 **입금** (사장님 설명 2026-08-25)
-  await db.execute(sql`
-    UPDATE cash_txn SET category = '지역화폐정산'
-    WHERE upload_id = ${uploadId} AND category IS NULL AND source = '통장'
-      AND in_amount > 0 AND description LIKE '%속초정산%'
-  `);
-  /* 주주거래 — 조준호·이현숙(내부 관계자·주주). 🔴 감사 M20: **출금만** 자동으로 —
-     입금까지 자동 잠그면 혹시 모를 동명 손님 입금이 대조 화면에서 사라진다 */
-  await db.execute(sql`
-    UPDATE cash_txn SET category = '주주거래'
-    WHERE upload_id = ${uploadId} AND category IS NULL AND source = '통장'
-      AND out_amount > 0
-      AND (description LIKE '%조준호%' OR description LIKE '%이현숙%')
-  `);
+  /* ⭐ 자동 분류 정본 — expense-core.applyAutoCategories (경비 규칙·내부이체·카드정산·지역화폐·주주거래).
+     🔴 2026-08-26: 전엔 여기 손 복제 정규식(백슬래시 1개)이라 경비 규칙이 통장 줄에 한 번도 안 붙었다 */
+  await applyAutoCategories({ uploadId });
 
   const dupCount = parsed.rows.length - newCount;
   await db.execute(sql`

@@ -15,7 +15,8 @@ import { db } from "@/db";
 import { getSession, isOwner } from "@/lib/auth";
 import { payerKeyOf } from "./expense-cats";
 import { cashUsedMap, cashUsedSql, normDescSql, normName } from "./recon-data";
-import { nearTolerance, taxReconV2 } from "./tax-recon";
+import { taxReconV2 } from "./tax-recon";
+import { confirmBankToTaxesCore, confirmMonthlyPartyCore, confirmSureTaxCore, confirmTaxToBankCore, confirmTaxToBanksCore } from "./recon-core";
 import { restoreCashLine } from "./cash-restore";
 import { revalidateFinance } from "./fin-revalidate";
 
@@ -361,130 +362,20 @@ export async function setTaxPartyRule(input: {
 }
 
 /**
- * 계산서 ↔ 통장 직접 연결 (사장님 통찰 2026-08-25 — "앱 내역보다 입출금 대조가 정확").
- *   매출 계산서 ↔ 입금 (대행 정산사) · 매입 계산서 ↔ 출금 (지급).
- *   매입-출금을 이으면 그 출금은 자동으로 '매입대금' 분류까지 된다.
+ * 계산서 ↔ 통장 직접 연결 — 규칙은 recon-core.ts(코어) 한 벌. 여기는 권한 검사와 화면 갱신만 (2026-08-26).
  */
 export async function confirmTaxToBank(
   taxInvoiceId: number,
   cashTxnId: number,
-): Promise<
-  { ok: true; remaining: number; shortfall: number; netted: boolean } | { ok: false; error: string }
-> {
+): Promise<{ ok: true; remaining: number; shortfall: number; netted: boolean } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  const [inv] = await db.execute<{
-    id: number; direction: string; recon_status: string; total: number;
-    counterparty_biz_no: string; counterparty_name: string;
-  }>(sql`
-    SELECT id, direction, recon_status, total, counterparty_biz_no, counterparty_name
-    FROM tax_invoice WHERE id = ${taxInvoiceId} AND is_active
-  `);
-  if (!inv) return { ok: false, error: "세금계산서를 찾을 수 없습니다" };
-  if (Number(inv.total) <= 0)
-    return { ok: false, error: "마이너스 계산서는 원본과 상쇄로 정리해 주세요" };
-  /* ⭐ 여러 출금·입금 합산 발행 지원 (사장님 제보 2026-08-25) — 계산서에 남은 금액이
-     있는 한 계속 잇는다. 부분 확인 상태는 돈 확인 뷰가 「일부 확인 · 남은 X원」으로 보여준다. */
-  const [covRow] = await db.execute<{ s: string }>(sql`
-    SELECT COALESCE(SUM(amount), 0)::bigint s FROM recon_match
-    WHERE src_table = 'tax_invoice' AND src_id = ${taxInvoiceId} AND status = '확정'
-      AND kind IN ('매입계산서', '매출계산서') AND ref_table IN ('cash_txn', 'adjust')
-  `);
-  const invCovered = Number(covRow.s);
-  const invRemain = Number(inv.total) - invCovered;
-  if (invRemain <= 0)
-    return { ok: false, error: "이 계산서는 금액이 이미 다 확인됐습니다 — 잘못 이었다면 되돌린 뒤 다시 이으세요" };
-  const [dep] = await db.execute<{ id: number; in_amount: number; out_amount: number; description: string }>(sql`
-    SELECT id, in_amount, out_amount, description FROM cash_txn
-    WHERE id = ${cashTxnId} AND source = '통장' AND is_active
-  `);
-  if (!dep) return { ok: false, error: "통장 줄을 찾을 수 없습니다" };
-  /* ⭐ 상계 허용 (사장님 제보 2026-08-25 — 트랜스코스모스·맥스런):
-     ①온라인몰 정산사는 수수료(매입 계산서)를 정산 입금에서 떼고 보낸다 → 매입인데 입금뿐
-     ②서로 사고파는 거래처는 매출 대금을 매입 대금과 상계한다 → 매출인데 출금뿐
-     둘 다 실제로 결제가 끝난 것이므로(상계도 결제다) 반대 방향 연결을 허용한다. */
-  const isCashIn = Number(dep.in_amount) > 0;
-  if (Number(dep.in_amount) <= 0 && Number(dep.out_amount) <= 0)
-    return { ok: false, error: "금액이 없는 통장 줄입니다" };
-  /** 계산서 방향과 통장 방향이 반대 = 상계로 처리된 건 */
-  const netted = (inv.direction === "매출") !== isCashIn;
-  /**
-   * ⭐ 한 통장 줄 ↔ 여러 계산서 (사장님 제보 2026-08-25): ①카랑이 현대캐피탈·쏘카 몫을
-   *    한 번에 입금 ②선입금(포인트 적립) 후 매입 계산서가 여러 번 — 남은 금액을 추적하며
-   *    부분 연결한다. 첫 연결은 차액(수수료 차감 등)이 있어도 허용, 차액을 돌려준다.
-   */
-  const depAmt = isCashIn ? Number(dep.in_amount) : Number(dep.out_amount);
-  /* ⭐ 소진량 정본(cashUsedMap) — 지급 잡기('매입지급')·외상 수금('이체입금')이 쓴 몫까지
-     센다 (리뷰 C1 이중계상 차단). 남은 금액만큼만 기록해 SUM 이 통장 금액을 못 넘게 한다(C5). */
-  const already = (await cashUsedMap([cashTxnId])).get(cashTxnId) ?? 0;
-  const remain0 = depAmt - already;
-  if (remain0 <= 0)
-    return { ok: false, error: "이 통장 줄은 남은 금액이 없습니다 — 이미 다른 연결이 다 썼습니다" };
-  const linkAmt = Math.min(invRemain, remain0);
-  const remaining = remain0 - linkAmt; // 통장 쪽 잔여 (>= 0)
-  const shortfall = invRemain - linkAmt; // 계산서에 아직 남은 금액 — 다른 줄을 이어 잇거나 「차액 확인 끝」
-
-  const kind = inv.direction === "매출" ? "매출계산서" : "매입계산서";
-  const reason = netted ? "상계연결" : isCashIn ? "입금연결" : "출금연결";
-  await db.transaction(async (tx) => {
-    await tx.execute(sql`
-      INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
-      VALUES (${kind}, 'tax_invoice', ${taxInvoiceId}, 'cash_txn', ${cashTxnId}, ${linkAmt}, '확정', '수동', ${g.uid}, now())
-    `);
-    await tx.execute(sql`UPDATE tax_invoice SET recon_status = '확정', recon_reason = ${reason} WHERE id = ${taxInvoiceId}`);
-    if (remaining === 0) {
-      // 통장 줄이 다 찼다(또는 계산서가 더 크다) — 확정으로 정리
-      if (inv.direction === "매입" && !isCashIn) {
-        await tx.execute(sql`
-          UPDATE cash_txn SET recon_status = '확정', category = COALESCE(category, '매입대금')
-          WHERE id = ${cashTxnId}
-        `);
-      } else {
-        await tx.execute(sql`UPDATE cash_txn SET recon_status = '확정' WHERE id = ${cashTxnId}`);
-      }
-    } else if (inv.direction === "매입" && !isCashIn) {
-      // 적립 소진 중 — 분류를 미리 붙이고 '제안' 상태로 (다음 계산서를 기다린다)
-      await tx.execute(sql`
-        UPDATE cash_txn SET recon_status = '제안', category = COALESCE(category, '매입대금')
-        WHERE id = ${cashTxnId}
-      `);
-    } else {
-      /* 부분 연결 입금은 '미대조'로 남긴다 (감사 B6, 2026-08-25) — 입금 대조 화면이
-         남은 금액만 보여주고, 이중 사용은 소진량 정본(cashUsedMap)이 막는다.
-         '제안'으로 빼돌리면 남은 돈을 외상 수금에 쓸 길이 사라진다 (H6 재해석) */
-    }
-  });
-
-  /**
-   * ⭐ 입금자명 학습 (사장님 제보 2026-08-25 — 한국타이어 정산이 「이관우」 개인 이름으로 온다).
-   *    한 번 이으면 그 입금자명 = 이 계산서 상대의 정산 입금으로 기억한다 ('T:'+사업자번호).
-   */
-  try {
-    const payer = dep.description.replace(/^\[[^\]]*\]\s*/, "").trim();
-    const key = normName(payer);
-    if (key.length >= 2) {
-      await db.execute(sql`
-        INSERT INTO party_alias (alias_key, alias_raw, party_key, party_label)
-        VALUES (${key + "@" + inv.counterparty_biz_no}, ${payer}, ${"T:" + inv.counterparty_biz_no},
-                ${(inv.direction === "매출" ? "정산입금 " : "지급출금 ") + inv.counterparty_name})
-        ON CONFLICT (alias_key) DO UPDATE SET party_key = EXCLUDED.party_key,
-          party_label = EXCLUDED.party_label, updated_at = now()
-      `);
-    }
-  } catch {
-    // 학습 실패는 확정을 막지 않는다
-  }
-
-  revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
-  revalidatePath("/finance/deposits");
-  return { ok: true, remaining, shortfall, netted };
+  const r = await confirmTaxToBankCore(taxInvoiceId, cashTxnId, g.uid);
+  if (r.ok) revalidateFinance();
+  return r;
 }
 
-/**
- * ⭐ 여러 통장 줄을 한 계산서에 한꺼번에 (사장님 제보 2026-08-25 — 위즈오토)
- *    월합계 계산서 + 건별 결제라 「7/8 84만 + 7/8 50만 + 7/12 19만 = 계산서 153만」인
- *    경우, 합이 딱 맞는 조합을 화면이 찾아 주고 여기서 한 번에 잇는다.
- */
+/** 여러 통장 줄을 한 계산서에 (허용 오차 잔돈·차액 자동 정리) */
 export async function confirmTaxToBanks(
   taxInvoiceId: number,
   cashTxnIds: number[],
@@ -494,100 +385,24 @@ export async function confirmTaxToBanks(
 > {
   const g = await guard();
   if (!g.ok) return g;
-  const ids = [...new Set((cashTxnIds ?? []).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 12);
-  if (ids.length === 0) return { ok: false, error: "이을 통장 줄을 골라 주세요" };
-  let applied = 0;
-  let remaining = 0;
-  let lastId = 0;
-  for (const id of ids) {
-    const r = await confirmTaxToBank(taxInvoiceId, id);
-    if (!r.ok) {
-      return applied === 0
-        ? { ok: false, error: r.error }
-        : { ok: false, error: `${applied}건까지 이었고 그다음에서 멈췄습니다 — ${r.error}` };
-    }
-    applied++;
-    remaining = r.remaining;
-    lastId = id;
-  }
-  /* ⭐ 허용 오차 정리 (사장님 요청 2026-08-26, 유일이엔티): 여러 줄 합이 계산서와 몇백 원 어긋나면
-     ①통장에 남은 잔돈(수수료·반올림)은 계산서에 붙여 소진 — 후보에 200원짜리가 얼쩡거리지 않게
-     ②계산서에 모자라는 몇백 원은 「차액 확인 끝」(adjust)으로 자동 마감. 둘 다 오차 안일 때만. */
-  const [inv] = await db.execute<{ direction: string; total: number }>(sql`
-    SELECT direction, total FROM tax_invoice WHERE id = ${taxInvoiceId}
-  `);
-  const total = Number(inv?.total ?? 0);
-  const tol = nearTolerance(total);
-  const kind = inv?.direction === "매출" ? "매출계산서" : "매입계산서";
-  const [covRow] = await db.execute<{ s: string }>(sql`
-    SELECT COALESCE(SUM(amount), 0)::bigint s FROM recon_match
-    WHERE src_table = 'tax_invoice' AND src_id = ${taxInvoiceId} AND status = '확정'
-      AND kind IN ('매입계산서', '매출계산서') AND ref_table IN ('cash_txn', 'adjust')
-  `);
-  let shortfall = total - Number(covRow.s);
-  let absorbed = 0;
-  let settled = 0;
-  if (shortfall > 0 && shortfall <= tol) {
-    await db.execute(sql`
-      INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
-      VALUES (${kind}, 'tax_invoice', ${taxInvoiceId}, 'adjust', ${taxInvoiceId}, ${shortfall}, '확정', '조정', ${g.uid}, now())
-    `);
-    settled = shortfall;
-    shortfall = 0;
-  }
-  if (remaining > 0 && remaining <= tol && lastId > 0) {
-    await db.transaction(async (tx) => {
-      await tx.execute(sql`
-        INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
-        VALUES (${kind}, 'tax_invoice', ${taxInvoiceId}, 'cash_txn', ${lastId}, ${remaining}, '확정', '조정', ${g.uid}, now())
-      `);
-      await tx.execute(sql`
-        UPDATE cash_txn SET recon_status = '확정',
-               category = CASE WHEN ${kind} = '매입계산서' AND out_amount > 0 THEN COALESCE(category, '매입대금') ELSE category END
-        WHERE id = ${lastId}
-      `);
-    });
-    absorbed = remaining;
-    remaining = 0;
-  }
-  revalidateFinance();
-  return { ok: true, applied, remaining, shortfall, absorbed, settled };
+  const r = await confirmTaxToBanksCore(taxInvoiceId, cashTxnIds, g.uid);
+  if (r.ok) revalidateFinance();
+  return r;
 }
 
-/**
- * ⭐ 통장 한 줄 → 계산서 여러 장 한꺼번에 (사장님 케이스 2026-08-26 — 타이어프로 속초점 입금 842,160 =
- *    계산서 242,160 + 600,000). confirmTaxToBank 를 차례로 부르면 남은 금액이 정확히 이어진다.
- */
+/** 통장 한 줄 → 계산서 여러 장 */
 export async function confirmBankToTaxes(
   cashTxnId: number,
   taxInvoiceIds: number[],
 ): Promise<{ ok: true; applied: number; remaining: number } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  const ids = [...new Set((taxInvoiceIds ?? []).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 12);
-  if (ids.length === 0) return { ok: false, error: "이을 계산서를 골라 주세요" };
-  let applied = 0;
-  let remaining = 0;
-  for (const id of ids) {
-    const r = await confirmTaxToBank(id, cashTxnId);
-    if (!r.ok) {
-      return applied === 0
-        ? { ok: false, error: r.error }
-        : { ok: false, error: `${applied}장까지 이었고 그다음에서 멈췄습니다 — ${r.error}` };
-    }
-    applied++;
-    remaining = r.remaining;
-  }
-  return { ok: true, applied, remaining };
+  const r = await confirmBankToTaxesCore(cashTxnId, taxInvoiceIds, g.uid);
+  if (r.ok) revalidateFinance();
+  return r;
 }
 
-/**
- * ⭐ 월정산 상대의 「이 달 맞음」 (사장님 승인 2026-08-25)
- *
- *   미쉐린처럼 월말 합계 계산서를 쓰는 상대는 계산서 ↔ 출금이 1:1로 대응하지 않는다.
- *   세무적으로도 매칭은 요구되지 않으므로(매입세액공제는 계산서 기준), 그 달 계산서와
- *   지급 총액을 눈으로 견주고 「맞음」을 누르면 그 달 확인이 끝난다. 잔액은 누계로 남는다.
- */
+/** 월정산 상대의 「이 달 맞음」 */
 export async function confirmMonthlyParty(
   bizNo: string,
   ym: string,
@@ -595,18 +410,22 @@ export async function confirmMonthlyParty(
 ): Promise<{ ok: true; applied: number } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  const biz = bizNo.replace(/\D/g, "");
+  const r = await confirmMonthlyPartyCore(bizNo, ym, direction);
+  if (r.ok) revalidateFinance();
+  return r;
+}
+
+/** ⭐ 돈 확인 뷰 「짝이 확실한 N건 모두 잇기」 (2026-08-26) — 서버가 같은 규칙으로 다시 계산한다 */
+export async function confirmSureTax(
+  ym: string,
+  direction: "매입" | "매출",
+): Promise<{ ok: true; applied: number; failed: number } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return { ok: false, error: "달이 이상합니다" };
-  const rows = await db.execute<{ id: number }>(sql`
-    UPDATE tax_invoice SET recon_status = '확정', recon_reason = '월정산'
-    WHERE is_active AND counterparty_biz_no = ${biz} AND direction = ${direction}
-      AND recon_status IN ('미대조', '제안')
-      AND write_date >= (${ym} || '-01')::date
-      AND write_date < ((${ym} || '-01')::date + INTERVAL '1 month')
-    RETURNING id
-  `);
-  revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
-  return { ok: true, applied: rows.length };
+  const r = await confirmSureTaxCore(ym, direction, g.uid, "자동");
+  revalidateFinance();
+  return { ok: true, ...r };
 }
 
 /** 월정산 「이 달 맞음」 되돌리기 */

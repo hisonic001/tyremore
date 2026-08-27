@@ -13,6 +13,7 @@ import type { TaxCashData } from "@/lib/tax-recon";
 import {
   closeTaxShortfall,
   confirmMonthlyParty,
+  confirmSureTax,
   confirmTaxToBank,
   confirmTaxToBanks,
   confirmBankToTaxes,
@@ -159,6 +160,22 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
     });
 
   const pct = data.total.n > 0 ? Math.round((data.bankOk.n / data.total.n) * 100) : 0;
+  /* ⭐ 짝이 확실한 것 — 정확 일치 + ★ + 정확 후보 하나뿐, 또는 정확 묶음 (서버가 같은 규칙으로 재계산) */
+  const sureN = data.rows.filter((r) => {
+    if (r.isFix || r.fixFirst) return false;
+    const remain = r.total - r.bankCovered;
+    const exact = r.autoBank.filter((b) => b.amount === remain);
+    return (exact.length === 1 && exact[0].known) || (exact.length === 0 && !!r.bankCombo && r.bankCombo.diff === 0);
+  }).length;
+  const linkSure = () =>
+    start(async () => {
+      setMsg(null);
+      setError(null);
+      const r = await confirmSureTax(data.ym, data.direction);
+      if (!r.ok) return setError(r.error);
+      setMsg(`짝이 확실한 ${r.applied}건을 이었습니다${r.failed > 0 ? ` · ${r.failed}건은 실패` : ""}.`);
+      router.refresh();
+    });
   const base = `/finance/tax?view=money&ym=${data.ym}`;
   const seg = (on: boolean) =>
     `flex-1 rounded-full py-2.5 text-center text-sm font-semibold transition-colors ${
@@ -192,6 +209,16 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
         <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-100">
           <div className="h-full rounded-full bg-brand-500 transition-all" style={{ width: `${pct}%` }} />
         </div>
+        {sureN > 0 && (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={linkSure}
+            className="mt-2 rounded-control bg-brand-600 px-3 py-2 text-sm font-semibold text-white active:bg-brand-700 disabled:opacity-40"
+          >
+            ✔ 짝이 확실한 {sureN}건 모두 잇기
+          </button>
+        )}
         <p className="tabular mt-1.5 text-xs text-slate-500">
           돈 확인할 것 {data.open.n}건 · {won(data.bankOk.sum)}원 확인 / 전체 {won(data.total.sum)}원
           {data.ignoredN > 0 && ` · 정리(무시) ${data.ignoredN}건은 셈에서 뺐습니다`}
