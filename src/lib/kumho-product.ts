@@ -123,6 +123,25 @@ export function kumhoProductFields(m: KumhoMaterial, currentName?: string | null
   };
 }
 
+/**
+ * ⭐ 한 상품에 자재코드가 여럿일 때 **어느 것을 정본으로 볼 것인가** (2026-08-27)
+ *
+ * 순서를 한 곳에 못 박아 둔다 — 스크립트마다 다르게 고르면 기표가가 왔다 갔다 한다
+ * (실제로 215/55R17 TA31 이 152,000 과 161,000 을 오갔다).
+ *
+ *   ① 사장님이 확인해 주신 코드
+ *   ② 유형 ④(미운영·중단)가 아닌 것
+ *   ③ 시점이 정상·운영인 것
+ *   ④ **OE 마킹이 없는 것** — `TA31 A9;RK` 는 특정 차 순정판이라 값이 다르다. 우리 상품은 일반판이다
+ *   ⑤ 그래도 같으면 코드 오름차순 (결과가 늘 같아야 한다)
+ */
+export const PICK_MATERIAL_ORDER = sql`
+  (c.matched_by = '사장님확인') DESC,
+  (m.op_type IS DISTINCT FROM '④') DESC,
+  (m.op_status IN ('정상','운영')) DESC,
+  (m.name ~ '\s;') DESC,
+  m.code ASC`;
+
 export type KumhoResolve =
   | { ok: true; productId: number; via: "사전" | "품번" | "규격+패턴" | "새로 만듦"; name: string | null }
   | { ok: false; reason: "자재코드없음" | "애매함"; message: string };
