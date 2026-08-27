@@ -14,6 +14,7 @@ import {
   closeTaxShortfall,
   confirmMonthlyParty,
   confirmSureTax,
+  markTaxWaiting,
   confirmTaxToBank,
   confirmTaxToBanks,
   confirmBankToTaxes,
@@ -129,13 +130,57 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
 
   /* ⭐ 월정산 상대 — 계산서 1장 ↔ 출금 1건이 대응하지 않는 거래처(미쉐린형).
      그 달 계산서 합과 지급 합을 견주고 「맞음」 한 번으로 끝낸다. */
+
+  /**
+   * ⭐ 「아직 안 들어옴 — 다음 달로」 (사장님 질문 2026-08-27)
+   *
+   *   "카랑은 보통 다음달에 입금을 해주는데 아직 안 들어온 건 어떻게 처리해야하나?"
+   *
+   * 「정리(무시)」와 다르다 — 무시는 없던 일로 하는 것이라 **받을 돈을 잊는다.**
+   * 이건 이 달 할 일에서만 빼고 「아직 안 들어온 돈」으로 남긴다.
+   */
+  const wait = (invId: number, name: string, total: number) =>
+    start(async () => {
+      setMsg(null);
+      setError(null);
+      const ok = await ask({
+        title: isIn ? "아직 안 들어온 돈으로 미룰까요?" : "아직 안 준 돈으로 미룰까요?",
+        body:
+          `「${name}」 ${won(total)}원을 이 달 할 일에서 뺍니다.\n` +
+          `없던 일로 하는 게 아닙니다 — 「아직 ${isIn ? "안 들어온" : "안 준"} 돈」으로 남고, ` +
+          `${isIn ? "입금" : "출금"}이 오면 그 줄과 이으면 확인이 끝납니다.`,
+        confirmLabel: "미루기",
+      });
+      if (!ok) return;
+      const r = await markTaxWaiting(invId, true);
+      if (!r.ok) return setError(r.error);
+      setMsg(`「${name}」을(를) 아직 ${isIn ? "안 들어온" : "안 준"} 돈으로 미뤘습니다.`);
+      router.refresh();
+    });
+
+  const unwait = (invId: number, name: string) =>
+    start(async () => {
+      setMsg(null);
+      setError(null);
+      const r = await markTaxWaiting(invId, false);
+      if (!r.ok) return setError(r.error);
+      setMsg(`「${name}」을(를) 다시 이 달 할 일로 되돌렸습니다.`);
+      router.refresh();
+    });
+
   const confirmMonth = (bizNo: string) =>
     start(async () => {
       setMsg(null);
       setError(null);
       const r = await confirmMonthlyParty(bizNo, data.ym, data.direction);
       if (!r.ok) return setError(r.error);
-      setMsg(`${r.applied}건을 이 달 정산으로 확인했습니다.`);
+      /* 🔴 0건이면 **아무 말도 없이 그대로**였다 (사장님 제보 2026-08-27:
+         "눌러도 변화가 없음"). 고칠 대상이 없다는 사실을 말해 준다. */
+      setMsg(
+        r.applied > 0
+          ? `${r.applied}건을 이 달 정산으로 확인했습니다.`
+          : "고칠 것이 없었습니다 — 이 달 계산서는 이미 모두 확인돼 있습니다.",
+      );
       router.refresh();
     });
 
@@ -231,6 +276,8 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
         <p className="tabular mt-1.5 text-xs text-slate-500">
           돈 확인할 것 {data.open.n}건 · {won(data.bankOk.sum)}원 확인 / 전체 {won(data.total.sum)}원
           {data.ignoredN > 0 && ` · 정리(무시) ${data.ignoredN}건은 셈에서 뺐습니다`}
+          {data.waiting.length > 0 &&
+            ` · 아직 ${isIn ? "안 들어온" : "안 준"} 돈 ${data.waiting.length}건 ${won(data.waitingSum)}원은 따로 셉니다`}
         </p>
       </section>
 
@@ -281,7 +328,8 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
                 )}
                 {!m.confirmed && m.invN > 0 && (
                   <p className="mt-1.5 text-[11px] leading-snug text-slate-400">
-                    이 달 지급이 계산서와 비슷하면 [이 달 맞음]을 누르세요 — 정확한 잔액 흐름은 원장에서 봅니다
+                    아직 확인 안 된 계산서 <strong>{m.openN}건</strong> — 이 달 지급이 계산서와
+                    비슷하면 [이 달 맞음]을 누르세요. 정확한 잔액 흐름은 원장에서 봅니다
                   </p>
                 )}
                 <div className="mt-2 flex items-center justify-between gap-2">
@@ -292,18 +340,26 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
                     원장 보기 →
                   </Link>
                   {m.confirmed ? (
-                    <button
-                      type="button"
-                      disabled={pending}
-                      onClick={() => undoMonth(m.bizNo)}
-                      className="text-xs text-slate-400 underline disabled:opacity-40"
-                    >
-                      확인 되돌리기
-                    </button>
+                    /* 🔴 「이 달 맞음」으로 확인한 게 있어야 여기서 되돌릴 수 있다.
+                       개별로 이어 끝낸 달은 되돌릴 대상이 없으므로 버튼 대신 말로 알린다. */
+                    m.monthlyN > 0 ? (
+                      <button
+                        type="button"
+                        disabled={pending}
+                        onClick={() => undoMonth(m.bizNo)}
+                        className="text-xs text-slate-400 underline disabled:opacity-40"
+                      >
+                        확인 되돌리기
+                      </button>
+                    ) : (
+                      <span className="text-xs text-slate-400">
+                        통장 줄에 하나씩 이어서 끝냈습니다 — 되돌리려면 그 줄에서
+                      </span>
+                    )
                   ) : (
                     <button
                       type="button"
-                      disabled={pending || m.invN === 0}
+                      disabled={pending || m.openN === 0}
                       onClick={() => confirmMonth(m.bizNo)}
                       className="rounded-control bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white active:bg-brand-700 disabled:opacity-40"
                     >
@@ -311,6 +367,41 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
                     </button>
                   )}
                 </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+
+      {/* ⭐ 아직 안 들어온 돈 — 「무시」와 달리 잊지 않는다 (2026-08-27) */}
+      {data.waiting.length > 0 && (
+        <section className="mt-4 rounded-card border border-amber-200 bg-amber-50 p-4">
+          <h2 className="font-semibold text-amber-900">
+            아직 {isIn ? "안 들어온" : "안 준"} 돈 {data.waiting.length}건 · {won(data.waitingSum)}원
+          </h2>
+          <p className="mt-0.5 text-xs leading-relaxed text-amber-800">
+            이 달 할 일에서는 뺐지만 <strong>없던 일이 아닙니다.</strong>{" "}
+            {isIn ? "입금" : "출금"}이 들어오면 통장 화면이나 아래 「되돌리기」로 이어 확인을 끝내세요.
+          </p>
+          <ul className="mt-2 space-y-1">
+            {data.waiting.map((w) => (
+              <li key={w.id} className="tabular flex items-center justify-between gap-2 text-sm">
+                <span className="min-w-0 truncate">
+                  <span className="text-xs text-amber-700">{w.d}</span>{" "}
+                  <span className="font-medium text-amber-900">{w.name}</span>
+                </span>
+                <span className="flex shrink-0 items-center gap-2">
+                  <strong className="text-amber-900">{won(w.total)}원</strong>
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => unwait(w.id, w.name)}
+                    className="text-xs text-amber-700 underline disabled:opacity-40"
+                  >
+                    되돌리기
+                  </button>
+                </span>
               </li>
             ))}
           </ul>
@@ -378,6 +469,17 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
                     className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-xs font-medium text-slate-600 active:bg-slate-100 disabled:opacity-40"
                   >
                     남은 건 수수료·적립 — 확인 끝
+                  </button>
+                )}
+                {/* 아직 안 온 돈은 억지로 잇지 말고 미룬다 (2026-08-27) */}
+                {!r.isFix && !r.fixFirst && (
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => wait(r.id, r.name, r.total)}
+                    className="rounded-full border border-amber-300 bg-white px-2 py-0.5 text-xs font-medium text-amber-700 active:bg-amber-50 disabled:opacity-40"
+                  >
+                    아직 {isIn ? "안 들어옴" : "안 줌"} — 다음 달로
                   </button>
                 )}
               </div>

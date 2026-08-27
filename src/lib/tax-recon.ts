@@ -818,8 +818,22 @@ export interface MonthlyParty {
   paidSum: number;
   /** 누적 미지급 = 보는 달까지의 계산서 − 보는 달까지의 지급 (원장의 그 달 누적과 같은 값) */
   balance: number;
-  /** 이 달 계산서를 「맞음」으로 확인했나 */
+  /**
+   * 이 달 계산서의 돈 확인이 끝났나
+   *
+   * 🔴 **「월정산으로 확인했나」가 아니라 「열린 게 없나」다** (사장님 제보 2026-08-27:
+   *    "이 달 맞음 — 확인 눌러도 변화가 없음").
+   *    전에는 `recon_reason = '월정산'` 인 것만 셌다. 그래서 그 달 계산서를 **개별로
+   *    이어 두면**(확정/출금연결) done_n=0 · open_n=0 이 되어 confirmed=false,
+   *    버튼이 계속 뜨는데 누르면 고칠 대상(미대조·제안)이 없어 **0건**이었다.
+   *    7월 5곳·8월 2곳이 이 상태였다 — 강남세차장·스칼릿·쌍성트레이딩·엠에프티코리아·
+   *    위즈오토코리아·한국타이어 티스테이션.
+   */
   confirmed: boolean;
+  /** 아직 열린(미대조·제안) 건수 — 0이면 확인이 끝난 것이다 */
+  openN: number;
+  /** 그중 「이 달 맞음」으로 확인한 건수. 0이면 개별로 이은 것이라 여기서 되돌릴 게 없다 */
+  monthlyN: number;
 }
 
 export interface TaxCashData {
@@ -831,6 +845,17 @@ export interface TaxCashData {
   /** 아직 안 끝난 것 — 일부 확인 포함 */
   open: { n: number; sum: number };
   ignoredN: number;
+  /**
+   * ⭐ 「아직 안 들어옴 / 아직 안 줌」으로 미뤄 둔 계산서 (사장님 질문 2026-08-27)
+   *
+   *   "카랑은 보통 다음달에 입금을 해주는데 아직 안 들어온 건 어떻게 처리해야하나?"
+   *
+   * 「무시」와 다르다 — 무시는 셈에서 빼는 것이라 **받을 돈을 잊는다.**
+   * 이건 "아직 안 왔다, 다음에 온다"이다. 이 달 할 일에서는 빠지되 여기 남아 있고,
+   * 통장 후보 풀에는 그대로 있어 다음 달 입금이 오면 그때 이으면 확정이 된다.
+   */
+  waiting: { id: number; d: string; name: string; total: number }[];
+  waitingSum: number;
   /** 돈 미확인 계산서 — 금액 큰 순 LIMIT 50 */
   rows: TaxCashRow[];
   moreN: number;
@@ -863,18 +888,30 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
   const inMonth = sql`t.is_active AND t.direction = ${direction}
     AND t.write_date >= ${start}::date AND t.write_date < ${nextStart}::date`;
 
+  /* 🔴 「대기」(아직 안 들어옴)는 이 달 셈에서 뺀다 — 그래야 달이 닫힌다.
+        「무시」와 달리 없던 일이 아니라 **다음에 올 돈**이므로 따로 세어 보여 준다. */
+  const LIVE = sql.raw("t.recon_status NOT IN ('무시', '대기')");
   const [agg] = await db.execute<{
     total_n: number; total_s: string; ok_n: number; ok_s: string;
-    open_n: number; open_s: string; ign_n: number;
+    open_n: number; open_s: string; ign_n: number; wait_s: string;
   }>(sql`
-    SELECT count(*) FILTER (WHERE t.recon_status <> '무시')::int total_n,
-           COALESCE(SUM(t.total) FILTER (WHERE t.recon_status <> '무시'), 0)::bigint total_s,
-           count(*) FILTER (WHERE t.recon_status <> '무시' AND ${DONE})::int ok_n,
-           COALESCE(SUM(t.total) FILTER (WHERE t.recon_status <> '무시' AND ${DONE}), 0)::bigint ok_s,
-           count(*) FILTER (WHERE t.recon_status <> '무시' AND NOT ${DONE})::int open_n,
-           COALESCE(SUM(t.total) FILTER (WHERE t.recon_status <> '무시' AND NOT ${DONE}), 0)::bigint open_s,
-           count(*) FILTER (WHERE t.recon_status = '무시')::int ign_n
+    SELECT count(*) FILTER (WHERE ${LIVE})::int total_n,
+           COALESCE(SUM(t.total) FILTER (WHERE ${LIVE}), 0)::bigint total_s,
+           count(*) FILTER (WHERE ${LIVE} AND ${DONE})::int ok_n,
+           COALESCE(SUM(t.total) FILTER (WHERE ${LIVE} AND ${DONE}), 0)::bigint ok_s,
+           count(*) FILTER (WHERE ${LIVE} AND NOT ${DONE})::int open_n,
+           COALESCE(SUM(t.total) FILTER (WHERE ${LIVE} AND NOT ${DONE}), 0)::bigint open_s,
+           count(*) FILTER (WHERE t.recon_status = '무시')::int ign_n,
+           COALESCE(SUM(t.total) FILTER (WHERE t.recon_status = '대기'), 0)::bigint wait_s
     FROM tax_invoice t ${CASH_LAT} WHERE ${inMonth}
+  `);
+
+  /* 미뤄 둔 것 — 그 달 화면에 「아직 안 들어온 돈」 카드로 남는다 */
+  const waitingRows = await db.execute<{ id: number; d: string; name: string; total: number }>(sql`
+    SELECT id, to_char(write_date, 'MM-DD') d, counterparty_name name, total
+    FROM tax_invoice t
+    WHERE ${inMonth} AND t.recon_status = '대기'
+    ORDER BY ABS(total) DESC LIMIT 50
   `);
 
   /* ⭐ 월정산 상대 — 개별 목록에서 빼고 잔액 카드로 (사장님 승인 2026-08-25) */
@@ -913,7 +950,7 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
                    AND m.kind IN ('매입계산서', '매출계산서')) app_linked,
            x.cov bank_covered
     FROM tax_invoice t ${CASH_LAT}
-    WHERE ${inMonth} AND t.recon_status <> '무시' AND NOT ${DONE} ${notMonthly}
+    WHERE ${inMonth} AND ${LIVE} AND NOT ${DONE} ${notMonthly}
     ORDER BY ABS(t.total) DESC, t.id DESC LIMIT 50
   `);
 
@@ -947,6 +984,8 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
     let paidAll = 0; // 보는 달까지의 누적 지급 (F1)
     for (const [ym2, v] of cashByYm) if (ym2 <= ym) paidAll += isIn2 ? v.inS - v.outS : v.outS - v.inS;
     monthlyOpenN += Number(inv?.open_n ?? 0);
+    const openN = Number(inv?.open_n ?? 0);
+    const monthlyN = Number(inv?.done_n ?? 0);
     monthly.push({
       bizNo: mr.biz_no,
       name: inv?.nm ?? mr.name_raw,
@@ -955,8 +994,12 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
       paidN: Number(mm.n),
       paidSum: paidMonth,
       balance: Number(inv?.all_s ?? 0) - paidAll,
-      // 🔴 감사 C2: 「이 달 확인됨」은 월정산 확인이 실제로 있을 때만
-      confirmed: Number(inv?.done_n ?? 0) > 0 && Number(inv?.open_n ?? 0) === 0,
+      /* 🔴 감사 C2 의 「월정산 확인이 실제로 있을 때만」을 뒤집었다 (2026-08-27) —
+         개별로 이어 확인이 끝난 달까지 「확인 전」으로 보여 주고, 버튼은 0건을 고쳤다.
+         계산서가 있고(n>0) 열린 게 없으면(open_n=0) **어떻게 확인했든 끝난 것**이다. */
+      confirmed: Number(inv?.n ?? 0) > 0 && openN === 0,
+      openN,
+      monthlyN,
     });
   }
 
@@ -1106,6 +1149,10 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
     bankOk: { n: Number(agg.ok_n), sum: Number(agg.ok_s) },
     open: { n: Number(agg.open_n), sum: Number(agg.open_s) },
     ignoredN: Number(agg.ign_n),
+    waiting: waitingRows.map((w) => ({
+      id: Number(w.id), d: w.d, name: w.name, total: Number(w.total),
+    })),
+    waitingSum: Number(agg.wait_s ?? 0),
     rows: outRows,
     moreN: Math.max(0, Number(agg.open_n) - outRows.length - monthlyOpenN),
     monthly,

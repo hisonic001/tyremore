@@ -428,6 +428,43 @@ export async function confirmSureTax(
   return { ok: true, ...r };
 }
 
+
+/**
+ * ⭐ 「아직 안 들어옴 / 아직 안 줌」으로 미루기 (사장님 질문 2026-08-27)
+ *
+ *   "카랑은 보통 다음달에 입금을 해주는데 아직 안 들어온 건 어떻게 처리해야하나?"
+ *
+ * 🔴 「정리(무시)」와 헷갈리면 안 된다 —
+ *      정리(무시) = 없던 일로 한다. 셈에서 뺀다. (수정 상쇄·경비 계산서)
+ *      미루기(대기) = **돈이 아직 안 왔을 뿐이다.** 받을 돈으로 남는다.
+ *
+ * 이 달 「돈 확인할 것」에서는 빠지지만 통장 후보 풀에는 그대로 있다 —
+ * 다음 달 입금이 오면 그 줄과 이으면 `confirmTaxToBank` 가 '확정' 으로 바꾼다.
+ * 이미 확정된 계산서는 미룰 수 없다 (먼저 되돌려야 한다).
+ */
+export async function markTaxWaiting(
+  taxInvoiceId: number,
+  on: boolean,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  const [inv] = await db.execute<{ id: number; recon_status: string }>(sql`
+    SELECT id, recon_status FROM tax_invoice WHERE id = ${taxInvoiceId} AND is_active
+  `);
+  if (!inv) return { ok: false, error: "세금계산서를 찾을 수 없습니다" };
+  if (on && inv.recon_status === "확정")
+    return { ok: false, error: "이미 돈 확인이 끝난 계산서입니다 — 먼저 되돌려 주세요" };
+  if (!on && inv.recon_status !== "대기") return { ok: false, error: "미뤄 둔 계산서가 아닙니다" };
+  await db.execute(sql`
+    UPDATE tax_invoice
+    SET recon_status = ${on ? "대기" : "미대조"},
+        recon_reason = ${on ? "아직 안 들어옴" : null}
+    WHERE id = ${taxInvoiceId}
+  `);
+  revalidateFinance();
+  return { ok: true };
+}
+
 /** 월정산 「이 달 맞음」 되돌리기 */
 export async function undoMonthlyParty(
   bizNo: string,
