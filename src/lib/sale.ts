@@ -23,6 +23,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { customer, quote, quoteItem, quotePayment, serviceItem, stockItem, stockMovement, vehicle } from "@/db/schema";
 import { checkSplitPayments } from "./payments";
+import { ageAnchorSql } from "./tire-age";
 import type { NewCustomerInput } from "./sale-types";
 
 function refresh(...paths: string[]) {
@@ -112,9 +113,18 @@ async function nextQuoteNo(dbc: Dbc): Promise<string> {
 }
 
 /**
- * ⭐ 재고 차감 — **오래된 DOT 부터** 뺀다.
+ * ⭐ 재고 차감 — **오래된 것부터** 뺀다.
  *    새 타이어를 먼저 팔면 오래된 것이 창고에 남아 늙는다.
- *    DOT 이 없는 것은 언제 들어왔는지 모르므로 가장 먼저 내보낸다.
+ *
+ * 🔴 줄 세우는 순서를 바로잡았다 (사장님 지시 2026-08-27).
+ *    전에는 `dot ASC NULLS FIRST` — DOT 글자를 그대로 줄 세웠는데,
+ *    DOT 는 `WWYY`(주차+연도)라 **글자 순서가 시간 순서가 아니다.**
+ *    `0926`(26년 9주) 이 `4825`(25년 48주) 보다 먼저 나가고 있었다 —
+ *    즉 **25년산을 창고에 두고 26년산을 먼저 팔았다** (#77 · #1536 · #2076).
+ *    게다가 `NULLS FIRST` 라 DOT 를 모르는 새 물건이 DOT 찍힌 24년산보다 먼저 나갔다.
+ *
+ *    이제는 `ageAnchor` 한 축으로 줄 세운다 —
+ *    **DOT 를 알면 제조일, 모르면 입고일.** 모르는 것을 새것으로 치지 않는다.
  */
 export async function sellFromStock(
   productId: number,
@@ -133,7 +143,11 @@ export async function sellFromStock(
     .select({ id: stockItem.id, qty: stockItem.qty, dot: stockItem.dot })
     .from(stockItem)
     .where(and(eq(stockItem.productId, productId), eq(stockItem.status, "재고")))
-    .orderBy(sql`${stockItem.dot} ASC NULLS FIRST`, asc(stockItem.receivedAt))
+    .orderBy(
+      sql.raw(`${ageAnchorSql("stock_item.dot", "stock_item.received_at")} ASC`),
+      asc(stockItem.receivedAt),
+      asc(stockItem.id),
+    )
     .for("update");
 
   let left = qty;

@@ -3,14 +3,15 @@ import { notFound } from "next/navigation";
 import { getStockDetail } from "@/lib/stock";
 import { SEASON_STYLE, type Season } from "@/lib/tire-attrs";
 import { BADGE_STYLE } from "@/lib/tire-name";
+import { ageBadge, dotLabel, receivedLabel } from "@/lib/tire-age";
 import { AttrsEditor } from "./attrs-editor";
 import { CopyLine, HideToggle, NameEditor, PriceEditor } from "./editor";
-import { AddDotRow, QtyEditor } from "./qty-editor";
+import { AddDotRow, QtyEditor, ReceivedEditor } from "./qty-editor";
 
-/** 1826 → '26년 18주' */
-function dotLabel(dot: string): string {
-  return `${dot.slice(2, 4)}년 ${Number(dot.slice(0, 2))}주`;
-}
+const AGE_TONE = {
+  warn: "bg-amber-50 text-amber-800",
+  bad: "bg-red-50 text-red-700",
+} as const;
 
 export const dynamic = "force-dynamic";
 
@@ -191,19 +192,47 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
           </span>
         </h2>
 
+        {/*
+          ⭐ DOT 옆에 **입고일**을 나란히 (사장님 지시 2026-08-27)
+             "dot를 붙이면 가장 좋지만 못할때도 많으니 매입한 날짜도 dot와 함께"
+
+          🔴 한 칸에 섞지 않는다. DOT 는 **만든** 때, 입고일은 **받은** 때다.
+             오늘 받은 타이어가 2년 전 제조일 수 있으므로, 입고일을 제조년처럼
+             말하면 고객 앞에서 곤란해진다. 그래서 줄을 나누고 말을 달리한다.
+        */}
         <ul className="space-y-2">
-          {d.groups.map((g) => (
-            <li
-              key={g.dot ?? "none"}
-              className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3"
-            >
-              <span className="tabular text-lg font-semibold">
-                {g.dot ?? <span className="font-normal text-amber-600">DOT 없음</span>}
-                {g.dot && <span className="ml-2 text-xs font-normal text-slate-500">{dotLabel(g.dot)}</span>}
-              </span>
-              <QtyEditor productId={d.productId} dot={g.dot} qty={g.qty} unit={unit} />
-            </li>
-          ))}
+          {d.groups.map((g) => {
+            const age = d.isSerialized ? ageBadge(g.dot, g.firstIn) : null;
+            return (
+              <li
+                key={g.dot ?? "none"}
+                className="rounded-xl border border-slate-200 bg-white p-3"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span className="tabular flex flex-wrap items-center gap-x-2 gap-y-1 text-lg font-semibold">
+                    {g.dot ?? <span className="font-normal text-amber-600">DOT 없음</span>}
+                    {g.dot && <span className="text-xs font-normal text-slate-500">{dotLabel(g.dot)}</span>}
+                    {age && (
+                      <span
+                        title={age.title}
+                        className={`rounded px-1.5 py-0.5 text-xs font-medium ${AGE_TONE[age.tone]}`}
+                      >
+                        {age.text}
+                      </span>
+                    )}
+                  </span>
+                  <QtyEditor productId={d.productId} dot={g.dot} qty={g.qty} unit={unit} />
+                </div>
+                <ReceivedEditor
+                  productId={d.productId}
+                  dot={g.dot}
+                  label={receivedLabel(g.firstIn, g.lastIn)}
+                  date={g.firstIn}
+                  spread={g.firstIn !== g.lastIn}
+                />
+              </li>
+            );
+          })}
           {d.groups.length === 0 && (
             <li className="rounded-xl border border-dashed border-slate-300 p-4 text-center text-slate-500">
               등록된 재고가 없습니다
@@ -223,8 +252,16 @@ export default async function StockPage({ params }: { params: Promise<{ id: stri
 
       <HideToggle productId={d.productId} isActive={d.isActive} hasStock={d.total > 0} />
 
-      <p className="mt-6 text-xs text-slate-400">
+      <p className="mt-6 text-xs leading-relaxed text-slate-400">
         모든 변경은 이력에 남습니다. 재고가 실물과 어긋났을 때 원인을 되짚기 위해서입니다.
+        {d.isSerialized && (
+          <>
+            <br />
+            <strong>DOT</strong> 는 타이어를 <strong>만든</strong> 때(제조주차),{" "}
+            <strong>입고일</strong> 은 우리가 <strong>받은</strong> 때입니다. 오늘 받은 타이어도 예전에
+            만들어진 것일 수 있으니, DOT 를 모를 때 입고일을 제조 연도처럼 말하지 마세요.
+          </>
+        )}
       </p>
     </main>
   );

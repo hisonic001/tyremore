@@ -2,6 +2,7 @@ import Link from "@/lib/link";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { listPartStock } from "@/lib/part-stock";
+import { oldByDotSql, staleNoDotSql } from "@/lib/tire-age";
 import { StockExcel } from "./excel-ui";
 import { PartStockList } from "./parts";
 
@@ -19,15 +20,28 @@ export const dynamic = "force-dynamic";
  *    거기서 들어온 재고도 여기 엑셀에 그대로 나온다.
  */
 export default async function StockPage() {
-  const [s] = await db.execute<{ qty: number; lots: number; models: number; old: number; nodot: number }>(sql`
+  /**
+   * 🔴 「묵었다」의 기준은 `tire-age.ts` 한 곳에만 둔다 (2026-08-27).
+   *    여기와 재고 상세 배지가 서로 다른 기준을 쓰면 사장님이 앱을 못 믿게 된다.
+   *    `stale` 은 **DOT 를 모르는 채로 1년 넘게 있는 것** — 제조 연도를 모르니
+   *    「N년산」이라 말할 수 없고, 받아둔 지 얼마나 됐는지만 셀 수 있다.
+   */
+  const [s] = await db.execute<{
+    qty: number;
+    lots: number;
+    models: number;
+    old: number;
+    nodot: number;
+    stale: number;
+  }>(sql`
     SELECT COALESCE(SUM(s.qty),0)::int qty,
            count(DISTINCT (p.id::text || '|' || COALESCE(s.dot,'')))::int lots,
            count(DISTINCT p.id)::int models,
+           COALESCE(SUM(s.qty) FILTER (WHERE ${sql.raw(oldByDotSql("s.dot"))}),0)::int old,
+           COALESCE(SUM(s.qty) FILTER (WHERE s.dot IS NULL),0)::int nodot,
            COALESCE(SUM(s.qty) FILTER (
-             WHERE s.dot ~ '^[0-9]{4}$'
-               AND (2000 + substr(s.dot,3,2)::int) <= date_part('year', now())::int - 2
-           ),0)::int old,
-           COALESCE(SUM(s.qty) FILTER (WHERE s.dot IS NULL),0)::int nodot
+             WHERE ${sql.raw(staleNoDotSql("s.dot", "s.received_at"))}
+           ),0)::int stale
     FROM stock_item s JOIN product p ON p.id = s.product_id
     WHERE s.status='재고' AND s.qty > 0 AND p.item_type='tire'
   `);
@@ -63,6 +77,14 @@ export default async function StockPage() {
               DOT 없음 {s.nodot}본
             </span>
           )}
+          {Number(s?.stale ?? 0) > 0 && (
+            <span
+              title="DOT 를 모르니 제조 연도는 알 수 없습니다. 받아둔 지 1년이 넘었다는 뜻입니다."
+              className="rounded-lg bg-red-50 px-3 py-1.5 font-medium text-red-700"
+            >
+              DOT 없이 1년 넘은 것 {s.stale}본
+            </span>
+          )}
         </div>
       </section>
 
@@ -73,6 +95,9 @@ export default async function StockPage() {
       <p className="mt-6 text-xs leading-relaxed text-slate-400">
         판매 등록하면 재고가 자동으로 빠지고, 매입 입고하면 자동으로 늘어납니다. 엑셀은{" "}
         <strong>실물과 어긋난 것을 한꺼번에 맞출 때</strong> 쓰세요. 모든 변경은 이력에 남습니다.
+        <br />
+        판매할 때는 <strong>오래된 것부터</strong> 나갑니다 — DOT 를 알면 제조 주차 순, 모르면 입고일
+        순입니다. 상품을 눌러 들어가면 묶음마다 입고일을 고칠 수 있습니다.
       </p>
     </main>
   );

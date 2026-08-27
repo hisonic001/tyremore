@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { setDotQty } from "@/lib/stock";
+import { setDotQty, setLotReceivedDate } from "@/lib/stock";
 import { Pencil } from "lucide-react";
 import { useConfirm } from "@/components/ui/confirm";
 
@@ -117,6 +117,102 @@ export function QtyEditor({
       </button>
       {error && <span className="text-xs text-red-600">{error}</span>}
       {confirmDialog}
+    </div>
+  );
+}
+
+/**
+ * ⭐ 입고일 — 보여주고, 눌러서 고친다 (사장님 지시 2026-08-27)
+ *
+ *   "타이어 매입시 dot를 붙이면 가장 좋지만 못할때도 많으니
+ *    매입한 날짜도 dot와 함께 붙여주었으면 좋겠음."
+ *
+ * 🔴 고칠 수 있어야 하는 이유가 있다. 지금 저장된 입고일은 **실제로 받은 날이 아니라
+ *    「앱에 넣은 날」** 이다 — 2026-08 재고 실사로 1,233본을 한꺼번에 넣은 탓에
+ *    재고 전량이 "최근 3개월 입고" 로 보인다. 사장님이 아는 날짜로 고칠 길이 없으면
+ *    이 값은 영영 거짓이고, 그 위에 세운 선입선출도 같이 거짓이 된다.
+ *
+ * DOT 칸과 달리 **연필을 눌러야** 열린다 — 평소엔 조용히 한 줄로만 있으면 된다.
+ */
+export function ReceivedEditor({
+  productId,
+  dot,
+  label,
+  date,
+  spread,
+}: {
+  productId: number;
+  dot: string | null;
+  /** `8/12 입고` · 여러 날이면 `8/12~8/20 입고` */
+  label: string;
+  /** `YYYY-MM-DD` — 입력칸의 처음 값 */
+  date: string | null;
+  /** 여러 날에 걸쳐 들어왔나 — 고치면 한 날로 모인다는 것을 알려야 한다 */
+  spread: boolean;
+}) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(date ?? "");
+  const [error, setError] = useState<string | null>(null);
+
+  function save() {
+    start(async () => {
+      setError(null);
+      const r = await setLotReceivedDate({ productId, dot, date: value });
+      if (!r.ok) return setError(r.error);
+      setEditing(false);
+      router.refresh();
+    });
+  }
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setValue(date ?? "");
+          setEditing(true);
+        }}
+        className="mt-1 flex items-center gap-1.5 text-sm text-slate-500 active:text-slate-800"
+      >
+        <span className="tabular">{label || "입고일 모름"}</span>
+        <Pencil className="size-3.5 shrink-0" aria-hidden />
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-2 rounded-lg bg-slate-50 p-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="date"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          max={new Date().toISOString().slice(0, 10)}
+          className="tabular min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2"
+        />
+        <button
+          type="button"
+          onClick={save}
+          disabled={pending || !value}
+          className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-40"
+        >
+          {pending ? "저장 중…" : "저장"}
+        </button>
+        <button
+          type="button"
+          onClick={() => setEditing(false)}
+          className="rounded-lg px-2 py-2 text-sm text-slate-500"
+        >
+          취소
+        </button>
+      </div>
+      <p className="mt-1.5 text-xs leading-relaxed text-slate-500">
+        타이어를 <strong>받은 날</strong>입니다. 만든 때(DOT)와는 다릅니다.
+        {spread && " 여러 날에 걸쳐 들어온 묶음이라, 저장하면 이 날 하나로 모입니다."}
+      </p>
+      {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
     </div>
   );
 }

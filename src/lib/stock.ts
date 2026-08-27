@@ -14,7 +14,9 @@ import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { product, stockItem, stockMovement } from "@/db/schema";
+import { getSession } from "./auth";
 import { isPlausibleDot, isValidDot } from "./normalize";
+import { ageAnchorSql, ymdKst } from "./tire-age";
 import { parseTireName, type Badge } from "./tire-name";
 
 /**
@@ -34,6 +36,17 @@ function refresh(...paths: string[]) {
 export interface DotGroup {
   dot: string | null;
   qty: number;
+  /**
+   * ⭐ 이 묶음이 **들어온 날** (사장님 지시 2026-08-27)
+   *
+   *   "dot를 붙이면 가장 좋지만 못할때도 많으니 매입한 날짜도 dot와 함께"
+   *
+   * DOT 를 대신하는 값이 **아니다** — DOT 는 만든 때, 입고일은 받은 때다.
+   * 오늘 받은 타이어가 2년 전에 만들어졌을 수 있으니 둘을 나란히 보여준다.
+   * 여러 날에 걸쳐 들어왔으면 `firstIn`~`lastIn` 이 벌어진다. `YYYY-MM-DD` (KST).
+   */
+  firstIn: string | null;
+  lastIn: string | null;
 }
 
 /**
@@ -91,7 +104,8 @@ export async function stockLots(): Promise<StockLot[]> {
     WHERE s.status = '재고' AND s.qty > 0 AND p.item_type = 'tire'
     GROUP BY p.id, p.raw_name, p.pattern, p.display_name, p.brand_code, p.season,
              p.width, p.aspect_ratio, p.rim_inch, p.load_index, p.speed_rating, s.dot
-    ORDER BY p.rim_inch NULLS LAST, p.width NULLS LAST, p.aspect_ratio NULLS LAST, s.dot NULLS FIRST
+    ORDER BY p.rim_inch NULLS LAST, p.width NULLS LAST, p.aspect_ratio NULLS LAST,
+             ${sql.raw(`MIN(${ageAnchorSql("s.dot", "s.received_at")})`)}
   `);
 
   const thisYear = new Date().getFullYear();
@@ -209,12 +223,25 @@ export async function getStockDetail(productId: number): Promise<StockDetail | n
   `);
   if (!p) return null;
 
-  const groups = await db.execute<{ dot: string | null; qty: number }>(sql`
-    SELECT dot, SUM(qty)::int AS qty
+  /**
+   * 🔴 **DOT 글자순으로 세우지 않는다** (2026-08-27).
+   *    `WWYY` 는 글자 순서가 시간 순서가 아니다 — `0926`(26년 9주) 이
+   *    `4825`(25년 48주) 보다 앞에 오면 화면이 거짓말을 한다.
+   *    화면 위의 "오래된 것부터 나갑니다" 가 참이 되려면 판매(`sellFromStock`)와
+   *    **같은 축**으로 세워야 한다.
+   */
+  const groups = await db.execute<{
+    dot: string | null;
+    qty: number;
+    first_in: Date | null;
+    last_in: Date | null;
+  }>(sql`
+    SELECT dot, SUM(qty)::int AS qty,
+           MIN(received_at) AS first_in, MAX(received_at) AS last_in
     FROM stock_item
     WHERE product_id = ${productId} AND status = '재고'
     GROUP BY dot
-    ORDER BY dot NULLS LAST
+    ORDER BY ${sql.raw(`MIN(${ageAnchorSql("dot", "received_at")})`)}
   `);
 
   const [v] = await db.execute<{ verified_at: Date | null }>(sql`
@@ -261,7 +288,12 @@ export async function getStockDetail(productId: number): Promise<StockDetail | n
     total: groups.reduce((s, g) => s + Number(g.qty), 0),
     verified: v?.verified_at !== null && v?.verified_at !== undefined,
     verifiedAt: v?.verified_at ?? null,
-    groups: groups.map((g) => ({ dot: g.dot, qty: Number(g.qty) })),
+    groups: groups.map((g) => ({
+      dot: g.dot,
+      qty: Number(g.qty),
+      firstIn: g.first_in ? ymdKst(g.first_in) : null,
+      lastIn: g.last_in ? ymdKst(g.last_in) : null,
+    })),
   };
 }
 
@@ -393,6 +425,72 @@ export async function setDotQty(input: {
 
   refresh(`/stock/${productId}`, "/stock", "/");
   return { ok: true, delta };
+}
+
+/**
+ * ⭐ 입고일 고치기 (사장님 지시 2026-08-27)
+ *
+ *   "매입한 날짜도 dot와 함께 붙여주었으면 좋겠음."
+ *
+ * 🔴 왜 고칠 수 있어야 하는가 — 지금 `received_at` 은 **실제로 받은 날이 아니라
+ *    「앱에 넣은 날」** 이다. 2026-08 재고 실사로 1,233본을 한꺼번에 넣은 탓에
+ *    재고 2,007본이 전부 "최근 3개월 입고" 로 보인다. 고칠 길이 없으면 이 값은
+ *    영영 거짓이고, 그 위에 세운 선입선출·묵은 재고 경고도 같이 거짓이 된다.
+ *
+ * 묶음(같은 상품·같은 DOT) 단위로 한 날에 맞춘다 — 창고에서 세는 단위가 그것이다.
+ * `created_at` 은 그대로 남으므로 "언제 앱에 넣었나" 는 잃지 않는다.
+ */
+export async function setLotReceivedDate(input: {
+  productId: number;
+  dot: string | null;
+  /** `YYYY-MM-DD` (KST) */
+  date: string;
+}): Promise<{ ok: true; n: number } | { ok: false; error: string }> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "다시 로그인해 주세요" };
+
+  const { productId, date } = input;
+  const dot = input.dot?.trim() || null;
+  if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(date)) return { ok: false, error: "날짜를 확인해 주세요" };
+
+  const today = ymdKst(new Date());
+  if (date > today) return { ok: false, error: "앞으로 올 날짜는 입고일이 될 수 없습니다" };
+  if (Number(date.slice(0, 4)) < new Date().getFullYear() - 15)
+    return { ok: false, error: `${date.slice(0, 4)}년이 됩니다. 연도를 확인해 주세요` };
+
+  /**
+   * 하루의 어느 시각으로 둘 것인가 — **KST 09:00**.
+   * 자정으로 두면 시차 계산이 하루 앞뒤로 미끄러져 화면에 전날이 찍힌다.
+   */
+  const at = new Date(`${date}T09:00:00+09:00`);
+
+  const dotCond = dot === null ? isNull(stockItem.dot) : eq(stockItem.dot, dot);
+  const rows = await db
+    .select({ id: stockItem.id, receivedAt: stockItem.receivedAt })
+    .from(stockItem)
+    .where(and(eq(stockItem.productId, productId), eq(stockItem.status, "재고"), dotCond));
+  if (rows.length === 0) return { ok: false, error: "그 묶음에 재고가 없습니다" };
+
+  await db
+    .update(stockItem)
+    .set({ receivedAt: at })
+    .where(sql`${stockItem.id} IN ${sql.raw(`(${rows.map((r) => r.id).join(",")})`)}`);
+
+  /* 수량은 그대로다 — 그래도 "누가 언제 무엇을 바꿨나" 는 남긴다 (docs/09 3-6) */
+  const before = rows[0].receivedAt ? ymdKst(rows[0].receivedAt) : "없음";
+  await db.insert(stockMovement).values(
+    rows.map((r) => ({
+      stockItemId: r.id,
+      type: "조정" as const,
+      reason: "입고일 수정",
+      qtyDelta: 0,
+      memo: `${before} → ${date}`,
+      createdBy: session.uid,
+    })),
+  );
+
+  refresh(`/stock/${productId}`, "/stock", "/");
+  return { ok: true, n: rows.length };
 }
 
 /**
