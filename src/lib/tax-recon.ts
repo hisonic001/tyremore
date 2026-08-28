@@ -304,7 +304,9 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
     SELECT id, name, biz_no FROM supplier WHERE is_active ORDER BY id LIMIT 500
   `);
   const aliases = await db.execute<{ alias_key: string; party_key: string }>(sql`
-    SELECT alias_key, party_key FROM party_alias LIMIT 10000
+    SELECT alias_key, party_key FROM party_alias
+    -- 🔴 LIMIT 없음 (2026-08-28): 별명은 「이을 때마다 한 줄씩 늘어나는」 표다. 잘려도
+    --    오류가 안 나고 ★(기억된 상대)만 조용히 꺼져 후보·자동잇기가 틀리기 시작한다.
   `);
   const aliasMap = new Map(aliases.map((a) => [a.alias_key, a.party_key]));
   const rules = await db.execute<{ biz_no: string; kind: string }>(sql`
@@ -695,7 +697,8 @@ export async function taxReconV2(ym: string): Promise<TaxReconV2> {
     SELECT counterparty_biz_no biz, direction, total FROM tax_invoice
     WHERE is_active AND total < 0 AND recon_status IN ('미대조', '제안')
       AND write_date >= ${mr.start}::date - 30 AND write_date < ${mr.nextStart}::date + 90
-    LIMIT 200
+    -- 🔴 LIMIT 없음 (2026-08-28): 잘리면 상쇄할 원본을 못 찾아 마이너스 계산서에
+    --    통장 후보가 다시 뜬다 (2025 감사 F4 재발). 창(±90일)이 이미 범위를 좁힌다.
   `);
   const negKeys = new Set(negsNear.map((n) => `${n.biz}|${n.direction}|${-Number(n.total)}`));
   for (const s of suggestions) {
@@ -883,14 +886,30 @@ export const CASH_LAT = sql`CROSS JOIN LATERAL (
 // 🔴 감사 B8(2026-08-25): 음수(수정) 계산서는 cov(0)≥total 로 자동 확인되던 것 차단
 export const DONE = sql`(t.total > 0 AND (x.cov >= t.total OR x.ind OR COALESCE(t.recon_reason, '') = '월정산'))`;
 
+/**
+ * ⭐ 「이 달 셈에 드는 계산서」 정본 (2026-08-28)
+ *
+ * 🔴 **왜 모듈 범위로 올렸나** — 전에는 이 규칙이 `taxCashData` 안의 지역 상수라
+ *    현황 카드·월 마감이 쓰는 `taxOpenCounts` 는 `recon_status <> '무시'` 를 손으로
+ *    따로 적고 있었다. 그래서 「아직 안 들어옴 — 다음 달로」로 미룬 계산서를
+ *    **돈 확인 화면은 빼고 현황·마감은 세어** 같은 달에 두 숫자가 갈라졌다.
+ *    「대기」를 만든 이유가 "그래야 달이 닫힌다" 였는데, 정작 마감 체크리스트
+ *    (`month-close.ts` — `ok: taxN === 0`)가 그걸 세는 바람에 달이 영영 안 닫혔다.
+ *    (감사 C1·N1 이 두 번 고쳤던 「첫 화면 ↔ 탭 숫자 불일치」의 세 번째 재발이다.)
+ *
+ *    「무시」 = 없던 일로 한다 · 「대기」 = 돈이 아직 안 왔을 뿐이다 —
+ *    둘 다 **이 달 할 일은 아니다.** 세는 곳이 하나면 다시는 안 갈라진다.
+ */
+export const LIVE = sql.raw("t.recon_status NOT IN ('무시', '대기')");
+
 export async function taxCashData(direction: "매입" | "매출", ym: string): Promise<TaxCashData> {
   const { start, nextStart } = monthRange(ym);
   const inMonth = sql`t.is_active AND t.direction = ${direction}
     AND t.write_date >= ${start}::date AND t.write_date < ${nextStart}::date`;
 
   /* 🔴 「대기」(아직 안 들어옴)는 이 달 셈에서 뺀다 — 그래야 달이 닫힌다.
-        「무시」와 달리 없던 일이 아니라 **다음에 올 돈**이므로 따로 세어 보여 준다. */
-  const LIVE = sql.raw("t.recon_status NOT IN ('무시', '대기')");
+        「무시」와 달리 없던 일이 아니라 **다음에 올 돈**이므로 따로 세어 보여 준다.
+        정의는 모듈 위 LIVE 한 벌 (2026-08-28) — 현황·마감이 같은 것을 쓴다. */
   const [agg] = await db.execute<{
     total_n: number; total_s: string; ok_n: number; ok_s: string;
     open_n: number; open_s: string; ign_n: number; wait_s: string;
@@ -1023,7 +1042,9 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
     .map((x) => ({ ...x, remain: Number(x.amt) - (used.get(Number(x.id)) ?? 0) }))
     .filter((x) => x.remain > 0);
   const aliases2 = await db.execute<{ alias_key: string }>(sql`
-    SELECT alias_key FROM party_alias LIMIT 10000
+    SELECT alias_key FROM party_alias
+    -- 🔴 LIMIT 없음 (2026-08-28): 별명은 「이을 때마다 한 줄씩 늘어나는」 표다. 잘려도
+    --    오류가 안 나고 ★(기억된 상대)만 조용히 꺼져 후보·자동잇기가 틀리기 시작한다.
   `);
   const aliasKeys = new Set(aliases2.map((a) => a.alias_key));
   const rules2 = await db.execute<{ biz_no: string; kind: string }>(sql`
@@ -1036,7 +1057,8 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
     SELECT counterparty_biz_no biz, total FROM tax_invoice
     WHERE is_active AND direction = ${direction} AND total < 0 AND recon_status IN ('미대조', '제안')
       AND write_date >= ${start}::date - 30 AND write_date < ${nextStart}::date + 90
-    LIMIT 200
+    -- 🔴 LIMIT 없음 (2026-08-28): 잘리면 상쇄할 원본을 못 찾아 마이너스 계산서에
+    --    통장 후보가 다시 뜬다 (2025 감사 F4 재발). 창(±90일)이 이미 범위를 좁힌다.
   `);
   const negKeys = new Set(negs.map((n) => `${n.biz}|${-Number(n.total)}`));
   // 같은 상대의 다른 열린 계산서 금액 — 그 몫인 통장 줄은 이 계산서 후보에서 뺀다 (사장님 지적 2026-08-26)
@@ -1175,7 +1197,8 @@ export async function taxOpenCounts(ym: string): Promise<{ buy: number; sell: nu
     SELECT count(*) FILTER (WHERE t.direction = '매입')::int b,
            count(*) FILTER (WHERE t.direction = '매출')::int s
     FROM tax_invoice t ${CASH_LAT}
-    WHERE t.is_active AND t.recon_status <> '무시' AND NOT ${DONE}
+    -- 🔴 2026-08-28: 손으로 적던 「무시만 제외」를 정본 LIVE 로 — 「대기」가 여기서만 세이던 문제
+    WHERE t.is_active AND ${LIVE} AND NOT ${DONE}
       AND t.write_date >= ${start}::date AND t.write_date < ${nextStart}::date
   `);
   return { buy: Number(r?.b ?? 0), sell: Number(r?.s ?? 0) };

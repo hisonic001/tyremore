@@ -303,7 +303,9 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
 
   // ⭐ 별명 사전 — 입금자명을 한 번 이어주면 다음부터 바로 알아본다
   const aliases2 = await db.execute<{ alias_key: string; party_key: string; party_label: string }>(sql`
-    SELECT alias_key, party_key, party_label FROM party_alias LIMIT 10000
+    SELECT alias_key, party_key, party_label FROM party_alias
+    -- 🔴 LIMIT 없음 (2026-08-28): 별명은 「이을 때마다 한 줄씩 늘어나는」 표다. 잘려도
+    --    오류가 안 나고 ★(기억된 상대)만 조용히 꺼져 후보·자동잇기가 틀리기 시작한다.
   `);
   const aliasMap = new Map(aliases2.map((a) => [a.alias_key, a.party_key]));
   const aliasLabel = new Map(aliases2.map((a) => [a.alias_key, a.party_label]));
@@ -866,12 +868,16 @@ export async function payLinkData(
   `);
   const remainMap = new Map(remains.map((r) => [r.supplier, Number(r.remain)]));
   const aliases3 = await db.execute<{ alias_key: string; party_key: string }>(sql`
-    SELECT alias_key, party_key FROM party_alias WHERE party_key LIKE 'S:%' LIMIT 10000
+    SELECT alias_key, party_key FROM party_alias WHERE party_key LIKE 'S:%'
+    -- 🔴 LIMIT 없음 (2026-08-28): 별명은 「이을 때마다 한 줄씩 늘어나는」 표다. 잘려도
+    --    오류가 안 나고 ★(기억된 상대)만 조용히 꺼져 후보·자동잇기가 틀리기 시작한다.
   `);
   const aliasMap3 = new Map(aliases3.map((a) => [a.alias_key, a.party_key.slice(2)]));
   // 🔴 C10(2026-08-25): 지급출금 별명(T:) → 사업자번호 → 거래처 — 「콘티_(주)싸이」 제안의 열쇠
   const tAliases = await db.execute<{ alias_key: string; party_key: string }>(sql`
-    SELECT alias_key, party_key FROM party_alias WHERE party_key LIKE 'T:%' LIMIT 10000
+    SELECT alias_key, party_key FROM party_alias WHERE party_key LIKE 'T:%'
+    -- 🔴 LIMIT 없음 (2026-08-28): 별명은 「이을 때마다 한 줄씩 늘어나는」 표다. 잘려도
+    --    오류가 안 나고 ★(기억된 상대)만 조용히 꺼져 후보·자동잇기가 틀리기 시작한다.
   `);
   const supByBiz = await db.execute<{ name: string; biz_no: string }>(sql`
     SELECT name, biz_no FROM supplier WHERE biz_no IS NOT NULL AND is_active LIMIT 500
@@ -935,7 +941,19 @@ export async function payLinkData(
  *     매입계산서·매출계산서 = ref (계산서가 src)
  *     매입지급·이체입금     = src (지급 잡기·외상 수금이 쓴 몫)
  *   양방향을 다 세야 지급 잡기로 이미 쓴 출금이 계산서 후보에
- *   전액 남은 것처럼 되살아나지 않는다 (리뷰 C1). 전부 status='확정'만. */
+ *   전액 남은 것처럼 되살아나지 않는다 (리뷰 C1). 전부 status='확정'만.
+ *
+ * 🔴 **LIMIT 을 걸면 안 된다** (2026-08-28) — 왜
+ *
+ *   전에는 `GROUP BY 1 LIMIT 20000` 이었다. 이 표는 **소진량 정본**이라
+ *   빠진 줄은 「0원 썼음」= 「전액 남아 있음」으로 읽힌다. 즉 한도를 넘는 순간
+ *   **이미 다 쓴 통장 줄이 후보에 되살아나 같은 돈이 두 계산서에 이어진다.**
+ *   오류도 경고도 안 난다 — 화면은 그냥 틀린 후보를 보여줄 뿐이다.
+ *   그리고 이 표는 자료가 늘어서가 아니라 **앱을 쓸수록**(확인 한 번에 한 줄씩) 커진다.
+ *   2026-08-28 실측 199줄이라 아직 한참 밑이지만, 넘는 날 아무도 모르는 게 문제였다.
+ *
+ *   행수는 「확정 연결이 붙은 통장 줄 수」로 스스로 묶여 있다(통장 줄 수가 상한).
+ *   Map 하나에 담기는 크기라 한도가 애초에 필요 없다. */
 
 export async function cashUsedMap(ids?: number[]): Promise<Map<number, number>> {
   const f1 = ids && ids.length > 0 ? sql`AND ref_id IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})` : sql``;
@@ -947,7 +965,7 @@ export async function cashUsedMap(ids?: number[]): Promise<Map<number, number>> 
       UNION ALL
       SELECT src_id, amount FROM recon_match
        WHERE src_table = 'cash_txn' AND kind IN ('매입지급', '이체입금') AND status = '확정' ${f2}
-    ) x GROUP BY 1 LIMIT 20000
+    ) x GROUP BY 1
   `);
   return new Map(rows.map((r) => [Number(r.cash_id), Number(r.used)]));
 }

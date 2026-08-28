@@ -62,7 +62,9 @@ export async function depositTaxCandidates(
     ORDER BY t.write_date DESC LIMIT 1500
   `);
   const aliases = await db.execute<{ alias_key: string }>(sql`
-    SELECT alias_key FROM party_alias WHERE party_key LIKE 'T:%' LIMIT 10000
+    SELECT alias_key FROM party_alias WHERE party_key LIKE 'T:%'
+    -- 🔴 LIMIT 없음 (2026-08-28): 별명은 「이을 때마다 한 줄씩 늘어나는」 표다. 잘려도
+    --    오류가 안 나고 ★(기억된 상대)만 조용히 꺼져 후보·자동잇기가 틀리기 시작한다.
   `);
   const aliasKeys = new Set(aliases.map((a) => a.alias_key));
   const DAY = 86400000;
@@ -171,6 +173,9 @@ export interface TransferSale {
   bundle: { cashIds: number[]; parts: string[]; total: number; diff: number } | null;
 }
 
+/** 늦게 들어오는 입금을 어디까지 찾을 것인가 (날) — 위 🔴 주석의 실측 근거 참고 */
+const WIN = 90;
+
 export async function transferSalesMissing(ym: string): Promise<TransferSale[]> {
   const { start, nextStart } = monthRange(ym);
   const D = sql`COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)`;
@@ -186,22 +191,51 @@ export async function transferSalesMissing(ym: string): Promise<TransferSale[]> 
       AND q.total_amount > COALESCE((SELECT SUM(m.amount) FROM recon_match m WHERE m.kind = '이체입금' AND m.ref_table = 'quote' AND m.ref_id = q.id AND m.status = '확정'), 0)
     ORDER BY ${D} DESC, q.id DESC LIMIT 100
   `);
+  /* 후보: 통장 입금 중 (미분류 또는 「판매입금」으로 분류해 둔 것) 남은 금액이 있고,
+     금액이 같거나 이름이 같은 것 — 「판매입금」은 사장님이 "앱에 기록 없는 판매"라고 골라 둔 줄이지만
+     실은 이 판매의 대금일 수 있어 후보에 넣는다 (염대현 425,000·110,000)
+
+   🔴 **질의를 한 번만 던진다** (2026-08-28) — 왜
+     전에는 **판매 한 건마다** 통장을 따로 뒤졌다. 8월이면 19번, 많은 달은 100번이다.
+     입금 화면 한 번에 질의가 100개 넘게 나가는 셈인데, 이 앱의 접속 자리는 3개뿐이라
+     (src/db max:3) 화면 하나가 자리를 오래 붙들면 **앱 전체가 멎는다** — 2026-08-05·08-11에
+     실제로 겪은 「좀비 질의 → 풀 만석」 과 같은 길이다. 모든 판매의 창을 합치면 결국
+     한 달 ±90일(WIN) 하나이므로, **한 번 긁어 놓고 판매마다 JS 에서 고른다.**
+     화면에 나오는 후보·묶음은 글자 하나까지 전과 같다.
+
+   🔴 **창을 ±10일 → ±90일(WIN)로 넓혔다** (사장님 지적 2026-08-28 —
+     "실제로 꽤나 더 나중에 입금하는 경우도 종종 있음. 어떤 경우는 몇달 후에 입금시키는 경우도 있음")
+     실측: 2026-06 은 못 맞춘 판매 26건 중 **±10일이면 후보가 뜨는 게 1건뿐**이었는데
+     ±90일이면 12건이다. 90일을 넘겨도 4개월 통틀어 1건밖에 안 늘어 90일에서 멈춘다.
+     늘어나는 후보는 거의 다 「금액만 같음(이름 다름)」이다 — 늦게 보내는 손님은 대개
+     배우자·회사 이름으로 보내기 때문이다. 그래서 **자동으로 잘못 이어질 위험은 안 는다**
+     (자동 잇기는 ★=이름 맞음만 쓰는데 ★ 개수는 창을 넓혀도 그대로였다).
+
+   🔴 **판매당 400개 뚜껑을 없앴다** — 그 400개를 「날짜가 가까운 순」으로 골랐기 때문에,
+     창만 넓히고 뚜껑을 두면 **정작 멀리 있는(= 늦게 들어온) 입금이 먼저 잘려** 넓힌 뜻이 사라진다.
+     창(±90일(WIN))이 이미 범위를 묶고 있고, 실제로 걸러지고 남는 건 판매당 몇 개뿐이다. */
+  const lines = await db.execute<{ id: number; d: string; dt: string; ts: number; description: string; remain: string }>(sql`
+    SELECT c.id, to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') d,
+           to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') dt,
+           extract(epoch FROM c.occurred_at)::bigint ts,
+           c.description, (c.in_amount - ${cashUsedSql("c")})::bigint remain
+    FROM cash_txn c
+    WHERE c.source = '통장' AND c.is_active AND c.in_amount > 0 AND (c.category IS NULL OR c.category = '판매입금')
+      AND c.in_amount > ${cashUsedSql("c")}
+      AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date - ${sql.raw(String(WIN))}
+      AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date <= ${nextStart}::date + ${sql.raw(String(WIN))}
+    ORDER BY c.occurred_at
+  `);
+  const gap = (a: string, b: string) => Math.abs((new Date(a).getTime() - new Date(b).getTime()) / 86400000);
+
   const out: TransferSale[] = [];
   for (const r of rows) {
     const remainQ = Number(r.total) - Number(r.linked);
-    /* 후보: ±10일 안의 통장 입금 중 (미분류 또는 「판매입금」으로 분류해 둔 것) 남은 금액이 있고,
-       금액이 같거나 이름이 같은 것 — 「판매입금」은 사장님이 "앱에 기록 없는 판매"라고 골라 둔 줄이지만
-       실은 이 판매의 대금일 수 있어 후보에 넣는다 (염대현 425,000·110,000) */
-    const lines = await db.execute<{ id: number; d: string; description: string; remain: string }>(sql`
-      SELECT c.id, to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') d, c.description,
-             (c.in_amount - ${cashUsedSql("c")})::bigint remain
-      FROM cash_txn c
-      WHERE c.source = '통장' AND c.is_active AND c.in_amount > 0 AND (c.category IS NULL OR c.category = '판매입금')
-        AND c.in_amount > ${cashUsedSql("c")}
-        AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date BETWEEN ${r.d}::date - 10 AND ${r.d}::date + 10
-      ORDER BY abs((c.occurred_at AT TIME ZONE 'Asia/Seoul')::date - ${r.d}::date), c.occurred_at LIMIT 400
-    `);
-    const scored = lines
+    /* 이 판매의 창 안에 드는 줄만, 전과 같은 차례(날짜 가까운 순 → 시각 순)로 */
+    const near = lines
+      .filter((c) => gap(c.dt, r.d) <= WIN)
+      .sort((a, b) => gap(a.dt, r.d) - gap(b.dt, r.d) || Number(a.ts) - Number(b.ts));
+    const scored = near
       .map((c) => {
         const payer = payerKeyOf("통장", c.description);
         const remain = Number(c.remain);
