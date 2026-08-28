@@ -85,73 +85,23 @@ export const normDescSql = (col = "description") =>
   sql.raw(`regexp_replace(lower(${col}), '㈜|\\(주\\)|주식회사|[[:space:]]', '', 'g')`);
 
 /**
- * 몇 자부터 「적요 아무 데나 들어 있으면 같은 상대」로 볼 것인가 (2회차 수리 A3, 2026-08-28)
- *
- * 🔴 **왜 생겼나** — 전에는 정규화 후 2자만 넘으면 무조건 부분일치였다.
- *    그래서 거래처 이름이 짧으면 남의 출금을 통째로 끌어왔다 (2026-08-28 실측):
- *      · 「한국」 → 8줄 4,020,110원 — 「[FB전기] 한국전력공사」(이미 공과금), 「[신한체] 한국관」
- *      · 「유일」 → 13줄 12,607,644원 — 「유일택배버스비」(택배)까지
- *      · 「제로」 → 5줄 (출금 5,509,500 · 입금 446,000)
- *    이 세 곳은 사업자번호가 없어 **월별 지급에도 그대로 들어가**, 계산서가 0장이라
- *    누적 잔액이 마이너스로 찍혔다.
- *
- * 🔴 **같은 사고가 세 번째다** — 감사 F16(「타이어」가 모든 타이어 거래처에 걸림),
- *    감사 G8(「제로」 2글자). 낱말을 GENERIC_WORDS 에 하나씩 더하는 방식으로는 계속 샌다.
- *
- * 🔴 **왜 4자인가** — 이미 이 파일의 samePartyName 이 같은 판단을 하고 있었다:
- *    3자 미만이면 포함 검사를 아예 안 하고 「완전히 같을 때만」 같은 상대로 본다(감사 G8).
- *    그 규칙을 SQL 쪽에도 맞춘 것이다.
- */
-const SUBSTR_MIN = 4;
-
-/**
  * SQL 조건 — 적요가 이 이름들 중 하나와 맞나 (정규화 + 앞 ${HEAD}자 잘림 대비).
  * 이름이 없으면 false 를 돌려 질의가 전부를 긁는 사고를 막는다.
- *
- * 🔴 이름 길이에 따라 **엄격함이 다르다** (2회차 수리 A3):
- *    · ${SUBSTR_MIN}자 이상 → 지금까지처럼 적요 아무 데나 (은행 적요 잘림을 견뎌야 한다)
- *    · 2~3자          → **상대명이 통째로 같을 때만.** 적요 머리표를 뗀 이름(payerKeySql)이
- *                       그 이름과 정확히 일치해야 한다.
- *      「(주)제로」 → 상대명 '제로' = '제로' ✅ 잡힌다
- *      「한국전력공사」 → 상대명 '한국전력공사' ≠ '한국' ❌ 안 잡힌다
- *    짧은 이름이 못 찾는 줄은 **별명을 한 번 이어 주면**(지급 잡기·계산서 확인) 정식 상호가
- *    이름 목록에 들어와 그때부터 잡힌다 — 원래 설계된 회복 경로다.
  */
 export function partyMatchSql(names: (string | null | undefined)[], col = "description") {
-  const wide = new Set<string>(); // 부분일치해도 되는 긴 이름
-  const exact = new Set<string>(); // 통째로 같아야 하는 짧은 이름
+  const pats = new Set<string>();
   for (const n of names) {
     const x = norm(n);
     if (isGeneric(x)) continue; // 「타이어」 같은 일반어 하나로는 통장을 긁지 않는다 (F16)
-    if (x.length >= SUBSTR_MIN) {
-      wide.add(x);
-      if (x.length >= HEAD) wide.add(x.slice(0, HEAD));
-    } else if (x.length >= 2) {
-      exact.add(x);
-    }
+    if (x.length >= 2) pats.add(x);
+    if (x.length >= HEAD) pats.add(x.slice(0, HEAD));
   }
-  if (wide.size === 0 && exact.size === 0) return sql`false`;
+  if (pats.size === 0) return sql`false`;
   const nd = normDescSql(col);
-  /* 적요 머리표를 뗀 상대명(정본 payerKeySql)을 같은 규칙으로 정규화한 것 */
-  const prefix = col.includes(".") ? col.slice(0, col.lastIndexOf(".") + 1) : "";
-  const np = normDescSql(payerKeySql(prefix));
   return sql.join(
-    [
-      ...[...wide].map((p) => sql`${nd} LIKE ${"%" + p + "%"}`),
-      ...[...exact].map((p) => sql`${np} = ${p}`),
-    ],
+    [...pats].map((p) => sql`${nd} LIKE ${"%" + p + "%"}`),
     sql` OR `,
   );
-}
-
-/** 짧아서 「통째로 같을 때만」 규칙이 걸린 이름들 — 화면이 그 사실을 밝히려고 쓴다 (A3) */
-export function shortMatchNames(names: (string | null | undefined)[]): string[] {
-  return names
-    .map((n) => String(n ?? ""))
-    .filter((n) => {
-      const x = norm(n);
-      return x.length >= 2 && x.length < SUBSTR_MIN && !isGeneric(x);
-    });
 }
 
 /**

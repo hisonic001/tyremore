@@ -233,19 +233,4 @@ export const descRuleSql = (cond: string, prefix = ""): string =>
 export const CARD_SETTLE_PATTERN_SQL =
   // 🔴 2026 감사 G10: 「[FB이체] 현대5816」 — '현' 뒤에 '대'가 와서 놓쳤다 → 현대?
   // 🔴 사장님 지적(2026-08-26): 「[FB자금] MAXRUN」은 온라인몰 맥스런의 판매 대금 정산 — 카드정산이 아니다
-  /**
-   * 🔴 2회차 수리 C1(2026-08-28): **카드사 수수료 환급**도 카드정산이다.
-   *
-   *    같은 성격의 입금 6건이 적요 **머리표**에 따라 두 분류로 갈려 있었다 (실측, 대부분 2025-03-31):
-   *      · 「[매출표] SH수수료환급」 96,574 · 「[FB자금] 롯데수수료환급」 5,760  → 카드정산 (머리표가 걸림)
-   *      · 「[타행PC] KB환급11694」 94,964 · 「[타행FB] 삼성환급946」 65,175
-   *        「[타행PC] NH우대환급」 129,486 · 「[타행PC] 현대우대환급」 104,886 → 기타입금 (머리표가 안 걸림)
-   *    카드사 이름 + (우대)환급 꼴을 함께 잡는다. 사장님 결정(2026-08-28): 「카드정산」으로 통일.
-   *
-   * 🔴 카드사 이름을 앞에 못 박았다 — '환급' 두 글자만 보면 「[국세] 속초세무서」 같은
-   *    세무서 환급까지 끌려온다. 그건 「기타입금」이 맞다.
-   */
-  "((description LIKE '%FB자금%' OR description LIKE '%매출표%' " +
-  "OR description ~ '\\] ?(KB|NH|하나|현대?|우|삼성|롯데|신한|비씨|BC|SHC)[0-9]' " +
-  "OR description ~ '\\] ?(KB|NH|하나|현대|우리|삼성|롯데|신한|비씨|BC|SHC)[가-힣]{0,3}환급') " +
-  "AND description NOT ILIKE '%MAXRUN%')";
+  "((description LIKE '%FB자금%' OR description LIKE '%매출표%' OR description ~ '\\] ?(KB|NH|하나|현대?|우|삼성|롯데|신한|비씨|BC|SHC)[0-9]') AND description NOT ILIKE '%MAXRUN%')";

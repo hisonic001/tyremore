@@ -19,18 +19,17 @@ const METHODS = ["현금", "카드", "계좌이체", "지역화폐"] as const;
 /** 이보다 오래되면 붉게 — 눈에 띄어야 챙긴다 */
 const OLD_DAYS = 90;
 
-export function BookList({ targets, owner = false }: { targets: ReceivableTarget[]; owner?: boolean }) {
+export function BookList({ targets }: { targets: ReceivableTarget[] }) {
   return (
     <ul className="mt-3 space-y-2">
       {targets.map((t) => (
-        <TargetCard key={t.key} t={t} owner={owner} />
+        <TargetCard key={t.key} t={t} />
       ))}
     </ul>
   );
 }
 
-/** 🔴 owner: 2회차 수리 E1(2026-08-28) — 수금은 사장님 전용. 직원에게는 목록만 보인다 */
-function TargetCard({ t, owner }: { t: ReceivableTarget; owner: boolean }) {
+function TargetCard({ t }: { t: ReceivableTarget }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [sel, setSel] = useState<Record<number, boolean>>({});
@@ -121,7 +120,6 @@ function TargetCard({ t, owner }: { t: ReceivableTarget; owner: boolean }) {
             <p className="text-sm text-slate-500">건별 목록을 못 실었습니다 — 필터로 좁혀 보세요.</p>
           ) : (
             <>
-              {owner && (
               <div className="mb-2 flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -155,7 +153,6 @@ function TargetCard({ t, owner }: { t: ReceivableTarget; owner: boolean }) {
                   </button>
                 )}
               </div>
-              )}
 
               <ul className="divide-y divide-slate-100">
                 {t.sales.map((s) => {
@@ -164,8 +161,7 @@ function TargetCard({ t, owner }: { t: ReceivableTarget; owner: boolean }) {
                     <li key={s.quoteId} className="flex items-start gap-2 py-2">
                       <input
                         type="checkbox"
-                        disabled={done || !owner}
-                        hidden={!owner}
+                        disabled={done}
                         checked={!!sel[s.quoteId]}
                         onChange={(e) => setSel((v) => ({ ...v, [s.quoteId]: e.target.checked }))}
                         className="mt-1 h-4 w-4 shrink-0 accent-amber-700 disabled:opacity-30"
@@ -203,7 +199,7 @@ function TargetCard({ t, owner }: { t: ReceivableTarget; owner: boolean }) {
           {err && <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{err}</p>}
 
           {/* ── 한꺼번에 털기 ── */}
-          {owner && picked.length > 0 && (
+          {picked.length > 0 && (
             <div className="mt-3 rounded-xl border-2 border-amber-300 bg-amber-50 p-3">
               <div className="flex items-baseline justify-between">
                 <span className="text-sm font-bold text-amber-900">

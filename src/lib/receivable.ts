@@ -16,7 +16,7 @@ import { eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { quote, receivablePayment } from "@/db/schema";
-import { isOwner } from "./auth";
+import { getSession } from "./auth";
 import { planSettlement } from "./receivable-plan";
 
 function refresh() {
@@ -30,18 +30,6 @@ function refresh() {
 }
 
 const METHODS = ["현금", "카드", "계좌이체", "지역화폐"];
-
-/**
- * ⭐ 돈 관리는 사장님 전용 (2회차 수리 E1, 사장님 결정 2026-08-28)
- *
- * 🔴 **왜 바꿨나** — 거울상인 매입 지급(purchase-pay.ts)은 네 함수 모두 isOwner() 인데
- *    이쪽 외상은 셋 다 getSession() 이었다. 같은 「돈 관리」인데 기준이 두 벌이라,
- *    직원 계정(role='tech')으로도 외상을 한꺼번에 털고 수금 기록을 지울 수 있었다.
- *    사장님 결정: **매입 지급과 같은 기준으로 맞춘다.**
- *
- * 🔴 되돌리려면 이 한 줄을 getSession() 으로 바꾸면 된다 — 세 곳이 이걸 같이 쓴다.
- */
-const OWNER_ONLY = { ok: false as const, error: "돈 관리는 사장님 계정 전용입니다" };
 
 export interface CollectionRow {
   id: number;
@@ -59,7 +47,7 @@ export async function addCollection(input: {
   paidOn?: string | null;
   memo?: string | null;
 }): Promise<{ ok: true; remain: number } | { ok: false; error: string }> {
-  if (!(await isOwner())) return OWNER_ONLY; // 2회차 수리 E1
+  if (!(await getSession())) return { ok: false, error: "로그인이 필요합니다" };
   const amount = Math.round(Number(input.amount));
   if (!Number.isFinite(amount) || amount <= 0) return { ok: false, error: "금액이 올바르지 않습니다" };
   if (!METHODS.includes(input.method)) return { ok: false, error: "수단이 올바르지 않습니다" };
@@ -120,7 +108,7 @@ export async function settleReceivables(input: {
   | { ok: true; settled: number; applied: number; partialQuoteNo: string | null }
   | { ok: false; error: string }
 > {
-  if (!(await isOwner())) return OWNER_ONLY; // 2회차 수리 E1
+  if (!(await getSession())) return { ok: false, error: "로그인이 필요합니다" };
   if (!METHODS.includes(input.method)) return { ok: false, error: "수단이 올바르지 않습니다" };
   const paidOn = input.paidOn?.trim() || null;
   if (paidOn && !/^\d{4}-\d{2}-\d{2}$/.test(paidOn)) {
@@ -201,19 +189,10 @@ export async function settleReceivables(input: {
   }
 }
 
-/**
- * 잘못 넣은 수금 지우기
- *
- * 🔴 2회차 수리 E1(2026-08-28): 두 가지를 고쳤다 —
- *    ① 사장님 전용으로 (매입 지급의 removePurchasePayment 와 같은 기준)
- *    ② **0건 지우고도 「됐습니다」 하던 것.** 전에는 없는 id 를 줘도 그냥 ok 를 돌려줘,
- *       화면은 지워진 줄 알고 새로 고치는데 아무것도 안 바뀌었다.
- *       (2회차 보고 「눌렀는데 0건 처리하고 조용히 끝나는 것」)
- */
+/** 잘못 넣은 수금 지우기 */
 export async function removeCollection(id: number): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (!(await isOwner())) return OWNER_ONLY; // 2회차 수리 E1
-  const gone = await db.delete(receivablePayment).where(eq(receivablePayment.id, id)).returning({ id: receivablePayment.id });
-  if (gone.length === 0) return { ok: false, error: "그 수금 기록이 이미 없습니다 — 새로 고쳐 보세요" };
+  if (!(await getSession())) return { ok: false, error: "로그인이 필요합니다" };
+  await db.delete(receivablePayment).where(eq(receivablePayment.id, id));
   refresh();
   return { ok: true };
 }

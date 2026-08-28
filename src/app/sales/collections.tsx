@@ -13,18 +13,14 @@ import { addCollection, removeCollection } from "@/lib/receivable";
 const won = (n: number) => n.toLocaleString("ko-KR");
 const METHODS = ["현금", "카드", "계좌이체", "지역화폐"] as const;
 
-/** 🔴 owner: 2회차 수리 E1(2026-08-28) — 수금 넣기·지우기는 사장님 전용.
- *  직원에게는 「얼마 받았고 얼마 남았나」만 보인다 (그건 매장에서 알아야 한다). */
 export function CollectionPanel({
   quoteId,
   total,
   collections,
-  owner = false,
 }: {
   quoteId: number;
   total: number;
   collections: { id: number; amount: number; method: string; paidOn: string; memo: string | null }[];
-  owner?: boolean;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -57,7 +53,7 @@ export function CollectionPanel({
               <span className="min-w-0 flex-1">
                 {c.paidOn} · {c.method} {won(c.amount)}원{c.memo ? ` · ${c.memo}` : ""}
               </span>
-              {!owner ? null : askDel === c.id ? (
+              {askDel === c.id ? (
                 <>
                   <button
                     type="button"
@@ -97,7 +93,7 @@ export function CollectionPanel({
         </ul>
       )}
 
-      {owner && remain > 0 && (
+      {remain > 0 && (
         <div className="mt-2 space-y-1.5">
           <div className="flex flex-wrap items-center gap-1.5">
             {METHODS.map((m) => (
