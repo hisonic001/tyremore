@@ -356,7 +356,7 @@ export function SaleCard({
 
           {/* ⭐ 외상 수금 (사장님 선택 2026-08-11) */}
           {s.paymentMethod === "외상" && !canceled && (
-            <CollectionPanel quoteId={s.quoteId} total={s.totalAmount} collections={s.collections} />
+            <CollectionPanel quoteId={s.quoteId} total={s.totalAmount} collections={s.collections} owner={owner} />
           )}
 
           {/* ⭐ 손님·거래처 바꾸기 (사장님 지시 2026-08-17) */}

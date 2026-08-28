@@ -16,6 +16,19 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 
+/**
+ * ⭐ 「오늘」 정본 — 한국 날짜 (2회차 수리 D1, 2026-08-28)
+ *
+ * 🔴 전에는 `CURRENT_DATE` 였다. 이 DB 의 TimeZone 은 **UTC** 라
+ *    한국 시간 00:00~09:00 사이에는 `CURRENT_DATE` 가 **어제**를 가리킨다.
+ *    그 아홉 시간 동안 외상 나이가 하루 적게 나오고, 화면의 「90일 이상만」 버튼이
+ *    딱 90일째 된 건을 건너뛰었다.
+ *    같은 질의가 작업일 쪽은 이미 `AT TIME ZONE 'Asia/Seoul'` 로 읽고 있어
+ *    **한 줄 안에서 기준이 두 벌**이었다 — 「오늘」만 UTC, 「작업일」은 한국.
+ *    (lib/ym.kstToday() 의 SQL 판이다. 화면·서버가 같은 「오늘」을 쓴다)
+ */
+const KST_TODAY = sql`(now() AT TIME ZONE 'Asia/Seoul')::date`;
+
 export interface ReceivableSale {
   quoteId: number;
   quoteNo: string;
@@ -93,8 +106,15 @@ export async function receivableBook(opts?: {
     oldest_days: number;
   }>(sql`
     SELECT ${KEY} k,
-           COALESCE(q.supplier_name, c.name,
-                    NULLIF(split_part(q.mars_memo, '·', 1), ''), '이름 없음') label,
+           /* 🔴 2회차 수리 A4(2026-08-28): 이름 짓기도 **집계**로 바꿨다.
+              전에는 맨 컬럼이라 GROUP BY 에 c.name·mars_memo 를 끌고 들어가야 했고,
+              그 바람에 한 거래처가 여러 줄로 쪼개졌다 (아래 GROUP BY 주석 참고).
+              열쇠 안에 들어 있는 값만 대표로 뽑으므로 max() 로 안전하다:
+                · S: 묶음 → supplier_name 이 열쇠의 일부라 전부 같은 값
+                · C: 묶음 → customer_id 가 열쇠라 c.name 이 전부 같은 값
+                · W: 묶음 → 견적 한 건이 한 묶음이라 애초에 한 줄 */
+           COALESCE(max(q.supplier_name), max(c.name),
+                    NULLIF(max(split_part(q.mars_memo, '·', 1)), ''), '이름 없음') label,
            max(q.supplier_name) supplier_name,
            max(q.customer_id)::int customer_id,
            count(*)::int n,
@@ -102,13 +122,29 @@ export async function receivableBook(opts?: {
            SUM(COALESCE(rp.paid, 0))::bigint paid,
            SUM(q.total_amount - COALESCE(rp.paid, 0))::bigint remain,
            min(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date))::text oldest,
-           (CURRENT_DATE - min(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)))::int oldest_days
+           (${KST_TODAY} - min(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)))::int oldest_days
     FROM quote q
     LEFT JOIN customer c ON c.id = q.customer_id
     LEFT JOIN (SELECT quote_id, SUM(amount) paid FROM receivable_payment GROUP BY 1) rp
       ON rp.quote_id = q.id
     WHERE q.status = '성사' AND q.payment_method = '외상' ${kindCond} ${openOnly}
-    GROUP BY ${KEY}, q.supplier_name, c.name, q.mars_memo
+    /* 🔴 2회차 수리 A4(2026-08-28): **열쇠 하나로만 묶는다.**
+
+         전에는 GROUP BY 에 KEY 말고 q.supplier_name, c.name, q.mars_memo 가 더 있었다.
+         상세 목록(아래 detail 질의)은 열쇠 하나로만 묶는데 집계만 네 컬럼으로 묶으니
+         **같은 열쇠가 여러 줄로 쪼개졌다.**
+
+         실제로 터진 모습 (2026-08-28 실측) — 거래처 「한성공업사」:
+           · c.name='고객'  → 1건   44,000원
+           · c.name=NULL    → 2건  508,400원
+         화면엔 똑같은 이름의 카드가 **두 장** 뜨고, 두 장 모두 상세는
+         byKey.get('S:한성공업사') = **3건 552,400원** 전부를 보여줬다.
+         머리글의 「N곳」도 13곳이 아니라 14곳으로 셌고,
+         client.tsx 의 key={t.key} 는 React 키가 중복됐다.
+
+         🔴 총액·건수는 전에도 맞았다 — 쪼개진 줄의 합은 같다.
+            틀렸던 것은 **곳 수와 카드 겹침**이다. */
+    GROUP BY ${KEY}
     ORDER BY remain DESC, oldest ASC
     LIMIT 200
   `);
@@ -133,7 +169,7 @@ export async function receivableBook(opts?: {
            (SELECT string_agg(x.description, ' · ')
               FROM (SELECT qi.description FROM quote_item qi
                      WHERE qi.quote_id = q.id ORDER BY qi.id LIMIT 3) x) summary,
-           (CURRENT_DATE - COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date))::int age_days
+           (${KST_TODAY} - COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date))::int age_days
     FROM quote q
     LEFT JOIN vehicle v ON v.id = q.vehicle_id
     LEFT JOIN (SELECT quote_id, SUM(amount) paid FROM receivable_payment GROUP BY 1) rp

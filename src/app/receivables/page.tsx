@@ -1,5 +1,5 @@
 import Link from "@/lib/link";
-import { requireSession } from "@/lib/auth";
+import { isOwner, requireSession } from "@/lib/auth";
 import { receivableBook } from "@/lib/receivable-book";
 import { BookFilter } from "./filter";
 import { BookList } from "./client";
@@ -25,6 +25,9 @@ export default async function ReceivablesPage({
   searchParams: Promise<{ kind?: string; settled?: string }>;
 }) {
   await requireSession();
+  /* 🔴 2회차 수리 E1(2026-08-28): 수금은 사장님 전용이 됐다 — 직원에게는 보기만.
+     버튼을 남겨 두면 눌렀을 때 오류만 나서 더 답답하다. */
+  const owner = await isOwner();
   const sp = await searchParams;
   const kind = sp.kind === "supplier" || sp.kind === "customer" ? sp.kind : undefined;
   const includeSettled = sp.settled === "1";
@@ -55,9 +58,14 @@ export default async function ReceivablesPage({
           못 받은 외상이 없습니다 👍
         </p>
       ) : (
-        <BookList targets={book.targets} />
+        <BookList targets={book.targets} owner={owner} />
       )}
 
+      {!owner && (
+        <p className="mt-3 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600">
+          수금 넣기·털기는 <strong>사장님 계정</strong>에서만 됩니다 — 여기서는 못 받은 돈을 보기만 합니다.
+        </p>
+      )}
       <p className="mt-8 text-xs leading-relaxed text-slate-400">
         거래처를 펼쳐 받은 건들을 체크하고 「한꺼번에 털기」를 누르면 한 번에 수금됩니다. 받은 금액이
         고른 건들의 합보다 적으면 <strong>오래된 건부터</strong> 채웁니다 — 마지막 한 건만 잔액이
