@@ -9,7 +9,7 @@
     "start": "next start",
     "lint": "next lint",
     "test": "tsx --test src/lib/*.test.ts",
-    "check": "tsx scripts/check-money-links.ts && tsx scripts/check-limits.ts && tsx scripts/check-counts-match.ts && tsx scripts/check-query-load.ts",
+    "check": "tsx scripts/check-all.ts",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
