@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
 import { EXPENSE_CATS } from "@/lib/expense-cats";
 import type { ExpenseData, ExpenseRow, RelatedTxn } from "@/lib/recon-data";
-import { setExpenseCategory } from "@/lib/fin-expense";
+import { previewUnset, setExpenseCategory } from "@/lib/fin-expense";
 import { won } from "@/components/fin/money";
 
 /**
@@ -59,6 +59,41 @@ export function ExpensesUi({ data, ym }: { data: ExpenseData; ym: string }) {
   const [error, setError] = useState<string | null>(null);
   /** 줄마다 고른 분류 (셀렉트) */
   const [pick, setPick] = useState<Record<number, string>>({});
+  /**
+   * ⭐ 해제를 누른 줄 — 「이 줄만 / N건 전부」를 고르는 중 (2회차 수리 A5, 2026-08-28)
+   *
+   * 🔴 전에는 해제가 **말없이 그 한 줄만** 풀었다. 붙일 때는 같은 상대의 전 기간에
+   *    한꺼번에 붙는데도. 그래서 사장님이 "고쳤다"고 생각한 뒤에도 나머지가 그대로 남아
+   *    손익에 계속 들어갔다. 이제 누를 때마다 몇 건인지 세어 물어본다.
+   */
+  const [unset, setUnset] = useState<
+    { id: number; payer: string; category: string; n: number; sum: number } | null
+  >(null);
+
+  /** 해제 눌렀을 때 — 1건뿐이면 바로 풀고, 여러 건이면 물어본다 */
+  const askUnset = (id: number) =>
+    start(async () => {
+      setMsg(null);
+      setError(null);
+      const p = await previewUnset(id);
+      if (!p.ok) return setError(p.error);
+      if (p.n <= 1) return doUnset(id, "one");
+      setUnset({ id, payer: p.payer, category: p.category, n: p.n, sum: p.sum });
+    });
+
+  const doUnset = (id: number, scope: "one" | "all") =>
+    start(async () => {
+      setMsg(null);
+      setError(null);
+      const r = await setExpenseCategory(id, null, { scope });
+      setUnset(null);
+      if (!r.ok) return setError(r.error);
+      setMsg(
+        `「${r.payer}」 분류를 ${r.applied}건 풀었습니다 — 규칙도 지워 앞으로 자동으로 붙지 않습니다.` +
+          (scope === "one" ? " (이 줄만 — 같은 상대의 나머지는 그대로입니다)" : ""),
+      );
+      router.refresh();
+    });
 
   const classify = (row: ExpenseRow, category: string) =>
     start(async () => {
@@ -279,23 +314,46 @@ export function ExpensesUi({ data, ym }: { data: ExpenseData; ym: string }) {
                   {row.at} {row.source === "법인카드" ? "💳" : "🏦"} {row.payer} · −{won(row.amount)}원 ·{" "}
                   <span className="text-violet-700">{row.category}</span>
                 </span>
-                <button
-                  type="button"
-                  disabled={pending}
-                  onClick={() =>
-                    start(async () => {
-                      setMsg(null);
-                      setError(null);
-                      const r = await setExpenseCategory(row.id, null);
-                      if (!r.ok) return setError(r.error);
-                      setMsg(`「${r.payer}」 분류를 해제했습니다 — 규칙도 지워 앞으로 자동으로 붙지 않습니다.`);
-                      router.refresh();
-                    })
-                  }
-                  className="shrink-0 text-xs text-slate-400 underline"
-                >
-                  해제
-                </button>
+                {/* 🔴 2회차 수리 A5: 여러 건이면 「이 줄만 / 전부」를 고른다 (위 unset 주석 참고) */}
+                {unset?.id === row.id ? (
+                  <span className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+                    <span className="text-xs text-slate-500">
+                      같은 상대 {unset.n}건({won(unset.sum)}원)
+                    </span>
+                    <button
+                      type="button"
+                      disabled={pending}
+                      onClick={() => doUnset(row.id, "one")}
+                      className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium disabled:opacity-40"
+                    >
+                      이 줄만
+                    </button>
+                    <button
+                      type="button"
+                      disabled={pending}
+                      onClick={() => doUnset(row.id, "all")}
+                      className="rounded-lg bg-red-600 px-2 py-1 text-xs font-semibold text-white disabled:opacity-40"
+                    >
+                      {unset.n}건 전부
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUnset(null)}
+                      className="px-1 text-xs text-slate-400 underline"
+                    >
+                      그만
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => askUnset(row.id)}
+                    className="shrink-0 text-xs text-slate-400 underline"
+                  >
+                    해제
+                  </button>
+                )}
               </li>
             ))}
           </ul>

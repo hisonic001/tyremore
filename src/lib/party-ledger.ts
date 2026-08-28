@@ -13,7 +13,7 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { partyMatchSql, partyMonthlyCash, partyStrictNames } from "./recon-data";
+import { partyMatchSql, partyMonthlyCash, partyStrictNames, shortMatchNames } from "./recon-data";
 import { CASH_LAT, DONE } from "./tax-recon";
 import { monthRange } from "./ym";
 
@@ -39,8 +39,14 @@ export interface PartyMonthRow {
 export interface PartyLedger {
   key: string;
   title: string;
-  /** 이 상대를 찾는 데 쓴 이름들 (본이름 + 배운 별명) */
+  /** 이 상대를 찾는 데 쓴 이름들 (본이름 + 배운 별명) — 계산서는 이 이름으로 정확히 맞춘다 */
   names: string[];
+  /** ⭐ 통장 줄·월별 지급을 찾는 데 쓴 **좁은** 이름들 (2회차 수리 A2, 2026-08-28).
+   *  names 와 다를 수 있다 — 아래 strictNames 주석 참고 */
+  cashNames: string[];
+  /** ⭐ 너무 짧아 「상대명이 통째로 같을 때만」 규칙이 걸린 이름들 (2회차 수리 A3).
+   *  비어 있지 않으면 화면이 그 사실을 밝혀야 한다 — 통장 줄이 적게 나오는 이유다 */
+  shortNames: string[];
   rows: LedgerRow[];
   /** 줄 돈 — 앱 매입 잔액 (전체 기간, S만) */
   payableRemain: number;
@@ -119,8 +125,30 @@ export async function partyLedgerData(key: string, ym: string): Promise<PartyLed
   for (const a of aliases) if (!names.includes(a.raw)) names.push(a.raw);
 
   const rows: LedgerRow[] = [];
-  /* 이름 맞추기는 정본(partyMatchSql) — 적요 잘림·㈜ 표기 차이를 견딘다 (2026-08-25) */
-  const nameConds = partyMatchSql(names.slice(0, 15));
+
+  /**
+   * ⭐ 돈 계산용 **좁은 이름** — 통장 목록과 월별 지급이 같은 한 벌을 쓴다
+   *    (2회차 수리 A2, 2026-08-28)
+   *
+   * 🔴 **왜 옮겼나** — 전에는 이 화면 안에서 이름 규칙이 **두 벌**이었다:
+   *      · 위 「통장 입출금」 목록 → names (짧은 상호 '미쉐린' 포함)
+   *      · 아래 「월별 지급」      → partyStrictNames (짧은 상호 일부러 뺌)
+   *    그래서 위 출금을 더한 값과 아래 「지급」 칸이 **매달 달랐다.**
+   *
+   *    실측(2026-08-28) 미쉐린 — 「[타행CC] 027.미쉐린로열」 330,300원(분류 수수료) 19건이
+   *    위에만 뜨고 아래엔 없었다. 2025-02~2026-08 거의 매달, 합계 약 690만원.
+   *    로열티는 타이어 물건값이 아니므로 **좁은 쪽이 옳다** (사장님 결정 2026-08-28).
+   *
+   * 🔴 좁은 목록이 비면 옛 목록으로 되돌아간다 — 사업자번호는 있는데 계산서도 별명도
+   *    아직 없는 상대(신규 거래처)에서 통장 줄이 통째로 사라지는 것을 막는다.
+   *    (전에는 이 경우 월별 지급이 조용히 전부 0원이 됐다)
+   */
+  const strictRaw = bizNos.length > 0 ? await partyStrictNames(bizNos[0]) : [];
+  const cashNames = strictRaw.length > 0 ? strictRaw : names;
+  const cashNamesUsed = cashNames.slice(0, 15);
+  const nameConds = partyMatchSql(cashNamesUsed);
+  /* 🔴 2회차 수리 A3: 짧은 이름은 부분일치를 안 한다 — 화면이 그 사실을 밝힐 수 있게 넘긴다 */
+  const shortNames = shortMatchNames(cashNamesUsed);
 
   // ── ② 세금계산서 (이 달) ──
   const taxCond =
@@ -271,8 +299,9 @@ export async function partyLedgerData(key: string, ym: string): Promise<PartyLed
   `);
   /* 🔴 감사 B5(2026-08-25): 달별 지급 = 정본(partyStrictNames+partyMonthlyCash),
      환불·상계 입금 차감(출금−입금) — 월정산 카드와 같은 식이라 두 화면 잔액이 일치 */
-  const strictNames = bizNos.length > 0 ? await partyStrictNames(bizNos[0]) : names;
-  const cashByYm = await partyMonthlyCash(strictNames);
+  /* 🔴 2회차 수리 A2: 위에서 이미 구한 cashNames 를 그대로 쓴다 — 질의도 한 번 줄고,
+     무엇보다 위 통장 목록과 아래 월별 지급이 **같은 이름 한 벌**을 쓰게 된다 */
+  const cashByYm = await partyMonthlyCash(cashNames);
   const mPay = [...cashByYm].map(([ym2, v]) => ({ ym: ym2, s: String(v.outS - v.inS) }));
   const invMap = new Map(mInv.map((r) => [r.ym, Number(r.s)]));
   const payMap = new Map(mPay.map((r) => [r.ym, Number(r.s)]));
@@ -289,6 +318,8 @@ export async function partyLedgerData(key: string, ym: string): Promise<PartyLed
     key,
     title,
     names,
+    cashNames,
+    shortNames,
     rows,
     payableRemain,
     receivableRemain,
