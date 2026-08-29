@@ -81,6 +81,24 @@ async function main() {
   const [sup] = await db.execute<{ n: number }>(sql`SELECT count(*)::int n FROM supplier WHERE is_active`);
   gauge("거래처 (taxReconV2 suppliers)", Number(sup.n), 500, "매입 계산서 상대 찾기에 쓴다");
 
+  /* ⭐ 매입 쪽 두 목록 (2026-08-29) — 전엔 이 감시 목록에 없었다.
+     purchaseHistory 는 LIMIT 이 아예 없어 전 기간이면 전부 끌어왔다 (그래서 화면이 길었다).
+     이제 장부 120건에서 자르고 「N건 더 있음」을 화면이 말한다 — 잘리는 걸 아는 것이 핵심이다. */
+  const [ph] = await db.execute<{ n: number }>(sql`
+    SELECT count(DISTINCT i.id)::int n FROM purchase_invoice i
+    JOIN purchase_invoice_item x ON x.invoice_id = i.id AND x.received_qty > 0
+    WHERE i.status <> '취소'
+  `);
+  gauge("매입 내역 장부 (purchaseHistory · 전체 기간)", Number(ph.n), 200,
+    "기본이 「오늘」이라 평소엔 안 닿는다. 「전체」를 누르면 여기서 잘리고 화면이 알려 준다");
+
+  const [pl] = await db.execute<{ n: number }>(sql`
+    SELECT count(*)::int n FROM purchase_invoice_item x JOIN purchase_invoice i ON i.id = x.invoice_id
+    WHERE i.status <> '취소' AND x.received_qty < x.qty
+  `);
+  gauge("입고 예정 줄 (pendingLines)", Number(pl.n), null,
+    "🔴 한도가 없다 — 대기가 쌓이면 /receiving 이 통째로 길어진다 (카드에 접기가 없다)");
+
   console.log("\n  [달마다 달라지는 것] — 이 달 기준\n");
   const ym = kstToday().slice(0, 7);
   const { start, nextStart } = monthRange(ym);

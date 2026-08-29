@@ -7,7 +7,8 @@ import { marsAudit } from "@/lib/mars-audit";
 import { ResolveButton } from "./audit-resolve";
 import { latestMarsRun } from "@/lib/mars-run";
 import { saleHistory } from "@/lib/sale-history";
-import { PeriodFilter } from "./filter";
+import { PeriodFilter } from "@/components/ui/period-filter";
+import { PayFilter } from "./filter";
 import { SalesList } from "./mars-upload";
 
 export const dynamic = "force-dynamic";
@@ -169,13 +170,12 @@ export default async function SalesPage({
 
       {/* ⭐ 기간 필터 — 오늘·이번 달·전체·월·기간 (사장님 요청 2026-08-05) */}
       <PeriodFilter
+        basePath="/sales"
         months={h.months}
         active={active}
         month={sp.month ?? null}
         from={sp.from ?? null}
         to={sp.to ?? null}
-        pay={pay ?? null}
-        payOptions={PAY_OPTIONS}
         keep={{
           customer: sp.customer,
           vehicle: sp.vehicle,
@@ -188,6 +188,23 @@ export default async function SalesPage({
           to: sp.to,
           pay: sp.pay,
         }}
+        extra={
+          <PayFilter
+            pay={pay ?? null}
+            payOptions={PAY_OPTIONS}
+            keep={{
+              customer: sp.customer,
+              vehicle: sp.vehicle,
+              supplier: sp.supplier,
+              canceled: sp.canceled,
+              month: sp.month,
+              range: sp.range,
+              from: sp.from,
+              to: sp.to,
+              pay: sp.pay,
+            }}
+          />
+        }
       />
 
       <p className="tabular mt-3 text-sm text-slate-600">
