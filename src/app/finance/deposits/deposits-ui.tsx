@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
 import type { DepositReconData, DepositSuggestion } from "@/lib/recon-data";
@@ -51,13 +51,20 @@ export function DepositsRecon({
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ask, confirmDialog] = useConfirm(); // 배치5 — 브라우저 confirm() 대체
+  /* 🔴 안내는 화면 맨 위에 뜨는데 단추는 한참 아래다 — 실패해도 「눌러도 아무 일이 없다」로 보인다
+        (사장님 제보 2026-08-29). 실패했을 때만 그 자리로 데려간다. */
+  const banner = useRef<HTMLDivElement>(null);
 
   const act = (fn: () => Promise<{ ok: boolean } & Record<string, unknown>>, okMsg: (r: never) => string) =>
     start(async () => {
       setMsg(null);
       setError(null);
       const r = await fn();
-      if (!r.ok) return setError(String((r as { error?: string }).error ?? "실패했습니다"));
+      if (!r.ok) {
+        setError(String((r as { error?: string }).error ?? "실패했습니다"));
+        banner.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
+      }
       setMsg(okMsg(r as never));
       router.refresh();
     });
@@ -83,8 +90,10 @@ export function DepositsRecon({
 
   return (
     <>
-      {error && <p className="mt-3 rounded-lg bg-red-50 p-2 text-sm text-red-700">⚠️ {error}</p>}
-      {msg && <p className="mt-3 rounded-lg bg-emerald-50 p-2 text-sm text-emerald-800">✅ {msg}</p>}
+      <div ref={banner}>
+        {error && <p className="mt-3 rounded-lg bg-red-50 p-2 text-sm text-red-700">⚠️ {error}</p>}
+        {msg && <p className="mt-3 rounded-lg bg-emerald-50 p-2 text-sm text-emerald-800">✅ {msg}</p>}
+      </div>
 
       {/* 카드 정산 일괄 */}
       {data.cardPatternCount > 0 && (

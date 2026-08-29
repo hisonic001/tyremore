@@ -27,9 +27,9 @@ export async function learnAlias(aliasRaw: string, partyKey: string, partyLabel:
 /* 🔴 2026 감사 G1: 입금 줄은 **남은 금액**(소진량 정본 cashUsedSql 을 뺀 값)으로 다룬다 */
 export async function getDeposit(id: number) {
   const [d] = await db.execute<{
-    id: number; in_amount: number; remain: number; recon_status: string; date: string; l: string; description: string;
+    id: number; in_amount: number; remain: number; recon_status: string; category: string | null; date: string; l: string; description: string;
   }>(sql`
-    SELECT c.id, c.in_amount, (c.in_amount - ${cashUsedSql("c")})::bigint remain, c.recon_status,
+    SELECT c.id, c.in_amount, (c.in_amount - ${cashUsedSql("c")})::bigint remain, c.recon_status, c.category,
            to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') date,
            c.account_label l, c.description
     FROM cash_txn c WHERE c.id = ${id} AND c.source = '통장' AND c.is_active AND c.in_amount > 0
@@ -60,8 +60,23 @@ export async function linkDepositToQuoteCore(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const dep = await getDeposit(cashTxnId);
   if (!dep) return { ok: false, error: "입금 줄을 찾을 수 없습니다" };
-  if (dep.recon_status === "확정") return { ok: false, error: "이미 정리된 입금입니다" };
   if (dep.remain <= 0) return { ok: false, error: "이 입금은 남은 금액이 없습니다 — 계산서 확인이 이미 썼습니다" };
+  /* 🔴 「판매입금」(앱에 기록 없는 판매 대금)으로 분류해 두면 recon_status 가 '확정'이 된다.
+        그런데 화면은 그 줄을 **일부러 후보에 넣는다** — 나중에 정비내역을 등록하면 잇게 하려고
+        (deposit-tax.ts 의 「염대현 425,000·110,000」 주석이 바로 그 사례다).
+        전에는 여기서 「이미 정리된 입금입니다」로 막혀 **버튼을 눌러도 아무 일도 안 났다**
+        (사장님 제보 2026-08-29, /finance/deposits?ym=2026-07 · MARS-002944 염대현 535,000원).
+        → 손으로 이을 때는 통과시키고, 아래 UPDATE 가 category 를 지워 손익에 두 번 안 잡히게 한다.
+        🔴 자동(연간 실행기)은 그대로 막는다 — 사장님이 손수 분류해 둔 것을 기계가 뒤집으면 안 된다. */
+  if (dep.recon_status === "확정" && !(method === "수동" && dep.category === "판매입금")) {
+    return {
+      ok: false,
+      error:
+        dep.category === "판매입금"
+          ? "「판매입금」으로 분류해 둔 줄입니다 — 화면에서 손으로 이어 주세요"
+          : `이미 정리된 입금입니다${dep.category ? ` (${dep.category})` : ""} — 먼저 되돌려 주세요`,
+    };
+  }
   const [q] = await db.execute<{ id: number; total: number; linked: string }>(sql`
     SELECT q.id, q.total_amount total,
            COALESCE((SELECT SUM(m.amount) FROM recon_match m WHERE m.kind = '이체입금' AND m.ref_table = 'quote' AND m.ref_id = q.id AND m.status = '확정'), 0)::bigint linked
