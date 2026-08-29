@@ -2,6 +2,7 @@ import Link from "@/lib/link";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { isOwner } from "@/lib/auth";
+import { ALL_METHODS } from "@/lib/payments";
 import { marsAudit } from "@/lib/mars-audit";
 import { ResolveButton } from "./audit-resolve";
 import { latestMarsRun } from "@/lib/mars-run";
@@ -46,7 +47,7 @@ export default async function SalesPage({
    *    지역화폐 추가 (2026-08-10). 간편결제 추가 (2026-08-29).
    *    「카드」로 거르면 카드가 섞인 분할 결제도 나온다 — 「혼합」은 분할 결제 건만 모아 본다.
    */
-  const PAY_OPTIONS = ["현금", "카드", "계좌이체", "지역화폐", "간편결제", "외상", "혼합", "서비스"];
+  const PAY_OPTIONS = ALL_METHODS; // 정본 하나 — lib/payments.ts
   const pay = sp.pay && PAY_OPTIONS.includes(sp.pay) ? sp.pay : undefined;
   // 대상을 콕 집어 들어온 것이면 기간은 「전체」로 편다 — 그 대상의 과거를 보러 온 것이니까
   const scoped = Number.isFinite(customerId) || Number.isFinite(vehicleId) || !!supplierName;

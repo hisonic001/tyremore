@@ -13,9 +13,11 @@ import Link from "@/lib/link";
 import { settleReceivables } from "@/lib/receivable";
 import { planSettlement } from "@/lib/receivable-plan";
 import type { ReceivableTarget } from "@/lib/receivable-book";
+import { SPLITTABLE } from "@/lib/payments";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
-const METHODS = ["현금", "카드", "계좌이체", "지역화폐"] as const;
+/** 수금 수단 — 정본은 lib/payments.ts (2026-08-29 간편결제 추가) */
+const METHODS: readonly string[] = SPLITTABLE;
 /** 이보다 오래되면 붉게 — 눈에 띄어야 챙긴다 */
 const OLD_DAYS = 90;
 

@@ -21,7 +21,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { quote, quotePayment, stockItem, stockMovement } from "@/db/schema";
-import { checkSplitPayments } from "./payments";
+import { ALL_METHODS, checkSplitPayments } from "./payments";
 
 function refresh() {
   for (const p of ["/sales", "/", "/stock"]) {
@@ -69,8 +69,12 @@ export async function updateSaleHead(input: {
   if (!splitCheck.ok) return { ok: false, error: splitCheck.error };
   const split = splitCheck.split;
   const pay = split ? "혼합" : input.paymentMethod?.trim() || null;
-  if (pay && !["현금", "카드", "계좌이체", "지역화폐", "외상", "혼합", "서비스"].includes(pay)) {
-    return { ok: false, error: "결제수단이 올바르지 않습니다" };
+  /* 🔴 목록을 여기 또 적지 않는다 — 정본은 lib/payments.ts 다.
+     2026-08-29: 여기에만 하드코딩이 남아 있어 간편결제로 못 고쳤다
+     (「결제수단이 올바르지 않습니다」 — 사장님 제보). 일마감의 「고치기」도 이 함수를 탄다. */
+  const ALLOWED = ALL_METHODS;
+  if (pay && !ALLOWED.includes(pay)) {
+    return { ok: false, error: `결제수단이 올바르지 않습니다 — ${ALLOWED.join("·")} 중에서 고를 수 있습니다` };
   }
 
   await db.transaction(async (tx) => {

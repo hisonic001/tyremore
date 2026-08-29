@@ -31,7 +31,7 @@ export function PeriodFilter({
   to: string | null;
   /** ⭐ 결제 방법 필터 (사장님 요청 2026-08-07) — null 이면 전체 */
   pay: string | null;
-  payOptions: string[];
+  payOptions: readonly string[];
   /** 유지할 쿼리 (customer·vehicle·canceled + 현재 기간·결제) */
   keep: Record<string, string | undefined>;
 }) {

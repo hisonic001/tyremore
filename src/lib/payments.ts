@@ -20,6 +20,14 @@
 export const SPLITTABLE = ["카드", "현금", "계좌이체", "지역화폐", "간편결제"] as const;
 /** 단독으로만 되는 수단 */
 export const EXCLUSIVE = ["외상", "서비스"] as const;
+/**
+ * ⭐ quote.payment_method 에 들어갈 수 있는 전부 (2026-08-29).
+ * 「혼합」은 사람이 고르는 값이 아니라 수단 2개 이상일 때 서버가 굳히는 값이다.
+ * 🔴 목록을 다른 파일에 또 적지 말 것 — 간편결제를 넣을 때 sale-edit 에만 하드코딩이
+ *    남아 있어 「결제수단이 올바르지 않습니다」로 막혔다 (사장님 제보 2026-08-29).
+ *    DB CHECK 와 어긋나지 않는지는 payments.test.ts 가 지킨다.
+ */
+export const ALL_METHODS: readonly string[] = [...SPLITTABLE, ...EXCLUSIVE, "혼합"];
 
 export interface PaymentPart {
   method: string;
