@@ -38,12 +38,24 @@ export interface NormalizedCashTxn {
   payerCode: string | null;
 }
 
+/**
+ * ⭐ 줄 하나를 못 담은 사연 (2026-08-29)
+ *   · expected 없음 = **못 읽은 줄** — 형식이 어긋나 담지 못했다. 사장님이 봐 주셔야 한다.
+ *   · expected: true = **일부러 뺀 줄** — 까닭이 분명해 안 담은 것이다(예: 승인했다가 전액 취소).
+ *     전엔 둘을 같이 「못 읽음」으로 세어, 정상인데 고장난 것처럼 보였다 (사장님 제보).
+ */
+export interface SheetSkip {
+  line: number;
+  reason: string;
+  expected?: boolean;
+}
+
 export interface FinParseResult {
   source: "법인카드" | "통장";
   /** 어느 형식으로 읽었는지 — 화면에 "이렇게 읽었습니다"로 보여준다 */
   formatName: string;
   rows: NormalizedCashTxn[];
-  skipped: { line: number; reason: string }[];
+  skipped: SheetSkip[];
   /** 원본 보존용 CSV — fin_upload.raw_text (파서를 고쳐 다시 읽을 수 있게) */
   rawCsv: string;
   periodFrom: string | null;
@@ -157,7 +169,7 @@ function finish(
   source: "법인카드" | "통장",
   formatName: string,
   out: NormalizedCashTxn[],
-  skipped: { line: number; reason: string }[],
+  skipped: SheetSkip[],
   rawCsv: string,
 ): FinParseResult {
   const dates = out.map((r) => r.occurredAt.slice(0, 10)).sort();
@@ -176,7 +188,7 @@ function finish(
 
 function parseBank(rows: unknown[][], h: { at: number; col: Map<string, number> }, rawCsv: string): FinParseResult {
   const out: NormalizedCashTxn[] = [];
-  const skipped: { line: number; reason: string }[] = [];
+  const skipped: SheetSkip[] = [];
   for (let i = h.at + 1; i < rows.length; i++) {
     const r = rows[i];
     if (r.every((c) => String(c ?? "").trim() === "")) continue;
@@ -209,7 +221,7 @@ function parseBank(rows: unknown[][], h: { at: number; col: Map<string, number> 
 
 function parseKbCard(rows: unknown[][], h: { at: number; col: Map<string, number> }, rawCsv: string): FinParseResult {
   const out: NormalizedCashTxn[] = [];
-  const skipped: { line: number; reason: string }[] = [];
+  const skipped: SheetSkip[] = [];
   for (let i = h.at + 1; i < rows.length; i++) {
     const r = rows[i];
     const when = toKstDateTime(cell(r, h.col, "거래일"));
@@ -245,7 +257,7 @@ function parseKbCard(rows: unknown[][], h: { at: number; col: Map<string, number
 
 function parseWooriCard(rows: unknown[][], h: { at: number; col: Map<string, number> }, rawCsv: string): FinParseResult {
   const out: NormalizedCashTxn[] = [];
-  const skipped: { line: number; reason: string }[] = [];
+  const skipped: SheetSkip[] = [];
   for (let i = h.at + 1; i < rows.length; i++) {
     const r = rows[i];
     const dateRaw = String(cell(r, h.col, "매출일자") ?? "").trim();
@@ -303,7 +315,7 @@ export interface TaxParseResult {
   source: "홈택스매출" | "홈택스매입";
   formatName: string;
   rows: NormalizedTaxInvoice[];
-  skipped: { line: number; reason: string }[];
+  skipped: SheetSkip[];
   rawCsv: string;
   periodFrom: string | null;
   periodTo: string | null;
@@ -379,7 +391,7 @@ function parseHometaxSheet(
   const titleSaysSell = headText.includes("매출");
 
   const out: NormalizedTaxInvoice[] = [];
-  const skipped: { line: number; reason: string }[] = [];
+  const skipped: SheetSkip[] = [];
   for (let i = h.at + 1; i < rows.length; i++) {
     const r = rows[i];
     const approvalNo = String(cell(r, h.col, "승인번호") ?? "").trim();
@@ -463,7 +475,7 @@ export interface CardDayParseResult {
   source: "카드매출승인";
   formatName: string;
   rows: NormalizedCardDay[];
-  skipped: { line: number; reason: string }[];
+  skipped: SheetSkip[];
   rawCsv: string;
   periodFrom: string | null;
   periodTo: string | null;
@@ -475,7 +487,7 @@ function parseCardDaySheet(ws: XLSX.WorkSheet, rows: unknown[][]): CardDayParseR
   if (!h) throw new Error("여신협회 승인내역의 머리행을 찾지 못했습니다");
   const toInt = (v: unknown) => toWon(v) ?? 0;
   const out: NormalizedCardDay[] = [];
-  const skipped: { line: number; reason: string }[] = [];
+  const skipped: SheetSkip[] = [];
   for (let i = h.at + 1; i < rows.length; i++) {
     const r = rows[i];
     const raw = String(cell(r, h.col, "거래일자") ?? "").trim();
@@ -523,7 +535,7 @@ export interface CardDepositParseResult {
   source: "카드매출입금";
   formatName: string;
   rows: NormalizedCardDeposit[];
-  skipped: { line: number; reason: string }[];
+  skipped: SheetSkip[];
   rawCsv: string;
   periodFrom: string | null;
   periodTo: string | null;
@@ -535,7 +547,7 @@ function parseCardDepositSheet(ws: XLSX.WorkSheet, rows: unknown[][]): CardDepos
   if (!h) throw new Error("여신협회 입금내역의 머리행을 찾지 못했습니다");
   const toInt = (v: unknown) => toWon(v) ?? 0;
   const out: NormalizedCardDeposit[] = [];
-  const skipped: { line: number; reason: string }[] = [];
+  const skipped: SheetSkip[] = [];
   for (let i = h.at + 1; i < rows.length; i++) {
     const r = rows[i];
     const month = String(cell(r, h.col, "월") ?? "").trim();
@@ -587,7 +599,7 @@ export interface CardTxnParseResult {
   source: "카드매출승인";
   formatName: string;
   rows: NormalizedCardTxn[];
-  skipped: { line: number; reason: string }[];
+  skipped: SheetSkip[];
   rawCsv: string;
   periodFrom: string | null;
   periodTo: string | null;
@@ -598,7 +610,7 @@ function parseCardTxnSheet(ws: XLSX.WorkSheet, rows: unknown[][]): CardTxnParseR
   const h = findHeader(rows, ["거래일자", "승인번호", "승인금액", "구분"]);
   if (!h) throw new Error("여신협회 세부 승인내역의 머리행을 찾지 못했습니다");
   const out: NormalizedCardTxn[] = [];
-  const skipped: { line: number; reason: string }[] = [];
+  const skipped: SheetSkip[] = [];
   for (let i = h.at + 1; i < rows.length; i++) {
     const r = rows[i];
     const kind = String(cell(r, h.col, "구분") ?? "").trim();
@@ -662,7 +674,7 @@ export interface PosParseResult {
   source: "토스포스";
   formatName: string;
   rows: NormalizedPosTxn[];
-  skipped: { line: number; reason: string }[];
+  skipped: SheetSkip[];
   rawCsv: string;
   periodFrom: string | null;
   periodTo: string | null;
@@ -681,7 +693,7 @@ function parseTossPosSheet(wb: XLSX.WorkBook, sheetName: string): PosParseResult
   const h = findHeader(rows, ["결제기준일자", "결제시각", "결제금액", "결제수단", "결제상태"]);
   if (!h) throw new Error("토스 포스 매출리포트의 「결제 상세내역」 머리행을 찾지 못했습니다");
   const out: NormalizedPosTxn[] = [];
-  const skipped: { line: number; reason: string }[] = [];
+  const skipped: SheetSkip[] = [];
   for (let i = h.at + 1; i < rows.length; i++) {
     const r = rows[i];
     const day = toKstDateTime(cell(r, h.col, "결제기준일자"))?.slice(0, 10) ?? null;
@@ -742,7 +754,7 @@ function parseTossPosSheet(wb: XLSX.WorkBook, sheetName: string): PosParseResult
  *  🔴 같은 승인번호로 +/− 취소쌍이 온다 (실측) — 중복 키에 금액이 들어가야 한다 */
 function parseShinhanCard(rows: unknown[][], h: { at: number; col: Map<string, number> }, rawCsv: string): FinParseResult {
   const out: NormalizedCashTxn[] = [];
-  const skipped: { line: number; reason: string }[] = [];
+  const skipped: SheetSkip[] = [];
   for (let i = h.at + 1; i < rows.length; i++) {
     const r = rows[i];
     const when = toKstDateTime(cell(r, h.col, "이용일시"));
@@ -788,7 +800,7 @@ function parseShinhanCard(rows: unknown[][], h: { at: number; col: Map<string, n
 function parseWooriApproval(rows: unknown[][], h: { at: number; col: Map<string, number> }, rawCsv: string): FinParseResult {
   const merKey = [...h.col.keys()].find((k) => k.startsWith("이용가맹점")) ?? "이용가맹점(은행)명";
   const out: NormalizedCashTxn[] = [];
-  const skipped: { line: number; reason: string }[] = [];
+  const skipped: SheetSkip[] = [];
   for (let i = h.at + 1; i < rows.length; i++) {
     const r = rows[i];
     if (r.every((c) => String(c ?? "").trim() === "")) continue;
@@ -811,7 +823,10 @@ function parseWooriApproval(rows: unknown[][], h: { at: number; col: Map<string,
     const cancel = toWon(cell(r, h.col, "취소금액")) ?? 0;
     const net = appr - Math.abs(cancel);
     if (net === 0) {
-      if (appr !== 0) skipped.push({ line: i + 1, reason: `승인 ${appr.toLocaleString()}원이 전액 취소됨` });
+      // 취소가 승인과 같은 액이면 남은 돈이 0이다 — 못 읽은 게 아니라 넣을 것이 없는 줄이다
+      if (appr !== 0) {
+        skipped.push({ line: i + 1, reason: `승인 ${appr.toLocaleString()}원을 전액 취소 — 넣을 돈이 없습니다`, expected: true });
+      }
       continue;
     }
     const inst = String(cell(r, h.col, "할부개월") ?? "").trim();
@@ -865,7 +880,7 @@ function parseWooriBill(rows: unknown[][], rawCsv: string, fileName?: string): F
 
   const pad = (n: number) => String(n).padStart(2, "0");
   const out: NormalizedCashTxn[] = [];
-  const skipped: { line: number; reason: string }[] = [];
+  const skipped: SheetSkip[] = [];
   for (let i = at + 1; i < rows.length; i++) {
     const r = rows[i];
     const dateRaw = String(cell(r, col, "이용일자") ?? "").trim();

@@ -115,6 +115,9 @@ export function FinUpload({ ym }: { ym: string }) {
               {preview.skippedCount > 0 && (
                 <span className="text-amber-700"> (못 읽음 {preview.skippedCount}줄)</span>
               )}
+              {preview.noteCount > 0 && (
+                <span className="text-slate-500"> (일부러 뺀 줄 {preview.noteCount}줄)</span>
+              )}
             </li>
             {preview.kind === "cash" ? (
               <li>
@@ -130,7 +133,16 @@ export function FinUpload({ ym }: { ym: string }) {
             )}
           </ul>
           {preview.skippedSample.length > 0 && (
-            <p className="mt-1 text-xs text-amber-700">못 읽은 줄: {preview.skippedSample.join(" / ")}</p>
+            <p className="mt-1 text-xs text-amber-700">
+              ⚠️ 못 읽은 줄 — 봐 주세요: {preview.skippedSample.join(" / ")}
+            </p>
+          )}
+          {/* ⭐ 까닭이 분명해 안 담은 줄 — 「못 읽음」과 갈라 놓는다 (사장님 제보 2026-08-29)
+              전엔 전액 취소된 승인까지 「못 읽음」으로 세어 고장난 것처럼 보였다 */}
+          {preview.noteSample.length > 0 && (
+            <p className="mt-1 text-xs text-slate-500">
+              일부러 뺀 줄 (넣을 돈이 없어서): {preview.noteSample.join(" / ")}
+            </p>
           )}
           {/* ⭐ 우리카드 두 형식 겹침 — 그대로 반영하면 같은 지출이 두 번 잡힌다 (2026-08-29) */}
           {preview.warn && (

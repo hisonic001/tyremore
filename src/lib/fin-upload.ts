@@ -49,8 +49,12 @@ export interface FinPreview {
   source: string;
   formatName: string;
   rowCount: number;
+  /** 못 읽은 줄 — 사장님이 봐 주셔야 한다 */
   skippedCount: number;
   skippedSample: string[];
+  /** ⭐ 일부러 뺀 줄 — 까닭이 분명한 것 (예: 승인했다가 전액 취소). 못 읽음과 갈라 보여준다 */
+  noteCount: number;
+  noteSample: string[];
   periodFrom: string | null;
   periodTo: string | null;
   /** cash: 들어온/나간 돈 · tax: sumTotal 에 합계 */
@@ -103,6 +107,19 @@ async function wooriOverlapWarning(formatName: string, from: string | null, to: 
   );
 }
 
+/** 못 읽은 줄 / 일부러 뺀 줄을 갈라 담는다 (2026-08-29) */
+function splitSkips(skipped: { line: number; reason: string; expected?: boolean }[]) {
+  const bad = skipped.filter((s) => !s.expected);
+  const noted = skipped.filter((s) => s.expected);
+  const label = (s: { line: number; reason: string }) => (s.line > 0 ? `${s.line}줄: ` : "") + s.reason;
+  return {
+    skippedCount: bad.length,
+    skippedSample: bad.slice(0, 5).map(label),
+    noteCount: noted.length,
+    noteSample: noted.slice(0, 5).map(label),
+  };
+}
+
 /** 무엇을 어떻게 읽었는지만 보여준다. 아무것도 저장하지 않는다 */
 export async function previewFinUpload(
   fd: FormData,
@@ -122,8 +139,7 @@ export async function previewFinUpload(
           source: p.source,
           formatName: p.formatName,
           rowCount: p.rows.length,
-          skippedCount: p.skipped.length,
-          skippedSample: p.skipped.slice(0, 5).map((s) => `${s.line}줄: ${s.reason}`),
+          ...splitSkips(p.skipped),
           periodFrom: p.periodFrom,
           periodTo: p.periodTo,
           sumIn: 0,
@@ -148,8 +164,7 @@ export async function previewFinUpload(
           source: p.source,
           formatName: p.formatName,
           rowCount: p.rows.length,
-          skippedCount: p.skipped.length,
-          skippedSample: p.skipped.slice(0, 5).map((s) => (s.line > 0 ? `${s.line}줄: ` : "") + s.reason),
+          ...splitSkips(p.skipped),
           periodFrom: p.periodFrom,
           periodTo: p.periodTo,
           sumIn: 0,
@@ -174,8 +189,7 @@ export async function previewFinUpload(
           source: p.source,
           formatName: p.formatName,
           rowCount: p.rows.length,
-          skippedCount: p.skipped.length,
-          skippedSample: p.skipped.slice(0, 5).map((s) => `${s.line}줄: ${s.reason}`),
+          ...splitSkips(p.skipped),
           periodFrom: p.periodFrom,
           periodTo: p.periodTo,
           sumIn: 0,
@@ -200,8 +214,7 @@ export async function previewFinUpload(
           source: p.source,
           formatName: p.formatName,
           rowCount: p.rows.length,
-          skippedCount: p.skipped.length,
-          skippedSample: p.skipped.slice(0, 5).map((s) => `${s.line}줄: ${s.reason}`),
+          ...splitSkips(p.skipped),
           periodFrom: p.periodFrom,
           periodTo: p.periodTo,
           sumIn: 0,
@@ -237,8 +250,7 @@ export async function previewFinUpload(
         source: p.source,
         formatName: p.formatName,
         rowCount: p.rows.length,
-        skippedCount: p.skipped.length,
-        skippedSample: p.skipped.slice(0, 5).map((s) => `${s.line}줄: ${s.reason}`),
+        ...splitSkips(p.skipped),
         periodFrom: p.periodFrom,
         periodTo: p.periodTo,
         sumIn: p.sumIn,
