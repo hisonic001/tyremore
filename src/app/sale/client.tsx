@@ -8,6 +8,7 @@ import type { ProductHit, VehicleHit } from "@/lib/search";
 import { searchProducts } from "@/lib/search-actions";
 import { findServices, saveSale, type SaleLine } from "@/lib/sale";
 import { EXCLUSIVE, SPLITTABLE } from "@/lib/payments";
+import { REFERRALS } from "@/lib/referral";
 /** ⭐ 고객·거래처 선택기는 공용으로 뺐다 (2026-08-17) — 정비 내역의 「대상 바꾸기」도 쓴다 */
 import { CustomerPick, type NewCustomerDraft } from "./customer-pick";
 import { listSaleDrafts, removeSaleDraft, saveSaleDraft, type SaleDraft, type SaleDraftState } from "./draft-store";
@@ -60,6 +61,8 @@ export function SaleForm() {
    */
   const [combo, setCombo] = useState(false);
   const [memo, setMemo] = useState("");
+  /** ⭐ 어떻게 알고 오셨는지 (마케팅 0단계, 2026-08-29) — 광고가 돈이 됐는지 볼 유일한 분모 */
+  const [referral, setReferral] = useState<string | null>(null);
   /** 실제로 정비한 날 — 기본은 오늘이지만 고칠 수 있다 */
   const today = new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD
   const [workDate, setWorkDate] = useState(today);
@@ -216,6 +219,7 @@ export function SaleForm() {
     setWalkIn({ name: "", phone: "", plateNo: "" });
     setMileage("");
     setMemo("");
+    setReferral(null);
     setPayMethods(["카드"]);
     setPayAmounts({});
     setCombo(false);
@@ -247,6 +251,7 @@ export function SaleForm() {
       workDate,
       wheels,
       newCustomer: newCust,
+      referral,
     });
     resetForm();
     setDrafts(listSaleDrafts());
@@ -263,6 +268,7 @@ export function SaleForm() {
     setPayAmounts(st.payAmounts ?? {});
     setCombo(!!st.combo);
     setMemo(st.memo ?? "");
+    setReferral(st.referral ?? null);
     setWorkDate(st.workDate || today);
     setWheels(st.wheels ?? []);
     setNewCust((st.newCustomer as NewCustomerDraft | null) ?? null);
@@ -364,6 +370,8 @@ export function SaleForm() {
         workDate,
         memo: memo.trim() || null,
         mileage: mileage ? Number(mileage.replace(/\D/g, "")) : null,
+        // 거래처 판매는 손님이 아니다 — 유입경로를 안 묻는다
+        referral: supplierSale ? null : referral,
         // 거래처 판매는 차량 점검이 없다 — 바퀴 정보도 안 넘긴다
         tyrePositions: !supplierSale && tyreQty > 0 && wheels.length > 0 ? wheels : null,
       });
@@ -378,6 +386,7 @@ export function SaleForm() {
       setWalkIn({ name: "", phone: "", plateNo: "" });
       setMileage("");
       setMemo("");
+      setReferral(null);
       setPayMethods(["카드"]);
       setPayAmounts({});
       setCombo(false);
@@ -677,6 +686,31 @@ export function SaleForm() {
           placeholder="메모 (선택 · 우리 기록용, MARS 미반영)"
           className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
         />
+        {/*
+          ⭐ 어떻게 알고 오셨어요? (마케팅 0단계, 2026-08-29 — docs/17)
+             광고비 ÷ 신규 고객 수는 분모에 소개·재방문이 다 섞여 틀린 숫자다(광고 마케터 리뷰).
+             결제 때 한 번 묻는 것이 어떤 API 조합보다 정확하다. 선택 — 안 눌러도 저장된다.
+             거래처 판매는 손님이 아니라 안 보인다.
+        */}
+        {!supplierSale && (
+          <div className="mt-3">
+            <p className="text-xs font-medium text-slate-500">어떻게 알고 오셨어요? (선택)</p>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {REFERRALS.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => setReferral(referral === r ? null : r)}
+                  className={`min-h-9 rounded-full px-3 text-[13px] font-medium transition-colors ${
+                    referral === r ? "bg-slate-900 text-white" : "border border-slate-300 bg-white text-slate-600 active:bg-slate-100"
+                  }`}
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </section>
 
       {error && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}

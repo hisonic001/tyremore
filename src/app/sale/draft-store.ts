@@ -28,6 +28,8 @@ export interface SaleDraftState {
   wheels: string[];
   /** 신규 손님 폼의 중간 입력 (2026-08-19) — 반쯤 쓰다 접어도 그대로 돌아온다 */
   newCustomer?: unknown | null;
+  /** 어떻게 알고 오셨는지 (마케팅 0단계, 2026-08-29) */
+  referral?: string | null;
 }
 
 export interface SaleDraft {

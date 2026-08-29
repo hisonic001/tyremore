@@ -12,6 +12,7 @@ import {
   Boxes,
   ChevronRight,
   ClipboardList,
+  Megaphone,
   Store,
   Tags,
   Truck,
@@ -53,6 +54,7 @@ const ICONS: Record<string, ReactNode> = {
   "/receivables": <BookOpen className="size-5" />,
   "/settings/shop": <Store className="size-5" />,
   "/status": <Activity className="size-5" />,
+  "/marketing": <Megaphone className="size-5" />,
 };
 
 export default async function SettingsPage() {
@@ -88,6 +90,12 @@ export default async function SettingsPage() {
             href: "/settings/users",
             title: "계정 관리",
             desc: "계정 만들기 · 사장님/정비사 권한 · 비밀번호 재설정 (사장님 전용)",
+          },
+          /* ⭐ 마케팅 (2026-08-29, docs/17) — 블로그 초안·리뷰 답글 초안. 발행은 사장님이 직접 */
+          {
+            href: "/marketing",
+            title: "마케팅",
+            desc: "네이버 블로그 초안 · 리뷰 답글 초안 (사장님 전용)",
           },
           /* ⭐ 돈 관리 (ERP 1단계, 사장님 승인 2026-08-24) — 통장·법인카드 업로드와 자금 흐름 */
           {

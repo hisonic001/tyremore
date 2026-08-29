@@ -31,7 +31,10 @@ export const config = {
     /**
      * 로그인 화면과 정적 파일만 열어 둔다.
      * `_next/static`·`_next/image` 는 화면 자산이라 막으면 로그인 화면도 깨진다.
+     *
+     * `api/cron` 은 Vercel 크론이 부른다 — 로그인 쿠키가 없다. 그 경로는 자기 비밀키
+     * (CRON_SECRET) 로 스스로 막는다 (src/app/api/cron/blog-draft/route.ts).
      */
-    "/((?!login|_next/static|_next/image|favicon.ico|robots.txt).*)",
+    "/((?!login|api/cron|_next/static|_next/image|favicon.ico|robots.txt).*)",
   ],
 };

@@ -605,6 +605,14 @@ export const quote = pgTable(
      */
     tyrePositions: text("tyre_positions"),
 
+    /**
+     * ⭐ 어떻게 알고 오셨는지 (마케팅 0단계, 2026-08-29 — docs/17)
+     *    광고비가 돈이 됐는지 볼 수 있는 **유일하게 믿을 만한 분모**다. 네이버는
+     *    「이 손님이 광고 보고 왔다」를 안 넘겨주므로, 결제 때 한 번 묻는 것이
+     *    어떤 API 조합보다 정확하다. 과거 건은 NULL. 값은 referral.ts REFERRALS.
+     */
+    referral: text("referral"),
+
     createdBy: bigint("created_by", { mode: "number" }).references(() => appUser.id),
     createdAt,
     updatedAt,
@@ -1271,4 +1279,42 @@ export const partyAlias = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("party_alias_alias_key_key").on(t.aliasKey)],
+);
+
+/* ============================================================
+ * 3-17. blog_draft — 네이버 블로그 초안 (마케팅 1단계, 2026-08-29)
+ *
+ * 밤 9시 크론이 그날 시공 중 블로그감을 골라 초안을 만들어 둔다.
+ * 🔴 발행은 사장님이 복사해서 직접 한다 — 프로그램이 블로그에 올리면 매크로 판정.
+ * 사진은 없다(1단계). 실제 생성은 scripts/add-blog-draft.ts. 설계: docs/17-네이버-마케팅.md
+ * ========================================================== */
+export const blogDraft = pgTable(
+  "blog_draft",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    /** 어느 시공에서 나온 글인지. 나중에 주제 글(시공 없이)도 가능하게 NULL 허용 */
+    quoteId: bigint("quote_id", { mode: "number" }).references(() => quote.id),
+    /** 초안 → 발행(사장님이 올렸다고 표시) / 버림 */
+    status: text("status").notNull().default("초안"),
+    /** 제목 후보 3개 */
+    titles: jsonb("titles").$type<string[]>().notNull(),
+    /** 본문. `{{사장님_한마디}}` 자리가 하나 있다 — 복사할 때 ownerNote 로 바꾼다 */
+    body: text("body").notNull(),
+    tags: jsonb("tags").$type<string[]>().notNull(),
+    /** ⭐ 사장님 육성 — 이게 없으면 복사가 안 된다 (AI 글 균일함을 깨는 유일한 장치) */
+    ownerNote: text("owner_note"),
+    /** 지시문에 넣은 시공 사실(개인정보 없음). 「다르게 한 번 더」가 그대로 다시 쓴다 */
+    facts: text("facts").notNull(),
+    /** 최근 블로그 글과 주제가 겹친다는 경고 등 */
+    warn: text("warn"),
+    model: text("model").notNull(),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    check("blog_draft_status", sql`${t.status} IN ('초안','발행','버림')`),
+    index("idx_blog_draft_quote").on(t.quoteId),
+    index("idx_blog_draft_status").on(t.status, t.createdAt),
+  ],
 );
