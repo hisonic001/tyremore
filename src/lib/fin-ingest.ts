@@ -131,10 +131,19 @@ export async function cancelFinUploadBatch(uploadId: number): Promise<number> {
     UPDATE ${table} SET is_active = false WHERE upload_id = ${uploadId} AND is_active RETURNING id
   `);
   // 토스 포스 배치 취소 — 그 결제 건에 붙은 일마감 자국도 지운다 (2026-08-26)
+  // 🔴 지운 자국은 recon_match_gone 에 옮겨 적는다 (2026-08-29 — 왜 사라졌는지 알 수 있게)
   if (up.source === "토스포스") {
     await db.execute(sql`
-      DELETE FROM recon_match WHERE kind = '포스결제' AND src_table = 'pos_txn'
-        AND src_id IN (SELECT id FROM pos_txn WHERE upload_id = ${uploadId})
+      WITH d AS (
+        DELETE FROM recon_match WHERE kind = '포스결제' AND src_table = 'pos_txn'
+          AND src_id IN (SELECT id FROM pos_txn WHERE upload_id = ${uploadId})
+        RETURNING *
+      )
+      INSERT INTO recon_match_gone
+        (match_id, kind, src_table, src_id, ref_table, ref_id, amount, method, confirmed_at, reason)
+      SELECT d.id, d.kind, d.src_table, d.src_id, d.ref_table, d.ref_id, d.amount, d.method, d.confirmed_at,
+             ${"배치 되돌리기 #" + uploadId}
+      FROM d
     `);
   }
   // 🔴 감사 M9: '카드매출승인' 배치는 card_day(집계)와 card_txn(건별) 둘 다 잠재운다

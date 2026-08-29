@@ -21,7 +21,7 @@
  *
  * 🔴 "use server" 아님 — 페이지·액션·ingest 가 부른다. 질의 순차 · LIMIT.
  */
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { isReconPos, NEARBY_DAYS, POS_TO_APP, PREPAID_REASON, RECON_METHODS, RECON_POS_METHODS } from "./pos-vocab";
 
@@ -227,12 +227,16 @@ export async function appPayItems(from: string, to: string): Promise<AppItem[]> 
       AND ${D} >= ${from}::date AND ${D} <= ${to}::date
     ORDER BY q.created_at LIMIT 600
   `);
+      /* 🔴 외상 수금은 그 판매가 **아직 「외상」일 때만** 센다 (사장님 제보 2026-08-29).
+         원래 외상으로 팔고 카드로 수금했는데 그 뒤 판매 자체의 결제수단을 「카드」로 바꾸면,
+         같은 88,000원이 ①카드 판매 ②외상 카드수금 으로 **두 번** 잡혔다
+         (실측: Q26-0826-019 홍동식 88,000원이 8/27 일마감에 두 줄로 떴다). */
   const colls = await db.execute<{ id: number; quote_id: number; quote_no: string; amount: number; who: string; at: string | null; day: string; pm: string }>(sql`
     SELECT rp.id, q.id quote_id, q.quote_no, rp.amount, ${who} who, rp.method pm,
            to_char(rp.created_at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') at,
            to_char(rp.paid_on, 'YYYY-MM-DD') AS "day"
     FROM receivable_payment rp JOIN quote q ON q.id = rp.quote_id LEFT JOIN customer c ON c.id = q.customer_id
-    WHERE rp.method IN (${M}) AND rp.amount > 0
+    WHERE rp.method IN (${M}) AND rp.amount > 0 AND q.payment_method = '외상'
       AND rp.paid_on >= ${from}::date AND rp.paid_on <= ${to}::date
     ORDER BY rp.id LIMIT 600
   `);
@@ -671,6 +675,25 @@ export async function insertMatch(
 }
 
 /**
+ * ⭐ 자국을 지우되 **왜 지웠는지 기록으로 남긴다** (사장님 제보 2026-08-29 — 8/27 짝 10건이
+ *    통째로 사라졌는데 무엇이 지웠는지 알 방법이 없었다). recon_match_gone 에 옮겨 적는다.
+ *    한 문장으로 지우고 옮기므로 중간에 끊겨도 갈라지지 않는다.
+ * 🔴 여기(순수 모듈)에 둔다 — "use server" 파일에서 내보내면 **임의 SQL 조각을 받는 서버 액션**이
+ *    되어 브라우저에서 부를 수 있게 된다.
+ */
+export async function forgetMatches(where: SQL, reason: string, uid: number | null): Promise<number> {
+  const rows = await db.execute<{ id: number }>(sql`
+    WITH d AS (DELETE FROM recon_match WHERE ${where} RETURNING *)
+    INSERT INTO recon_match_gone
+      (match_id, kind, src_table, src_id, ref_table, ref_id, amount, method, confirmed_at, deleted_by, reason)
+    SELECT d.id, d.kind, d.src_table, d.src_id, d.ref_table, d.ref_id, d.amount, d.method, d.confirmed_at,
+           ${uid}, ${reason}
+    FROM d RETURNING id
+  `);
+  return rows.length;
+}
+
+/**
  * 자동 대조 (쓰기, 멱등) — 3단으로 확실한 것부터.
  *   ① POS 1건 = 앱 1건, 수단도 금액도 같음
  *   ② POS 여러 건(2~3)의 합 = 앱 1건 — 카드 두 장으로 나눠 긁은 경우
@@ -800,8 +823,8 @@ export async function posDaysSummary(ym: string): Promise<PosDaySummary[]> {
         AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${nextStart}
       UNION ALL
       SELECT 'receivable_payment', rp.id, 'rp:' || rp.id, rp.amount, rp.paid_on
-      FROM receivable_payment rp
-      WHERE rp.method IN (${M}) AND rp.amount > 0
+      FROM receivable_payment rp JOIN quote q ON q.id = rp.quote_id
+      WHERE rp.method IN (${M}) AND rp.amount > 0 AND q.payment_method = '외상'
         AND rp.paid_on >= ${start} AND rp.paid_on < ${nextStart}
     )
     SELECT to_char(a.d, 'YYYY-MM-DD') AS "day", COALESCE(SUM(a.amt), 0)::bigint s,

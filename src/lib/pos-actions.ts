@@ -18,7 +18,7 @@ import { db } from "@/db";
 import { getSession, isOwner } from "@/lib/auth";
 import { SPLITTABLE, EXCLUSIVE } from "@/lib/payments";
 import { updateSaleHead } from "./sale-edit";
-import { autoMatchPosDayCore, insertMatch, parseAppKey, posDayData, type AppKind } from "./pos-close";
+import { autoMatchPosDayCore, forgetMatches, insertMatch, parseAppKey, posDayData, type AppKind } from "./pos-close";
 import { POS_REASONS, RECON_METHODS } from "./pos-vocab";
 import { revalidateFinance } from "./fin-revalidate";
 
@@ -34,6 +34,7 @@ function refresh() {
   revalidateFinance();
   revalidatePath("/sales");
 }
+
 
 /** 그 POS 건의 남은 돈 */
 async function posRemain(posId: number): Promise<{ amount: number; remain: number; day: string } | null> {
@@ -141,10 +142,8 @@ export async function linkPosMulti(
 export async function unlinkMatch(matchId: number): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  const rows = await db.execute<{ id: number }>(sql`
-    DELETE FROM recon_match WHERE id = ${matchId} AND kind = '포스결제' RETURNING id
-  `);
-  if (rows.length === 0) return { ok: false, error: "이어진 자국이 없습니다" };
+  const rows = await forgetMatches(sql`id = ${matchId} AND kind = '포스결제'`, "한 줄 풀기", g.uid);
+  if (rows === 0) return { ok: false, error: "이어진 자국이 없습니다" };
   refresh();
   return { ok: true };
 }
@@ -153,10 +152,12 @@ export async function unlinkMatch(matchId: number): Promise<{ ok: true } | { ok:
 export async function unlinkPos(posId: number): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  const rows = await db.execute<{ id: number }>(sql`
-    DELETE FROM recon_match WHERE kind = '포스결제' AND src_table = 'pos_txn' AND src_id = ${posId} RETURNING id
-  `);
-  if (rows.length === 0) return { ok: false, error: "이어진 자국이 없습니다" };
+  const rows = await forgetMatches(
+    sql`kind = '포스결제' AND src_table = 'pos_txn' AND src_id = ${posId}`,
+    "POS 건 통째로 풀기",
+    g.uid,
+  );
+  if (rows === 0) return { ok: false, error: "이어진 자국이 없습니다" };
   refresh();
   return { ok: true };
 }

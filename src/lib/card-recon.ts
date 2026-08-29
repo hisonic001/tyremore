@@ -105,10 +105,13 @@ export async function cardDaySums(ym: string): Promise<CardDaySums> {
       AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
     GROUP BY 1, 2 LIMIT 80
   `);
+  /* 🔴 외상 수금은 그 판매가 아직 「외상」일 때만 — 결제수단을 카드로 바꾼 뒤에도 세면
+     같은 돈이 판매와 수금으로 두 번 잡힌다 (사장님 제보 2026-08-29 · 홍동식 88,000원) */
   const appColl = await db.execute<{ d: string; m: string; amt: string }>(sql`
     SELECT to_char(rp.paid_on, 'YYYY-MM-DD') d, rp.method m, SUM(rp.amount)::bigint amt
-    FROM receivable_payment rp
-    WHERE rp.method IN (${M}) AND rp.paid_on >= ${start}::date AND rp.paid_on < ${nextStart}::date
+    FROM receivable_payment rp JOIN quote q ON q.id = rp.quote_id
+    WHERE rp.method IN (${M}) AND q.payment_method = '외상'
+      AND rp.paid_on >= ${start}::date AND rp.paid_on < ${nextStart}::date
     GROUP BY 1, 2 LIMIT 80
   `);
 
