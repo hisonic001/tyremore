@@ -1,103 +1,171 @@
 /**
  * ⭐ 카드 매출 맞추기 — 날짜별 합계 정본 (2026 감사 R4, 2026-08-26)
  *
- *   여신협회 「일별 승인」 vs 앱 카드 매출(카드 단일 + 혼합의 카드 몫 + 외상 카드 수금)을 날짜별로.
- *   🔴 여신 자료가 끝난 날(assocLast) 이후는 비교할 수 없는 날이다 — 전엔 8/24~26 앱 매출이
- *      전부 「차이 난 날」로 잡혀 569만원 가짜 차이가 떴다. 그 날들은 따로 센다.
- *   카드 화면과 현황 마감 체크리스트가 이 함수를 같이 쓴다.
+ *   ⭐ 2026-08-29 개편 (사장님 요청 — "토스POS 매출 리포트는 별개로 열이 추가되어야함")
+ *   세 자료를 **나란히** 놓는다. 전엔 토스POS 가 「여신 자료가 없는 날만 대신 채우는 폴백」이라
+ *   두 자료를 견줄 수가 없었다.
+ *
+ *   | 자료 | 무엇 | 간편결제 |
+ *   |---|---|---|
+ *   | 여신협회 승인 (card_day) | 카드사가 승인한 금액 — 카드사 정산·세무로 이어짐 | ❌ 안 잡힘 |
+ *   | 토스POS 결제 (pos_txn)   | 실제로 단말기에서 긁힌 돈                     | ✅ QR결제로 잡힘 |
+ *   | 앱 판매 (quote…)         | 우리가 적은 것                                | ✅ 간편결제 |
+ *
+ *   🔴 차이는 **POS − 앱**으로 잰다. POS 가 실제로 긁힌 돈이고 간편결제까지 들어 있다.
+ *      POS 자료가 없는 날만 여신 − 앱. 둘 다 없으면 「자료 없음」(비교 불가).
+ *   🔴 비교 가능 여부는 `base` 하나로 내려보낸다 — 전엔 화면이 따로 판정해서
+ *      card-recon 의 diffDays 와 화면 회색 처리가 어긋났다.
  *
  * 🔴 "use server" 아님. 질의 순차 · LIMIT.
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { monthRange } from "./ym";
+import { RECON_METHODS, RECON_POS_METHODS } from "./pos-vocab";
 
 export interface CardDayRow {
-  assoc: number;
-  cnt: number;
+  /** 여신협회 승인합 — 자료가 없는 날은 null */
+  assoc: number | null;
+  assocCnt: number;
   cancelled: number;
+  /** 토스POS 결제합 (카드 + 간편결제) — 자료가 없는 날은 null */
+  pos: number | null;
+  posCard: number;
+  posEasy: number;
+  /** 앱 매출합 (카드 + 간편결제) */
   app: number;
-  /** 승인합의 원천 — 여신협회 / 토스 포스(여신 자료 없는 날) / 없음 */
-  src: "여신" | "POS" | null;
+  appCard: number;
+  appEasy: number;
+  /** 차이를 무엇으로 잴지 — 둘 다 없으면 null(비교 불가) */
+  base: "POS" | "여신" | null;
 }
 
 export interface CardDaySums {
   /** 날짜 오름차순 */
   dayRows: [string, CardDayRow][];
   sumAssoc: number;
+  sumPos: number;
   sumApp: number;
-  /** 여신 자료가 있는 날 중 차이 난 날 수 */
+  /** 비교할 수 있는 날 중 차이 난 날 수 */
   diffDays: number;
   /** 이 달 여신 자료 마지막 날 (없으면 null) */
   assocLast: string | null;
-  /** 여신 자료 이후 날짜의 앱 카드 매출 (비교 불가) */
+  /** 비교할 자료가 아예 없는 날 */
   afterCutoffDays: number;
   afterCutoffApp: number;
+  /** 이 달 간편결제 — 여신협회에는 안 잡히는 몫 (차이 해석의 힌트) */
+  easyDays: number;
+  easyApp: number;
+  easyPos: number;
+}
+
+/** 그 행의 차이 (비교 불가면 null) */
+export function cardDiff(r: CardDayRow): number | null {
+  if (r.base === "POS") return (r.pos ?? 0) - r.app;
+  if (r.base === "여신") return (r.assoc ?? 0) - r.app;
+  return null;
 }
 
 export async function cardDaySums(ym: string): Promise<CardDaySums> {
   const { start, nextStart } = monthRange(ym);
   const D = sql`COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)`;
+  const M = sql.join((RECON_METHODS as readonly string[]).map((m) => sql`${m}`), sql`, `);
 
   const assoc = await db.execute<{ d: string; total: number; cnt: number; cancelled: number }>(sql`
     SELECT to_char(day, 'YYYY-MM-DD') d, total_amount total, total_cnt cnt, cancelled_amount cancelled
     FROM card_day WHERE is_active AND day >= ${start}::date AND day < ${nextStart}::date
     ORDER BY day LIMIT 40
   `);
-  const appDan = await db.execute<{ d: string; amt: string }>(sql`
-    SELECT to_char(${D}, 'YYYY-MM-DD') d, SUM(q.total_amount)::bigint amt
-    FROM quote q WHERE q.status = '성사' AND q.payment_method = '카드'
-      AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
-    GROUP BY 1 LIMIT 40
-  `);
-  const appSplit = await db.execute<{ d: string; amt: string }>(sql`
-    SELECT to_char(${D}, 'YYYY-MM-DD') d, SUM(pm.amount)::bigint amt
-    FROM quote_payment pm JOIN quote q ON q.id = pm.quote_id
-    WHERE q.status = '성사' AND pm.method = '카드'
-      AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
-    GROUP BY 1 LIMIT 40
-  `);
-  const appColl = await db.execute<{ d: string; amt: string }>(sql`
-    SELECT to_char(rp.paid_on, 'YYYY-MM-DD') d, SUM(rp.amount)::bigint amt
-    FROM receivable_payment rp
-    WHERE rp.method = '카드' AND rp.paid_on >= ${start}::date AND rp.paid_on < ${nextStart}::date
-    GROUP BY 1 LIMIT 40
-  `);
 
-  /* ⭐ 토스 포스 일별 카드 합 (2026-08-26) — 여신협회 자료가 아직 없는 날은 POS 를 승인합으로 쓴다
-     (8/24~26 공백이 이걸로 메워진다). 여신이 있는 날은 여신이 정본(승인번호·월 정산과 이어짐). */
-  const pos = await db.execute<{ d: string; total: string; cnt: number }>(sql`
-    SELECT to_char(day, 'YYYY-MM-DD') d, COALESCE(SUM(amount), 0)::bigint total,
-           count(*) FILTER (WHERE amount > 0)::int cnt
-    FROM pos_txn WHERE is_active AND method = '카드' AND day >= ${start}::date AND day < ${nextStart}::date
+  /* ⭐ 토스POS 일별 — 카드와 간편결제(QR결제·선불지급수단)를 갈라서 센다.
+     취소는 음수로 들어와 있어 그대로 더하면 상쇄된다 (2026-08-28 실측 QR 취소 2쌍). */
+  const pos = await db.execute<{ d: string; card: string; easy: string }>(sql`
+    SELECT to_char(day, 'YYYY-MM-DD') d,
+           COALESCE(SUM(amount) FILTER (WHERE method = '카드'), 0)::bigint card,
+           COALESCE(SUM(amount) FILTER (WHERE method IN (${sql.join(
+             RECON_POS_METHODS.filter((m) => m !== "카드").map((m) => sql`${m}`),
+             sql`, `,
+           )})), 0)::bigint easy
+    FROM pos_txn WHERE is_active AND method IN (${sql.join(RECON_POS_METHODS.map((m) => sql`${m}`), sql`, `)})
+      AND day >= ${start}::date AND day < ${nextStart}::date
     GROUP BY 1 ORDER BY 1 LIMIT 40
   `);
-  const appMap = new Map<string, number>();
-  for (const r of [...appDan, ...appSplit, ...appColl]) appMap.set(r.d, (appMap.get(r.d) ?? 0) + Number(r.amt));
+
+  // 앱 — 단일 판매 · 분할 몫 · 외상 카드수금. 수단별로 갈라 센다
+  const appDan = await db.execute<{ d: string; m: string; amt: string }>(sql`
+    SELECT to_char(${D}, 'YYYY-MM-DD') d, q.payment_method m, SUM(q.total_amount)::bigint amt
+    FROM quote q WHERE q.status = '성사' AND q.payment_method IN (${M})
+      AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
+    GROUP BY 1, 2 LIMIT 80
+  `);
+  const appSplit = await db.execute<{ d: string; m: string; amt: string }>(sql`
+    SELECT to_char(${D}, 'YYYY-MM-DD') d, pm.method m, SUM(pm.amount)::bigint amt
+    FROM quote_payment pm JOIN quote q ON q.id = pm.quote_id
+    WHERE q.status = '성사' AND pm.method IN (${M})
+      AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
+    GROUP BY 1, 2 LIMIT 80
+  `);
+  const appColl = await db.execute<{ d: string; m: string; amt: string }>(sql`
+    SELECT to_char(rp.paid_on, 'YYYY-MM-DD') d, rp.method m, SUM(rp.amount)::bigint amt
+    FROM receivable_payment rp
+    WHERE rp.method IN (${M}) AND rp.paid_on >= ${start}::date AND rp.paid_on < ${nextStart}::date
+    GROUP BY 1, 2 LIMIT 80
+  `);
+
+  const blank = (): CardDayRow => ({
+    assoc: null, assocCnt: 0, cancelled: 0,
+    pos: null, posCard: 0, posEasy: 0,
+    app: 0, appCard: 0, appEasy: 0,
+    base: null,
+  });
   const days = new Map<string, CardDayRow>();
-  for (const a of assoc) days.set(a.d, { assoc: Number(a.total), cnt: Number(a.cnt), cancelled: Number(a.cancelled), app: 0, src: "여신" });
+  const at = (d: string) => {
+    const r = days.get(d) ?? blank();
+    days.set(d, r);
+    return r;
+  };
+
+  for (const a of assoc) {
+    const r = at(a.d);
+    r.assoc = Number(a.total);
+    r.assocCnt = Number(a.cnt);
+    r.cancelled = Number(a.cancelled);
+  }
   for (const p of pos) {
-    if (!days.has(p.d)) days.set(p.d, { assoc: Number(p.total), cnt: Number(p.cnt), cancelled: 0, app: 0, src: "POS" });
+    const r = at(p.d);
+    r.posCard = Number(p.card);
+    r.posEasy = Number(p.easy);
+    r.pos = r.posCard + r.posEasy;
   }
-  for (const [d, amt] of appMap) {
-    const row = days.get(d) ?? { assoc: 0, cnt: 0, cancelled: 0, app: 0, src: null };
-    row.app = amt;
-    days.set(d, row);
+  for (const x of [...appDan, ...appSplit, ...appColl]) {
+    const r = at(x.d);
+    const v = Number(x.amt);
+    r.app += v;
+    if (x.m === "간편결제") r.appEasy += v;
+    else r.appCard += v;
   }
+  for (const r of days.values()) r.base = r.pos !== null ? "POS" : r.assoc !== null ? "여신" : null;
+
   const dayRows = [...days.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1));
   const assocLast = assoc.length > 0 ? assoc[assoc.length - 1].d : null;
-  const sumAssoc = dayRows.reduce((s, [, r]) => s + r.assoc, 0);
+  const sumAssoc = dayRows.reduce((s, [, r]) => s + (r.assoc ?? 0), 0);
+  const sumPos = dayRows.reduce((s, [, r]) => s + (r.pos ?? 0), 0);
   const sumApp = dayRows.reduce((s, [, r]) => s + r.app, 0);
-  const comparable = ([, r]: [string, CardDayRow]) => r.src !== null;
-  const diffDays = dayRows.filter((x) => comparable(x) && x[1].assoc !== x[1].app).length;
-  const after = dayRows.filter((x) => !comparable(x));
+  const diffDays = dayRows.filter(([, r]) => cardDiff(r) !== null && cardDiff(r) !== 0).length;
+  const after = dayRows.filter(([, r]) => r.base === null);
+  const easy = dayRows.filter(([, r]) => r.appEasy > 0 || r.posEasy > 0);
+
   return {
     dayRows,
     sumAssoc,
+    sumPos,
     sumApp,
     diffDays,
     assocLast,
     afterCutoffDays: after.length,
     afterCutoffApp: after.reduce((s, [, r]) => s + r.app, 0),
+    easyDays: easy.length,
+    easyApp: dayRows.reduce((s, [, r]) => s + r.appEasy, 0),
+    easyPos: dayRows.reduce((s, [, r]) => s + r.posEasy, 0),
   };
 }

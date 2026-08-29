@@ -622,7 +622,9 @@ export const quote = pgTable(
       // 서비스 = 무상 (사장님 요청 2026-08-07 — 단골 무상 점검·가벼운 서비스). MARS 에 안 간다
       // 지역화폐 (사장님 요청 2026-08-10) — MARS 에는 현금으로 들어간다
       // 혼합 = 결제수단 2개 이상 — 수단별 금액은 quote_payment 에 (2026-08-10)
-      sql`${t.paymentMethod} IS NULL OR ${t.paymentMethod} IN ('현금','카드','계좌이체','지역화폐','외상','혼합','서비스')`,
+      // 간편결제 (사장님 요청 2026-08-29) — QR·네이버페이·카카오페이·토스페이. 토스 포스는 「QR결제」로
+      //   적어 오고 여신협회 승인에는 안 잡힌다. MARS 에는 카드로 들어간다 (scripts/add-easypay.ts)
+      sql`${t.paymentMethod} IS NULL OR ${t.paymentMethod} IN ('현금','카드','계좌이체','지역화폐','간편결제','외상','혼합','서비스')`,
     ),
     /** ⭐ 이 인덱스가 MARS 입력 대기열 화면 그 자체다 */
     index("idx_quote_mars")
@@ -654,7 +656,7 @@ export const quotePayment = pgTable(
     createdAt,
   },
   (t) => [
-    check("quote_payment_method_check", sql`${t.method} IN ('현금','카드','계좌이체','지역화폐')`),
+    check("quote_payment_method_check", sql`${t.method} IN ('현금','카드','계좌이체','지역화폐','간편결제')`),
     // 마이너스 허용 — 카드 취소·환불 (사장님 요청 2026-08-21, scripts/add-negative-payment.ts). 0 만 막는다
     check("quote_payment_amount_check", sql`${t.amount} <> 0`),
     index("idx_quote_payment_quote").on(t.quoteId),
@@ -683,7 +685,7 @@ export const receivablePayment = pgTable(
   },
   (t) => [
     check("receivable_payment_amount_check", sql`${t.amount} > 0`),
-    check("receivable_payment_method_check", sql`${t.method} IN ('현금','카드','계좌이체','지역화폐')`),
+    check("receivable_payment_method_check", sql`${t.method} IN ('현금','카드','계좌이체','지역화폐','간편결제')`),
     index("idx_receivable_quote").on(t.quoteId),
   ],
 );

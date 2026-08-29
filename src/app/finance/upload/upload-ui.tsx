@@ -78,7 +78,8 @@ export function FinUpload({ ym }: { ym: string }) {
       <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
         <h2 className="font-semibold">엑셀 올리기</h2>
         <p className="mt-1 text-sm text-slate-500">
-          은행 거래내역 · 법인카드 이용내역 · 여신협회 카드매출 · 홈택스 전자세금계산서 · 토스 포스 매출리포트(zip 그대로)를
+          은행 거래내역 · 법인카드 이용내역(우리카드 <strong>승인 상세내역</strong>·이용대금 상세내역, 신한카드) ·
+          여신협회 카드매출 · 홈택스 전자세금계산서 · 토스 포스 매출리포트(zip 그대로)를
           올리면 무엇으로 읽었는지 먼저 보여 드립니다.{" "}
           <strong>같은 파일을 또 올려도 두 번 계산되지 않습니다.</strong>
         </p>
@@ -130,6 +131,12 @@ export function FinUpload({ ym }: { ym: string }) {
           </ul>
           {preview.skippedSample.length > 0 && (
             <p className="mt-1 text-xs text-amber-700">못 읽은 줄: {preview.skippedSample.join(" / ")}</p>
+          )}
+          {/* ⭐ 우리카드 두 형식 겹침 — 그대로 반영하면 같은 지출이 두 번 잡힌다 (2026-08-29) */}
+          {preview.warn && (
+            <p className="mt-2 rounded-lg border border-red-300 bg-red-50 p-2 text-xs font-medium text-red-800">
+              🔴 {preview.warn}
+            </p>
           )}
           <table className="mt-2 w-full text-xs">
             <tbody>

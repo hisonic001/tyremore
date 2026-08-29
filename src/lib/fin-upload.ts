@@ -61,6 +61,46 @@ export interface FinPreview {
   sample: { when: string; desc: string; inAmount: number; outAmount: number }[];
   /** 전에 쓴 계정 이름들 — 같은 이름을 고르시게 (오타로 계정이 갈라지지 않게) */
   labels: string[];
+  /** ⭐ 그대로 반영하면 곤란한 점 — 붉게 띄운다 (2026-08-29 우리카드 두 형식 겹침) */
+  warn: string | null;
+}
+
+/**
+ * ⭐ 우리카드 두 형식 겹침 경고 (사장님 요청 2026-08-29)
+ *
+ *   「승인 상세내역」과 「이용대금 상세내역」(청구서)은 **같은 지출을 다르게 적은 자료**다.
+ *   청구서엔 승인번호가 없어 중복 방지 키의 모양이 아예 달라 — 둘 다 올리면 같은 지출이
+ *   두 번 잡히고 걸러지지 않는다 (fin-sheet.ts parseWooriBill 주석의 알려진 한계).
+ *
+ *   막지는 않는다. 「이미 이렇게 올려두셨습니다 — 그 배치를 먼저 되돌리세요」라고 알린다.
+ *   되돌리기는 올리기 화면의 「최근 올린 자료」에 이미 있다.
+ */
+async function wooriOverlapWarning(formatName: string, from: string | null, to: string | null): Promise<string | null> {
+  if (!from || !to) return null;
+  const other =
+    formatName === "우리카드 승인 상세내역"
+      ? "이용대금 상세내역"
+      : formatName.startsWith("우리카드 이용대금")
+        ? "승인 상세내역"
+        : null;
+  if (!other) return null;
+  const rows = await db.execute<{ file_name: string; l: string | null; n: number; f: string; t: string }>(sql`
+    SELECT file_name, account_label l, row_count n,
+           to_char(period_from, 'YYYY-MM-DD') f, to_char(period_to, 'YYYY-MM-DD') t
+    FROM fin_upload
+    WHERE status = '반영' AND source = '법인카드'
+      AND period_from IS NOT NULL AND period_to IS NOT NULL
+      AND period_from <= ${to}::date AND period_to >= ${from}::date
+      AND raw_text LIKE ${"%" + other + "%"}
+    ORDER BY id DESC LIMIT 5
+  `);
+  if (rows.length === 0) return null;
+  const which = rows.map((r) => `${r.file_name}(${r.f}~${r.t} · ${r.n}줄)`).join(" · ");
+  return (
+    `이 기간(${from} ~ ${to})은 이미 우리카드 「${other}」으로 올려 두셨습니다 — ${which}. ` +
+    `두 자료는 같은 지출을 다르게 적은 것이라 그대로 반영하면 같은 지출이 두 번 잡힙니다. ` +
+    `아래 「최근 올린 자료」에서 그 배치를 먼저 되돌려 주세요.`
+  );
 }
 
 /** 무엇을 어떻게 읽었는지만 보여준다. 아무것도 저장하지 않는다 */
@@ -96,6 +136,7 @@ export async function previewFinUpload(
             outAmount: r.direction === "매입" ? r.total : 0,
           })),
           labels: [],
+          warn: null,
         },
       };
     }
@@ -121,6 +162,7 @@ export async function previewFinUpload(
             outAmount: r.amount < 0 ? -r.amount : 0,
           })),
           labels: [],
+          warn: null,
         },
       };
     }
@@ -146,6 +188,7 @@ export async function previewFinUpload(
             outAmount: r.amount < 0 ? -r.amount : 0,
           })),
           labels: [],
+          warn: null,
         },
       };
     }
@@ -179,12 +222,14 @@ export async function previewFinUpload(
                   outAmount: 0,
                 })),
           labels: [],
+          warn: null,
         },
       };
     }
     const labels = await db.execute<{ l: string }>(sql`
       SELECT DISTINCT account_label l FROM cash_txn WHERE source = ${p.source} ORDER BY 1 LIMIT 20
     `);
+    const warn = await wooriOverlapWarning(p.formatName, p.periodFrom, p.periodTo);
     return {
       ok: true,
       preview: {
@@ -206,6 +251,7 @@ export async function previewFinUpload(
           outAmount: r.outAmount,
         })),
         labels: labels.map((r) => r.l),
+        warn,
       },
     };
   } catch (e) {

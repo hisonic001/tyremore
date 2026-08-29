@@ -137,11 +137,18 @@ export function parseFinFile(buf: Buffer, fileName?: string): FinParseResult {
   const shinhan = findHeader(rows, ["이용일시", "승인번호", "가맹점명", "이용금액"]);
   if (shinhan) return parseShinhanCard(rows, shinhan, rawCsv);
 
+  /* ── 우리카드 「승인 상세내역」(승인 기준) — 사장님 제보 2026-08-29 (report (3).xls 가 안 올라갔다).
+     청구서와 달리 **연·시각·승인번호·사업자번호·부가세**가 다 있다. 앞선 분기와 안 부딪힌다:
+     통장은 「거래일시+잔액」, KB는 「거래일」, 신한은 「이용일시+이용금액」을 요구하는데 여기엔 없다 */
+  const wooriAppr = findHeader(rows, ["이용일자", "승인번호", "승인금액"]);
+  if (wooriAppr) return parseWooriApproval(rows, wooriAppr, rawCsv);
+
   // ── 우리카드 「이용대금 상세내역」(청구서) — 연도가 파일 안에 없어 파일 이름에서 읽는다
   if (headText.includes("이용대금상세내역")) return parseWooriBill(rows, rawCsv, fileName);
 
   throw new Error(
-    "어느 형식인지 알아보지 못했습니다 — 통장 거래내역·법인카드 이용내역(KB 확인서·우리카드) 엑셀만 지원합니다. " +
+    "어느 형식인지 알아보지 못했습니다 — 통장 거래내역·법인카드 이용내역(신한 확인서·신한 법인이용내역·" +
+      "우리카드 승인 상세내역·우리카드 이용대금 상세내역) 엑셀만 지원합니다. " +
       "파일 첫 줄들을 알려주시면 형식을 추가하겠습니다",
   );
 }
@@ -764,9 +771,74 @@ function parseShinhanCard(rows: unknown[][], h: { at: number; col: Map<string, n
   return finish("법인카드", "신한카드 법인이용내역(전체)", out, skipped, rawCsv);
 }
 
+/**
+ * ⭐ 우리 「승인 상세내역」(승인 기준) — 사장님 제보 2026-08-29
+ *
+ *   실측(report (3).xls, 2026-08-01~08-27 80줄): 제목행 「승인 상세내역」, 머리행 3행 —
+ *   이용일자(`2026.08.27 19:55`) · 승인번호 · 이용카드 · 이용가맹점(은행)명 · 가맹점 주소 ·
+ *   연락처 · 업종 · 사업자번호 · 매출구분 · 할부개월 · 승인금액 · 부가세 · 취소금액.
+ *
+ *   청구서(이용대금 상세내역)보다 낫다 — 연·시각이 있어 파일 이름에 기대지 않고,
+ *   승인번호가 있어 중복 방지가 튼튼하며(`카드|계정|승인번호|일자|금액`),
+ *   사업자번호가 있어 나중에 매입세금계산서와 견줄 수 있다.
+ *
+ *   🔴 같은 기간을 청구서로도 올리면 **중복**이다 (승인번호 유무로 키 모양이 갈린다).
+ *      fin-upload 의 미리보기가 겹치는 기간을 세어 경고한다.
+ */
+function parseWooriApproval(rows: unknown[][], h: { at: number; col: Map<string, number> }, rawCsv: string): FinParseResult {
+  const merKey = [...h.col.keys()].find((k) => k.startsWith("이용가맹점")) ?? "이용가맹점(은행)명";
+  const out: NormalizedCashTxn[] = [];
+  const skipped: { line: number; reason: string }[] = [];
+  for (let i = h.at + 1; i < rows.length; i++) {
+    const r = rows[i];
+    if (r.every((c) => String(c ?? "").trim() === "")) continue;
+    const when = toKstDateTime(cell(r, h.col, "이용일자"));
+    if (!when) {
+      const raw = String(cell(r, h.col, "이용일자") ?? "").trim();
+      // 🔴 여러 쪽짜리 파일은 중간에 머리행이 되풀이된다 — 못 읽은 줄이 아니다 (실측 report(3).xls)
+      if (raw !== "" && normHead(raw) !== "이용일자" && !/합계|소계|총/.test(raw)) {
+        skipped.push({ line: i + 1, reason: `이용일자 「${raw}」를 못 읽음` });
+      }
+      continue;
+    }
+    const appr = toWon(cell(r, h.col, "승인금액"));
+    if (appr === null) {
+      skipped.push({ line: i + 1, reason: "승인금액을 못 읽음" });
+      continue;
+    }
+    /* 취소금액이 붙어 오면 **순액**으로 적는다 — 합계가 그대로 맞고 줄이 늘지 않는다.
+       (실측 파일은 취소금액이 전부 0이었다. 0이 아닌 날을 대비해 설명에 남긴다) */
+    const cancel = toWon(cell(r, h.col, "취소금액")) ?? 0;
+    const net = appr - Math.abs(cancel);
+    if (net === 0) {
+      if (appr !== 0) skipped.push({ line: i + 1, reason: `승인 ${appr.toLocaleString()}원이 전액 취소됨` });
+      continue;
+    }
+    const inst = String(cell(r, h.col, "할부개월") ?? "").trim();
+    const kind = String(cell(r, h.col, "매출구분") ?? "").trim();
+    const merchant = String(cell(r, h.col, merKey) ?? "").trim() || "(가맹점 미상)";
+    out.push({
+      source: "법인카드",
+      occurredAt: when,
+      description: cancel !== 0 ? `${merchant} (취소 ${Math.abs(cancel).toLocaleString()}원 반영)` : merchant,
+      inAmount: 0,
+      outAmount: net,
+      balance: null,
+      approvalNo: String(cell(r, h.col, "승인번호") ?? "").trim() || null,
+      bizNo: String(cell(r, h.col, "사업자번호") ?? "").replace(/\D/g, "") || null,
+      installment: inst && inst !== "0" ? `${inst}개월` : kind && kind !== "일시불" ? kind : null,
+      branch: String(cell(r, h.col, "업종") ?? "").trim() || null,
+      payerCode: null,
+    });
+  }
+  if (out.length === 0) throw new Error("읽을 수 있는 승인 줄이 없습니다");
+  return finish("법인카드", "우리카드 승인 상세내역", out, skipped, rawCsv);
+}
+
 /** 우리 「이용대금 상세내역」(청구서) — 이용일자가 MM.DD 뿐이라 연도는 파일 이름(2026.8)에서.
- *  ⚠️ 승인번호가 없어 「거래내역(회원별)」과 같은 기간을 둘 다 올리면 중복이 된다 —
- *     우리카드는 한 형식만 쓰는 것이 안전하다 (중복 키가 서로 다른 글자라 못 걸러냄) */
+ *  ⚠️ 승인번호가 없어 「거래내역(회원별)」·「승인 상세내역」과 같은 기간을 둘 다 올리면 중복이 된다 —
+ *     우리카드는 한 형식만 쓰는 것이 안전하다 (중복 키가 서로 다른 글자라 못 걸러냄).
+ *     fin-upload 미리보기가 겹치는 기간을 세어 경고한다 (2026-08-29) */
 function parseWooriBill(rows: unknown[][], rawCsv: string, fileName?: string): FinParseResult {
   const m = /(20\d{2})[.\-년 ]*(\d{1,2})/.exec(fileName ?? "");
   if (!m) throw new Error("우리카드 청구서에는 연도가 없습니다 — 파일 이름에 「2026.8」처럼 연·월을 넣어 주세요");
@@ -799,8 +871,10 @@ function parseWooriBill(rows: unknown[][], rawCsv: string, fileName?: string): F
     const dateRaw = String(cell(r, col, "이용일자") ?? "").trim();
     const dm = /^(\d{1,2})[./](\d{1,2})$/.exec(dateRaw);
     if (!dm) {
-      // 🔴 감사 M12: 값이 있는데 못 읽으면 기록한다 (빈 줄·합계는 제외)
-      if (dateRaw !== "" && !/합계|소계|총/.test(dateRaw)) skipped.push({ line: i + 1, reason: `이용일자 「${dateRaw}」를 못 읽음` });
+      // 🔴 감사 M12: 값이 있는데 못 읽으면 기록한다 (빈 줄·합계·되풀이 머리행은 제외)
+      if (dateRaw !== "" && normHead(dateRaw) !== "이용일자" && !/합계|소계|총/.test(dateRaw)) {
+        skipped.push({ line: i + 1, reason: `이용일자 「${dateRaw}」를 못 읽음` });
+      }
       continue;
     }
     const mm = Number(dm[1]);

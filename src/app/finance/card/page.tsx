@@ -8,7 +8,7 @@ import { CARD_SETTLE_PATTERN_SQL } from "@/lib/expense-cats";
 import { FinShell } from "@/components/fin/shell";
 import { won } from "@/components/fin/money";
 import { TableWrap } from "@/components/fin/table";
-import { cardDaySums } from "@/lib/card-recon";
+import { cardDaySums, cardDiff } from "@/lib/card-recon";
 import { posDayData } from "@/lib/pos-close";
 import { kstToday } from "@/lib/ym";
 import { PosCloseUi } from "./pos-close-ui";
@@ -105,10 +105,11 @@ export default async function FinanceCardPage({
       AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date
   `);
 
-  const { dayRows, sumAssoc, sumApp, diffDays, assocLast, afterCutoffDays, afterCutoffApp } = cd;
-  /* 🔴 2026 감사 R4: 여신 자료가 끝난 날 이후의 앱 매출은 「차이」가 아니라 「비교 불가」 —
-     8/24~26 569만원이 빨간 차이로 보이던 것 */
-  const comparable = (d: string) => assocLast !== null && d <= assocLast;
+  const { dayRows, sumAssoc, sumPos, sumApp, diffDays, assocLast, afterCutoffDays, afterCutoffApp, easyDays, easyApp, easyPos } = cd;
+  /* 🔴 2026 감사 R4: 견줄 자료가 없는 날의 앱 매출은 「차이」가 아니라 「비교 불가」 —
+        8/24~26 569만원이 빨간 차이로 보이던 것.
+     🔴 2026-08-29: 판정은 card-recon 의 base 하나로 한다. 전엔 화면이 따로 재서
+        POS 로만 채워진 날의 집계와 회색 처리가 어긋났다. */
   const txnsByDay = new Map<string, { t: string; card_co: string; approval_no: string; amount: number; is_cancel: boolean }[]>();
   for (const x of monthTxns) {
     const arr = txnsByDay.get(x.d) ?? [];
@@ -127,17 +128,25 @@ export default async function FinanceCardPage({
   return (
     <FinShell tab="card" monthNav={{ ym, basePath: "/finance/card" }}>
       {/* ⭐ 카드 일마감 (사장님 요청 2026-08-26) — 토스 포스 매출리포트 ↔ 앱 판매 */}
-      <PosCloseUi data={pos} ym={ym} />
+      <PosCloseUi data={pos} />
 
       <h2 className="mt-6 text-lg font-bold">카드 매출 맞추기 (달)</h2>
       <p className="mt-1 text-sm text-slate-500">
-        여신협회 승인(카드사가 실제로 승인한 금액)과 앱에 적은 카드 판매를 <strong>날짜별로</strong> 견줍니다 —
-        차이 난 날만 열어 보면 됩니다.
+        세 자료를 <strong>날짜별로 나란히</strong> 봅니다 — 여신협회 승인(카드사가 승인한 금액) · 토스POS 결제(실제로
+        긁힌 돈) · 앱에 적은 판매. 차이 난 날만 열어 보면 됩니다.
       </p>
-      {assocLast && afterCutoffDays > 0 && (
+      {easyDays > 0 && (
+        <p className="tabular mt-2 rounded-lg bg-violet-50 p-2 text-xs text-violet-900">
+          이 달 간편결제: POS {won(easyPos)}원 · 앱 {won(easyApp)}원 ({easyDays}일) —
+          <strong> 간편결제(QR·네이버페이·카카오페이·토스페이)는 여신협회 승인에 안 잡힙니다.</strong>{" "}
+          그만큼 여신 열이 POS·앱보다 작은 것이 정상입니다. 그래서 차이는 <strong>POS 기준</strong>으로 잽니다.
+        </p>
+      )}
+      {afterCutoffDays > 0 && (
         <p className="tabular mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-900">
-          여신협회 자료가 {assocLast.slice(5)}까지입니다 — 그 뒤 {afterCutoffDays}일(앱 카드 매출 {won(afterCutoffApp)}원)은 POS
-          자료도 없어 비교할 수 없습니다(회색). 매출리포트나 여신 자료가 오면{" "}
+          {assocLast ? `여신협회 자료가 ${assocLast.slice(5)}까지입니다 — ` : ""}
+          {afterCutoffDays}일(앱 매출 {won(afterCutoffApp)}원)은 여신도 POS 자료도 없어 비교할 수 없습니다(회색).
+          매출리포트나 여신 자료가 오면{" "}
           <Link href={`/finance/upload?ym=${ym}`} className="underline">올리기</Link>에서 올려 주세요.
         </p>
       )}
@@ -155,27 +164,35 @@ export default async function FinanceCardPage({
       ) : (
         <>
           {/* 요약 */}
-          <section className="mt-4 grid grid-cols-3 gap-2 text-center">
+          <section className="mt-4 grid grid-cols-2 gap-2 text-center lg:grid-cols-4">
             <div className="rounded-2xl border border-slate-200 bg-white p-3">
               <p className="text-xs text-slate-500">여신협회 승인합</p>
               <p className="tabular mt-1 font-bold">{won(sumAssoc)}원</p>
+              <p className="text-[11px] text-slate-400">간편결제 빠짐</p>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white p-3">
-              <p className="text-xs text-slate-500">앱 카드 매출합</p>
-              <p className="tabular mt-1 font-bold">{won(sumApp)}원</p>
+              <p className="text-xs text-slate-500">토스POS 결제합</p>
+              <p className="tabular mt-1 font-bold">{won(sumPos)}원</p>
+              <p className="text-[11px] text-slate-400">카드 + 간편결제</p>
             </div>
-            <div className={`rounded-2xl border p-3 ${sumAssoc === sumApp ? "border-emerald-300 bg-emerald-50" : "border-amber-300 bg-amber-50"}`}>
+            <div className="rounded-2xl border border-slate-200 bg-white p-3">
+              <p className="text-xs text-slate-500">앱 매출합</p>
+              <p className="tabular mt-1 font-bold">{won(sumApp)}원</p>
+              <p className="text-[11px] text-slate-400">카드 + 간편결제</p>
+            </div>
+            <div className={`rounded-2xl border p-3 ${diffDays === 0 ? "border-emerald-300 bg-emerald-50" : "border-amber-300 bg-amber-50"}`}>
               <p className="text-xs text-slate-500">차이 난 날</p>
               <p className="tabular mt-1 font-bold">{diffDays}일</p>
+              <p className="text-[11px] text-slate-400">POS 기준</p>
             </div>
           </section>
 
           {/* 날짜별 대사 표 */}
           <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-            <h2 className="font-semibold">날짜별 — 여신협회 vs 앱</h2>
+            <h2 className="font-semibold">날짜별 — 여신협회 · 토스POS · 앱</h2>
             <p className="mt-1 text-xs text-slate-400">
-              차이 난 날은 그 날짜의 정비 내역에서 카드 판매를 펼쳐 보세요 — 앱에 안 적힌 카드
-              매출(등록 누락)이거나, 앱에는 있는데 승인이 없는 건입니다
+              차이 난 날은 날짜를 눌러 그 날 일마감을 여세요 — 앱에 안 적힌 결제(등록 누락)이거나,
+              앱에는 있는데 POS에 없는 건입니다
             </p>
             {(Number(localSale[0]?.n ?? 0) > 0 || Number(sokcho[0]?.n ?? 0) > 0) && (
               <p className="tabular mt-1 rounded-lg bg-sky-50 p-2 text-xs text-sky-900">
@@ -184,19 +201,20 @@ export default async function FinanceCardPage({
                 카드 연동형은 여신 승인에 섞이고 앱·QR형은 정산 입금으로만 옵니다 (차이 해석의 힌트)
               </p>
             )}
-            <TableWrap minWidth={430}>
+            <TableWrap minWidth={520}>
               <thead>
                 <tr className="text-xs text-slate-500">
                   <th className="py-1 text-left">날짜</th>
-                  <th className="text-right">승인합 (여신/POS)</th>
+                  <th className="text-right">여신협회</th>
+                  <th className="text-right">토스POS</th>
                   <th className="text-right">앱</th>
                   <th className="text-right">차이</th>
                 </tr>
               </thead>
               <tbody>
                 {dayRows.map(([d, r]) => {
-                  const diff = r.assoc - r.app;
-                  const cmp = comparable(d);
+                  const diff = cardDiff(r);
+                  const cmp = diff !== null;
                   return (
                     <tr
                       key={d}
@@ -204,10 +222,17 @@ export default async function FinanceCardPage({
                     >
                       <td className="py-1">
                         <Link href={`/finance/card?ym=${ym}&d=${d}`} className="underline-offset-2 hover:underline">{d.slice(5)}</Link>
-                        {r.src === "POS" && <span className="ml-1 rounded bg-sky-100 px-1 text-[10px] text-sky-800">POS</span>}
+                        {r.base === "POS" && <span className="ml-1 rounded bg-sky-100 px-1 text-[10px] text-sky-800">POS 기준</span>}
                       </td>
-                      <td className="text-right">{r.assoc !== 0 ? `${won(r.assoc)}` : <span className="text-slate-300">—</span>}</td>
-                      <td className="text-right">{r.app !== 0 ? `${won(r.app)}` : <span className="text-slate-300">—</span>}</td>
+                      <td className="text-right">{r.assoc !== null ? won(r.assoc) : <span className="text-slate-300">—</span>}</td>
+                      <td className="text-right">
+                        {r.pos !== null ? won(r.pos) : <span className="text-slate-300">—</span>}
+                        {r.posEasy !== 0 && <span className="block text-[10px] text-violet-700">간편 {won(r.posEasy)}</span>}
+                      </td>
+                      <td className="text-right">
+                        {r.app !== 0 ? won(r.app) : <span className="text-slate-300">—</span>}
+                        {r.appEasy !== 0 && <span className="block text-[10px] text-violet-700">간편 {won(r.appEasy)}</span>}
+                      </td>
                       <td className={`text-right ${!cmp ? "text-slate-300" : diff === 0 ? "text-slate-300" : "text-amber-700"}`}>
                         {!cmp ? "자료 없음" : diff === 0 ? "✓" : `${diff > 0 ? "+" : ""}${won(diff)}`}
                       </td>
@@ -219,9 +244,10 @@ export default async function FinanceCardPage({
                 <tr className="border-t border-slate-300 font-semibold">
                   <td className="py-1">합계</td>
                   <td className="text-right">{won(sumAssoc)}</td>
+                  <td className="text-right">{won(sumPos)}</td>
                   <td className="text-right">{won(sumApp)}</td>
-                  <td className={`text-right ${sumAssoc === sumApp ? "text-emerald-700" : "text-amber-700"}`}>
-                    {sumAssoc === sumApp ? "일치" : won(sumAssoc - sumApp)}
+                  <td className={`text-right ${sumPos === sumApp ? "text-emerald-700" : "text-amber-700"}`}>
+                    {sumPos === sumApp ? "일치" : won(sumPos - sumApp)}
                   </td>
                 </tr>
               </tfoot>
@@ -238,25 +264,26 @@ export default async function FinanceCardPage({
               </p>
               <div className="mt-2 space-y-1">
                 {dayRows
-                  .filter(([d, r]) => comparable(d) && r.assoc !== r.app)
+                  .filter(([, r]) => (cardDiff(r) ?? 0) !== 0)
                   .map(([d, r]) => {
-                    const diff = r.assoc - r.app;
+                    const diff = cardDiff(r) ?? 0;
                     const dayQ = quotesByDay.get(d) ?? [];
-                    const cardQ = dayQ.filter((q) => q.pm === "카드" || q.pm === "혼합");
+                    const cardQ = dayQ.filter((q) => q.pm === "카드" || q.pm === "간편결제" || q.pm === "혼합");
                     /* 지역화폐(속초상품권)는 두 갈래다 (사장님 설명 2026-08-25):
                        카드 연동형 → 여신협회 승인에 잡힘 / 앱·QR형 → 승인 없이 「속초정산」 입금만.
                        그래서 차이 난 날엔 그날 지역화폐 판매를 같이 보여준다. */
                     const localQ = dayQ.filter((q) => q.pm === "지역화폐");
                     const dayTxns = txnsByDay.get(d) ?? [];
-                    // 그날 앱 카드·혼합 판매 금액 집합 — 여신 승인 중 짝 없는 금액에 표시
-                    const appAmts = new Set(dayQ.filter((q) => q.pm === "카드" || q.pm === "혼합").map((q) => Number(q.total)));
+                    // 그날 앱 카드·간편·혼합 판매 금액 집합 — 여신 승인 중 짝 없는 금액에 표시
+                    const appAmts = new Set(cardQ.map((q) => Number(q.total)));
                     const suspects = dayQ.filter(
-                      (q) => q.pm !== "카드" && q.pm !== "혼합" && Number(q.total) === Math.abs(diff),
+                      (q) => q.pm !== "카드" && q.pm !== "간편결제" && q.pm !== "혼합" && Number(q.total) === Math.abs(diff),
                     );
                     return (
                       <details key={d} className="rounded-lg border border-slate-200 p-2">
                         <summary className="tabular cursor-pointer text-sm">
-                          {d.slice(5)} — 여신 {won(r.assoc)} vs 앱 {won(r.app)}{" "}
+                          {d.slice(5)} — {r.base === "POS" ? "POS" : "여신"}{" "}
+                          {won(r.base === "POS" ? (r.pos ?? 0) : (r.assoc ?? 0))} vs 앱 {won(r.app)}{" "}
                           <span className="font-semibold text-amber-700">
                             ({diff > 0 ? "+" : ""}
                             {won(diff)})

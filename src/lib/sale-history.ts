@@ -234,10 +234,13 @@ export async function saleHistory(opts: {
                    || ' ' || a.stage || COALESCE(' — ' || left(a.error, 140), '')
               FROM mars_attempt a WHERE a.quote_id = q.id ORDER BY a.id DESC LIMIT 1) mars_last_try,
            to_char(q.created_at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') created_hm,
-           -- ⭐ 카드 일마감 자국 (2026-08-26) — 이 판매(단일·분할)가 POS 결제와 이어졌나 / 그 날 POS 자료가 있나
+           -- ⭐ 카드 일마감 자국 (2026-08-26) — 이 판매(단일·분할·외상수금)가 POS 결제와 이어졌나 / 그 날 POS 자료가 있나
+           -- 🔴 2026-08-29: 외상 카드수금(receivable_payment)이 빠져 있어, 일마감에서 이어졌는데도
+           --    「POS에 없음」으로 보이던 것을 고쳤다
            (SELECT count(*)::int FROM recon_match m WHERE m.kind = '포스결제' AND m.status = '확정'
               AND ((m.ref_table = 'quote' AND m.ref_id = q.id)
-                OR (m.ref_table = 'quote_payment' AND m.ref_id IN (SELECT id FROM quote_payment WHERE quote_id = q.id)))) pos_n,
+                OR (m.ref_table = 'quote_payment' AND m.ref_id IN (SELECT id FROM quote_payment WHERE quote_id = q.id))
+                OR (m.ref_table = 'receivable_payment' AND m.ref_id IN (SELECT id FROM receivable_payment WHERE quote_id = q.id)))) pos_n,
            (SELECT count(*)::int FROM pos_txn p WHERE p.is_active AND p.day = COALESCE(q.work_date, q.created_at::date)) pos_day_n,
            qi.id item_id, qi.line_type, qi.description, qi.qty, qi.final_price, qi.memo line_memo,
            -- ⭐ 규격은 저장된 폭/편평비/인치로 조립한다 (225/45R17 · 145R13)
@@ -322,7 +325,10 @@ export async function saleHistory(opts: {
         tyrePositions: r.tyre_positions ? r.tyre_positions.split(",").map((x) => x.trim()).filter(Boolean) : [],
         createdAt: r.created_hm,
         posMatch:
-          r.payment_method === "카드" || (r.pay_split ?? "").includes("카드:")
+          r.payment_method === "카드" ||
+          r.payment_method === "간편결제" ||
+          (r.pay_split ?? "").includes("카드:") ||
+          (r.pay_split ?? "").includes("간편결제:")
             ? Number(r.pos_n) > 0
               ? "ok"
               : Number(r.pos_day_n) > 0

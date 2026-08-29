@@ -1142,6 +1142,8 @@ const PAY_CODE: Record<string, string> = {
   현금: "CREDITCARD",
   계좌이체: "CREDITCARD",
   지역화폐: "CREDITCARD",
+  // 간편결제 (2026-08-29) — 매입사가 카드사로 찍히는 건이 대부분이라 카드로 보낸다
+  간편결제: "CREDITCARD",
 };
 
 /** 신규 매출 주문을 열고 고객·주행거리·결제·날짜를 넣는다 */
