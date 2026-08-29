@@ -826,6 +826,52 @@ export const kumhoMaterial = pgTable(
   (t) => [index("idx_kumho_material_pattern").on(t.patternCode)],
 );
 
+/* ============================================================
+ * 3-18. continental_material — 콘티넨탈 자재 마스터 ⭐ (사장님 요청 2026-08-29)
+ *
+ * "콘티넨탈 품목을 재정리해야함. 운영 규격 표를 기준으로 삼고
+ *  material 번호들을 기준으로 삼아서 중복이 없도록 하면 될듯."
+ *
+ * 미쉐린은 MARS 마스터(CAI)가, 금호는 `kumho_material` 이 「무엇을 파는가」의 정본이다.
+ * 콘티넨탈은 그 자리가 비어 있었다 — 이 표가 그 자리다.
+ *
+ * 두 파일이 한 벌이다 (2026): 운영 규격 560줄(여름·사계절) + 겨울 주문서 176줄.
+ * **자재번호가 하나도 겹치지 않는다**(실측)라 합쳐서 한 표에 담는다.
+ *
+ * 🔴 `price_excl` 은 **부가세 미포함**이다. 운영 규격의 「공장도가」가 기표가×1.1 로
+ *    560줄 전부 일치해 확인했다. 헷갈리면 손님에게 10% 낮게 말하게 된다.
+ * ⚠️ 제너럴(GENERAL)이 31줄 섞여 있다 — `brand_code = 'GN'`.
+ * ========================================================== */
+export const continentalMaterial = pgTable(
+  "continental_material",
+  {
+    /** Material · Article # — 11자리 */
+    code: text("code").primaryKey(),
+    /** 'CO' | 'GN' — 우리 품번은 이 접두 + code (`CO03201650000`) */
+    brandCode: text("brand_code").notNull(),
+    /** 원문 `255/35R19 96Y XL FR AllSeasonContact 2` */
+    description: text("description").notNull(),
+    /** 겨울 주문서의 정식 모델명 (여름 파일엔 없다) */
+    marketingLine: text("marketing_line"),
+    /** 운영 규격의 짧은 패턴코드 `ASC2` */
+    patternCode: text("pattern_code"),
+    /** 규칙이 뽑은 모델명 — 화면 이름의 근거 (conti-name.ts) */
+    modelName: text("model_name").notNull(),
+    season: text("season"),
+    rimInch: numeric("rim_inch", { precision: 4, scale: 1 }),
+    sizeCode: text("size_code"),
+    /** 운영 규격의 COC 칸 — 「SMA 전환방지 숨김」 등. **뜻을 몰라 적어만 둔다** (사장님 결정) */
+    coc: text("coc"),
+    /** 기표가 — 부가세 **미포함** */
+    priceExcl: integer("price_excl").notNull(),
+    /** 어느 파일에서 왔나 — `운영규격 2026` · `겨울주문서 2026` · `사장님 확인 …` */
+    sourceLabel: text("source_label").notNull(),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [index("idx_conti_material_model").on(t.modelName), index("idx_conti_material_season").on(t.season)],
+);
+
 export const supplierItemCode = pgTable(
   "supplier_item_code",
   {

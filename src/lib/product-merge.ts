@@ -208,17 +208,25 @@ export async function mergeProducts(
         ) SELECT count(*) FROM m
       `);
 
-      /** 흡수된 품번을 사전에 남긴다 — 금호 KM자재코드는 맨숫자 코드도 함께 */
+      /**
+       * 흡수된 품번을 사전에 남긴다 — 옛 품번으로 인보이스가 와도 대표를 찾게.
+       * 🔴 **접두로 거래처를 가른다** (2026-08-29). 전에는 무엇이든 「금호」로 넣었다 —
+       *    콘티넨탈 상품을 합쳤더니 `CO03557690000` 이 금호 자재코드로 들어갔다.
+       *    금호는 `KM2387392` 와 맨숫자 `2387392` 둘 다, 콘티넨탈은 11자리 맨숫자만.
+       *    접두를 모르는 옛 품번(`120/001/00013`)은 넣지 않는다 — 근거 없는 사전은 해롭다.
+       */
       for (const p of absorbed) {
         const no = p.marsItemNo?.trim();
         if (!no) continue;
-        const codes = [no];
-        const m = /^KM(\d{7,8})$/.exec(no);
-        if (m) codes.push(m[1]);
+        const km = /^KM(\d{7,8})$/.exec(no);
+        const co = /^(?:CO|GN)(\d{11})$/.exec(no);
+        const supplier = km ? "금호" : co ? "콘티넨탈" : null;
+        if (!supplier) continue;
+        const codes = km ? [no, km[1]] : [co![1]];
         for (const code of codes) {
           await tx.execute(sql`
             INSERT INTO supplier_item_code (supplier, code, product_id, supplier_name, matched_by)
-            VALUES ('금호', ${code}, ${keepId}, ${p.rawName ?? p.pattern ?? null}, '합치기')
+            VALUES (${supplier}, ${code}, ${keepId}, ${p.rawName ?? p.pattern ?? null}, '합치기')
             ON CONFLICT (supplier, code) DO NOTHING
           `);
         }

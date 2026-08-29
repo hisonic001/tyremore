@@ -28,6 +28,14 @@ import * as XLSX from "xlsx";
 import { isOwner } from "./auth";
 import { applyCatalog, looksLikeCatalog, planCatalog, type ApplyResult, type CatalogPlan } from "./kumho-sheet";
 import { applyMaster, looksLikeMaster, planMaster } from "./kumho-master";
+import {
+  applyContiSpec,
+  applyContiWinter,
+  looksLikeContiSpec,
+  looksLikeContiWinter,
+  planContiSpec,
+  planContiWinter,
+} from "./conti-apply";
 
 /** 우리가 읽을 줄 아는 거래처 목록 양식 */
 const READERS = {
@@ -55,6 +63,33 @@ const READERS = {
     looksLike: looksLikeMaster,
     plan: planMaster,
     apply: applyMaster,
+  },
+  /**
+   * ⭐ 콘티넨탈 운영 규격 (사장님 요청 2026-08-29)
+   *   Material 11자리가 열쇠다. 우리 품번이 이미 `CO`/`GN` + Material 이라 딱 맞는다.
+   *   🔴 기표가는 **부가세 미포함**이다 (공장도가 = 기표가 × 1.1 이 560줄 전부 일치).
+   *   ⚠️ 제너럴(GENERAL)이 31줄 섞여 있다 — 브랜드 칸을 따라 `GN` 으로 간다.
+   */
+  "콘티넨탈 운영규격": {
+    where: "콘티넨탈이 보내주는 「타이어 운영 규격」 엑셀 (여름·사계절)",
+    columns: "Brand · Size · Pattern · Description · Material · 기표가",
+    mode: "json" as const,
+    looksLike: looksLikeContiSpec,
+    plan: planContiSpec,
+    apply: applyContiSpec,
+  },
+  /**
+   * ⭐ 콘티넨탈 겨울 주문서 (2026-08-29)
+   *   🔴 머리글이 6번째 줄에 있어 컬럼 이름으로 못 읽는다 — 「Article #」 줄을 찾아 머리글로 삼는다.
+   *   운영 규격과 자재번호가 하나도 겹치지 않는다 (실측). 겨울은 이 파일이 유일한 근거다.
+   */
+  "콘티넨탈 겨울주문서": {
+    where: "콘티넨탈이 보내주는 「Winter 주문서」 엑셀",
+    columns: "Article # · Description · Marketing Line · Size · 2026 List Price",
+    mode: "aoa" as const,
+    looksLike: looksLikeContiWinter,
+    plan: planContiWinter,
+    apply: applyContiWinter,
   },
 } as const;
 

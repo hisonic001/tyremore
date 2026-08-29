@@ -96,6 +96,22 @@ async function matchProduct(code: string, description = "", supplier = ""): Prom
     }
   }
 
+  /**
+   * ⭐ 콘티넨탈도 **자재 마스터**(continental_material)까지 본다 (사장님 요청 2026-08-29).
+   *    2026 목록 737줄이 들어 있어, 콘티넨탈이 같은 타이어에 새 번호를 매겨도
+   *    규격+모델명으로 이어 준다. ⚠️ 제네럴(GN)이 섞여 오므로 접두를 고정하지 않는다.
+   */
+  if (supplier === "콘티넨탈") {
+    const { resolveContinentalProduct } = await import("./conti-product");
+    // create·learn 둘 다 안 한다 — 미리보기에서도 불린다 (금호와 같은 이유)
+    const r = await resolveContinentalProduct(code);
+    if (r.ok) {
+      const [p] = await db.execute<{ id: number; pattern: string | null; excl: number | null }>(sql`
+        SELECT id, COALESCE(display_name, pattern) pattern, list_price_excl excl FROM product WHERE id = ${r.productId}`);
+      if (p) return { ...p, via: r.via === "규격+모델" ? "규격+모델" : "품번" };
+    }
+  }
+
   if (!description.trim()) return null;
 
   const { parseTireSpec } = await import("./tire-spec");
@@ -694,6 +710,23 @@ export async function createProductFromInvoiceItem(
     await db.update(purchaseInvoiceItem).set({ productId: r.productId }).where(eq(purchaseInvoiceItem.id, itemId));
     refresh("/receiving", "/");
     return { ok: true, productId: r.productId };
+  }
+
+  /**
+   * ⭐ 콘티넨탈·제네럴도 **자재 마스터 한 벌**로 만든다 (2026-08-29).
+   *    이름·규격·계절·기표가가 전부 conti-name 규칙에서 나온다 —
+   *    아래 일반 경로로 만들면 목록 올리기와 **다른 이름**이 나온다 (금호 ddedbce 의 교훈).
+   *    🔴 자재 마스터에 없는 번호로는 만들지 않는다.
+   */
+  if ((b.code === "CO" || b.code === "GN") && line.cai?.trim()) {
+    const { resolveContinentalProduct } = await import("./conti-product");
+    const r = await resolveContinentalProduct(line.cai.trim(), { create: true });
+    if (r.ok) {
+      await db.update(purchaseInvoiceItem).set({ productId: r.productId }).where(eq(purchaseInvoiceItem.id, itemId));
+      refresh("/receiving", "/");
+      return { ok: true, productId: r.productId };
+    }
+    // 자재 마스터에 없으면 아래 일반 경로로 — 콘티넨탈 인보이스 설명은 사람이 읽는 이름이라 쓸 만하다
   }
 
   const model = readModelName(line.description);
