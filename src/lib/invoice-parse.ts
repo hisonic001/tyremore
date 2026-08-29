@@ -174,6 +174,22 @@ function detectMap(rows: Record<string, unknown>[]): ColumnMap | null {
 }
 
 /**
+ * ⭐ **머리글만 보고** 어느 거래처 양식인지 (2026-08-29)
+ *
+ *   조회 기간에 자료가 없으면 머리글 한 줄짜리 빈 엑셀이 내려온다
+ *   (실측: `billing-report-2026-08-22 (1).xlsx` — 콘티넨탈 머리글만 있고 0줄).
+ *   그걸 「양식을 못 알아봤다」고 하면 사장님이 파일이 잘못된 줄 아신다.
+ *   자료가 0줄일 때 무엇이 비었는지 짚어 주려고 쓴다.
+ */
+export function supplierOfHeader(header: unknown[]): string | null {
+  const keys = header.map((k) => String(k ?? "").replace(/\s/g, "").toLowerCase());
+  for (const m of COLUMN_MAPS) {
+    if (m.signature.every((s) => keys.includes(s.replace(/\s/g, "").toLowerCase()))) return m.supplier;
+  }
+  return null;
+}
+
+/**
  * ⭐ 엑셀 인보이스 읽기 — 세 브랜드 공통.
  * 문서번호별로 나눠 **여러 건**을 돌려준다.
  */

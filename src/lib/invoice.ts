@@ -188,6 +188,8 @@ export async function previewInvoice(
 ): Promise<PreviewResult | { error: string }> {
   let text = "";
   let excelRows: Record<string, unknown>[] | null = null;
+  /** 머리글은 알아봤는데 자료가 0줄인 경우의 거래처 이름 (2026-08-29) */
+  let emptyOf: string | null = null;
   try {
     if (/\.pdf$/i.test(fileName)) {
       const { pdfToText } = await import("./pdf-text");
@@ -199,9 +201,13 @@ export async function previewInvoice(
        */
       const XLSX = await import("xlsx");
       const wb = XLSX.read(new Uint8Array(bytes.slice(0)), { type: "array", cellDates: true });
-      excelRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(wb.Sheets[wb.SheetNames[0]], {
-        defval: null,
-      });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      excelRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: null });
+      // 자료가 0줄이면 머리글만 따로 봐 둔다 — 「빈 파일」과 「모르는 양식」을 가르려고
+      if (excelRows.length === 0) {
+        const head = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: "" })[0] ?? [];
+        emptyOf = (await import("./invoice-parse")).supplierOfHeader(head);
+      }
       text = wb.SheetNames.map((n) => XLSX.utils.sheet_to_csv(wb.Sheets[n], { FS: " " })).join("\n");
     } else {
       return { error: "PDF 또는 엑셀 파일만 올릴 수 있습니다" };
@@ -221,6 +227,10 @@ export async function previewInvoice(
   const parsedList = excelRows ? parseInvoiceRows(excelRows) : parseInvoiceText(text);
 
   if (parsedList.length === 0) {
+    // 🔴 머리글은 맞는데 줄이 없는 파일을 「모르는 양식」이라 하면 안 된다 (사장님 제보 2026-08-29)
+    if (emptyOf) {
+      return { error: `${emptyOf} 인보이스 양식은 맞는데 **내용이 한 줄도 없습니다** — 조회 기간을 바꿔 다시 내려받아 주세요.` };
+    }
     return {
       error: excelRows
         ? "어느 브랜드 양식인지 알아보지 못했습니다. 미쉐린·콘티넨탈·금호 엑셀을 읽습니다."
