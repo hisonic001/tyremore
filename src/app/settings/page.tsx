@@ -12,6 +12,7 @@ import {
   Boxes,
   ChevronRight,
   ClipboardList,
+  Megaphone,
   Store,
   Tags,
   Truck,
@@ -55,6 +56,7 @@ const ICONS: Record<string, ReactNode> = {
   "/receivables": <BookOpen className="size-5" />,
   "/settings/shop": <Store className="size-5" />,
   "/status": <Activity className="size-5" />,
+  "/marketing": <Megaphone className="size-5" />,
 };
 
 export default async function SettingsPage() {
@@ -95,6 +97,12 @@ export default async function SettingsPage() {
             href: "/settings/users",
             title: "계정 관리",
             desc: "계정 만들기 · 할 수 있는 일 스위치 · 아이디·비밀번호 (항상 사장님 전용)",
+          },
+          /* ⭐ 마케팅 (2026-08-29, docs/17) — 블로그 초안·리뷰 답글 초안. 발행은 사장님이 직접 */
+          {
+            href: "/marketing",
+            title: "마케팅",
+            desc: "네이버 블로그 초안 · 리뷰 답글 초안 (사장님 전용)",
           },
         ]
       : []),

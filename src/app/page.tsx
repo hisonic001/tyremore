@@ -6,6 +6,8 @@ import { SearchBox, SearchButton } from "./search-box";
 import { FilterPanel, ModeTabs } from "./search-ui";
 import { ProductCard, VehicleCard } from "./cards";
 import { ComparePanel } from "./compare-panel";
+import { pendingDraftCount } from "@/lib/blog-draft";
+import { PenLine } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +66,8 @@ export default async function Home({
     (filter.parts ? 1 : 0);
 
   const session = await getSession();
+  /* ⭐ 밤에 만들어 둔 블로그 초안 (마케팅 1단계, 2026-08-29) — 사장님 계정에만, 있을 때만 */
+  const draftsWaiting = session?.role === "owner" && !q ? await pendingDraftCount().catch(() => 0) : 0;
   const [vehicles, products, brands] = await Promise.all([
     mode === "customer" && q ? findVehicles(q) : Promise.resolve([]),
     mode === "product"
@@ -102,6 +106,19 @@ export default async function Home({
           </Link>
         </nav>
       </header>
+
+      {draftsWaiting > 0 && (
+        <Link
+          href="/marketing/blog"
+          className="mb-3 flex items-center gap-3 rounded-card border border-accent-400 bg-amber-50 px-4 py-3 active:bg-amber-100"
+        >
+          <PenLine className="size-5 shrink-0 text-amber-800" />
+          <span className="min-w-0 flex-1 text-sm leading-snug text-amber-900">
+            <strong>블로그 초안 {draftsWaiting}개</strong>가 기다립니다 — 한마디 쓰고 복사해서 올리세요
+          </span>
+          <span className="shrink-0 text-xs font-semibold text-amber-800">열기 →</span>
+        </Link>
+      )}
 
       <ModeTabs mode={mode} q={q} />
 

@@ -30,7 +30,13 @@ const TABS = [
     href: "/settings",
     label: "설정",
     Icon: Settings,
-    match: (p: string) => p.startsWith("/settings") || p.startsWith("/receiving") || p.startsWith("/mars") || p.startsWith("/status"),
+    // 마케팅(/marketing)은 설정 소속 — 탭 5칸은 늘리지 않는다 (2026-08-29, docs/17)
+    match: (p: string) =>
+      p.startsWith("/settings") ||
+      p.startsWith("/receiving") ||
+      p.startsWith("/mars") ||
+      p.startsWith("/status") ||
+      p.startsWith("/marketing"),
   },
 ];
 
