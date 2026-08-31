@@ -139,24 +139,29 @@ export function MoneyView({ data, recentBank }: { data: TaxCashData; recentBank:
    * 「정리(무시)」와 다르다 — 무시는 없던 일로 하는 것이라 **받을 돈을 잊는다.**
    * 이건 이 달 할 일에서만 빼고 「아직 안 들어온 돈」으로 남긴다.
    */
-  const wait = (invId: number, name: string, total: number) =>
+  /* 🔴 확인 시트는 transition **밖**에서 연다 (settle 과 같은 꼴 — 사장님 제보 2026-08-31
+     "버그같은 것이 발생함") — 시트 응답을 기다리는 동안 transition 이 pending 을 붙들어
+     화면 단추가 통째로 잠겨 있었다 (React 19 는 async transition 을 끝까지 기다린다). */
+  const wait = async (invId: number, name: string, total: number) => {
+    const ok = await ask({
+      title: isIn ? "아직 안 들어온 돈으로 미룰까요?" : "아직 안 준 돈으로 미룰까요?",
+      body:
+        `「${name}」 ${won(total)}원을 이 달 할 일에서 뺍니다.
+` +
+        `없던 일로 하는 게 아닙니다 — 「아직 ${isIn ? "안 들어온" : "안 준"} 돈」으로 남고, ` +
+        `${isIn ? "입금" : "출금"}이 오면 그 줄과 이으면 확인이 끝납니다.`,
+      confirmLabel: "미루기",
+    });
+    if (!ok) return;
     start(async () => {
       setMsg(null);
       setError(null);
-      const ok = await ask({
-        title: isIn ? "아직 안 들어온 돈으로 미룰까요?" : "아직 안 준 돈으로 미룰까요?",
-        body:
-          `「${name}」 ${won(total)}원을 이 달 할 일에서 뺍니다.\n` +
-          `없던 일로 하는 게 아닙니다 — 「아직 ${isIn ? "안 들어온" : "안 준"} 돈」으로 남고, ` +
-          `${isIn ? "입금" : "출금"}이 오면 그 줄과 이으면 확인이 끝납니다.`,
-        confirmLabel: "미루기",
-      });
-      if (!ok) return;
       const r = await markTaxWaiting(invId, true);
       if (!r.ok) return setError(r.error);
       setMsg(`「${name}」을(를) 아직 ${isIn ? "안 들어온" : "안 준"} 돈으로 미뤘습니다.`);
       router.refresh();
     });
+  };
 
   const unwait = (invId: number, name: string) =>
     start(async () => {
