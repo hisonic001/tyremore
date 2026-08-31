@@ -14,6 +14,7 @@ import { db } from "@/db";
 import { getSession, isOwner } from "@/lib/auth";
 import { cashUsedSql, normName } from "./recon-data";
 import { planSettlement } from "./receivable-plan";
+import { exactPlan } from "./payables-plan";
 import { restoreCashLine } from "./cash-restore";
 
 const METHODS = ["계좌이체", "현금", "카드", "기타"];
@@ -144,6 +145,132 @@ export async function undoPayFromWithdrawal(
   revalidatePath("/finance/expenses");
   revalidatePath("/finance/party");
   return { ok: true, removed: marks.length };
+}
+
+/**
+ * ⚡ 원단위 자동 잇기 (리모델링 ②, 사장님 승인 2026-08-31)
+ *
+ *   출금 남은 돈이 그 거래처 인보이스(하나 또는 같은 작성일 묶음)와 **정확히 일치**할 때
+ *   한 번에 잇는다. 제안은 payables-view.exactPlan 이 만들지만, 🔴 실행 시점에 서버가
+ *   같은 계산을 다시 한다 — 화면이 열려 있던 사이 잔액이 바뀌었으면 거절되는 게 맞다.
+ */
+export async function autoLinkExact(input: {
+  cashTxnId: number;
+  supplier: string;
+}): Promise<{ ok: true; n: number; amount: number } | { ok: false; error: string }> {
+  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  const session = await getSession();
+  const supplier = input.supplier?.trim();
+  if (!supplier) return { ok: false, error: "거래처가 없습니다" };
+
+  const [dep] = await db.execute<{ id: number; out_amount: number; date: string; l: string; description: string }>(sql`
+    SELECT id, out_amount, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') date,
+           account_label l, description
+    FROM cash_txn WHERE id = ${input.cashTxnId} AND source = '통장' AND is_active AND out_amount > 0
+  `);
+  if (!dep) return { ok: false, error: "출금 줄을 찾을 수 없습니다" };
+  const dupe = await db.execute<{ id: number }>(sql`
+    SELECT id FROM recon_match WHERE src_table = 'cash_txn' AND src_id = ${input.cashTxnId} AND kind = '매입지급' LIMIT 1
+  `);
+  if (dupe.length > 0) return { ok: false, error: "이미 지급으로 이어진 출금입니다" };
+  const [usedRow] = await db.execute<{ s: string }>(sql`
+    SELECT ${cashUsedSql("c")}::bigint s FROM cash_txn c WHERE c.id = ${input.cashTxnId}
+  `);
+  const avail = Number(dep.out_amount) - Number(usedRow?.s ?? 0);
+  if (avail <= 0) return { ok: false, error: "이 출금은 남은 금액이 없습니다" };
+
+  try {
+    return await db.transaction(async (tx) => {
+      const rows = await tx.execute<{ id: number; no: string; d: string | null; remain: string }>(sql`
+        SELECT pi.id, pi.invoice_no no, pi.issued_at d,
+               (pi.total - COALESCE((SELECT SUM(amount)::int FROM purchase_payment pp WHERE pp.invoice_id = pi.id), 0))::bigint remain
+        FROM purchase_invoice pi
+        WHERE pi.status <> '취소' AND pi.supplier = ${supplier} AND pi.total > 0
+        ORDER BY pi.issued_at LIMIT 100
+        FOR UPDATE OF pi
+      `);
+      const plan = exactPlan(
+        avail,
+        rows.map((r) => ({ id: Number(r.id), no: r.no, d: r.d, remain: Number(r.remain) })),
+      );
+      if (!plan) return { ok: false as const, error: "지금은 금액이 정확히 맞지 않습니다 — 잔액이 바뀌었으면 새로고침해 주세요" };
+
+      let total = 0;
+      for (const id of plan.ids) {
+        const r = rows.find((x) => Number(x.id) === id)!;
+        const amt = Number(r.remain);
+        await tx.execute(sql`
+          INSERT INTO purchase_payment (invoice_id, amount, method, paid_on, memo, created_by)
+          VALUES (${id}, ${amt}, '계좌이체', ${dep.date},
+                  ${"통장 출금 연결 (" + dep.l + " " + dep.date + ") — 원단위 자동"}, ${session?.uid ?? null})
+        `);
+        await tx.execute(sql`
+          INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
+          VALUES ('매입지급', 'cash_txn', ${input.cashTxnId}, 'purchase_invoice', ${id}, ${amt}, '확정', '자동', ${session?.uid ?? null}, now())
+        `);
+        total += amt;
+      }
+      await tx.execute(sql`
+        UPDATE cash_txn SET recon_status = '확정', category = COALESCE(category, '매입대금')
+        WHERE id = ${input.cashTxnId}
+      `);
+      // 별명 학습 — payFromWithdrawal 과 같은 규칙
+      try {
+        const payer = dep.description.replace(/^\[[^\]]*\]\s*/, "").trim();
+        const key = normName(payer);
+        if (key.length >= 2) {
+          await tx.execute(sql`
+            INSERT INTO party_alias (alias_key, alias_raw, party_key, party_label)
+            VALUES (${key}, ${payer}, ${"S:" + supplier}, ${"거래처 " + supplier})
+            ON CONFLICT (alias_key) DO UPDATE SET party_key = EXCLUDED.party_key,
+              party_label = EXCLUDED.party_label, updated_at = now()
+          `);
+        }
+      } catch {
+        /* 학습 실패는 지급을 막지 않는다 */
+      }
+      revalidatePath("/finance/payables");
+      revalidatePath("/finance");
+      return { ok: true as const, n: plan.ids.length, amount: total };
+    });
+  } catch (e) {
+    return { ok: false, error: `잇지 못했습니다: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** ④ 통장 이름 별명 — 거래처 카드에서 직접 관리 (2026-08-31 "맨날 알려줘야 하는 것은 문제") */
+export async function addSupplierAlias(
+  supplier: string,
+  raw: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  const name = raw.trim();
+  const sup = supplier.trim();
+  if (!sup) return { ok: false, error: "거래처가 없습니다" };
+  const key = normName(name);
+  if (key.length < 2) return { ok: false, error: "통장에 찍히는 이름을 2자 이상 적어 주세요" };
+  await db.execute(sql`
+    INSERT INTO party_alias (alias_key, alias_raw, party_key, party_label)
+    VALUES (${key}, ${name}, ${"S:" + sup}, ${"거래처 " + sup})
+    ON CONFLICT (alias_key) DO UPDATE SET party_key = EXCLUDED.party_key,
+      party_label = EXCLUDED.party_label, updated_at = now()
+  `);
+  revalidatePath("/finance/payables");
+  return { ok: true };
+}
+
+export async function removeSupplierAlias(
+  supplier: string,
+  aliasKey: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  const done = await db.execute<{ alias_key: string }>(sql`
+    DELETE FROM party_alias WHERE alias_key = ${aliasKey} AND party_key = ${"S:" + supplier.trim()}
+    RETURNING alias_key
+  `);
+  if (done.length === 0) return { ok: false, error: "그 별명을 찾을 수 없습니다" };
+  revalidatePath("/finance/payables");
+  return { ok: true };
 }
 
 /**
