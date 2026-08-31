@@ -16,6 +16,7 @@ import {
   Tags,
   Truck,
   Users,
+  Wrench,
   Wallet,
 } from "lucide-react";
 
@@ -50,6 +51,7 @@ const ICONS: Record<string, ReactNode> = {
   "/settings/products": <Tags className="size-5" />,
   "/stock": <Boxes className="size-5" />,
   "/settings/suppliers": <Truck className="size-5" />,
+  "/settings/services": <Wrench className="size-5" />,
   "/receivables": <BookOpen className="size-5" />,
   "/settings/shop": <Store className="size-5" />,
   "/status": <Activity className="size-5" />,
@@ -110,6 +112,12 @@ export default async function SettingsPage() {
       href: "/settings/products",
       title: "상품",
       desc: "거래처 목록으로 채우기 · 새 상품 등록 · 안 받는 것 숨기기",
+    },
+    /* ⭐ 공임·정비 목록 (사장님 요청 2026-08-31) — 판매의 「공임·정비 추가」 검색이 쓰는 목록 */
+    {
+      href: "/settings/services",
+      title: "공임·정비",
+      desc: "판매에서 고르는 공임 목록 — 이름·금액 고치기 · 새로 만들기",
     },
     /*
      * ⭐ 재고는 홈 메뉴에서 여기로 내려왔다 (사장님 지시 2026-08-06) —

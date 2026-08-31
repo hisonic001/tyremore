@@ -5,7 +5,9 @@
  *
  * 전에는 「틀렸으면 취소하고 다시 등록」뿐이었다. 이제 줄 하나를 바로 고친다.
  * 재고는 서버가 따라 맞춘다 — 수량이 늘면 더 빠지고, 줄면 되살아난다.
- * MARS 전송완료 건을 고치면 경고가 돌아온다 (금액이 MARS 와 어긋난다).
+ * 🔴 MARS 에 보낸 판매(미전송·전송완료)는 서버가 품목 수정을 막는다
+ *    (사장님 결정 2026-08-31 — "전송 전에만"). 막힌 이유와 빠져나갈 길(수동처리)은
+ *    서버가 돌려주는 문구 그대로 위 알림띠에 보인다.
  */
 
 import { useEffect, useRef, useState, useTransition } from "react";
@@ -44,7 +46,7 @@ export function EditableLine({ line: l, onMessage }: { line: SaleLine; onMessage
       });
       if (!r.ok) return onMessage(`⚠️ ${r.error}`);
       onMessage(
-        `고쳤습니다.${r.shortage > 0 ? ` ⚠️ 재고가 ${r.shortage}본 모자랍니다.` : ""}${r.marsWarning ? ` ⚠️ ${r.marsWarning}` : ""}`,
+        `고쳤습니다.${r.shortage > 0 ? ` ⚠️ 재고가 ${r.shortage}본 모자랍니다.` : ""}${r.warning ? ` ⚠️ ${r.warning}` : ""}`,
       );
       setEditing(false);
       router.refresh();
@@ -56,7 +58,7 @@ export function EditableLine({ line: l, onMessage }: { line: SaleLine; onMessage
     start(async () => {
       const r = await removeSaleLine(l.itemId);
       if (!r.ok) return onMessage(`⚠️ ${r.error}`);
-      onMessage(`지웠습니다 — 재고 ${r.restored}개 복원.${r.marsWarning ? ` ⚠️ ${r.marsWarning}` : ""}`);
+      onMessage(`지웠습니다 — 재고 ${r.restored}개 복원.${r.warning ? ` ⚠️ ${r.warning}` : ""}`);
       router.refresh();
     });
   };
@@ -77,7 +79,11 @@ export function EditableLine({ line: l, onMessage }: { line: SaleLine; onMessage
               {won(l.finalPrice)}원
             </span>
             {l.qty > 1 && <span className="tabular text-xs text-slate-400">= {won(l.qty * l.finalPrice)}원</span>}
-            <button type="button" onClick={() => setEditing(true)} className="text-xs text-slate-400 underline">
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 active:bg-slate-100"
+            >
               고치기
             </button>
           </span>
@@ -176,7 +182,16 @@ export function EditableLine({ line: l, onMessage }: { line: SaleLine; onMessage
 }
 
 /** 품목 추가 — 타이어(상품 검색) 또는 공임(서비스 검색) */
-export function AddLine({ quoteId, onMessage }: { quoteId: number; onMessage: (m: string) => void }) {
+export function AddLine({
+  quoteId,
+  onMessage,
+  owner = false,
+}: {
+  quoteId: number;
+  onMessage: (m: string) => void;
+  /** 사장님이면 공임 검색 아래에 「새 공임 만들기」 길을 보여준다 (관리 화면이 사장님 전용) */
+  owner?: boolean;
+}) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [open, setOpen] = useState<null | "tire" | "service" | "custom">(null);
@@ -211,7 +226,7 @@ export function AddLine({ quoteId, onMessage }: { quoteId: number; onMessage: (m
       const r = await addSaleLine(input);
       if (!r.ok) return onMessage(`⚠️ ${r.error}`);
       onMessage(
-        `담았습니다.${r.shortage > 0 ? ` ⚠️ 재고가 ${r.shortage}본 모자랍니다.` : ""}${r.marsWarning ? ` ⚠️ ${r.marsWarning}` : ""}`,
+        `담았습니다.${r.shortage > 0 ? ` ⚠️ 재고가 ${r.shortage}본 모자랍니다.` : ""}${r.warning ? ` ⚠️ ${r.warning}` : ""}`,
       );
       setOpen(null);
       setQ("");
@@ -224,21 +239,21 @@ export function AddLine({ quoteId, onMessage }: { quoteId: number; onMessage: (m
         <button
           type="button"
           onClick={() => setOpen("tire")}
-          className="flex-1 rounded-lg border border-dashed border-slate-300 py-1.5 text-xs text-slate-500"
+          className="flex-1 rounded-lg border border-dashed border-slate-400 py-2 text-sm font-medium text-slate-600 active:bg-slate-50"
         >
           + 타이어·부품 추가
         </button>
         <button
           type="button"
           onClick={() => setOpen("service")}
-          className="flex-1 rounded-lg border border-dashed border-slate-300 py-1.5 text-xs text-slate-500"
+          className="flex-1 rounded-lg border border-dashed border-slate-400 py-2 text-sm font-medium text-slate-600 active:bg-slate-50"
         >
           + 공임·정비 추가
         </button>
         <button
           type="button"
           onClick={() => setOpen("custom")}
-          className="flex-1 rounded-lg border border-dashed border-slate-300 py-1.5 text-xs text-slate-500"
+          className="flex-1 rounded-lg border border-dashed border-slate-400 py-2 text-sm font-medium text-slate-600 active:bg-slate-50"
         >
           + 직접 입력
         </button>
@@ -358,6 +373,16 @@ export function AddLine({ quoteId, onMessage }: { quoteId: number; onMessage: (m
               </li>
             ))}
       </ul>
+      {/* ⭐ 목록에 없으면 즉석에서 만든다 (사장님 요청 2026-08-31) — 새 탭, 만들면 검색에 바로 뜬다 */}
+      {open === "service" && owner && (
+        <a
+          href="/settings/services?new=1"
+          target="_blank"
+          className="mt-1.5 block rounded-lg border border-dashed border-slate-400 py-2 text-center text-sm font-medium text-slate-600 active:bg-slate-100"
+        >
+          + 새 공임·정비 만들기 (목록에 없을 때)
+        </a>
+      )}
       <button type="button" onClick={() => setOpen(null)} className="mt-1.5 text-xs text-slate-500 underline">
         닫기
       </button>

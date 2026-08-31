@@ -478,6 +478,14 @@ export const serviceItem = pgTable(
     autoSuggest: boolean("auto_suggest").notNull().default(false),
     isFavorite: boolean("is_favorite").notNull().default(false),
     isActive: boolean("is_active").notNull().default(true),
+
+    /**
+     * ⭐ 만든 흔적 (2026-08-31, 관리 화면 도입과 함께 — scripts/add-service-audit.ts)
+     *    MARS 이관분 69건은 created_at 이 NULL — 화면에서 만든 것과 구분된다.
+     */
+    createdAt: timestamp("created_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
+    createdBy: bigint("created_by", { mode: "number" }).references(() => appUser.id),
   },
   (t) => [
     check("service_qty_rule", sql`${t.qtyRule} IN ('per_unit','per_2_units','per_job')`),
@@ -577,7 +585,7 @@ export const quote = pgTable(
      *
      * 전에는 `mars_memo` 에 「거래처 금호」 글자로만 남았다. 그런데 그 칸은 MARS
      * 기능들이 덮어쓴다 — markEntered·holdMars 는 통째로 대체하고,
-     * marsMismatchNote 는 「거래처 금호 · 수정됨 …」으로 이어붙인다.
+     * 예전의 marsMismatchNote(2026-08-31 삭제) 는 「거래처 금호 · 수정됨 …」으로 이어붙였다.
      * 거래처 이름이 날아가거나, 외상 장부에서 한 거래처가 둘로 갈렸다.
      *
      * ⚠️ supplier 표에 외래키로 안 묶는다 — purchase_invoice.supplier 와 같은 이유

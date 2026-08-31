@@ -36,7 +36,7 @@ interface Row extends SaleLine {
  */
 const PAYMENTS = [...SPLITTABLE, ...EXCLUSIVE] as readonly string[];
 
-export function SaleForm() {
+export function SaleForm({ owner = false }: { owner?: boolean }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [ask, confirmDialog] = useConfirm(); // 배치3 — 브라우저 confirm() 대체 시트
@@ -506,6 +506,7 @@ export function SaleForm() {
       )}
 
       <ServicePick
+        owner={owner}
         onAdd={(s) =>
           setRows((rs) => [
             ...rs,
@@ -776,7 +777,9 @@ function LineRow({
                 }}
                 onBlur={() => setUnitDraft(null)}
                 inputMode="numeric"
-                className="tabular h-9 w-24 rounded-lg border border-slate-300 px-2 text-right"
+                className={`tabular h-9 w-24 rounded-lg border px-2 text-right ${
+                  row.kind === "service" && row.unitPrice === 0 ? "border-amber-400 bg-amber-50" : "border-slate-300"
+                }`}
               />
             </label>
             <label className="flex items-center gap-1">
@@ -789,6 +792,10 @@ function LineRow({
             </label>
         </>
       </div>
+      {/* ⭐ 「기타」처럼 건별로 정하는 공임은 0원으로 담긴다 — 실제로 0원인 채 저장된 판매가 있었다 (2026-08-31) */}
+      {row.kind === "service" && row.unitPrice === 0 && (
+        <p className="mt-1 text-right text-xs font-medium text-amber-700">금액을 적어 주세요 — 이 공임은 건별로 정합니다</p>
+      )}
       {/* 0원이면 종전 그대로 소모 줄 — 금액을 쓰면 손님 청구·MARS 에 들어간다 */}
       {row.kind === "use" && (
         <p className="mt-1 text-right text-xs text-sky-800">
@@ -932,8 +939,11 @@ function TirePick({ onAdd }: { onAdd: (p: ProductHit) => void }) {
 
 function ServicePick({
   onAdd,
+  owner = false,
 }: {
   onAdd: (s: { id: number; marsNo: string | null; name: string; price: number | null }) => void;
+  /** 사장님이면 목록 아래에 「새 공임 만들기」 길을 보여준다 (관리 화면이 사장님 전용) */
+  owner?: boolean;
 }) {
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<Awaited<ReturnType<typeof findServices>>>([]);
@@ -994,6 +1004,18 @@ function ServicePick({
               </button>
             </li>
           ))}
+          {/* ⭐ 목록에 없으면 즉석에서 만든다 (사장님 요청 2026-08-31) — 새 탭, 만들면 여기 검색에 바로 뜬다 */}
+          {owner && (
+            <li>
+              <a
+                href="/settings/services?new=1"
+                target="_blank"
+                className="block rounded-lg border border-dashed border-slate-400 px-3 py-2 text-center text-sm font-medium text-slate-600 active:bg-slate-100"
+              >
+                + 새 공임·정비 만들기 (목록에 없을 때)
+              </a>
+            </li>
+          )}
         </ul>
       )}
     </section>

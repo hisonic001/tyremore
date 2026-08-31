@@ -99,6 +99,10 @@ async function main() {
   gauge("입고 예정 줄 (pendingLines)", Number(pl.n), null,
     "🔴 한도가 없다 — 대기가 쌓이면 /receiving 이 통째로 길어진다 (카드에 접기가 없다)");
 
+  const [svc] = await db.execute<{ n: number }>(sql`SELECT count(*)::int n FROM service_item`);
+  gauge("공임·정비 목록 (listServiceCatalog)", Number(svc.n), 300,
+    "관리 화면에서 손으로 만드니 천천히 는다 — 잘리면 관리 화면에서 안 보인다");
+
   console.log("\n  [달마다 달라지는 것] — 이 달 기준\n");
   const ym = kstToday().slice(0, 7);
   const { start, nextStart } = monthRange(ym);

@@ -300,7 +300,7 @@ export function SaleCard({
               ),
             )}
           </ul>
-          {!canceled && <AddLine quoteId={s.quoteId} onMessage={setNotice} />}
+          {!canceled && <AddLine quoteId={s.quoteId} onMessage={setNotice} owner={owner} />}
 
           {/* ⭐ 견적서·거래명세서 인쇄 (사장님 요청 2026-08-05) — 새 탭에서 열려 바로 인쇄 */}
           <div className="mt-2 flex gap-2">

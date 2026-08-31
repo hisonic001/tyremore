@@ -226,8 +226,12 @@ export async function cancelSale(
  *   수량이 늘면 → 재고에서 더 빼고 (오래된 DOT 부터)
  *   수량이 줄거나 줄을 지우면 → 이 판매의 출고 이력을 근거로 되돌린다
  *
- * 🔴 MARS 전송완료 건을 고치면 MARS 와 금액이 어긋난다 — 경고를 돌려주고
- *    marsMemo 에도 남긴다. 화면이 그걸 보여 주고 사장님이 판단하신다.
+ * 🔴 MARS 에 보낸 판매는 품목을 **막는다** (사장님 결정 2026-08-31 — "전송 전에만").
+ *    · 미전송: 지금 매장 PC 로봇이 그 건을 MARS 화면에 치고 있을 수 있다 — 그 사이
+ *      줄을 더하면 로봇은 옛 줄만 넣고 옛 금액으로 대조를 통과해 **전기까지 해 버린다.**
+ *    · 전송완료: 전기(Posting)는 되돌릴 수 없다(D-08). 고치려면 MARS 칸에서
+ *      「수동처리」로 내린 뒤 고치고, MARS 쪽은 사장님이 직접 맞추신다.
+ *    (전에는 경고만 하고 marsMemo 에 「수정됨」을 남겼다 — 실제로 쓰인 건 3번뿐이었다.)
  * ========================================================== */
 
 /** 취소 아님 + 존재 확인. 자주 쓰여서 한 곳에 모은다 */
@@ -241,6 +245,19 @@ async function editableQuote(
     .limit(1);
   if (!q) return { error: "판매 기록을 찾을 수 없습니다" };
   if (q.status === "취소") return { error: "취소된 판매는 고칠 수 없습니다" };
+  /* 🔴 MARS 에 보낸 판매는 품목을 못 고친다 (사장님 결정 2026-08-31).
+     「미전송」 차단은 sale-reassign.ts 선례 그대로 — 확인을 물어도 안 되는 상태다.
+     ⚠️ updateSaleHead(날짜·결제수단)는 이 함수를 안 탄다 — 카드 일마감의 「고치기」가
+     전송완료 건에도 매일 쓰이기 때문에 거기는 막지 않는다. */
+  if (q.marsStatus === "미전송") {
+    return { error: "지금 MARS 에 올리는 중입니다 — 끝난 뒤에 고쳐 주세요" };
+  }
+  if (q.marsStatus === "전송완료") {
+    return {
+      error:
+        "MARS 에 이미 들어간 판매라 품목을 고칠 수 없습니다 — 정말 고쳐야 하면 MARS 칸에서 「수동처리」로 내린 뒤 고치고, MARS 쪽도 직접 맞춰 주세요",
+    };
+  }
   return { q };
 }
 
@@ -266,16 +283,6 @@ async function recomputeTotal(quoteId: number): Promise<string | null> {
     return "금액이 바뀌어 분할 결제 합계와 어긋납니다 — 「날짜·결제 고치기」에서 수단별 금액을 다시 맞춰 주세요";
   }
   return null;
-}
-
-/** MARS 에 이미 들어간 건이면 경고를 만들고 메모에도 한 번만 남긴다 */
-async function marsMismatchNote(quoteId: number, marsStatus: string): Promise<string | null> {
-  if (marsStatus !== "전송완료") return null;
-  await db.execute(sql`
-    UPDATE quote SET mars_memo = COALESCE(mars_memo || ' · ', '') || '수정됨 — MARS 금액 확인 필요'
-    WHERE id = ${quoteId} AND (mars_memo IS NULL OR mars_memo NOT LIKE '%수정됨 — MARS 금액 확인 필요%')
-  `);
-  return "MARS 에 이미 들어간 판매라 금액이 어긋날 수 있습니다 — MARS 쪽도 확인해 주세요";
 }
 
 /**
@@ -342,7 +349,7 @@ export async function updateSaleLine(input: {
   description?: string;
   /** ⭐ 줄별 메모 (2026-08-07) — null 이면 지운다, undefined 면 안 건드린다 */
   memo?: string | null;
-}): Promise<{ ok: true; shortage: number; marsWarning: string | null } | { ok: false; error: string }> {
+}): Promise<{ ok: true; shortage: number; warning: string | null } | { ok: false; error: string }> {
   if (!Number.isInteger(input.qty) || input.qty <= 0) return { ok: false, error: "수량은 1 이상이어야 합니다" };
   // 마이너스 단가 허용 — 환불·카드 취소 줄 (사장님 요청 2026-08-21)
   if (!Number.isFinite(input.unitPrice)) return { ok: false, error: "단가가 올바르지 않습니다" };
@@ -374,18 +381,15 @@ export async function updateSaleLine(input: {
       ${input.memo !== undefined ? sql`, memo = ${input.memo?.trim() || null}` : sql``}
     WHERE id = ${input.itemId}
   `);
-  const splitWarn = await recomputeTotal(e.q.id);
-  const amountChanged = delta !== 0 || input.unitPrice !== Number(line.final_price);
-  const marsNote = amountChanged ? await marsMismatchNote(e.q.id, e.q.marsStatus) : null;
-  const marsWarning = [marsNote, splitWarn].filter(Boolean).join(" · ") || null;
+  const warning = await recomputeTotal(e.q.id);
   refresh();
-  return { ok: true, shortage, marsWarning };
+  return { ok: true, shortage, warning };
 }
 
 /** 줄 지우기 — 재고는 되살아난다. 마지막 줄은 못 지운다 (그건 판매 취소다) */
 export async function removeSaleLine(
   itemId: number,
-): Promise<{ ok: true; restored: number; marsWarning: string | null } | { ok: false; error: string }> {
+): Promise<{ ok: true; restored: number; warning: string | null } | { ok: false; error: string }> {
   const [line] = await db.execute<{ id: number; quote_id: number; product_id: number | null; qty: number }>(
     sql`SELECT id, quote_id, product_id, qty FROM quote_item WHERE id = ${itemId}`,
   );
@@ -405,11 +409,9 @@ export async function removeSaleLine(
     restored = await restoreStockFor(e.q.id, e.q.quoteNo, Number(line.product_id), Number(line.qty));
   }
   await db.execute(sql`DELETE FROM quote_item WHERE id = ${itemId}`);
-  const splitWarn = await recomputeTotal(e.q.id);
-  const marsNote = await marsMismatchNote(e.q.id, e.q.marsStatus);
-  const marsWarning = [marsNote, splitWarn].filter(Boolean).join(" · ") || null;
+  const warning = await recomputeTotal(e.q.id);
   refresh();
-  return { ok: true, restored, marsWarning };
+  return { ok: true, restored, warning };
 }
 
 /** 줄 더하기 — 상품이면 재고에서 빠진다 */
@@ -421,7 +423,7 @@ export async function addSaleLine(input: {
   description: string;
   qty: number;
   unitPrice: number;
-}): Promise<{ ok: true; shortage: number; marsWarning: string | null } | { ok: false; error: string }> {
+}): Promise<{ ok: true; shortage: number; warning: string | null } | { ok: false; error: string }> {
   if (!input.description.trim()) return { ok: false, error: "품목 이름이 없습니다" };
   if (!Number.isInteger(input.qty) || input.qty <= 0) return { ok: false, error: "수량은 1 이상이어야 합니다" };
   const e = await editableQuote(input.quoteId);
@@ -439,9 +441,7 @@ export async function addSaleLine(input: {
     const { short } = await sellFromStock(input.productId, input.qty, e.q.id);
     shortage = short;
   }
-  const splitWarn = await recomputeTotal(e.q.id);
-  const marsNote = await marsMismatchNote(e.q.id, e.q.marsStatus);
-  const marsWarning = [marsNote, splitWarn].filter(Boolean).join(" · ") || null;
+  const warning = await recomputeTotal(e.q.id);
   refresh();
-  return { ok: true, shortage, marsWarning };
+  return { ok: true, shortage, warning };
 }
