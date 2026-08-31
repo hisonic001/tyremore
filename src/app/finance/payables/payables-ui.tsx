@@ -39,6 +39,11 @@ export function PayablesUi({
 
   /** 출금 → 거래처 직접 선택 (제안이 없거나 다를 때) */
   const [linkPick, setLinkPick] = useState<Record<number, string>>({});
+  /* 🔴 결과를 누른 줄 바로 밑에 보여준다 (사장님 제보 2026-08-31 — "지급 클릭 →
+     아무일도 안일어남"). 실은 「미지급이 없습니다」 거절이 위쪽 배너에만 떠서 안 보였다. */
+  const [rowNote, setRowNote] = useState<Record<number, string>>({});
+  /** 거래처별 미지급 잔액 — 0원인 곳은 누르기 전에 알려 준다 */
+  const remainBySup = new Map(data.suppliers.map((x) => [x.supplier, x.remain]));
   const linkPay = async (row: PayLinkRow, supplier: string) => {
     if (
       !(await ask({
@@ -52,7 +57,11 @@ export function PayablesUi({
       setMsg(null);
       setError(null);
       const r = await payFromWithdrawal({ cashTxnId: row.id, supplier });
-      if (!r.ok) return setError(r.error);
+      if (!r.ok) {
+        setRowNote((p) => ({ ...p, [row.id]: r.error }));
+        return setError(r.error);
+      }
+      setRowNote((p) => ({ ...p, [row.id]: "" }));
       setMsg(
         `지급 ${won(r.applied)}원 연결 — ${r.settled}건 완납${r.leftover > 0 ? ` · 출금의 ${won(r.leftover)}원은 미지급보다 커서 배분 안 됨` : ""}`,
       );
@@ -172,7 +181,11 @@ export function PayablesUi({
                     />
                     <button
                       type="button"
-                      disabled={pending || !supplierNames.includes((linkPick[row.id] ?? "").trim())}
+                      disabled={
+                        pending ||
+                        !supplierNames.includes((linkPick[row.id] ?? "").trim()) ||
+                        !remainBySup.has((linkPick[row.id] ?? "").trim())
+                      }
                       onClick={() => linkPay(row, (linkPick[row.id] ?? "").trim())}
                       className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium disabled:opacity-40"
                     >
@@ -190,6 +203,19 @@ export function PayablesUi({
                 >
                   이을 것 없음
                 </button>
+                {/* 미지급 0원 거래처를 골랐을 때 — 서버까지 안 가고 바로 알려 준다 */}
+                {(() => {
+                  const picked = (linkPick[row.id] ?? "").trim();
+                  const zero = !row.suggest && supplierNames.includes(picked) && !remainBySup.has(picked);
+                  const note = rowNote[row.id];
+                  if (!zero && !note) return null;
+                  return (
+                    <p className="w-full rounded-lg bg-amber-50 p-1.5 text-xs text-amber-800">
+                      {note ||
+                        `「${picked}」는 지금 미지급이 0원입니다 — 인보이스가 아직 앱에 안 들어온 선지급이면 입고 뒤에 잇고, 그동안은 「이을 것 없음」으로 접어 두세요.`}
+                    </p>
+                  );
+                })()}
               </li>
             ))}
           </ul>

@@ -237,7 +237,11 @@ export async function payFromWithdrawal(input: {
       const open = rows
         .map((r) => ({ quoteId: Number(r.id), quoteNo: r.invoice_no, remain: Number(r.total) - Number(r.paid) }))
         .filter((r) => r.remain > 0);
-      if (open.length === 0) return { ok: false as const, error: "그 거래처의 미지급 매입이 없습니다" };
+      if (open.length === 0)
+        return {
+          ok: false as const,
+          error: `「${supplier}」는 지금 미지급이 0원입니다 — 인보이스가 아직 앱에 안 들어온 선지급이면 입고 뒤에 이어 주세요`,
+        };
       const plan = planSettlement(open, avail);
       if (plan.plan.length === 0) return { ok: false as const, error: "배분할 금액이 없습니다" };
 
