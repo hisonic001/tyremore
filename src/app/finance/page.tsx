@@ -12,6 +12,8 @@ import { uploadCoverage, coverageStatus } from "@/lib/upload-coverage";
 import { cardDaySums } from "@/lib/card-recon";
 import { latestAuditRun } from "@/lib/self-audit";
 import { AuditBanner } from "./audit-banner";
+import { finInbox } from "@/lib/fin-inbox";
+import { InboxSection } from "./inbox-ui";
 import { posDaysSummary } from "@/lib/pos-close";
 import { cancelFinUpload } from "@/lib/fin-upload";
 import { FinShell } from "@/components/fin/shell";
@@ -134,6 +136,8 @@ export default async function FinancePage({
   const posDays = await posDaysSummary(ym);
   const posToday = posDays.find((d) => d.day === kstToday());
   const posOpenDays = posDays.filter((d) => !d.closed).length;
+  // ⭐ 2단계(2026-08-31) — 할 일 인박스 (상대별). 내역 보기에서는 안 채운다 (질의 절약)
+  const inbox = view !== "내역" ? await finInbox(ym) : null;
 
   // ③ 최근 올린 파일 (배치) — 내역 보기일 때만
   const uploads = view !== "내역" ? [] : await db.execute<{
@@ -391,23 +395,25 @@ export default async function FinancePage({
         </section>
       )}
 
-      {/* ⭐ 2026 감사 R2 — 이 달 정리 순서 (사장님 루틴 그대로, 번호 = 순서) */}
+      {/* ⭐ 2단계(2026-08-31) — 체크리스트 6카드를 한 줄 칩으로 압축하고, 그 아래
+          「할 일 인박스」(상대별)가 1차 화면이 된다. 전문 화면들은 칩·항목의 딥링크로. */}
       <section className="mt-4">
-        <ol className="grid grid-cols-2 gap-2 lg:grid-cols-3">
-          {steps.map((s, i) => (
-            <li key={s.href}>
-              <Link href={s.href} className="block h-full rounded-2xl border border-slate-200 bg-white p-3">
-                <p className="flex items-center gap-1.5 text-sm font-semibold">
-                  <span className="inline-grid size-5 shrink-0 place-items-center rounded-md bg-brand-100 text-[11px] text-brand-700">
-                    {i + 1}
-                  </span>
-                  {s.title}
-                </p>
-                <p className={`tabular mt-1 text-xs ${s.warn ? "font-semibold text-amber-700" : "text-slate-500"}`}>{s.status}</p>
+        <div className="-mx-4 overflow-x-auto px-4">
+          <div className="flex min-w-max gap-1.5 lg:min-w-0 lg:flex-wrap">
+            {steps.map((s, i) => (
+              <Link
+                key={s.href}
+                href={s.href}
+                className={`whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-medium ${
+                  s.warn ? "border-amber-300 bg-amber-50 text-amber-800" : "border-slate-200 bg-white text-slate-500"
+                }`}
+              >
+                {i + 1} {s.title} · {s.status.replace(" →", "")}
               </Link>
-            </li>
-          ))}
-        </ol>
+            ))}
+          </div>
+        </div>
+        {inbox && <InboxSection inbox={inbox} ym={ym} />}
         <p className="mt-1.5 text-xs text-slate-400">
           품목별 마진은 <Link href="/reports/margin" className="underline">마진 리포트</Link>에서 따로 봅니다.
         </p>
