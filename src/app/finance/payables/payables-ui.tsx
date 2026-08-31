@@ -25,6 +25,7 @@ const METHODS = ["계좌이체", "현금", "카드", "기타"];
 export function PayablesUi({
   data,
   cards,
+  payerOptions,
   links,
   skipped,
   linked,
@@ -34,6 +35,8 @@ export function PayablesUi({
   data: PayablesData;
   /** ⭐ 리모델링(2026-08-31) — 거래처마다 세 장부(준 돈·계산서·예치금·자동 잇기)를 합친 카드 정보 */
   cards: Record<string, SupplierCardInfo>;
+  /** 별명 추가할 때 고를 이 달 통장 이름 후보 (검색) */
+  payerOptions: string[];
   links: PayLinkRow[];
   /** 「이을 것 없음」으로 접어둔 출금 — 되살리기 목록 (2026-08-31) */
   skipped: PayLinkRow[];
@@ -443,8 +446,9 @@ export function PayablesUi({
                   <input
                     value={aliasDraft[s.supplier] ?? ""}
                     onChange={(e) => setAliasDraft((p) => ({ ...p, [s.supplier]: e.target.value }))}
-                    placeholder="통장에 찍히는 이름"
-                    className="w-36 rounded-lg border border-slate-300 px-2 py-1 text-xs"
+                    list="bank-payer-names"
+                    placeholder="통장에 찍히는 이름 검색"
+                    className="w-40 rounded-lg border border-slate-300 px-2 py-1 text-xs"
                   />
                   <button type="button" disabled={pending || !(aliasDraft[s.supplier] ?? "").trim()}
                     onClick={() => aliasAdd(s.supplier)}
@@ -454,7 +458,14 @@ export function PayablesUi({
                 </div>
               </details>
 
-              {/* 지급 등록 */}
+              {/* 손으로 지급 적기 — 통장에 안 찍힌 지급(현금·상계 등)용. 이름을 밝히고 접어 둔다
+                  (사장님 질문 2026-08-31 "지급 등록은 무슨 버튼인거지?") */}
+              <details className="mt-2">
+                <summary className="cursor-pointer text-xs text-slate-500 underline">손으로 지급 적기</summary>
+                <p className="mt-1 text-xs text-slate-400">
+                  통장에 안 찍힌 지급(현금·상계 등)을 직접 기록합니다. 통장으로 보낸 돈은 위
+                  「출금에서 지급 잡기」·⚡ 자동 잇기로 잇는 것이 정확합니다.
+                </p>
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
                 <input
                   value={f.amount}
@@ -485,9 +496,10 @@ export function PayablesUi({
                   onClick={() => pay(s)}
                   className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40"
                 >
-                  지급 등록
+                  지급 적기
                 </button>
               </div>
+              </details>
             </li>
           );
         })}
@@ -509,6 +521,13 @@ export function PayablesUi({
           </ul>
         </section>
       )}
+
+      {/* 별명 추가 검색 후보 — 이 달 통장 출금 상대 (2026-08-31) */}
+      <datalist id="bank-payer-names">
+        {payerOptions.map((n) => (
+          <option key={n} value={n} />
+        ))}
+      </datalist>
 
       <datalist id="pay-supplier-names">
         {supplierNames.map((s) => (

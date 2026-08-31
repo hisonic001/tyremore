@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { FinShell } from "@/components/fin/shell";
 import { payLinkData, payablesData } from "@/lib/recon-data";
-import { payablesCardInfo } from "@/lib/payables-view";
+import { bankPayerOptions, payablesCardInfo } from "@/lib/payables-view";
 import { taxCashData } from "@/lib/tax-recon";
 import { pickYm } from "@/lib/ym";
 import { PayablesUi } from "./payables-ui";
@@ -31,6 +31,7 @@ export default async function FinancePayablesPage({
   const links = await payLinkData(ym);
   // ⭐ 리모델링(2026-08-31) — 거래처마다 세 장부(준 돈·계산서·자동 잇기·예치금)를 한 장으로
   const cards = await payablesCardInfo(ym, data.suppliers.map((s) => s.supplier));
+  const payerOptions = await bankPayerOptions(ym);
   // ⭐ 재설계(2026-08-25): 계산서 돈 확인의 정본은 /finance/tax 「돈 확인」 뷰 — 여기는 요약만
   const cash = await taxCashData("매입", ym);
 
@@ -50,6 +51,7 @@ export default async function FinancePayablesPage({
       <PayablesUi
         data={data}
         cards={cards}
+        payerOptions={payerOptions}
         links={links.rows}
         skipped={links.skipped}
         linked={links.linked}

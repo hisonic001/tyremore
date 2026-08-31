@@ -44,7 +44,8 @@ export interface SupplierCardInfo {
   taxN: number;
   taxSum: number;
   taxOkN: number;
-  /** 확정(통장 확인) 계산서 합 — 도장은 이 합이 잔액 이상일 때만 권한다 */
+  /** 🔴 「출금연결」 확정 계산서 합만 — 월정산·차액 확정은 돈이 나간 증거가 아니다
+      (강남세차장 14,322,000 이 월정산-확정이라 도장이 잘못 떴던 사고, 2026-08-31) */
   taxOkSum: number;
   /** 출금을 일부만 잇고 남은 돈 (예치금 — 전 기간) */
   deposit: number;
@@ -142,8 +143,9 @@ export async function payablesCardInfo(
   }
 
   /* ── 이번 달 매입 세금계산서 — 사업자번호 우선, 이름 맞추기 보조 ── */
-  const tax = await db.execute<{ biz: string | null; name: string; total: number; st: string }>(sql`
-    SELECT counterparty_biz_no biz, counterparty_name name, total, recon_status st
+  const tax = await db.execute<{ biz: string | null; name: string; total: number; st: string; reason: string }>(sql`
+    SELECT counterparty_biz_no biz, counterparty_name name, total, recon_status st,
+           COALESCE(recon_reason, '') reason
     FROM tax_invoice
     WHERE is_active AND direction = '매입'
       AND write_date >= ${start}::date AND write_date < ${nextStart}::date
@@ -158,7 +160,7 @@ export async function payablesCardInfo(
     const info = at(sup);
     info.taxN++;
     info.taxSum += Number(t.total);
-    if (t.st === "확정") {
+    if (t.st === "확정" && t.reason === "출금연결") {
       info.taxOkN++;
       info.taxOkSum += Number(t.total);
     }
@@ -190,4 +192,17 @@ export async function payablesCardInfo(
   }
 
   return out;
+}
+
+/** 별명 추가할 때 고를 통장 이름 후보 — 이 달 통장 출금 상대 (2026-08-31 "검색으로 찾기") */
+export async function bankPayerOptions(ym: string): Promise<string[]> {
+  const { start, nextStart } = monthRange(ym);
+  const rows = await db.execute<{ description: string }>(sql`
+    SELECT DISTINCT description FROM cash_txn
+    WHERE source = '통장' AND is_active AND out_amount > 0
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
+      AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date
+    LIMIT 200
+  `);
+  return [...new Set(rows.map((r) => payerKeyOf("통장", r.description)).filter((x) => x.length >= 2))].sort();
 }
