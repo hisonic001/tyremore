@@ -99,3 +99,39 @@ export function extractFirst(zip: Buffer, password: string | null, filter: (name
 }
 
 export const isZip = (buf: Buffer) => buf.length > 4 && buf.readUInt32LE(0) === 0x04034b50;
+
+/** 엔트리 이름만 훑는다 (본문은 안 푼다) — 오피스 문서 판별용 */
+export function zipEntryNames(zip: Buffer, cap = 50): string[] {
+  const names: string[] = [];
+  let off = 0;
+  while (off + 30 <= zip.length && names.length < cap) {
+    if (zip.readUInt32LE(off) !== 0x04034b50) break;
+    const flags = zip.readUInt16LE(off + 6);
+    const compSize = zip.readUInt32LE(off + 18);
+    const nameLen = zip.readUInt16LE(off + 26);
+    const extraLen = zip.readUInt16LE(off + 28);
+    names.push(zip.subarray(off + 30, off + 30 + nameLen).toString(flags & 0x800 ? "utf8" : "latin1"));
+    const dataStart = off + 30 + nameLen + extraLen;
+    let compReal = compSize;
+    const hasDescriptor = (flags & 8) !== 0;
+    if (hasDescriptor && compSize === 0) {
+      const next = zip.indexOf(Buffer.from([0x50, 0x4b, 0x03, 0x04]), dataStart);
+      const cd = zip.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]), dataStart);
+      const end = [next, cd].filter((x) => x > 0).sort((a, b) => a - b)[0] ?? zip.length;
+      compReal = end - dataStart - 16;
+    }
+    off = dataStart + compReal + (hasDescriptor ? 16 : 0);
+  }
+  return names;
+}
+
+/**
+ * 🔴 이 zip 이 사실은 **엑셀 파일 그 자체**인가 (2026-08-31 사장님 제보로 발견)
+ *
+ *   xlsx 는 속이 zip 이다(PK 서명). 그래서 「zip 이면 토스 포스 zip 으로 풀기」 판정이
+ *   진짜 xlsx 를 붙잡아 「zip 안에 엑셀 파일이 없습니다」로 끝냈다 — 신한 통장 .xlsx 가
+ *   첫 사례였다 (여태 통장·카드 파일은 전부 구형 .xls = zip 아님이라 안 드러났다).
+ *   오피스 문서 zip 은 안에 [Content_Types].xml 이 있다 — 그걸로 가른다.
+ */
+export const isOfficeZip = (buf: Buffer) =>
+  isZip(buf) && zipEntryNames(buf).some((n) => n === "[Content_Types].xml" || n.startsWith("xl/"));

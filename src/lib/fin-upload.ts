@@ -17,7 +17,7 @@ import { getSession, isOwner } from "@/lib/auth";
 import { getShopInfo } from "@/lib/shop";
 import { parseAnyFin } from "./fin-sheet";
 import { cancelFinUploadBatch, ingestCardDays, ingestCardDeposits, ingestCardTxns, ingestCashTxns, ingestPosTxns, ingestTaxInvoices } from "./fin-ingest";
-import { extractFirst, isZip } from "./zip-crypto";
+import { extractFirst, isOfficeZip, isZip } from "./zip-crypto";
 
 const MAX_BYTES = 8 * 1024 * 1024;
 
@@ -31,7 +31,9 @@ async function toBuffer(fd: FormData): Promise<Taken> {
   const raw = Buffer.from(await f.arrayBuffer());
   /* ⭐ 토스 포스 매출리포트는 비밀번호 zip 으로 내려온다 (2026-08-26) — 그대로 올리면 여기서 푼다.
      비밀번호는 env POS_ZIP_PASSWORD (Vercel 설정), 코드·저장소엔 없다 */
-  if (/\.zip$/i.test(f.name) || isZip(raw)) {
+  /* 🔴 xlsx 도 속은 zip 이다 — 오피스 문서면 zip 풀기로 보내지 않는다 (2026-08-31,
+     신한 통장 .xlsx 가 「zip 안에 엑셀 파일이 없습니다」로 죽던 원인. zip-crypto.isOfficeZip 참고) */
+  if (/\.zip$/i.test(f.name) || (isZip(raw) && !isOfficeZip(raw))) {
     try {
       const entry = extractFirst(raw, process.env.POS_ZIP_PASSWORD ?? null, (n) => /\.xlsx?$/i.test(n));
       if (!entry) return { ok: false, error: "zip 안에 엑셀 파일이 없습니다" };

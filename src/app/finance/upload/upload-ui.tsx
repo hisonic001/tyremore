@@ -47,10 +47,15 @@ export function FinUpload({ ym }: { ym: string }) {
     const fd = new FormData();
     fd.set("file", f);
     start(async () => {
-      const r = await previewFinUpload(fd);
-      if (!r.ok) return setError(r.error);
-      setPreview(r.preview);
-      if (!label && r.preview.labels.length === 1) setLabel(r.preview.labels[0]);
+      /* 🔴 서버 액션이 터지면(배포 직후 옛 화면 등) 조용히 끝났다 — 반드시 말로 남긴다 (2026-08-31) */
+      try {
+        const r = await previewFinUpload(fd);
+        if (!r.ok) return setError(r.error);
+        setPreview(r.preview);
+        if (!label && r.preview.labels.length === 1) setLabel(r.preview.labels[0]);
+      } catch {
+        setError("서버와 연결이 어긋났습니다 — 화면을 새로고침한 뒤 다시 올려 주세요");
+      }
     });
   }
 
@@ -60,6 +65,7 @@ export function FinUpload({ ym }: { ym: string }) {
     fd.set("file", file);
     if (preview.kind === "cash") fd.set("label", label);
     start(async () => {
+      try {
       const r = await applyFinUpload(fd);
       if (!r.ok) return setError(r.error);
       setDoneMsg(`${r.source} 반영했습니다 — 새로 ${r.newCount}줄 · 이미 있음 ${r.dupCount}줄`);
@@ -68,6 +74,9 @@ export function FinUpload({ ym }: { ym: string }) {
       setFile(null);
       if (input.current) input.current.value = ""; // 계정 이름은 남긴다 — 다음 파일에 이어 쓰게
       router.refresh();
+      } catch {
+        setError("서버와 연결이 어긋났습니다 — 화면을 새로고침한 뒤 다시 올려 주세요");
+      }
     });
   }
 
