@@ -8,7 +8,7 @@ import Link from "@/lib/link";
  *   🔴 탭에 할 일 수 배지를 넣지 않는다 — 매 화면 카운트 질의는 커넥션 풀 낭비.
  *      할 일 수는 「현황」 대시보드가 담당.
  */
-export type FinTabId = "home" | "tax" | "card" | "deposits" | "expenses" | "payables" | "party" | "upload";
+export type FinTabId = "home" | "tax" | "card" | "deposits" | "expenses" | "payables" | "party" | "trace" | "upload";
 
 const TABS: { id: FinTabId; href: string; label: string }[] = [
   { id: "home", href: "/finance", label: "현황" },
@@ -18,6 +18,8 @@ const TABS: { id: FinTabId; href: string; label: string }[] = [
   { id: "expenses", href: "/finance/expenses", label: "지출" },
   { id: "payables", href: "/finance/payables", label: "미지급" },
   { id: "party", href: "/finance/party", label: "거래처" },
+  /* ⭐ 돈 추적 (근본책 1단계-A, 2026-08-31) — "이 돈 어디 갔어?" */
+  { id: "trace", href: "/finance/trace", label: "추적" },
   { id: "upload", href: "/finance/upload", label: "올리기" },
 ];
 

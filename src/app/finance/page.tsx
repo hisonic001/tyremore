@@ -10,6 +10,8 @@ import { taxOpenCounts } from "@/lib/tax-recon";
 import { depositOpenCount, expenseOpen } from "@/lib/recon-data";
 import { uploadCoverage, coverageStatus } from "@/lib/upload-coverage";
 import { cardDaySums } from "@/lib/card-recon";
+import { latestAuditRun } from "@/lib/self-audit";
+import { AuditBanner } from "./audit-banner";
 import { posDaysSummary } from "@/lib/pos-close";
 import { cancelFinUpload } from "@/lib/fin-upload";
 import { FinShell } from "@/components/fin/shell";
@@ -127,6 +129,7 @@ export default async function FinancePage({
   const depOpen = await depositOpenCount(ym);
   // ⭐ 2026 감사 R2·R3 — 이 달 자료 컷오프·카드 차이 (올리기·카드 화면·체크리스트와 같은 정본)
   const covSt = coverageStatus(await uploadCoverage(), ym);
+  const audit = await latestAuditRun();
   const cardSum = await cardDaySums(ym);
   const posDays = await posDaysSummary(ym);
   const posToday = posDays.find((d) => d.day === kstToday());
@@ -246,6 +249,9 @@ export default async function FinancePage({
         </summary>
         <p className="mt-1">{health.lines.map((l) => (l.ok ? l.text : `⚠ ${l.text}`)).join("  ·  ")}</p>
       </details>
+
+      {/* ⭐ 매일 자동 감사 + 돈 추적 입구 (근본책 1단계, 2026-08-31) — 어긋남을 기계가 잡는다 */}
+      <AuditBanner audit={audit} />
 
       {/* ⭐ 배치2 — 요약/내역 보기 전환 (내역 질의는 그때만) */}
       <div className="mt-3 flex gap-1.5 text-sm">
