@@ -25,14 +25,25 @@ export interface CoverageRow {
 
 export async function uploadCoverage(): Promise<CoverageRow[]> {
   const rows: CoverageRow[] = [];
+  /* 🔴 「마지막 자료 날짜」가 아니라 「어디까지 확인했나」다 (사장님 제보 2026-08-31) —
+     월말까지 받았는데 후반 거래가 없으면 자료 날짜만으로는 「안 올라옴」으로 억울하게 찍힌다.
+     업로드가 기록한 받은 범위(fin_upload.period_to — 조회기간·받은 날짜 보정 포함)와 max 로 합친다. */
   const bank = await db.execute<{ l: string; d: string | null }>(sql`
-    SELECT account_label l, max((occurred_at AT TIME ZONE 'Asia/Seoul')::date)::text d
-    FROM cash_txn WHERE source = '통장' AND is_active GROUP BY 1 ORDER BY 1 LIMIT 10
+    SELECT a.l, GREATEST(a.dmax, COALESCE(b.pmax, a.dmax))::text d FROM
+      (SELECT account_label l, max((occurred_at AT TIME ZONE 'Asia/Seoul')::date) dmax
+       FROM cash_txn WHERE source = '통장' AND is_active GROUP BY 1) a
+      LEFT JOIN (SELECT account_label l, max(period_to) pmax FROM fin_upload
+                 WHERE source = '통장' AND status = '반영' GROUP BY 1) b ON b.l = a.l
+    ORDER BY 1 LIMIT 10
   `);
   for (const r of bank) rows.push({ key: `bank:${r.l}`, label: `통장 ${r.l}`, last: r.d, granularity: "day", next: "/finance/deposits" });
   const card = await db.execute<{ l: string; d: string | null }>(sql`
-    SELECT account_label l, max((occurred_at AT TIME ZONE 'Asia/Seoul')::date)::text d
-    FROM cash_txn WHERE source = '법인카드' AND is_active GROUP BY 1 ORDER BY 1 LIMIT 10
+    SELECT a.l, GREATEST(a.dmax, COALESCE(b.pmax, a.dmax))::text d FROM
+      (SELECT account_label l, max((occurred_at AT TIME ZONE 'Asia/Seoul')::date) dmax
+       FROM cash_txn WHERE source = '법인카드' AND is_active GROUP BY 1) a
+      LEFT JOIN (SELECT account_label l, max(period_to) pmax FROM fin_upload
+                 WHERE source = '법인카드' AND status = '반영' GROUP BY 1) b ON b.l = a.l
+    ORDER BY 1 LIMIT 10
   `);
   for (const r of card) rows.push({ key: `card:${r.l}`, label: `법인카드 ${r.l}`, last: r.d, granularity: "day", next: "/finance/expenses" });
   const [posLast] = await db.execute<{ d: string | null }>(sql`SELECT max(day)::text d FROM pos_txn WHERE is_active`);

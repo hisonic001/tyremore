@@ -6,6 +6,8 @@
  *     · 통장: 머리행 0행 — No·거래일시·적요·입금액·출금액·내용·잔액·거래점명·입금인코드
  *     · 신한카드 「법인 거래 확인서」: 머리행 ~12행, 병합 셀 — 거래일·카드번호·승인번호·
  *       상품구분·사업자번호·가맹점명·매출금액·공급가액·부가세
+ *     · 우리카드 「승인내역(간략)」: 머리행 ~18행 — 이용일자(MM.DD)·승인금액/취소(원) 한 칸,
+ *       연도·기간은 조회기간 줄에서 (2026-08-31)
  *     · 우리카드 「거래내역(회원별)」: 머리행 ~10행 — 매출일자·이용카드·매출금액(원)·
  *       부가세(원)·매출종류·할부개월·가맹점명·사업자번호. 🔴 "2026년04월소계" 소계 행 끼어 있음
  *
@@ -155,12 +157,18 @@ export function parseFinFile(buf: Buffer, fileName?: string): FinParseResult {
   const wooriAppr = findHeader(rows, ["이용일자", "승인번호", "승인금액"]);
   if (wooriAppr) return parseWooriApproval(rows, wooriAppr, rawCsv);
 
+  /* 우리 「승인내역(간략)」 (사장님 제보 2026-08-31 — report (4).xls). 승인 상세내역과 다른
+     화면의 내려받기다: 이용일자가 MM.DD 뿐, 금액 칸이 「승인금액 /취소(원)」 하나로 합쳐져
+     「55,000  (-55,000)」처럼 취소가 괄호로 붙는다. 연도·기간은 위쪽 조회기간 줄에서. */
+  const wooriBrief = findHeader(rows, ["이용일자", "승인번호", "승인금액/취소"]);
+  if (wooriBrief) return parseWooriBriefAppr(rows, wooriBrief, rawCsv);
+
   // ── 우리카드 「이용대금 상세내역」(청구서) — 연도가 파일 안에 없어 파일 이름에서 읽는다
   if (headText.includes("이용대금상세내역")) return parseWooriBill(rows, rawCsv, fileName);
 
   throw new Error(
     "어느 형식인지 알아보지 못했습니다 — 통장 거래내역·법인카드 이용내역(신한 확인서·신한 법인이용내역·" +
-      "우리카드 승인 상세내역·우리카드 이용대금 상세내역) 엑셀만 지원합니다. " +
+      "우리카드 승인 상세내역·승인내역(간략)·이용대금 상세내역) 엑셀만 지원합니다. " +
       "파일 첫 줄들을 알려주시면 형식을 추가하겠습니다",
   );
 }
@@ -334,6 +342,22 @@ export type AnyFinParse =
  * 파일 종류를 가리지 않는 입구 — 업로드 화면은 이것만 부른다.
  * 홈택스 목록이면 세금계산서로, 아니면 자금 움직임(통장·법인카드)으로.
  */
+/**
+ * 🔴 「어디까지 받았나」 보정 (사장님 제보 2026-08-31)
+ *
+ *   기간을 자료의 마지막 거래일로 잡으면, 월말까지 받았는데 후반 거래가 없을 때
+ *   「반쪽만 올린 것」처럼 보인다 (신한 법인카드 — 8/14 이후 이용 없음 사례).
+ *   파일 이름에 받은 날짜(신한 「…_20260831.xls」)가 있으면 기간 끝을 거기까지 늘린다 —
+ *   그날 내려받은 파일에는 그날까지의 거래가 다 들어 있다.
+ *   (우리 승인내역(간략)은 파일 안 조회기간 줄을 그대로 쓴다 — 이 보정과 겹쳐도 max 라 안전)
+ */
+function withFileCoverage(res: FinParseResult, fileName?: string): FinParseResult {
+  const m = /(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])/.exec(fileName ?? "");
+  if (!m) return res;
+  const got = `${m[1]}-${m[2]}-${m[3]}`;
+  return res.periodTo && got > res.periodTo ? { ...res, periodTo: got } : res;
+}
+
 export function parseAnyFin(buf: Buffer, myBizNo: string | null, fileName?: string): AnyFinParse {
   const wb = XLSX.read(buf, { type: "buffer" });
   // ⭐ 토스 포스 매출리포트 (2026-08-26) — 시트 이름으로 바로 알아본다
@@ -358,7 +382,7 @@ export function parseAnyFin(buf: Buffer, myBizNo: string | null, fileName?: stri
       return { kind: "carddeposit", ...parseCardDepositSheet(wb.Sheets[name], rows) };
     }
   }
-  return { kind: "cash", ...parseFinFile(buf, fileName) };
+  return { kind: "cash", ...withFileCoverage(parseFinFile(buf, fileName), fileName) };
 }
 
 /**
@@ -848,6 +872,87 @@ function parseWooriApproval(rows: unknown[][], h: { at: number; col: Map<string,
   }
   if (out.length === 0) throw new Error("읽을 수 있는 승인 줄이 없습니다");
   return finish("법인카드", "우리카드 승인 상세내역", out, skipped, rawCsv);
+}
+
+/**
+ * 우리 「승인내역(간략)」 (2026-08-31, report (4).xls 실측 84건·3,038,342원)
+ *   머리행 ~18행 — 이용일자(MM.DD HH:MM)·국내/해외·승인번호·이용카드·이용가맹점명·
+ *   매출구분·할부개월·「승인금액 /취소(원)」·승인금액(USD)·접수/취소.
+ *   🔴 연도가 없다 — 위쪽 「YYYY.MM.DD ~ YYYY.MM.DD」 조회기간 줄에서 얻는다.
+ *   🔴 기간 표시도 그 조회기간을 쓴다 — 자료의 마지막 거래 날짜로 잡으면, 월말까지 받았는데
+ *      후반 이용이 없었을 때 「반쪽만 올린 것」처럼 보인다 (사장님 제보 — 신한 8/14 사례).
+ *   전액 취소는 순액 0 → 「넣을 돈이 없습니다」로 건너뛴다 (승인 상세내역과 같은 규칙).
+ *   ⚠️ 「미접수」도 실제 승인이라 넣는다 — 나중에 접수돼 다시 받아도 승인번호로 걸러진다.
+ */
+function parseWooriBriefAppr(rows: unknown[][], h: { at: number; col: Map<string, number> }, rawCsv: string): FinParseResult {
+  let from: string | null = null;
+  let to: string | null = null;
+  outer: for (let i = 0; i < h.at; i++) {
+    for (const c of rows[i] ?? []) {
+      const m = /(\d{4})\.(\d{2})\.(\d{2})\s*~\s*(\d{4})\.(\d{2})\.(\d{2})/.exec(String(c ?? ""));
+      if (m) {
+        from = `${m[1]}-${m[2]}-${m[3]}`;
+        to = `${m[4]}-${m[5]}-${m[6]}`;
+        break outer;
+      }
+    }
+  }
+  if (!from || !to) throw new Error("조회기간 줄(YYYY.MM.DD ~ YYYY.MM.DD)이 없어 연도를 알 수 없습니다");
+  /** 기간이 해를 넘는 경우: 시작 달 이상이면 시작 연도, 아니면 끝 연도 */
+  const yearOf = (mm: number) => {
+    const fy = Number(from!.slice(0, 4));
+    const fm = Number(from!.slice(5, 7));
+    const ty = Number(to!.slice(0, 4));
+    return fy === ty ? fy : mm >= fm ? fy : ty;
+  };
+
+  const out: NormalizedCashTxn[] = [];
+  const skipped: SheetSkip[] = [];
+  for (let i = h.at + 1; i < rows.length; i++) {
+    const r = rows[i];
+    const dayRaw = String(cell(r, h.col, "이용일자") ?? "").trim();
+    if (dayRaw === "이용일자") continue; // 페이지마다 머리행이 되풀이된다 (실측 3회) — 자료가 아니다
+    const dm = /^(\d{2})\.(\d{2})(?:\s+(\d{1,2}):(\d{2}))?/.exec(dayRaw);
+    if (!dm) {
+      if (String(cell(r, h.col, "승인번호") ?? "").trim()) skipped.push({ line: i + 1, reason: "이용일자를 못 읽음" });
+      continue;
+    }
+    const when = `${yearOf(Number(dm[1]))}-${dm[1]}-${dm[2]} ${String(dm[3] ?? "0").padStart(2, "0")}:${dm[4] ?? "00"}:00`;
+    const amtRaw = String(cell(r, h.col, "승인금액/취소") ?? "");
+    const appr = toWon(amtRaw.replace(/\([^)]*\)/, ""));
+    if (appr === null) {
+      skipped.push({ line: i + 1, reason: "승인금액을 못 읽음" });
+      continue;
+    }
+    const cm = /\((-?[\d,]+)\)/.exec(amtRaw);
+    const cancel = cm ? Math.abs(toWon(cm[1]) ?? 0) : 0;
+    const net = appr - cancel;
+    if (net === 0) {
+      if (appr !== 0) {
+        skipped.push({ line: i + 1, reason: `승인 ${appr.toLocaleString()}원을 전액 취소 — 넣을 돈이 없습니다`, expected: true });
+      }
+      continue;
+    }
+    const inst = String(cell(r, h.col, "할부개월") ?? "").trim();
+    const kind = String(cell(r, h.col, "매출구분") ?? "").trim();
+    const merchant = String(cell(r, h.col, "이용가맹점명") ?? "").trim() || "(가맹점 미상)";
+    out.push({
+      source: "법인카드",
+      occurredAt: when,
+      description: cancel !== 0 ? `${merchant} (취소 ${cancel.toLocaleString()}원 반영)` : merchant,
+      inAmount: 0,
+      outAmount: net,
+      balance: null,
+      approvalNo: String(cell(r, h.col, "승인번호") ?? "").trim() || null,
+      bizNo: null,
+      installment: inst && inst !== "0" ? `${inst}개월` : kind && kind !== "일시불" ? kind : null,
+      branch: String(cell(r, h.col, "국내/해외") ?? "").trim() || null,
+      payerCode: null,
+    });
+  }
+  if (out.length === 0) throw new Error("읽을 수 있는 승인 줄이 없습니다");
+  const fin = finish("법인카드", "우리카드 승인내역(간략)", out, skipped, rawCsv);
+  return { ...fin, periodFrom: from, periodTo: to };
 }
 
 /** 우리 「이용대금 상세내역」(청구서) — 이용일자가 MM.DD 뿐이라 연도는 파일 이름(2026.8)에서.

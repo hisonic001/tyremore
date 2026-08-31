@@ -69,6 +69,8 @@ export interface FinPreview {
   labels: string[];
   /** ⭐ 그대로 반영하면 곤란한 점 — 붉게 띄운다 (2026-08-29 우리카드 두 형식 겹침) */
   warn: string | null;
+  /** 🔵 참고 안내 — 「받은 날짜보다 마지막 거래가 이르다」 같은, 오류 아님 (2026-08-31) */
+  note?: string | null;
 }
 
 /**
@@ -245,6 +247,13 @@ export async function previewFinUpload(
       SELECT DISTINCT account_label l FROM cash_txn WHERE source = ${p.source} ORDER BY 1 LIMIT 20
     `);
     const warn = await wooriOverlapWarning(p.formatName, p.periodFrom, p.periodTo);
+    /* ⭐ 기간 끝이 마지막 거래보다 뒤면(조회기간·받은 날짜 보정) 그 뜻을 말로 —
+       「후반 줄이 없는 것은 거래가 없어서」임을 사장님이 알게 (제보 2026-08-31) */
+    let note: string | null = null;
+    const dataLast = p.rows.map((r) => r.occurredAt.slice(0, 10)).sort().at(-1) ?? null;
+    if (p.periodTo && dataLast && p.periodTo > dataLast) {
+      note = `마지막 거래는 ${dataLast} — 그 뒤 ${p.periodTo} 까지는 거래·이용이 없어 줄이 없는 것뿐입니다`;
+    }
     return {
       ok: true,
       preview: {
@@ -258,6 +267,7 @@ export async function previewFinUpload(
         sumIn: p.sumIn,
         sumOut: p.sumOut,
         sumTotal: 0,
+        note,
         sample: p.rows.slice(0, 6).map((r) => ({
           when: r.occurredAt.slice(0, 16),
           desc: r.description,

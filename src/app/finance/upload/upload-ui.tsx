@@ -156,6 +156,10 @@ export function FinUpload({ ym }: { ym: string }) {
               일부러 뺀 줄 (넣을 돈이 없어서): {preview.noteSample.join(" / ")}
             </p>
           )}
+          {/* 🔵 오류 아님 안내 — 받은 날짜 vs 마지막 거래 (2026-08-31) */}
+          {preview.note && (
+            <p className="mt-2 rounded-lg bg-sky-50 p-2 text-xs text-sky-800">💡 {preview.note}</p>
+          )}
           {/* ⭐ 우리카드 두 형식 겹침 — 그대로 반영하면 같은 지출이 두 번 잡힌다 (2026-08-29) */}
           {preview.warn && (
             <p className="mt-2 rounded-lg border border-red-300 bg-red-50 p-2 text-xs font-medium text-red-800">
