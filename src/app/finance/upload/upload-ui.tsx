@@ -132,6 +132,9 @@ export function FinUpload({ ym }: { ym: string }) {
               <li>
                 들어온 돈 <strong>{won(preview.sumIn)}원</strong> · 나간 돈{" "}
                 <strong>{won(preview.sumOut)}원</strong>
+                {preview.sample.some((x) => x.outAmount < 0) && (
+                  <span className="text-sky-700"> (취소·환불을 뺀 실제 나간 돈)</span>
+                )}
                 <span className="ml-1 text-xs text-slate-500">— 은행·카드 앱의 합계와 맞는지 봐 주세요</span>
               </li>
             ) : (
@@ -168,7 +171,11 @@ export function FinUpload({ ym }: { ym: string }) {
                   <td className="tabular pr-2 text-right text-emerald-700">
                     {s.inAmount !== 0 && `+${won(s.inAmount)}`}
                   </td>
-                  <td className="tabular text-right text-red-600">{s.outAmount !== 0 && `−${won(s.outAmount)}`}</td>
+                  {/* ⭐ 취소·환불은 음수로 온다 (신한 법인이용내역) — 「−-2,994」로 찍히던 것 (사장님 제보 2026-08-31) */}
+                  <td className={`tabular text-right ${s.outAmount < 0 ? "text-sky-700" : "text-red-600"}`}>
+                    {s.outAmount > 0 && `−${won(s.outAmount)}`}
+                    {s.outAmount < 0 && `+${won(-s.outAmount)} 취소`}
+                  </td>
                 </tr>
               ))}
             </tbody>
