@@ -62,6 +62,15 @@ describe("③ 이름 → 점검표 낱말 매핑 (관리 화면 미리보기의 
     assert.equal(r.padFront, false);
   });
 
+  test("전륜/후륜 낱말로 앞뒤가 갈린다 (사장님이 2026-08-31 실제로 이렇게 이름 지음)", () => {
+    const front = replacedFromServices(["브레이크패드(좌우1세트) - 디스크 타입 패드 교환 - 전륜"]);
+    assert.equal(front.padFront, true);
+    assert.equal(front.padRear, false);
+    const rear = replacedFromServices(["브레이크패드(좌우1세트) - 디스크 타입 패드 교환 - 후륜"]);
+    assert.equal(rear.padFront, false);
+    assert.equal(rear.padRear, true);
+  });
+
   test("드럼·라이닝·슈는 후륜, 그냥 패드는 전륜", () => {
     assert.equal(replacedFromServices(["드럼교환(좌우1세트) - 허브 탈착시 추가금액"]).padRear, false); // 드럼만으론 패드 계열이 아니다
     assert.equal(replacedFromServices(["브레이크 라이닝 교환"]).padRear, true);

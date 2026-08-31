@@ -39,6 +39,8 @@ function MarsPreview({ name, before }: { name: string; before?: string }) {
       <p className="mt-1 text-xs text-sky-800">
         MARS 차량 점검표에서 <strong>{now.join(" · ")}</strong> 교체로 표시됩니다.
         {/점검/.test(name.replace(/\s/g, "")) ? " (「점검」이 들어가면 표시 안 함)" : ""}
+        {/* ⭐ 앞/뒤는 이름의 낱말로 갈린다 — 사장님이 직접 바꿀 수 있게 알려 준다 (2026-08-31 후륜 요청) */}
+        {now.includes("앞 브레이크 패드") ? " — 이름에 「뒤」나 「후륜」이 들어가면 뒤로 표시됩니다" : ""}
       </p>
     );
   }
