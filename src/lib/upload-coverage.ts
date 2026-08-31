@@ -52,8 +52,19 @@ export async function uploadCoverage(): Promise<CoverageRow[]> {
   rows.push({ key: "assoc", label: "여신협회 카드매출(일별)", last: assoc?.d ?? null, granularity: "day", next: "/finance/card" });
   const [dep] = await db.execute<{ m: string | null }>(sql`SELECT max(month) m FROM card_deposit WHERE is_active`);
   rows.push({ key: "deposit", label: "카드사 정산(월)", last: dep?.m ?? null, granularity: "month", next: "/finance/card" });
+  /* 홈택스도 같은 이치 (사장님 제보 2026-08-31 2차) — 마지막 계산서 작성일로 잡으면
+     오늘까지 조회해 받아도 「안 올라옴」으로 찍힌다. 파일에는 조회기간이 없어서(실측)
+     **올린 날**을 「여기까지 확인함」으로 쓴다 — 오늘 받은 파일에는 오늘까지 발급된
+     계산서가 다 들어 있다. (⚠ 지난달 분은 다음 달 10일까지 늦게 발급될 수 있다 —
+     그래서 다음 달에 한 번 더 받는 습관은 그대로 필요하다) */
   const tax = await db.execute<{ direction: string; d: string | null }>(sql`
-    SELECT direction, max(write_date)::text d FROM tax_invoice WHERE is_active GROUP BY 1 ORDER BY 1 LIMIT 2
+    SELECT t.direction, GREATEST(t.dmax, COALESCE(u.umax, t.dmax))::text d FROM
+      (SELECT direction, max(write_date) dmax FROM tax_invoice WHERE is_active GROUP BY 1) t
+      LEFT JOIN (SELECT CASE source WHEN '홈택스매입' THEN '매입' ELSE '매출' END dir,
+                        max((created_at AT TIME ZONE 'Asia/Seoul')::date) umax
+                 FROM fin_upload WHERE source IN ('홈택스매입', '홈택스매출') AND status = '반영'
+                 GROUP BY 1) u ON u.dir = t.direction
+    ORDER BY 1 LIMIT 2
   `);
   for (const dir of ["매입", "매출"]) {
     const r = tax.find((t) => t.direction === dir);
@@ -85,9 +96,14 @@ export function coverageStatus(rows: CoverageRow[], ym: string): CoverageStatus 
   const lastDay = new Date(new Date(nextStart + "T00:00:00Z").getTime() - 86400000).toISOString().slice(0, 10);
   const endShown = ym === today.slice(0, 7) ? today : lastDay;
   const threshold = new Date(new Date(endShown + "T00:00:00Z").getTime() - 3 * 86400000).toISOString().slice(0, 10);
+  /* 🔴 월 단위 원천(카드사 정산)은 그 달이 끝나야 자료가 **세상에 나온다** —
+     8월이 진행 중일 때 「~07 ⚠」로 재촉하는 것은 잘못이다 (사장님 질문 2026-08-31).
+     이 달을 보는 동안은 지난달까지 있으면 정상, 달이 지나면 그 달분을 요구한다. */
+  const prevYm = new Date(new Date(ym + "-01T00:00:00Z").getTime() - 86400000).toISOString().slice(0, 7);
+  const monthWant = ym === today.slice(0, 7) ? prevYm : ym;
   const lagging = rows.filter((r) => {
     if (!r.last) return true;
-    return r.granularity === "month" ? r.last < ym : r.last < threshold;
+    return r.granularity === "month" ? r.last < monthWant : r.last < threshold;
   });
   const lagSet = new Set(lagging.map((r) => r.key));
   const text = rows
