@@ -147,6 +147,43 @@ export async function undoPayFromWithdrawal(
 }
 
 /**
+ * ⭐ 「이을 것 없음 — 접기」 (사장님 질문 2026-08-31 "존재 이유를 잘 모르겠음")
+ *
+ *   지급 잡기 목록의 태반이 **앱 이전 기간(7월분 이하) 대금**이라 이을 인보이스가
+ *   없었다 — 그 줄들이 영영 남아 화면이 숙제처럼 보였다. 접으면 목록에서 빠지고
+ *   「접어둔 출금」에서 언제든 되살린다. 분류(매입대금)·손익은 그대로다.
+ */
+export async function skipWithdrawal(
+  cashTxnId: number,
+  restore = false,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  const [c] = await db.execute<{ id: number; st: string }>(sql`
+    SELECT id, recon_status st FROM cash_txn
+    WHERE id = ${cashTxnId} AND source = '통장' AND is_active AND out_amount > 0 AND category = '매입대금'
+  `);
+  if (!c) return { ok: false, error: "출금 줄을 찾을 수 없습니다" };
+  if (!restore) {
+    if (c.st === "무시") return { ok: false, error: "이미 접힌 출금입니다" };
+    const linked = await db.execute<{ id: number }>(sql`
+      SELECT id FROM recon_match WHERE kind = '매입지급' AND src_table = 'cash_txn' AND src_id = ${cashTxnId} LIMIT 1
+    `);
+    if (linked.length > 0) return { ok: false, error: "이미 지급으로 이어진 출금입니다 — 먼저 되돌려 주세요" };
+    await db.execute(sql`
+      UPDATE cash_txn SET recon_status = '무시',
+        memo = COALESCE(memo || ' · ', '') || '지급 잡기에서 접음 (이을 인보이스 없음)'
+      WHERE id = ${cashTxnId}
+    `);
+  } else {
+    if (c.st !== "무시") return { ok: false, error: "접힌 출금이 아닙니다" };
+    await db.execute(sql`UPDATE cash_txn SET recon_status = '미대조' WHERE id = ${cashTxnId}`);
+  }
+  revalidatePath("/finance/payables");
+  revalidatePath("/finance");
+  return { ok: true };
+}
+
+/**
  * 🔴 감사 P2(2026-08-25): 「출금에서 지급 잡기」 — '매입대금' 통장 출금 한 건으로
  *   거래처 미지급을 선입선출로 턴다. 지급 기록 + 연결 자국('매입지급') + 출금 확정 + 별명 학습.
  *   미지급 장부가 "이미 준 돈"을 알게 되는 핵심 고리.

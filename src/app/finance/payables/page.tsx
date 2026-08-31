@@ -47,6 +47,7 @@ export default async function FinancePayablesPage({
       <PayablesUi
         data={data}
         links={links.rows}
+        skipped={links.skipped}
         linked={links.linked}
         supplierNames={links.supplierNames}
         cashSummary={{ ym: cash.ym, n: cash.open.n, sum: cash.open.sum }}

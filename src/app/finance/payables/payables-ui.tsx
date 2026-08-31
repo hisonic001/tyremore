@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
 import type { PayLinkRow, PayLinkedRow, PayablesData, PayableSupplier } from "@/lib/recon-data";
-import { payFromWithdrawal, payToSupplier, removePurchasePayment, undoPayFromWithdrawal } from "@/lib/purchase-pay";
+import { payFromWithdrawal, payToSupplier, removePurchasePayment, skipWithdrawal, undoPayFromWithdrawal } from "@/lib/purchase-pay";
 import { won } from "@/components/fin/money";
 import { useConfirm } from "@/components/ui/confirm";
 
@@ -15,12 +15,15 @@ const METHODS = ["계좌이체", "현금", "카드", "기타"];
 export function PayablesUi({
   data,
   links,
+  skipped,
   linked,
   supplierNames,
   cashSummary,
 }: {
   data: PayablesData;
   links: PayLinkRow[];
+  /** 「이을 것 없음」으로 접어둔 출금 — 되살리기 목록 (2026-08-31) */
+  skipped: PayLinkRow[];
   /** 이 달 「지급 잡기」로 이은 출금 — 되돌리기 목록 */
   linked: PayLinkedRow[];
   supplierNames: string[];
@@ -53,6 +56,28 @@ export function PayablesUi({
       setMsg(
         `지급 ${won(r.applied)}원 연결 — ${r.settled}건 완납${r.leftover > 0 ? ` · 출금의 ${won(r.leftover)}원은 미지급보다 커서 배분 안 됨` : ""}`,
       );
+      router.refresh();
+    });
+  };
+
+  /* ⭐ 「이을 것 없음 — 접기」 (2026-08-31) — 앱 이전 기간 대금은 이을 인보이스가 없다 */
+  const skipRow = async (row: PayLinkRow, restore: boolean) => {
+    if (
+      !restore &&
+      !(await ask({
+        title: "이 출금을 접을까요?",
+        body: `${row.at} ${row.payer} ${won(row.amount)}원 — 앱에 이을 인보이스가 없는 출금(지난달 대금 등)을 목록에서 접습니다.
+분류(매입대금)와 손익은 그대로이고, 아래 「접어둔 출금」에서 언제든 되살립니다.`,
+        confirmLabel: "접기",
+      }))
+    )
+      return;
+    start(async () => {
+      setMsg(null);
+      setError(null);
+      const r = await skipWithdrawal(row.id, restore);
+      if (!r.ok) return setError(r.error);
+      setMsg(restore ? "되살렸습니다 — 지급 잡기 목록에 다시 나옵니다." : "접었습니다 — 아래 「접어둔 출금」에서 되살릴 수 있습니다.");
       router.refresh();
     });
   };
@@ -155,10 +180,46 @@ export function PayablesUi({
                     </button>
                   </span>
                 )}
+                {/* ⭐ 이을 인보이스가 없는 출금(지난달 대금 등)은 접는다 (2026-08-31) */}
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => skipRow(row, false)}
+                  className="shrink-0 rounded-lg px-1.5 py-1 text-xs text-slate-400 underline underline-offset-2 active:bg-slate-100"
+                  title="앱에 이을 인보이스가 없으면 접습니다 — 되살릴 수 있어요"
+                >
+                  이을 것 없음
+                </button>
               </li>
             ))}
           </ul>
         </section>
+      )}
+
+      {/* ⭐ 접어둔 출금 — 이을 인보이스가 없어 접은 것 (2026-08-31). 되살리기 가능 */}
+      {skipped.length > 0 && (
+        <details className="mt-2 rounded-2xl border border-slate-200 bg-white p-3">
+          <summary className="cursor-pointer text-xs font-medium text-slate-500">
+            접어둔 출금 {skipped.length}건 (지난달 대금 등 — 이을 인보이스 없음)
+          </summary>
+          <ul className="mt-2 space-y-1 text-xs">
+            {skipped.map((row) => (
+              <li key={row.id} className="flex items-center justify-between gap-2">
+                <span className="tabular min-w-0 truncate">
+                  {row.at} · {row.payer} · −{won(row.amount)}원
+                </span>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => skipRow(row, true)}
+                  className="shrink-0 rounded-lg border border-slate-300 px-2 py-0.5 text-xs text-slate-600"
+                >
+                  되살리기
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
 
       {data.suppliers.length === 0 && (

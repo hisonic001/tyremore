@@ -894,7 +894,7 @@ export interface PayLinkedRow {
 
 export async function payLinkData(
   ym: string,
-): Promise<{ rows: PayLinkRow[]; supplierNames: string[]; linked: PayLinkedRow[] }> {
+): Promise<{ rows: PayLinkRow[]; skipped: PayLinkRow[]; supplierNames: string[]; linked: PayLinkedRow[] }> {
   // '매입대금' 출금 중 지급 기록과 안 이어진 것 — 보는 달 (2025 감사 F18: '2026-08-01' 하드코딩 폐지)
   const { start: pStart, nextStart: pNext } = monthRange(ym);
   const outs = await db.execute<{ id: number; at: string; description: string; out_amount: number }>(sql`
@@ -902,11 +902,22 @@ export async function payLinkData(
            (c.out_amount - ${cashUsedSql("c")})::int out_amount
     FROM cash_txn c
     WHERE c.source = '통장' AND c.is_active AND c.category = '매입대금'
+      -- ⭐ 「이을 것 없음」으로 접은 출금은 뺀다 (2026-08-31 — 앱 이전 기간 대금은 이을 인보이스가 없다)
+      AND c.recon_status <> '무시'
       AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${pStart}::date
       AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${pNext}::date
       -- 🔴 감사 B4(2026-08-25): 계산서 확인·지급이 이미 쓴 몫을 뺀 잔액만 — 이중 소진 차단
       AND c.out_amount > ${cashUsedSql("c")}
     ORDER BY c.occurred_at DESC LIMIT 60
+  `);
+  // ⭐ 접어둔 출금 — 되돌리기용 (2026-08-31)
+  const skippedRows = await db.execute<{ id: number; at: string; description: string; out_amount: number }>(sql`
+    SELECT c.id, to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD') at, c.description, c.out_amount
+    FROM cash_txn c
+    WHERE c.source = '통장' AND c.is_active AND c.category = '매입대금' AND c.recon_status = '무시'
+      AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${pStart}::date
+      AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${pNext}::date
+    ORDER BY c.occurred_at DESC LIMIT 40
   `);
   // 거래처별 미지급 잔액
   const remains = await db.execute<{ supplier: string; remain: string }>(sql`
@@ -972,6 +983,13 @@ export async function payLinkData(
   `);
   return {
     rows,
+    skipped: skippedRows.map((r) => ({
+      id: Number(r.id),
+      at: r.at,
+      payer: payerKeyOf("통장", r.description),
+      amount: Number(r.out_amount),
+      suggest: null,
+    })),
     supplierNames: names.map((r) => r.s),
     linked: linkedRows.map((r) => ({
       id: Number(r.id),
