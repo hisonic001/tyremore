@@ -117,7 +117,7 @@ export default async function SettingsPage() {
     {
       href: "/settings/services",
       title: "공임·정비",
-      desc: "판매에서 고르는 공임 목록 — 이름·금액 고치기 · 새로 만들기",
+      desc: "판매에서 고르는 공임 목록 — 이름·금액 고치기 · 새로 만들기 · 숨기기",
     },
     /*
      * ⭐ 재고는 홈 메뉴에서 여기로 내려왔다 (사장님 지시 2026-08-06) —

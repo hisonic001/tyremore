@@ -14,7 +14,7 @@
  *     않는다(D-08, product.mars_item_no 와 같은 이치). 화면은 보여만 준다.
  *   · 새로 만든 항목은 번호가 NULL → MARS 입력 로봇이 범용 품번 S001/1290(기타)으로
  *     넣고 이름은 그대로 들어간다 (mars-queue.ts · mars-fill.ts, 이미 뚫려 있는 길).
- *   · 삭제는 없다 — **사용중지**뿐. 과거 판매 줄들이 service_item_id 로 물려 있다.
+ *   · 삭제는 없다 — **숨기기**(is_active 끄기)뿐. 과거 판매 줄들이 service_item_id 로 물려 있다.
  *   · 금액을 고쳐도 과거 판매는 안 바뀐다 — quote_item.final_price 는 판 순간의 스냅샷.
  *
  * 🔴 사장님 전용. 질의 순차 · LIMIT.
@@ -56,7 +56,7 @@ export interface ServiceCatalogRow {
   qtyRule: string;
   isFavorite: boolean;
   isActive: boolean;
-  /** 판매에 붙은 횟수 — 사용중지할지 판단하는 근거 */
+  /** 판매에 붙은 횟수 — 숨길지 판단하는 근거 */
   usedCount: number;
   /** 화면에서 만든 시각 — 이관분 69건은 NULL */
   createdAt: string | null;
@@ -128,7 +128,7 @@ async function findDup(name: string, exceptId?: number): Promise<string | null> 
   if (!dup) return null;
   return dup.is_active
     ? `같은 이름이 이미 있습니다 — 「${dup.name}」`
-    : `같은 이름이 사용중지 상태로 있습니다 — 「${dup.name}」을 다시 켜 주세요`;
+    : `같은 이름이 숨겨져 있습니다 — 「숨긴 항목」에서 「${dup.name}」을 다시 보이게 해 주세요`;
 }
 
 /** 새 공임·정비 만들기 — MARS 번호는 없이(NULL) 태어난다 → MARS 에는 범용 S001/1290 으로 */
@@ -184,7 +184,7 @@ export async function updateService(input: {
   return { ok: true };
 }
 
-/** 사용중지/다시 켜기 — 검색에서만 사라진다. 과거 판매 줄은 그대로 남는다 */
+/** 숨기기/다시 보이기 (is_active) — 검색에서만 사라진다. 과거 판매 줄은 그대로 남는다 */
 export async function setServiceActive(
   id: number,
   active: boolean,

@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Star } from "lucide-react";
+import { EyeOff, Star } from "lucide-react";
 import { createService, setServiceActive, updateService, type ServiceCatalogRow } from "@/lib/service-catalog";
 import { replacedLabels } from "@/lib/mars-service-words";
 import { Button } from "@/components/ui/button";
@@ -11,13 +11,18 @@ import { Notice } from "@/components/ui/notice";
 import { useConfirm } from "@/components/ui/confirm";
 
 /**
- * 공임·정비 목록 — 검색 · 고치기 · 새로 만들기 · 사용중지 (사장님 요청 2026-08-31)
+ * 공임·정비 목록 — 검색 · 고치기 · 새로 만들기 · 숨기기 (사장님 요청 2026-08-31)
  *
  *   짜임은 settings/suppliers/client.tsx 를 따른다 (목록이 먼저, 수정은 그 자리에서).
  *
  * ⭐ 이름을 칠 때 「MARS 점검표에 무엇이 켜지는지」를 미리 보여 준다 —
  *    점검표 체크는 이름의 낱말로 정해지므로(mars-service-words), 이름에서
  *    낱말이 빠지면 체크가 조용히 안 켜진다. 그 사고를 화면에서 미리 막는다.
+ *
+ * ⭐ 「숨기기」 = is_active 끄기 (사장님 요청 2026-08-31 2차 — "일부 공임목록은
+ *    검색되지 않도록 숨기기"). 처음엔 「사용중지」라는 이름으로 고치기 안에만 있어서
+ *    사장님이 못 알아보셨다 — 거래처 화면과 같은 「숨기기」로 바꾸고 목록 줄에서
+ *    바로 누를 수 있게 했다. 검색에서만 사라지고 과거 판매는 그대로, 언제든 되살린다.
  */
 
 const won = (n: number) => n.toLocaleString("ko-KR");
@@ -65,6 +70,7 @@ function PriceField({ value, onChange }: { value: string; onChange: (v: string) 
 export function ServiceManager({ rows, startNew }: { rows: ServiceCatalogRow[]; startNew: boolean }) {
   const router = useRouter();
   const [pending, start] = useTransition();
+  const [ask, confirmDialog] = useConfirm();
   const [notice, setNotice] = useState<{ tone: "success" | "error"; msg: string } | null>(null);
   const [q, setQ] = useState("");
   const [adding, setAdding] = useState(startNew);
@@ -87,8 +93,25 @@ export function ServiceManager({ rows, startNew }: { rows: ServiceCatalogRow[]; 
   };
   const fail = (msg: string) => setNotice({ tone: "error", msg });
 
+  /** 줄에서 바로 숨기기 — 한 번 묻고 끈다 (되살리기는 아래 「숨긴 항목」에서) */
+  const hide = async (r: ServiceCatalogRow) => {
+    const okGo = await ask({
+      title: "이 공임을 검색에서 숨길까요?",
+      body: `「${r.name}」 — 판매 등록·정비 내역의 공임 검색에 안 나오게 됩니다.
+이미 등록된 판매 ${r.usedCount}건은 그대로 남고, 언제든 다시 보이게 할 수 있습니다.`,
+      confirmLabel: "숨기기",
+    });
+    if (!okGo) return;
+    start(async () => {
+      const res = await setServiceActive(r.id, false);
+      if (!res.ok) return fail(res.error);
+      done(`「${r.name}」 을 숨겼습니다 — 아래 「숨긴 항목」에서 되살릴 수 있습니다.`);
+    });
+  };
+
   return (
     <>
+      {confirmDialog}
       {notice && <Notice tone={notice.tone}>{notice.msg}</Notice>}
 
       {adding ? (
@@ -125,6 +148,7 @@ export function ServiceManager({ rows, startNew }: { rows: ServiceCatalogRow[]; 
                 row={r}
                 pending={pending}
                 onEdit={() => { setNotice(null); setEditId(r.id); }}
+                onHide={() => hide(r)}
                 onStar={() =>
                   start(async () => {
                     const res = await updateService({
@@ -145,7 +169,7 @@ export function ServiceManager({ rows, startNew }: { rows: ServiceCatalogRow[]; 
       {hidden.length > 0 && (
         <div className="mt-5">
           <button type="button" onClick={() => setShowHidden((v) => !v)} className="text-sm text-slate-500 underline underline-offset-4">
-            사용중지 {hidden.length}개 {showHidden ? "접기" : "보기"}
+            숨긴 항목 {hidden.length}개 {showHidden ? "접기" : "보기"}
           </button>
           {showHidden && (
             <ul className="mt-2 space-y-2 opacity-60">
@@ -159,11 +183,11 @@ export function ServiceManager({ rows, startNew }: { rows: ServiceCatalogRow[]; 
                       start(async () => {
                         const res = await setServiceActive(r.id, true);
                         if (!res.ok) return fail(res.error);
-                        done(`「${r.name}」 을 다시 켰습니다 — 검색에 다시 나옵니다.`);
+                        done(`「${r.name}」 이 다시 보입니다 — 검색에 다시 나옵니다.`);
                       })
                     }
                   >
-                    다시 켜기
+                    다시 보이기
                   </Button>
                 </li>
               ))}
@@ -175,8 +199,8 @@ export function ServiceManager({ rows, startNew }: { rows: ServiceCatalogRow[]; 
   );
 }
 
-function RowView({ row: r, pending, onEdit, onStar }: {
-  row: ServiceCatalogRow; pending: boolean; onEdit: () => void; onStar: () => void;
+function RowView({ row: r, pending, onEdit, onStar, onHide }: {
+  row: ServiceCatalogRow; pending: boolean; onEdit: () => void; onStar: () => void; onHide: () => void;
 }) {
   return (
     <div className="rounded-card border border-slate-200 bg-white p-3">
@@ -197,6 +221,11 @@ function RowView({ row: r, pending, onEdit, onStar }: {
         <span className="tabular shrink-0 text-sm font-semibold">
           {r.price === null ? <span className="font-normal text-slate-400">건별</span> : `${won(r.price)}원`}
         </span>
+        {/* ⭐ 줄에서 바로 숨기기 (사장님 요청 2026-08-31 2차) — 고치기 안까지 안 들어가도 된다 */}
+        <button type="button" disabled={pending} onClick={onHide} aria-label="검색에서 숨기기"
+          className="shrink-0 rounded-lg p-2 text-slate-400 active:bg-slate-100" title="검색에서 숨기기">
+          <EyeOff className="size-5" />
+        </button>
         <Button variant="secondary" onClick={onEdit} className="shrink-0">고치기</Button>
       </div>
     </div>
@@ -227,18 +256,17 @@ function EditForm({ row: r, pending, start, onDone, onFail, onClose }: {
       onDone("고쳤습니다 — 검색과 앞으로의 판매에 바로 적용됩니다.");
     });
 
-  const deactivate = async () => {
+  const hideThis = async () => {
     const okGo = await ask({
-      title: "이 공임을 사용중지할까요?",
-      body: `「${r.name}」 — 검색에서 사라집니다.\n이미 등록된 판매 ${r.usedCount}건은 그대로 남습니다. 언제든 다시 켤 수 있습니다.`,
-      tone: "danger",
-      confirmLabel: "사용중지",
+      title: "이 공임을 검색에서 숨길까요?",
+      body: `「${r.name}」 — 공임 검색에 안 나오게 됩니다.\n이미 등록된 판매 ${r.usedCount}건은 그대로 남고, 언제든 다시 보이게 할 수 있습니다.`,
+      confirmLabel: "숨기기",
     });
     if (!okGo) return;
     start(async () => {
       const res = await setServiceActive(r.id, false);
       if (!res.ok) return onFail(res.error);
-      onDone(`「${r.name}」 을 사용중지했습니다.`);
+      onDone(`「${r.name}」 을 숨겼습니다 — 아래 「숨긴 항목」에서 되살릴 수 있습니다.`);
     });
   };
 
@@ -258,7 +286,9 @@ function EditForm({ row: r, pending, start, onDone, onFail, onClose }: {
         {r.marsNo && <p className="text-xs text-slate-400">MARS 품번 {r.marsNo} — 바꿀 수 없습니다 (MARS 원본)</p>}
       </div>
       <div className="mt-3 flex gap-2">
-        <Button variant="danger" pending={pending} onClick={deactivate}>사용중지</Button>
+        <Button variant="secondary" pending={pending} onClick={hideThis} className="text-slate-600">
+          <EyeOff className="size-4" /> 숨기기
+        </Button>
         <Button variant="secondary" className="ml-auto" onClick={onClose}>취소</Button>
         <Button pending={pending} disabled={!name.trim()} onClick={save}>저장</Button>
       </div>
