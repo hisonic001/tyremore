@@ -32,6 +32,9 @@ export const config = {
      * 로그인 화면과 정적 파일만 열어 둔다.
      * `_next/static`·`_next/image` 는 화면 자산이라 막으면 로그인 화면도 깨진다.
      */
-    "/((?!login|_next/static|_next/image|favicon.ico|robots.txt).*)",
+    /* ⭐ 자동 감사 cron 만 예외 (2026-08-31) — Vercel Cron 은 로그인이 없다.
+       그 라우트는 자체 검사(CRON_SECRET/cron 헤더)를 하고, 읽기+감사기록뿐이라
+       열려도 자료가 새거나 바뀌지 않는다. 경로 하나만 정확히 연다. */
+    "/((?!login|api/cron/self-audit|_next/static|_next/image|favicon.ico|robots.txt).*)",
   ],
 };
