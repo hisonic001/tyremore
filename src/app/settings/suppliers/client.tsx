@@ -150,6 +150,7 @@ function SupplierCard({ s }: { s: SupplierRow }) {
   const [name, setName] = useState(s.name);
   const [phone, setPhone] = useState(s.phone ?? "");
   const [memo, setMemo] = useState(s.memo ?? "");
+  const [vatMode, setVatMode] = useState(s.vatMode ?? "포함");
   const [error, setError] = useState<string | null>(null);
   /** 합칠 상대 이름 — 있으면 「합칠까요?」 를 띄운다 */
   const [merge, setMerge] = useState<string | null>(null);
@@ -158,7 +159,7 @@ function SupplierCard({ s }: { s: SupplierRow }) {
   function save(confirmMerge = false) {
     setError(null);
     start(async () => {
-      const r = await updateSupplier({ id: s.id, name, phone, memo, confirmMerge });
+      const r = await updateSupplier({ id: s.id, name, phone, memo, vatMode, confirmMerge });
       if (!r.ok) {
         if (r.needsMerge) return setMerge(r.needsMerge);
         return setError(r.error);
@@ -195,6 +196,23 @@ function SupplierCard({ s }: { s: SupplierRow }) {
             placeholder="메모"
             className="w-full rounded-lg border border-slate-300 px-3 py-2"
           />
+          {/* ⭐ 청구서 부가세 방식 (월 정산, 2026-09-01) — AJ 처럼 부가세 별도 금액으로
+              등록하는 곳은 청구서에서 ×1.1 로 계산된다 */}
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-slate-500">청구서 부가세</span>
+            {(["포함", "별도"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setVatMode(m)}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+                  vatMode === m ? "bg-slate-900 text-white" : "bg-white text-slate-600 ring-1 ring-slate-300"
+                }`}
+              >
+                {m === "포함" ? "포함 (금액 그대로)" : "별도 (청구 때 ×1.1)"}
+              </button>
+            ))}
+          </div>
         </div>
 
         {s.invoiceCount > 0 && name.trim() !== s.name && (

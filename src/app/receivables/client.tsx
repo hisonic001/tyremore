@@ -312,7 +312,17 @@ function TargetCard({ t, owner }: { t: ReceivableTarget; owner: boolean }) {
             </div>
           )}
 
-          <div className="mt-3 text-right">
+          <div className="mt-3 flex items-center justify-between">
+            {isSupplier && owner ? (
+              <Link
+                href={`/receivables/settle/${encodeURIComponent(t.supplierName!)}`}
+                className="text-xs font-medium text-brand-700 underline underline-offset-4"
+              >
+                월 정산 →
+              </Link>
+            ) : (
+              <span />
+            )}
             <Link
               href={
                 t.supplierName

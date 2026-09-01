@@ -39,7 +39,17 @@ export default async function ReceivablesPage({
       <Link href="/sales" className="text-sm text-slate-500 underline underline-offset-4">
         ← 정비 내역
       </Link>
-      <h1 className="mt-3 text-xl font-bold">외상 장부</h1>
+      <div className="mt-3 flex items-baseline justify-between gap-2">
+        <h1 className="text-xl font-bold">외상 장부</h1>
+        {owner && (
+          <Link
+            href="/receivables/settle"
+            className="shrink-0 rounded-control border border-brand-300 bg-brand-50 px-3 py-1.5 text-sm font-medium text-brand-700"
+          >
+            거래처 월 정산 →
+          </Link>
+        )}
+      </div>
       <p className="tabular mt-1 text-sm text-slate-600">
         못 받은 외상 <strong>{book.totalCount}건</strong> · 잔액{" "}
         <strong className="text-amber-800">{won(book.totalRemain)}원</strong> · {book.targets.length}곳

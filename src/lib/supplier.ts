@@ -43,6 +43,8 @@ export interface SupplierRow {
   /** 이 거래처로 등록된 매입 장부 수 — 지울 수 있는지 판단한다 */
   invoiceCount: number;
   lastAt: string | null;
+  /** ⭐ 청구서 부가세 방식 (월 정산, 2026-09-01) — '포함' | '별도' */
+  vatMode: string;
 }
 
 /**
@@ -71,10 +73,11 @@ export async function listSuppliers(): Promise<SupplierRow[]> {
     phone: string | null;
     memo: string | null;
     is_active: boolean;
+    vat_mode: string;
     n: number;
     last_at: string | null;
   }>(sql`
-    SELECT s.id, s.name, s.phone, s.memo, s.is_active,
+    SELECT s.id, s.name, s.phone, s.memo, s.is_active, s.vat_mode,
            (SELECT count(*)::int FROM purchase_invoice i
              WHERE replace(lower(i.supplier),' ','') = s.name_key) n,
            (SELECT max(i.issued_at) FROM purchase_invoice i
@@ -91,6 +94,7 @@ export async function listSuppliers(): Promise<SupplierRow[]> {
     isActive: r.is_active,
     invoiceCount: Number(r.n),
     lastAt: r.last_at,
+    vatMode: r.vat_mode,
   }));
 }
 
@@ -149,6 +153,8 @@ export async function updateSupplier(input: {
   name: string;
   phone?: string;
   memo?: string;
+  /** ⭐ 청구서 부가세 방식 (월 정산) — '포함' | '별도'. 안 주면 안 건드린다 */
+  vatMode?: string;
   /** 이름이 이미 있는 거래처와 겹칠 때, 합쳐도 된다고 확인했는가 */
   confirmMerge?: boolean;
 }): Promise<{ ok: true; merged?: boolean } | { ok: false; error: string; needsMerge?: string }> {
@@ -191,6 +197,11 @@ export async function updateSupplier(input: {
       WHERE supplier_name IS NOT NULL
         AND replace(lower(supplier_name), ' ', '') = ${cur.nameKey}
     `);
+    // ⭐ 월 정산 회차도 같은 이유로 같이 옮긴다 (2026-09-01)
+    await db.execute(sql`
+      UPDATE settlement_run SET supplier_name = ${name}, updated_at = now()
+      WHERE replace(lower(supplier_name), ' ', '') = ${cur.nameKey}
+    `);
   }
 
   if (merging) {
@@ -221,6 +232,7 @@ export async function updateSupplier(input: {
       nameKey: k,
       phone: input.phone?.trim() || null,
       memo: input.memo?.trim() || null,
+      ...(input.vatMode === "포함" || input.vatMode === "별도" ? { vatMode: input.vatMode } : {}),
       updatedAt: new Date(),
     })
     .where(eq(supplier.id, input.id));

@@ -135,6 +135,22 @@ export async function cancelSale(
   if (!q) return { ok: false, error: "판매 기록을 찾을 수 없습니다" };
   if (q.status === "취소") return { ok: false, error: "이미 취소된 판매입니다" };
 
+  /**
+   * 🔴 수금이 이미 들어간 판매는 못 지운다 (월 정산 작업 중 발견한 구멍, 2026-09-01).
+   *    외상 장부는 status='성사' 만 세므로 취소하는 순간 그 건이 장부에서 사라지는데,
+   *    receivable_payment 줄은 그대로 남아 **받은 돈이 허공에 뜬다.**
+   */
+  const [rp] = await db.execute<{ n: number; s: number }>(sql`
+    SELECT count(*)::int n, COALESCE(SUM(amount), 0)::int s
+    FROM receivable_payment WHERE quote_id = ${quoteId}
+  `);
+  if (Number(rp?.n ?? 0) > 0) {
+    return {
+      ok: false,
+      error: `수금 ${Number(rp.s).toLocaleString()}원이 이미 들어간 판매입니다 — 외상 화면에서 수금 기록을 먼저 지운 뒤 취소해 주세요`,
+    };
+  }
+
   if (q.marsStatus === "전송완료" && !confirmMars) {
     return {
       ok: false,

@@ -777,6 +777,11 @@ export const supplier = pgTable(
     memo: text("memo"),
     /** 거래를 끊은 곳. 지우지 않고 숨긴다 — 옛 매입 내역이 남아 있다 */
     isActive: boolean("is_active").notNull().default(true),
+    /**
+     * ⭐ 청구서 부가세 방식 (월 정산, 2026-09-01) — '포함'(기본) | '별도'.
+     *    AJ렌트카는 앱에 부가세 별도 금액으로 등록하고 청구 때 ×1.1 (실측: 8월 수리비 엑셀).
+     */
+    vatMode: text("vat_mode").notNull().default("포함"),
     createdAt,
     updatedAt,
   },
@@ -1287,3 +1292,84 @@ export const partyAlias = pgTable(
   },
   (t) => [uniqueIndex("party_alias_alias_key_key").on(t.aliasKey)],
 );
+
+/* ============================================================
+ * 3-18. 렌트카 거래처 월 정산 ⭐ (사장님 요청 2026-09-01)
+ *
+ *   "월초에 거래처가 검토 후 반려/승인/금액조정을 보내줌 → 앱에서 달라진 내역
+ *    전부 재조정(가장 불편)" — 회차(run)·판정(line)·한꺼번에 적용으로 바꾼다.
+ *
+ * 실제 생성은 scripts/add-settlement.ts. 되돌리기 가능(소프트) — month_close 관례.
+ * ========================================================== */
+
+/** 거래처×월 1건 — 수기 「청구·입금 관리대장」의 한 줄에 해당 */
+export const settlementRun = pgTable(
+  "settlement_run",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    /** 글자로 둔다 (quote.supplier_name 과 같은 이유) — 개명은 updateSupplier 가 같이 옮긴다 */
+    supplierName: text("supplier_name").notNull(),
+    /** 'YYYY-MM' */
+    ym: text("ym").notNull(),
+    /** '작성중' → '회신반영중' → '적용완료' → '입금완료' (언제든 뒤로 돌릴 수 있다) */
+    status: text("status").notNull().default("작성중"),
+    /** 청구서를 내보낸 시점의 합계 스냅샷 — 「원래 얼마 청구했나」의 정본 */
+    invoicedAmount: integer("invoiced_amount"),
+    invoiceExportedAt: timestamp("invoice_exported_at", { withTimezone: true }),
+    /** 합의 합계 (적용 시점 캐시 — 정본은 줄들의 agreed_amount 합) */
+    agreedAmount: integer("agreed_amount"),
+    appliedAt: timestamp("applied_at", { withTimezone: true }),
+    depositedOn: date("deposited_on"),
+    depositedAmount: integer("deposited_amount"),
+    memo: text("memo"),
+    createdAt,
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("uq_settlement_run").on(t.supplierName, t.ym)],
+);
+
+/** 판매 한 건의 판정 — billed_amount 는 run 생성 시점 스냅샷 (원 청구액 보관처) */
+export const settlementLine = pgTable(
+  "settlement_line",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    runId: bigint("run_id", { mode: "number" })
+      .notNull()
+      .references(() => settlementRun.id, { onDelete: "cascade" }),
+    quoteId: bigint("quote_id", { mode: "number" })
+      .notNull()
+      .references(() => quote.id),
+    billedAmount: integer("billed_amount").notNull(),
+    /** '대기' | '승인' | '조정' | '부분반려' | '반려' | '보류' */
+    decision: text("decision").notNull().default("대기"),
+    agreedAmount: integer("agreed_amount"),
+    replyMemo: text("reply_memo"),
+    /** 회신과 어떻게 이었나 — '관리번호' | '차량번호' | '차량+금액' | '손으로' */
+    matchedBy: text("matched_by"),
+    /** 🔴 멱등의 핵심 — 판정을 고치면 null 로 되돌리고, 적용은 null 인 줄만 처리한다 */
+    appliedAt: timestamp("applied_at", { withTimezone: true }),
+    createdAt,
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("uq_settlement_line").on(t.runId, t.quoteId)],
+);
+
+/**
+ * 품목 줄 단위 지시·스냅샷 — 부분반려·줄 조정은 지우거나 고치기 **전** 여기 남긴다.
+ * quote_item_id 는 FK 로 안 묶는다 (반려로 지워지면 참조가 허공이 되는 게 정상).
+ */
+export const settlementLineItem = pgTable("settlement_line_item", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  lineId: bigint("line_id", { mode: "number" })
+    .notNull()
+    .references(() => settlementLine.id, { onDelete: "cascade" }),
+  quoteItemId: bigint("quote_item_id", { mode: "number" }),
+  description: text("description").notNull(),
+  qty: integer("qty").notNull(),
+  /** 고치기 전 단가 */
+  originalPrice: integer("original_price").notNull(),
+  /** '반려'(줄 삭제) | '조정'(단가 변경) */
+  action: text("action").notNull(),
+  agreedPrice: integer("agreed_price"),
+  createdAt,
+});
