@@ -43,8 +43,9 @@ export interface AuditRun {
 
 export async function runSelfAudit(): Promise<AuditItem[]> {
   const items: AuditItem[] = [];
-  const ym = kstToday().slice(0, 7);
-  const start = ym + "-01";
+  /* 🔴 A1 은 「이번 달」이 아니라 최근 45일 — 달이 바뀌어도 못 받은 돈은 못 받은 돈이다
+     (2026-09-01 실측: 9/1 이 되자 8월 미수 26건이 감사에서 사라졌다) */
+  const start = new Date(Date.parse(kstToday()) - 45 * 86400000).toISOString().slice(0, 10);
 
   /* ① 계좌이체 판매인데 이체입금 자국 없음 — 이번 달 (미광전력 유형) */
   const a1 = await db.execute<{ quote_no: string; d: string; total: number; who: string; cand: number }>(sql`
@@ -66,7 +67,7 @@ export async function runSelfAudit(): Promise<AuditItem[]> {
   if (a1.length > 0) {
     items.push({
       code: "A1",
-      title: "계좌이체 판매인데 통장 입금과 안 이어진 것 (이번 달)",
+      title: "계좌이체 판매인데 통장 입금과 안 이어진 것 (최근 45일)",
       n: a1.length,
       samples: a1.slice(0, 6).map((r) =>
         `${r.d} ${r.who} ${Number(r.total).toLocaleString()}원 (${r.quote_no})${Number(r.cand) > 0 ? " — 이을 만한 입금 있음 ⚡" : " — 동액 입금 없음(미수금·다르게 받았을 수 있음)"}`,

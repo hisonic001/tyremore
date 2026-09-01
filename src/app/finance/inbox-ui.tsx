@@ -9,7 +9,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
 import type { FinInbox, InboxEntry } from "@/lib/fin-inbox";
-import { traceLinkDeposit } from "@/lib/trace-actions";
+import { markSaleSettledAside, traceLinkDeposit } from "@/lib/trace-actions";
 import { payFromWithdrawal } from "@/lib/purchase-pay";
 import { useConfirm } from "@/components/ui/confirm";
 
@@ -31,6 +31,28 @@ export function InboxSection({ inbox, ym }: { inbox: FinInbox; ym: string }) {
       const r = await traceLinkDeposit(a.cashTxnId, a.quoteId);
       if (!r.ok) return setError(r.error);
       setMsg("이었습니다 — 입금자명도 기억했습니다.");
+      router.refresh();
+    });
+  };
+
+  /* 통장에 안 찍히는 수령(개인계좌·현금) — 확인 끝 표시 (사장님 제보 2026-09-01 나기춘) */
+  const doAside = async (e: InboxEntry) => {
+    const a = e.aside!;
+    if (
+      !(await ask({
+        title: "개인계좌·현금으로 받은 판매인가요?",
+        body: `${e.text}
+법인 통장에 안 찍히는 돈이라 확인 끝으로 표시합니다. 잘못 표시했으면 추적 화면에서 되돌릴 수 있습니다.`,
+        confirmLabel: "받았음 — 확인 끝",
+      }))
+    )
+      return;
+    start(async () => {
+      setMsg(null);
+      setError(null);
+      const r = await markSaleSettledAside(a.quoteId);
+      if (!r.ok) return setError(r.error);
+      setMsg("확인 끝으로 표시했습니다.");
       router.refresh();
     });
   };
@@ -105,6 +127,16 @@ export function InboxSection({ inbox, ym }: { inbox: FinInbox; ym: string }) {
                           className="shrink-0 rounded-lg bg-sky-700 px-2 py-1 text-xs font-semibold text-white disabled:opacity-40"
                         >
                           → {e.payFrom.label}
+                        </button>
+                      )}
+                      {e.aside && !e.linkDeposit && (
+                        <button
+                          type="button"
+                          disabled={pending}
+                          onClick={() => doAside(e)}
+                          className="shrink-0 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 disabled:opacity-40"
+                        >
+                          개인계좌·현금으로 받음
                         </button>
                       )}
                       {!e.linkDeposit && !e.payFrom && e.href && (

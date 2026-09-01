@@ -34,6 +34,8 @@ export interface InboxEntry {
   linkDeposit?: { cashTxnId: number; quoteId: number; label: string };
   /** 지급 잡기 — purchase-pay.payFromWithdrawal */
   payFrom?: { cashTxnId: number; supplier: string; label: string };
+  /** 「개인계좌·현금으로 받음」 — 통장에 안 찍히는 수령 확인 (trace-actions.markSaleSettledAside) */
+  aside?: { quoteId: number };
 }
 
 export interface InboxGroup {
@@ -124,6 +126,7 @@ export async function finInbox(ym: string): Promise<FinInbox> {
         cand.length === 1
           ? { cashTxnId: Number(cand[0].id), quoteId: Number(r.id), label: `${cand[0].d} 입금 「${payerKeyOf("통장", cand[0].description)}」와 잇기` }
           : undefined,
+      aside: { quoteId: Number(r.id) },
     });
   }
 
