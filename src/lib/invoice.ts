@@ -1288,16 +1288,13 @@ export async function receiveLine(input: {
   if (!line.productId) {
     return { ok: false, error: `상품을 찾지 못했습니다 (CAI ${line.cai}). 먼저 상품을 등록하세요` };
   }
-  /**
-   * 🔴 이 흐름은 타이어 전용(1본 1행)이다 (2026-08-18) — 부품 줄을 태우면 5개가
-   *    5행으로 쪼개진다. 부품 매입은 붙여넣기 카드의 「입고」 버튼이 맡는다.
-   */
   const [prodKind] = await db.execute<{ is_serialized: boolean }>(sql`
     SELECT is_serialized FROM product WHERE id = ${line.productId}
   `);
-  if (prodKind && prodKind.is_serialized === false) {
-    return { ok: false, error: "부품 줄은 이 흐름으로 입고할 수 없습니다 — 붙여넣기 카드의 「입고」 버튼을 써 주세요" };
-  }
+  /* ⭐ 부품도 이 흐름으로 입고한다 (사장님 제보 2026-09-01) — 입고 예정으로 만들어진
+     부품 인보이스(배터리 직접-20260901-01)는 붙여넣기 「입고」 버튼이 없어 막다른 길이었다.
+     규칙은 receivePastedInvoice 와 동일: 타이어 1본 1행, 부품은 한 행에 수량. */
+  const isPart = !!prodKind && prodKind.is_serialized === false;
   const remain = line.qty - line.receivedQty;
   if (input.qty > remain) {
     return { ok: false, error: `남은 수량은 ${remain}본입니다` };
@@ -1311,6 +1308,46 @@ export async function receiveLine(input: {
   `);
   const start = seqRow?.n ?? 1;
 
+  if (isPart) {
+    /* 부품 — 이미 재고 줄이 있으면 수량을 더하고, 없으면 한 줄 만든다 (DOT 는 부품에 없다) */
+    const [exist] = await db.execute<{ id: number; qty: number }>(sql`
+      SELECT id, qty FROM stock_item
+      WHERE product_id = ${line.productId} AND status = '재고' AND dot IS NULL LIMIT 1
+    `);
+    let stockId: number;
+    if (exist) {
+      await db.execute(sql`
+        UPDATE stock_item SET qty = ${Number(exist.qty) + input.qty}, verified_at = now()
+          ${line.unitCost !== null ? sql`, purchase_price = ${line.unitCost}` : sql``}
+        WHERE id = ${Number(exist.id)}
+      `);
+      stockId = Number(exist.id);
+    } else {
+      const [ins] = await db
+        .insert(stockItem)
+        .values({
+          stockNo: `S${yy}-${String(start).padStart(6, "0")}`,
+          productId: line.productId!,
+          qty: input.qty,
+          status: "재고",
+          dot: null,
+          purchasePrice: line.unitCost,
+          purchaseItemId: line.id,
+          verifiedAt: new Date(),
+          createdBy: input.userId ?? null,
+        })
+        .returning({ id: stockItem.id });
+      stockId = ins.id;
+    }
+    await db.insert(stockMovement).values({
+      stockItemId: stockId,
+      type: "입고",
+      reason: "매입입고",
+      qtyDelta: input.qty,
+      memo: `인보이스 ${line.cai}`,
+      createdBy: input.userId ?? null,
+    });
+  } else {
   const values = Array.from({ length: input.qty }, (_, i) => ({
     stockNo: `S${yy}-${String(start + i).padStart(6, "0")}`,
     productId: line.productId!,
@@ -1342,6 +1379,7 @@ export async function receiveLine(input: {
       createdBy: input.userId ?? null,
     })),
   );
+  }
 
   await db
     .update(purchaseInvoiceItem)
