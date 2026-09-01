@@ -15,6 +15,7 @@
 import { eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
+import { normalizePlate } from "./normalize";
 import { customer, vehicle } from "@/db/schema";
 
 function refresh() {
@@ -67,7 +68,7 @@ export async function updateVehicleInfo(input: {
     return { ok: false, error: "연료 종류가 올바르지 않습니다" };
   }
   const plate = input.plateNo.trim();
-  const plateNorm = plate.replace(/[\s-]/g, "");
+  const plateNorm = normalizePlate(plate); // 정본 하나 (2026-09-01 통일)
   if (!plateNorm) return { ok: false, error: "차량번호는 비울 수 없습니다" };
   const [v] = await db.select({ id: vehicle.id }).from(vehicle).where(eq(vehicle.id, input.vehicleId)).limit(1);
   if (!v) return { ok: false, error: "차량을 찾을 수 없습니다" };

@@ -386,6 +386,13 @@ export const customer = pgTable(
     consentSignedAt: timestamp("consent_signed_at", { withTimezone: true }),
 
     type: text("type").notNull().default("개인"),
+    /**
+     * ⭐ 「거래처 차고」 링크 (2026-09-01, scripts/add-customer-supplier-link.ts)
+     *    이 고객이 거래처 X 의 차량 보관소라는 표시 — 거래처당 최대 1 (부분 유니크).
+     *    이름 비교가 아니라 링크라 동명 실제 손님과 안 섞인다. 차고 차량은 그 번호판으로
+     *    개인 손님이 등록되는 순간 그 손님에게 이전된다 (sale.ts createCustomerAndVehicle).
+     */
+    supplierName: text("supplier_name"),
     grade: text("grade"),
     extraDiscountRate: numeric("extra_discount_rate", { precision: 5, scale: 4 }),
     /** 같은 전화 쓰는 묶음 72그룹. 합치지 않고 연결만 한다 */

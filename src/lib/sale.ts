@@ -21,6 +21,7 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
+import { normalizePlate } from "./normalize";
 import { customer, quote, quoteItem, quotePayment, serviceItem, stockItem, stockMovement, vehicle } from "@/db/schema";
 import { checkSplitPayments } from "./payments";
 import { ageAnchorSql } from "./tire-age";
@@ -356,7 +357,8 @@ export async function saveSale(
         if (input.vehicleId && input.mileage && input.mileage > 0) {
           await tx
             .update(vehicle)
-            .set({ mileage: input.mileage, lastVisitAt: now })
+            // mileage_at 도 채운다 (2026-09-01 — sale-edit 와 비대칭이었다)
+            .set({ mileage: input.mileage, mileageAt: now, lastVisitAt: now })
             .where(eq(vehicle.id, input.vehicleId));
         }
 
@@ -423,7 +425,9 @@ export async function createCustomerAndVehicle(
     }
   }
 
-  const plateNorm = plateNo.replace(/[\s-]/g, "");
+  /* 🔴 번호판 정규화는 정본 하나(normalizePlate) — 전엔 인라인 replace 라 점·밑줄이
+     섞이면 중복 차량이 생겼다 (읽기 검색과 규칙이 갈라져 있었다, 2026-09-01 통일) */
+  const plateNorm = normalizePlate(plateNo);
   const phone = input.phone.replace(/[^\d]/g, "");
 
   // 같은 번호판이 이미 있으면 그것을 쓴다 — 중복 차량을 만들지 않는다
@@ -432,7 +436,18 @@ export async function createCustomerAndVehicle(
     .from(vehicle)
     .where(eq(vehicle.plateNoNorm, plateNorm))
     .limit(1);
-  if (dupV) return { ok: true, customerId: dupV.customerId, vehicleId: dupV.id };
+  /* ⭐ 주인이 「거래처 차고」면 재사용이 아니라 **이전**이다 (사장님 2026-09-01 —
+     "거래처 차량이 나중에 개인고객으로 올 경우도 있음"). 차고는 소유주가 아니라 보관소 —
+     아래에서 개인 고객을 만들고 차량을 그 손님에게 옮긴다. 과거 거래처 판매 이력은
+     quote.vehicle_id 로 그대로 따라온다. 실제 개인 손님 소유면 지금처럼 그대로 재사용. */
+  let garageVehicle: { id: number; from: string } | null = null;
+  if (dupV) {
+    const [own] = await db.execute<{ sup: string | null }>(sql`
+      SELECT supplier_name sup FROM customer WHERE id = ${dupV.customerId}
+    `);
+    if (own?.sup) garageVehicle = { id: dupV.id, from: own.sup };
+    else return { ok: true, customerId: dupV.customerId, vehicleId: dupV.id };
+  }
 
   // 같은 전화번호가 있으면 그 손님의 차량으로 붙인다
   let customerId: number | null = null;
@@ -465,6 +480,18 @@ export async function createCustomerAndVehicle(
     customerId = c.id;
   }
 
+  if (garageVehicle) {
+    // 차고 → 개인 손님 이전 (번호판·이력 그대로)
+    await db.update(vehicle).set({ customerId }).where(eq(vehicle.id, garageVehicle.id));
+    await db.execute(sql`
+      UPDATE customer SET memo = COALESCE(memo || ' · ', '') ||
+        ${"차량 " + plateNo + " — " + garageVehicle.from + " 차고에서 이전 " + now.toISOString().slice(0, 10)}
+      WHERE id = ${customerId}
+    `);
+    refresh("/sale", "/sales");
+    return { ok: true, customerId, vehicleId: garageVehicle.id };
+  }
+
   const year = Number(input.year.replace(/\D/g, "")) || null;
   const [v] = await db
     .insert(vehicle)
@@ -485,6 +512,73 @@ export async function createCustomerAndVehicle(
 
   refresh("/sale", "/sales");
   return { ok: true, customerId, vehicleId: v.id };
+}
+
+/**
+ * ⭐ 거래처 차량 담기 (사장님 요청 2026-09-01 — "거래처도 차량번호와 주행거리를")
+ *
+ *   거래처 판매에서 새 차량을 달 때 쓴다. 주인은 그 거래처의 **차고 고객**
+ *   (customer.supplier_name 링크, 없으면 자동 생성 — type '법인', MARS 대상 아님).
+ *   같은 번호판이 이미 있으면(주인이 누구든) 그 차량을 그대로 돌려준다 — 중복 금지.
+ *   MARS 필수 항목(주소·연료 등)은 안 받는다 — 거래처 판매는 MARS 에 안 간다.
+ */
+export async function createSupplierVehicle(input: {
+  supplier: string;
+  plateNo: string;
+  makerName?: string;
+  model?: string;
+  mileage?: string;
+}): Promise<
+  | { ok: true; vehicleId: number; customerId: number; plateNo: string; makerName: string | null; model: string | null; mileage: number | null; reused: boolean }
+  | { ok: false; error: string }
+> {
+  const supplierName = input.supplier.trim();
+  const plateNo = input.plateNo.trim();
+  if (!supplierName) return { ok: false, error: "거래처가 없습니다" };
+  if (!plateNo) return { ok: false, error: "차량번호를 넣어 주세요" };
+  const plateNorm = normalizePlate(plateNo);
+
+  const [dup] = await db
+    .select({ id: vehicle.id, customerId: vehicle.customerId, plateNo: vehicle.plateNo, makerName: vehicle.makerName, model: vehicle.model, mileage: vehicle.mileage })
+    .from(vehicle)
+    .where(eq(vehicle.plateNoNorm, plateNorm))
+    .limit(1);
+  if (dup) {
+    return { ok: true, vehicleId: dup.id, customerId: dup.customerId, plateNo: dup.plateNo, makerName: dup.makerName, model: dup.model, mileage: dup.mileage, reused: true };
+  }
+
+  // 차고 고객 찾기/만들기 — 링크(supplier_name)로만, 이름 비교 안 함
+  let [garage] = await db.execute<{ id: number }>(sql`
+    SELECT id FROM customer WHERE supplier_name = ${supplierName} LIMIT 1
+  `);
+  if (!garage) {
+    const [made] = await db.execute<{ id: number }>(sql`
+      INSERT INTO customer (name, name_search, type, supplier_name, memo)
+      VALUES (${supplierName}, ${supplierName.replace(/\s/g, "").toLowerCase()}, '법인', ${supplierName},
+              ${"거래처 차고 — " + supplierName + " 차량 보관용 (자동 생성)"})
+      RETURNING id
+    `);
+    garage = made;
+  }
+
+  const now = new Date();
+  const mileage = Number((input.mileage ?? "").replace(/\D/g, "")) || null;
+  const [v] = await db
+    .insert(vehicle)
+    .values({
+      customerId: Number(garage.id),
+      plateNo,
+      plateNoNorm: plateNorm,
+      makerName: input.makerName?.trim() || null,
+      model: input.model?.trim() || null,
+      fuelType: null,
+      mileage,
+      mileageAt: mileage ? now : null,
+    })
+    .returning({ id: vehicle.id });
+
+  refresh("/sale", "/sales");
+  return { ok: true, vehicleId: v.id, customerId: Number(garage.id), plateNo, makerName: input.makerName?.trim() || null, model: input.model?.trim() || null, mileage, reused: false };
 }
 
 /** 서비스·공임 찾기 (직접 추가용) */

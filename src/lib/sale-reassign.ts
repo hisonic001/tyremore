@@ -145,7 +145,11 @@ export async function reassignSale(input: {
     `);
     if (!s) return { ok: false, error: "그 거래처를 찾지 못했습니다 — 설정 > 거래처에서 먼저 추가해 주세요" };
     setSupplier = s.name;
-    after = `거래처 ${s.name}`;
+    /* ⭐ 차량은 유지한다 (2026-09-01 — 「거래처로 묶되 차량 유지」 2026-08-21 결정이
+       등록에는 있었는데 여기엔 없어서, 거래처로 돌리면 차량이 날아갔다) */
+    setCustomerId = q.customerId;
+    setVehicleId = q.vehicleId;
+    after = `거래처 ${s.name}${q.vehicleId ? " (차량 유지)" : ""}`;
   } else {
     const name = input.target.name?.trim();
     if (!name) return { ok: false, error: "손님 이름을 넣어 주세요" };

@@ -17,7 +17,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import type { VehicleHit } from "@/lib/search";
 import { searchVehicles } from "@/lib/search-actions";
-import { createCustomerAndVehicle } from "@/lib/sale";
+import { createCustomerAndVehicle, createSupplierVehicle } from "@/lib/sale";
 import { isMarsMaker, makerSuggestions, MARS_MAKER_LIST_ID, MarsMakerDatalist } from "@/lib/mars-makers";
 import { listSuppliers } from "@/lib/supplier";
 import { BODY_TYPES, FUEL_TYPES, type NewCustomerInput } from "@/lib/sale-types";
@@ -142,6 +142,11 @@ export function CustomerPick({
               </div>
             ) : (
               <div className="text-sm text-violet-700">MARS 에는 등록하지 않습니다 — 재고와 판매 기록만 남습니다</div>
+            )}
+            {/* ⭐ 거래처 차량 달기 (사장님 요청 2026-09-01) — 전엔 메모에 「156허9093 K5 26688km」처럼
+                손으로 적으셨다. 차량을 달면 주행거리 칸이 열리고 그 차 기록에 남는다. */}
+            {!vehicle && (
+              <SupplierVehiclePick supplier={supplier} onPick={onPick} />
             )}
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
@@ -663,3 +668,113 @@ function NewCustomer({
     </div>
   );
 }
+
+/**
+ * 거래처 카드 안의 차량 달기 — 검색(기존 정본 searchVehicles)과 「새 차량」.
+ * 새 차량은 그 거래처의 차고 고객 소속으로 만들어진다 (sale.ts createSupplierVehicle —
+ * 같은 번호판이 있으면 그 차량 재사용, 중복 금지). MARS 필수 항목은 안 받는다.
+ */
+function SupplierVehiclePick({ supplier, onPick }: { supplier: string; onPick: (v: VehicleHit) => void }) {
+  const [vq, setVq] = useState("");
+  const [vhits, setVhits] = useState<VehicleHit[]>([]);
+  const [focused, setFocused] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState({ plateNo: "", makerName: "", model: "", mileage: "" });
+  const [err, setErr] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+  const vt = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!focused && !vq.trim()) return;
+    if (vt.current) clearTimeout(vt.current);
+    // 검색어가 없으면 거래처 이름으로 — 차고·동명 고객의 차량들이 후보로 뜬다
+    vt.current = setTimeout(() => void searchVehicles(vq.trim() || supplier).then((r) => setVhits(r.slice(0, 6))), 250);
+    return () => {
+      if (vt.current) clearTimeout(vt.current);
+    };
+  }, [vq, focused, supplier]);
+
+  const add = () =>
+    start(async () => {
+      setErr(null);
+      const r = await createSupplierVehicle({ supplier, ...form });
+      if (!r.ok) return setErr(r.error);
+      onPick({
+        vehicleId: r.vehicleId, plateNo: r.plateNo, makerName: r.makerName, model: r.model,
+        year: null, mileage: r.mileage, vin: null, lastFittedSize: null,
+        customerId: r.customerId, customerName: supplier, phone: null, memo: null, familyGroupId: null,
+      });
+    });
+
+  return (
+    <div className="mt-2">
+      {!adding ? (
+        <>
+          <input
+            value={vq}
+            onChange={(e) => setVq(e.target.value)}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setTimeout(() => setFocused(false), 250)}
+            placeholder="차량번호로 달기 (선택) — 예: 156허9093"
+            className="w-full rounded-lg border border-violet-300 bg-white px-3 py-2 text-sm"
+          />
+          {(focused || vq.trim()) && (
+            <ul className="mt-1 space-y-1" onMouseDown={(e) => e.preventDefault()}>
+              {vhits.map((h) => (
+                <li key={h.vehicleId}>
+                  <button
+                    type="button"
+                    onClick={() => onPick(h)}
+                    className="flex w-full items-baseline gap-2 rounded-lg border border-violet-200 bg-white px-3 py-1.5 text-left text-sm active:bg-violet-100"
+                  >
+                    <span className="font-medium">{h.plateNo}</span>
+                    <span className="min-w-0 truncate text-xs text-slate-500">
+                      {[h.model, h.customerName].filter(Boolean).join(" · ")}
+                    </span>
+                  </button>
+                </li>
+              ))}
+              <li>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdding(true);
+                    setForm((f) => ({ ...f, plateNo: vq.trim() }));
+                  }}
+                  className="w-full rounded-lg border border-dashed border-violet-400 px-3 py-1.5 text-sm font-medium text-violet-700 active:bg-violet-100"
+                >
+                  + 새 차량으로 달기{vq.trim() ? ` (${vq.trim()})` : ""}
+                </button>
+              </li>
+            </ul>
+          )}
+        </>
+      ) : (
+        <div className="rounded-xl border border-violet-300 bg-white p-2">
+          <div className="grid grid-cols-2 gap-1.5">
+            <input value={form.plateNo} onChange={(e) => setForm({ ...form, plateNo: e.target.value })}
+              placeholder="차량번호 (필수)" className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm" />
+            <input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })}
+              placeholder="모델 (선택) — K5" className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm" />
+            <input value={form.makerName} onChange={(e) => setForm({ ...form, makerName: e.target.value })}
+              placeholder="제조사 (선택)" className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm" />
+            <input value={form.mileage} onChange={(e) => setForm({ ...form, mileage: e.target.value.replace(/[^\d]/g, "") })}
+              inputMode="numeric" placeholder="주행거리 km (선택)" className="tabular rounded-lg border border-slate-300 px-2 py-1.5 text-sm" />
+          </div>
+          <p className="mt-1 text-xs text-slate-500">
+            거래처 차량으로 담깁니다 — 나중에 개인 손님으로 오면 「새 손님 등록」 때 그 손님에게 자동으로 넘어갑니다.
+          </p>
+          {err && <p className="mt-1 rounded-lg bg-red-50 p-1.5 text-xs text-red-700">⚠️ {err}</p>}
+          <div className="mt-1.5 flex gap-2">
+            <button type="button" onClick={() => setAdding(false)} className="text-xs text-slate-500 underline">닫기</button>
+            <button type="button" disabled={pending || !form.plateNo.trim()} onClick={add}
+              className="ml-auto rounded-lg bg-violet-700 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
+              담기
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
