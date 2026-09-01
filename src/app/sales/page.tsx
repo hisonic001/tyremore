@@ -36,6 +36,7 @@ export default async function SalesPage({
     supplier?: string;
     canceled?: string;
     pay?: string;
+    reserved?: string;
   }>;
 }) {
   const sp = await searchParams;
@@ -50,8 +51,10 @@ export default async function SalesPage({
    */
   const PAY_OPTIONS = ALL_METHODS; // 정본 하나 — lib/payments.ts
   const pay = sp.pay && PAY_OPTIONS.includes(sp.pay) ? sp.pay : undefined;
+  // ⭐ 예약중만 보기 (예약거래 2026-09-01) — 언제 올지 모르는 예약을 한 목록으로
+  const reserved = sp.reserved === "1";
   // 대상을 콕 집어 들어온 것이면 기간은 「전체」로 편다 — 그 대상의 과거를 보러 온 것이니까
-  const scoped = Number.isFinite(customerId) || Number.isFinite(vehicleId) || !!supplierName;
+  const scoped = Number.isFinite(customerId) || Number.isFinite(vehicleId) || !!supplierName || reserved;
 
   /**
    * ⭐ 기간 필터 — 기본은 **오늘** (사장님 요청 2026-08-05).
@@ -98,6 +101,7 @@ export default async function SalesPage({
     supplierName,
     includeCanceled,
     paymentMethod: pay,
+    reserved: reserved || undefined,
   });
 
   /**
@@ -192,6 +196,7 @@ export default async function SalesPage({
           <PayFilter
             pay={pay ?? null}
             payOptions={PAY_OPTIONS}
+            reserved={reserved}
             keep={{
               customer: sp.customer,
               vehicle: sp.vehicle,
@@ -202,6 +207,7 @@ export default async function SalesPage({
               from: sp.from,
               to: sp.to,
               pay: sp.pay,
+              reserved: sp.reserved,
             }}
           />
         }

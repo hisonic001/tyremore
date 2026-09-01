@@ -57,6 +57,16 @@ export interface DotGroup {
  * 타이어는 1본 1행이라 재고 295본이 stock_item 295줄이다. 그대로 늘어놓으면
  * 창고에서 못 쓴다. 실제로 세는 단위인 **같은 상품·같은 DOT** 로 묶는다.
  */
+/**
+ * ⭐ 예약 걸린 수량 (예약거래 2026-09-01) — 성사 + '예약중' 판매의 상품 줄 합.
+ *    **표시·알림용일 뿐 판매를 막지 않는다** (급한 손님에게 먼저 팔고 재주문하는 관행).
+ *    검색(search.ts)이 같은 식을 제 파일에 두고 쓴다 ("use server" 라 export 불가).
+ */
+const reservedQtySql = (productIdRef: unknown) => sql`COALESCE((
+  SELECT SUM(i.qty)::int FROM quote_item i JOIN quote q ON q.id = i.quote_id
+  WHERE i.product_id = ${productIdRef} AND q.status = '성사' AND q.reservation_status = '예약중'
+), 0)`;
+
 export interface StockLot {
   productId: number;
   model: string;
@@ -74,6 +84,8 @@ export interface StockLot {
   verifiedAt: string | null;
   /** 제조 후 지난 햇수 — 오래된 것부터 팔아야 한다 */
   ageYears: number | null;
+  /** ⭐ 예약 걸린 수량 (상품 전체 기준 — 같은 상품의 DOT 줄마다 같은 값) */
+  reservedQty: number;
 }
 
 /**
@@ -96,10 +108,12 @@ export async function stockLots(): Promise<StockLot[]> {
     dot: string | null;
     qty: number;
     verified_at: Date | null;
+    reserved: number;
   }>(sql`
     SELECT p.id product_id, p.raw_name, p.pattern, p.display_name, p.brand_code, p.season,
            p.width, p.aspect_ratio, p.rim_inch, p.load_index, p.speed_rating,
-           s.dot, SUM(s.qty)::int qty, MAX(s.verified_at) verified_at
+           s.dot, SUM(s.qty)::int qty, MAX(s.verified_at) verified_at,
+           ${reservedQtySql(sql.raw("p.id"))} reserved
     FROM stock_item s JOIN product p ON p.id = s.product_id
     WHERE s.status = '재고' AND s.qty > 0 AND p.item_type = 'tire'
     GROUP BY p.id, p.raw_name, p.pattern, p.display_name, p.brand_code, p.season,
@@ -131,6 +145,7 @@ export async function stockLots(): Promise<StockLot[]> {
       qty: Number(r.qty),
       verifiedAt: r.verified_at ? new Date(r.verified_at).toISOString() : null,
       ageYears: made === null ? null : Math.max(0, thisYear - made),
+      reservedQty: Number(r.reserved ?? 0),
     };
   });
 }

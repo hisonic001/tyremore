@@ -586,6 +586,13 @@ export const quote = pgTable(
      */
     marsOrderNo: text("mars_order_no"),
     marsMemo: text("mars_memo"),
+    /**
+     * ⭐ 예약거래 (사장님 요청 2026-09-01) — NULL(일반) | '예약중' | '시공완료'.
+     *    예약중이면 재고 차감·MARS 를 시공 완료까지 미룬다. 돈·매출은 work_date 그대로.
+     */
+    reservationStatus: text("reservation_status"),
+    /** 시공한 날 — 매출 날(work_date)과 별개 */
+    fulfilledOn: date("fulfilled_on"),
 
     /**
      * ⭐ 거래처 판매의 거래처 이름 (2026-08-17)
@@ -668,6 +675,8 @@ export const quotePayment = pgTable(
       .references(() => quote.id, { onDelete: "cascade" }),
     method: text("method").notNull(),
     amount: integer("amount").notNull(),
+    /** ⭐ 받은 날 (예약거래, 2026-09-01) — 비면 판매의 work_date 로 해석 (기존 자료 무변경) */
+    paidOn: date("paid_on"),
     createdAt,
   },
   (t) => [

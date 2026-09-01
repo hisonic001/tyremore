@@ -5,7 +5,8 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { RateBox } from "../rate-box";
 import type { ProductHit, VehicleHit } from "@/lib/search";
-import { searchProducts } from "@/lib/search-actions";
+import { findOpenReservations, searchProducts } from "@/lib/search-actions";
+import type { OpenReservation } from "@/lib/search";
 import { findServices, saveSale, type SaleLine } from "@/lib/sale";
 import { EXCLUSIVE, SPLITTABLE } from "@/lib/payments";
 /** ⭐ 고객·거래처 선택기는 공용으로 뺐다 (2026-08-17) — 정비 내역의 「대상 바꾸기」도 쓴다 */
@@ -59,11 +60,17 @@ export function SaleForm({ owner = false }: { owner?: boolean }) {
    *    꺼져 있으면 예전처럼 하나만 골라진다(누르면 바뀜). 켰을 때만 2개 이상 + 금액 분배.
    */
   const [combo, setCombo] = useState(false);
+  /** ⭐ 예약 (사장님 요청 2026-09-01) — 선금 받고 나중에 시공. 재고는 시공 완료 때 뺀다 */
+  const [reserve, setReserve] = useState(false);
+  /** 복합결제 수단별 「받은 날」 — 비면 작업일. 예약금·잔금이 다른 날일 때 쓴다 */
+  const [payDates, setPayDates] = useState<Record<string, string>>({});
+  /** 이 차량·손님에게 걸린 예약 — 고르는 순간 배너로 알려 준다 */
+  const [openResv, setOpenResv] = useState<OpenReservation[]>([]);
   const [memo, setMemo] = useState("");
   /** 실제로 정비한 날 — 기본은 오늘이지만 고칠 수 있다 */
   const today = new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD
   const [workDate, setWorkDate] = useState(today);
-  const [done, setDone] = useState<{ quoteNo: string; shortages: string[] } | null>(null);
+  const [done, setDone] = useState<{ quoteNo: string; shortages: string[]; reserved?: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   /**
@@ -208,6 +215,18 @@ export function SaleForm({ owner = false }: { owner?: boolean }) {
   /** CustomerPick 을 통째로 다시 그리게 하는 열쇠 — 접기/펼치기 때 내부 상태(검색어·폼)를 리셋 */
   const [formEpoch, setFormEpoch] = useState(0);
   useEffect(() => setDrafts(listSaleDrafts()), []);
+
+  // ⭐ 차량·손님이 정해지면 예약 걸린 건이 있는지 물어본다 (2026-09-01)
+  useEffect(() => {
+    if (!vehicle) return setOpenResv([]);
+    let alive = true;
+    void findOpenReservations({ vehicleId: vehicle.vehicleId, customerId: vehicle.customerId })
+      .then((r) => alive && setOpenResv(r))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [vehicle]);
 
   const resetForm = () => {
     setRows([]);
@@ -359,8 +378,9 @@ export function SaleForm({ owner = false }: { owner?: boolean }) {
         paymentMethod: payMethods.length === 1 ? payMethods[0] : "혼합",
         payments:
           payMethods.length >= 2
-            ? payMethods.map((m) => ({ method: m, amount: Number(payAmounts[m] || "0") }))
+            ? payMethods.map((m) => ({ method: m, amount: Number(payAmounts[m] || "0"), paidOn: payDates[m] || null }))
             : null,
+        reserve,
         workDate,
         memo: memo.trim() || null,
         mileage: mileage ? Number(mileage.replace(/\D/g, "")) : null,
@@ -371,7 +391,7 @@ export function SaleForm({ owner = false }: { owner?: boolean }) {
         setError(res.error);
         return;
       }
-      setDone({ quoteNo: res.quoteNo, shortages: res.shortages });
+      setDone({ quoteNo: res.quoteNo, shortages: res.shortages, reserved: reserve });
       setRows([]);
       setVehicle(null);
       setSupplierSale(null);
@@ -380,6 +400,8 @@ export function SaleForm({ owner = false }: { owner?: boolean }) {
       setMemo("");
       setPayMethods(["카드"]);
       setPayAmounts({});
+      setPayDates({});
+      setReserve(false);
       setCombo(false);
       setWheels([]);
       wheelsTouched.current = false;
@@ -392,7 +414,9 @@ export function SaleForm({ owner = false }: { owner?: boolean }) {
       <section className="mt-5 rounded-card border-2 border-brand-500 bg-brand-50 p-5">
         <h2 className="text-lg font-bold text-brand-700">판매를 등록했습니다 — {done.quoteNo}</h2>
         <p className="mt-1 text-sm text-brand-700">
-          재고가 빠졌고 정비 내역에 남았습니다. MARS 에 올릴 때는 정비 내역에서 카드를 체크하세요.
+          {done.reserved
+            ? "📌 예약으로 남았습니다 — 재고는 아직 안 빠졌고, 손님이 오시면 정비 내역에서 「시공 완료」를 눌러 주세요. 차량을 고르면 예약 배너가 뜹니다."
+            : "재고가 빠졌고 정비 내역에 남았습니다. MARS 에 올릴 때는 정비 내역에서 카드를 체크하세요."}
         </p>
         {done.shortages.length > 0 && (
           <div className="mt-3 rounded-lg bg-amber-100 p-3 text-sm text-amber-900">
@@ -443,6 +467,27 @@ export function SaleForm({ owner = false }: { owner?: boolean }) {
         newDraft={newCust}
         onNewDraft={setNewCust}
       />
+
+      {/* ⭐ 예약 배너 (2026-09-01) — 이 차·이 손님에게 걸린 예약이 있으면 바로 알려 준다 */}
+      {openResv.length > 0 && (
+        <div className="rounded-xl border-2 border-violet-400 bg-violet-50 p-3">
+          <p className="text-sm font-bold text-violet-900">📌 이 손님, 예약 {openResv.length}건이 걸려 있습니다</p>
+          <ul className="mt-1 space-y-0.5">
+            {openResv.map((r) => (
+              <li key={r.quoteId} className="tabular text-xs text-violet-900">
+                {r.workDate.slice(5)} 예약 · {won(r.total)}원 · {r.summary}
+                {r.memo && <span className="text-violet-600"> — {r.memo.slice(0, 40)}</span>}
+              </li>
+            ))}
+          </ul>
+          <a
+            href={`/sales?vehicle=${vehicle?.vehicleId ?? ""}`}
+            className="mt-1.5 inline-block text-xs font-semibold text-violet-800 underline underline-offset-4"
+          >
+            정비 내역에서 열기 → (시공하러 오셨으면 거기서 「시공 완료」)
+          </a>
+        </div>
+      )}
 
       {vehicle && (
         <label className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2">
@@ -601,7 +646,24 @@ export function SaleForm({ owner = false }: { owner?: boolean }) {
           >
             복합결제
           </button>
+          {/* ⭐ 예약 (2026-09-01) — 선금·구두 예약. 재고는 시공 완료 때 */}
+          <button
+            type="button"
+            onClick={() => setReserve((v) => !v)}
+            className={`rounded-lg border border-dashed px-4 py-2 text-sm font-medium ${
+              reserve ? "border-violet-700 bg-violet-700 text-white" : "border-violet-400 bg-white text-violet-700"
+            }`}
+          >
+            📌 예약
+          </button>
         </div>
+        {reserve && (
+          <p className="mt-1.5 rounded-lg bg-violet-50 px-2 py-1.5 text-xs text-violet-900">
+            <strong>예약으로 저장</strong> — 오늘 받은 돈은 오늘 매출로 남고, <strong>재고는 안 빠집니다</strong>
+            (시공하러 오시면 정비 내역에서 「시공 완료」). 재고가 없어도, 돈을 안 받았어도(0원) 담을 수 있습니다.
+            MARS 는 시공 완료 뒤에 올립니다.
+          </p>
+        )}
         {combo && (
           <p className="mt-1.5 text-xs text-indigo-700">
             복합결제 — 수단을 2개 이상 고르세요. 새 수단을 고르면 나머지 금액이 자동으로 들어갑니다.
@@ -621,6 +683,14 @@ export function SaleForm({ owner = false }: { owner?: boolean }) {
                   className="tabular min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-right text-sm"
                 />
                 <span className="shrink-0 text-xs text-slate-400">원</span>
+                {/* ⭐ 받은 날 (2026-09-01) — 비면 작업일. 예약금을 먼저 받은 날짜를 적으면 카드 일마감이 그 날로 맞는다 */}
+                <input
+                  type="date"
+                  value={payDates[m] ?? ""}
+                  onChange={(e) => setPayDates((d) => ({ ...d, [m]: e.target.value }))}
+                  title="받은 날 (비면 작업일)"
+                  className="tabular w-32 shrink-0 rounded-lg border border-slate-200 px-1.5 py-2 text-xs text-slate-600"
+                />
               </label>
             ))}
             {payMethods.length >= 2 && paySum !== total && (
@@ -910,6 +980,7 @@ function TirePick({ onAdd }: { onAdd: (p: ProductHit) => void }) {
                 <div className="tabular text-xs text-slate-500">
                   {[h.spec, h.loadSpeed, h.brandName].filter(Boolean).join(" · ")}
                   {h.stockQty > 0 ? ` · 재고 ${h.stockQty}본` : " · 재고 없음"}
+                  {h.reservedQty > 0 && <span className="font-semibold text-violet-700"> · 📌 예약 {h.reservedQty}본</span>}
                 </div>
               </div>
               <span className="tabular shrink-0 text-sm font-semibold">
@@ -1081,6 +1152,7 @@ function UsedPartsPick({ onAdd }: { onAdd: (p: ProductHit) => void }) {
                 </span>
                 <span className="tabular shrink-0 text-xs text-slate-500">
                   {p.stockTracked ? `재고 ${p.stockQty}개` : "재고 미등록"}
+                  {p.reservedQty > 0 && <span className="font-semibold text-violet-700"> · 📌 {p.reservedQty}</span>}
                 </span>
               </button>
             </li>

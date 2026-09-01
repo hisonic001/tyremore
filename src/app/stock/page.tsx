@@ -46,6 +46,15 @@ export default async function StockPage() {
     WHERE s.status='재고' AND s.qty > 0 AND p.item_type='tire'
   `);
 
+  // ⭐ 예약 걸린 수량 (예약거래 2026-09-01) — 표시·재주문 신호일 뿐 판매는 안 막는다
+  const resv = await db.execute<{ n: number; qty: number; shortage: number }>(sql`
+    SELECT count(DISTINCT q.id)::int n, COALESCE(SUM(i.qty), 0)::int qty,
+           COALESCE(SUM(GREATEST(i.qty - COALESCE((SELECT SUM(st.qty)::int FROM stock_item st
+             WHERE st.product_id = i.product_id AND st.status = '재고'), 0), 0)), 0)::int shortage
+    FROM quote_item i JOIN quote q ON q.id = i.quote_id
+    WHERE q.status = '성사' AND q.reservation_status = '예약중' AND i.product_id IS NOT NULL
+  `);
+
   // ⭐ 부품 재고 (사장님 선택 2026-08-11) — 타이어와 달리 종류별 수량으로 관리
   const parts = await listPartStock();
 
@@ -76,6 +85,15 @@ export default async function StockPage() {
             <span className="rounded-lg bg-amber-50 px-3 py-1.5 font-medium text-amber-800">
               DOT 없음 {s.nodot}본
             </span>
+          )}
+          {Number(resv[0]?.qty ?? 0) > 0 && (
+            <Link
+              href="/sales?reserved=1&range=all"
+              className="rounded-lg bg-violet-50 px-3 py-1.5 font-medium text-violet-800 underline-offset-4"
+            >
+              📌 예약 걸림 {resv[0].qty}개 ({resv[0].n}건)
+              {Number(resv[0].shortage) > 0 && <span className="ml-1 font-semibold text-red-700">· 재고 부족 {resv[0].shortage}개 — 재주문!</span>}
+            </Link>
           )}
           {Number(s?.stale ?? 0) > 0 && (
             <span

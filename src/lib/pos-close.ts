@@ -218,13 +218,15 @@ export async function appPayItems(from: string, to: string): Promise<AppItem[]> 
       AND ${D} >= ${from}::date AND ${D} <= ${to}::date
     ORDER BY q.created_at LIMIT 600
   `);
+  /* ⭐ 분할 몫의 날짜 = 받은 날(paid_on) 우선 (예약거래 2026-09-01) — 예약금 8/18 ·
+     잔금 8/29 가 각자 전표 날짜의 일마감에 붙는다. paid_on 없으면 지금처럼 작업일. */
   const splits = await db.execute<{ id: number; quote_id: number; quote_no: string; amount: number; who: string; at: string; day: string; pm: string }>(sql`
     SELECT pm.id, q.id quote_id, q.quote_no, pm.amount, ${who} who, pm.method pm,
            to_char(q.created_at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') at,
-           to_char(${D}, 'YYYY-MM-DD') AS "day"
+           to_char(COALESCE(pm.paid_on, ${D}), 'YYYY-MM-DD') AS "day"
     FROM quote_payment pm JOIN quote q ON q.id = pm.quote_id LEFT JOIN customer c ON c.id = q.customer_id
     WHERE q.status = '성사' AND pm.method IN (${M}) AND pm.amount > 0
-      AND ${D} >= ${from}::date AND ${D} <= ${to}::date
+      AND COALESCE(pm.paid_on, ${D}) >= ${from}::date AND COALESCE(pm.paid_on, ${D}) <= ${to}::date
     ORDER BY q.created_at LIMIT 600
   `);
       /* 🔴 외상 수금은 그 판매가 **아직 「외상」일 때만** 센다 (사장님 제보 2026-08-29).

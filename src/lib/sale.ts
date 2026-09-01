@@ -69,7 +69,12 @@ export interface SaleInput {
    * ⭐ 분할 결제 (사장님 요청 2026-08-10) — 결제수단을 2개 이상 고르면 수단별 금액.
    *    합이 판매 합계와 같아야 한다. 이때 paymentMethod 는 서버가 '혼합'으로 굳힌다.
    */
-  payments?: { method: string; amount: number }[] | null;
+  payments?: { method: string; amount: number; paidOn?: string | null }[] | null;
+  /**
+   * ⭐ 예약 (사장님 요청 2026-09-01) — 선금 받고 나중에 시공. 돈·매출은 오늘 그대로,
+   *    재고 차감과 MARS 는 「시공 완료」까지 미룬다. 0원(구두 예약)도 된다.
+   */
+  reserve?: boolean;
   memo?: string | null;
   /** 주행거리를 적어 주면 차량 기록을 갱신한다 */
   mileage?: number | null;
@@ -203,7 +208,8 @@ export async function saveSale(
     .map((l) => (l.kind === "use" ? { ...l, listPrice: null, salesRate: null } : l));
   if (lines.length === 0) return { ok: false, error: "판매할 품목이 없습니다" };
   // 0원 부품 소모뿐이면 판매가 아니다 — 금액 있는 부품만이면(배터리 단품 등) 성립한다
-  if (lines.every((l) => l.kind === "use" && l.unitPrice === 0)) {
+  // (예약은 예외 — 구두 예약은 0원으로 담아 둔다)
+  if (!input.reserve && lines.every((l) => l.kind === "use" && l.unitPrice === 0)) {
     return { ok: false, error: "0원 부품 소모만으로는 판매가 안 됩니다 — 작업 내역·공임을 담거나 부품에 금액을 적어 주세요" };
   }
   for (const l of lines) {
@@ -281,6 +287,8 @@ export async function saveSale(
             // ⭐ '보류' = 자동으로 MARS 에 올라가지 않는다 (사장님 지시 2026-08-09).
             //    정비 내역에서 체크한 것만 queueForMars 가 '미전송' 으로 바꿔 올린다.
             marsStatus: input.supplierName || input.paymentMethod === "서비스" ? "해당없음" : "보류",
+            // ⭐ 예약 — 재고·MARS 는 시공 완료까지 미룬다 (fulfillReservation)
+            reservationStatus: input.reserve ? "예약중" : null,
             tyrePositions: input.tyrePositions?.length ? input.tyrePositions.join(",") : null,
             /**
              * ⭐ 거래처 이름은 이제 제 컬럼에 (2026-08-17). 아래 marsMemo 에도 당분간
@@ -299,7 +307,15 @@ export async function saveSale(
 
         // 분할 결제 — 수단별 금액을 한 줄씩 (2026-08-10)
         if (split) {
-          await tx.insert(quotePayment).values(split.map((p) => ({ quoteId: q.id, method: p.method, amount: p.amount })));
+          await tx.insert(quotePayment).values(
+            split.map((p) => ({
+              quoteId: q.id,
+              method: p.method,
+              amount: p.amount,
+              // ⭐ 받은 날 (2026-09-01) — 예약금·잔금이 다른 날이어도 카드 대사가 전표와 맞게
+              paidOn: /^\d{4}-\d{2}-\d{2}$/.test(p.paidOn ?? "") ? p.paidOn : null,
+            })),
+          );
         }
 
         /**
@@ -345,12 +361,14 @@ export async function saveSale(
           })),
         );
 
-        // 재고 차감 — 타이어·부품만
+        // 재고 차감 — 타이어·부품만. ⭐ 예약은 건너뛴다 — 시공 완료 때 뺀다 (재고 0 이어도 예약 가능)
         const shortages: string[] = [];
-        for (const l of lines) {
-          if (!l.productId) continue;
-          const { short } = await sellFromStock(l.productId, l.qty, q.id, undefined, tx);
-          if (short > 0) shortages.push(`${l.description} ${short}본`);
+        if (!input.reserve) {
+          for (const l of lines) {
+            if (!l.productId) continue;
+            const { short } = await sellFromStock(l.productId, l.qty, q.id, undefined, tx);
+            if (short > 0) shortages.push(`${l.description} ${short}본`);
+          }
         }
 
         // 주행거리를 적어 주셨으면 차량 기록을 갱신한다

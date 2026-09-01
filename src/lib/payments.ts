@@ -32,6 +32,8 @@ export const ALL_METHODS: readonly string[] = [...SPLITTABLE, ...EXCLUSIVE, "혼
 export interface PaymentPart {
   method: string;
   amount: number;
+  /** ⭐ 받은 날 (예약거래 2026-09-01) — 비면 판매 작업일. 검증은 안 하고 통과만 시킨다 */
+  paidOn?: string | null;
 }
 
 /**

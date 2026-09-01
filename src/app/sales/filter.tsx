@@ -14,11 +14,14 @@ export function PayFilter({
   pay,
   payOptions,
   keep,
+  reserved = false,
 }: {
   /** null 이면 전체 */
   pay: string | null;
   payOptions: readonly string[];
   keep: Record<string, string | undefined>;
+  /** ⭐ 예약중만 보기 (예약거래 2026-09-01) */
+  reserved?: boolean;
 }) {
   const router = useRouter();
   const go = (over: Record<string, string | undefined>) => {
@@ -40,6 +43,13 @@ export function PayFilter({
           {p}
         </button>
       ))}
+      <button
+        type="button"
+        onClick={() => go({ reserved: reserved ? undefined : "1", range: reserved ? undefined : "all" })}
+        className={`${chip(reserved)} ${reserved ? "" : "text-violet-700 ring-1 ring-inset ring-violet-300"}`}
+      >
+        📌 예약중
+      </button>
     </div>
   );
 }

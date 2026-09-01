@@ -167,6 +167,7 @@ export async function queueForMars(
     id: number;
     quote_no: string;
     payment_method: string | null;
+    reservation_status: string | null;
     vehicle_id: number | null;
     mars_vehicle_no: string | null;
     maker_name: string | null;
@@ -185,6 +186,7 @@ export async function queueForMars(
     SELECT q.id, q.quote_no, q.payment_method, q.vehicle_id, q.total_amount,
            v.mars_vehicle_no, v.maker_name, v.model, v.year, v.fuel_type,
            COALESCE(q.mileage, v.mileage)::int AS eff,
+           q.reservation_status,
            c.mars_contact_no, c.name customer_name, c.phone, c.address,
            (c.consent_signed_at IS NOT NULL) consent_signed,
            (SELECT max(q2.mileage)::int FROM quote q2
@@ -198,6 +200,11 @@ export async function queueForMars(
   const blocked: string[] = [];
   const allowed: number[] = [];
   for (const r of cands) {
+    // ⭐ 예약중은 아직 시공 전이다 (2026-09-01) — 지금 올리면 시공도 안 한 매출이 전기된다
+    if (r.reservation_status === "예약중") {
+      blocked.push(`${r.quote_no}: 예약 건입니다 — 시공 완료 후에 올릴 수 있습니다`);
+      continue;
+    }
     // 외상·서비스는 MARS 대상이 아니다 (2026-08-17 — 올려 봐야 로봇이 되돌린다)
     if (r.payment_method === "외상" || r.payment_method === "서비스") {
       blocked.push(

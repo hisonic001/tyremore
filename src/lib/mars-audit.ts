@@ -100,6 +100,8 @@ export async function marsAudit(): Promise<MarsAudit> {
   const pending = await db.execute<{ n: number }>(sql`
       SELECT count(*)::int n FROM quote
       WHERE status = '성사' AND mars_status IN ('보류', '수동처리')
+        /* 예약중은 시공 전이라 「아직 안 올린 판매」가 아니다 (2026-09-01) */
+        AND COALESCE(reservation_status, '') <> '예약중'
     `);
   const runs = await db.execute<{ warned: boolean }>(sql`
       SELECT (log LIKE '%⚠️%' OR status = '실패') warned

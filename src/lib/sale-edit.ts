@@ -39,7 +39,7 @@ export async function updateSaleHead(input: {
   workDate?: string | null;
   paymentMethod?: string | null;
   /** ⭐ 분할 결제 (2026-08-10) — 2개 이상이면 paymentMethod 는 서버가 '혼합'으로 굳힌다 */
-  payments?: { method: string; amount: number }[] | null;
+  payments?: { method: string; amount: number; paidOn?: string | null }[] | null;
   paymentMemo?: string | null;
   /**
    * ⭐ 주행거리 (사장님 지시 2026-08-17 — 주행거리 없는 판매는 MARS 체크가 막히므로
@@ -91,9 +91,15 @@ export async function updateSaleHead(input: {
     // 분할 내역은 통째로 갈아 끼운다 — 단일 수단으로 바꾸면 이전 분할 줄이 남으면 안 된다
     await tx.delete(quotePayment).where(eq(quotePayment.quoteId, input.quoteId));
     if (split) {
-      await tx
-        .insert(quotePayment)
-        .values(split.map((p) => ({ quoteId: input.quoteId, method: p.method, amount: p.amount })));
+      await tx.insert(quotePayment).values(
+        split.map((p) => ({
+          quoteId: input.quoteId,
+          method: p.method,
+          amount: p.amount,
+          // ⭐ 받은 날 (예약거래 2026-09-01) — 비면 작업일로 해석
+          paidOn: /^\d{4}-\d{2}-\d{2}$/.test(p.paidOn ?? "") ? p.paidOn : null,
+        })),
+      );
     }
     /**
      * 차량의 최근 주행거리도 따라 올린다 — 단, **키우기만 한다.**
@@ -110,6 +116,46 @@ export async function updateSaleHead(input: {
 
   refresh();
   return { ok: true };
+}
+
+/**
+ * ⭐ 예약 시공 완료 (사장님 요청 2026-09-01) — 이제야 재고가 빠진다.
+ *
+ *   예약 저장은 재고를 안 건드렸다. 손님이 실제로 오셔서 시공한 날 이 버튼으로
+ *   상품 줄만큼 재고를 뺀다. 재고가 모자라면 막지 않고 부족분을 알린다
+ *   (급한 손님에게 예약분을 먼저 팔 수 있다는 사장님 방침 — 재주문 신호).
+ *   매출 날(work_date)은 안 건드린다 — 돈은 받은 날 그대로다.
+ *
+ * 🔴 멱등 — 「예약중」일 때만 차감한다. 두 번 눌러도 재고가 두 번 빠지지 않는다.
+ */
+export async function fulfillReservation(
+  quoteId: number,
+): Promise<{ ok: true; shortages: string[] } | { ok: false; error: string }> {
+  const [q] = await db.execute<{ id: number; status: string; reservation_status: string | null; quote_no: string }>(sql`
+    SELECT id, status, reservation_status, quote_no FROM quote WHERE id = ${quoteId}
+  `);
+  if (!q) return { ok: false, error: "판매 기록을 찾을 수 없습니다" };
+  if (q.status === "취소") return { ok: false, error: "취소된 판매입니다" };
+  if (q.reservation_status === "시공완료") return { ok: false, error: "이미 시공 완료된 예약입니다" };
+  if (q.reservation_status !== "예약중") return { ok: false, error: "예약 건이 아닙니다" };
+
+  const lines = await db.execute<{ product_id: number | null; qty: number; description: string }>(sql`
+    SELECT product_id, qty, description FROM quote_item WHERE quote_id = ${quoteId}
+  `);
+  const shortages: string[] = [];
+  const { sellFromStock } = await import("./sale");
+  for (const l of lines) {
+    if (!l.product_id) continue;
+    const { short } = await sellFromStock(Number(l.product_id), Number(l.qty), quoteId);
+    if (short > 0) shortages.push(`${l.description} ${short}본`);
+  }
+  await db.execute(sql`
+    UPDATE quote SET reservation_status = '시공완료',
+      fulfilled_on = (now() AT TIME ZONE 'Asia/Seoul')::date, updated_at = now()
+    WHERE id = ${quoteId}
+  `);
+  refresh();
+  return { ok: true, shortages };
 }
 
 /**

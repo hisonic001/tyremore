@@ -86,6 +86,8 @@ export interface ProductHit {
   salePrice: number | null;
   salesRate: number | null;
   stockQty: number;
+  /** ⭐ 예약 걸린 수량 (2026-09-01) — 표시용, 판매는 안 막는다 */
+  reservedQty: number;
   stockTracked: boolean;
   verified: boolean;
   itemType: string;
@@ -345,6 +347,11 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
     SELECT SUM(s.qty)::int FROM stock_item s
     WHERE s.product_id = ${product.id} AND s.status = '재고'
   ), 0)`;
+  // ⭐ 예약 걸린 수량 (2026-09-01) — 정본은 stock.ts reservedQtySql 과 같은 식
+  const reservedQty = sql<number>`COALESCE((
+    SELECT SUM(i.qty)::int FROM quote_item i JOIN quote q ON q.id = i.quote_id
+    WHERE i.product_id = ${product.id} AND q.status = '성사' AND q.reservation_status = '예약중'
+  ), 0)`;
 
   if (f.inStock) {
     conds.push(sql`EXISTS (
@@ -386,6 +393,7 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
       fitment: product.fitment,
       partNo: product.partNo,
       stockQty,
+      reservedQty,
       isHidden,
       /**
        * ⭐ 판매 할인율 — 좁은 것이 이긴다 (개별 > 모델 > 브랜드 > 범주).
@@ -472,6 +480,7 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
     isSuv: r.isSuv,
     listPrice: r.listPrice,
     stockQty: Number(r.stockQty ?? 0),
+    reservedQty: Number(r.reservedQty ?? 0),
     stockTracked: r.stockTracked,
     verified: r.verified,
     itemType: r.itemType,
@@ -492,3 +501,45 @@ export async function tireBrands() {
     ORDER BY b.sort_order
   `);
 }
+
+/* ============================================================
+ * ⭐ 예약 찾기 (예약거래 2026-09-01) — 차량·손님을 고르는 순간
+ *    「이 손님 예약 있음」을 알려 준다. 언제 오실지 몰라도 차 번호면 나온다.
+ * ========================================================== */
+export interface OpenReservation {
+  quoteId: number;
+  quoteNo: string;
+  workDate: string;
+  total: number;
+  memo: string | null;
+  summary: string;
+}
+
+export async function openReservations(opts: {
+  vehicleId?: number | null;
+  customerId?: number | null;
+}): Promise<OpenReservation[]> {
+  const conds = [];
+  if (opts.vehicleId) conds.push(sql`q.vehicle_id = ${opts.vehicleId}`);
+  if (opts.customerId) conds.push(sql`q.customer_id = ${opts.customerId}`);
+  if (conds.length === 0) return [];
+  const rows = await db.execute<{ id: number; quote_no: string; work_date: string; total: number; memo: string | null; summary: string | null }>(sql`
+    SELECT q.id, q.quote_no,
+           to_char(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date), 'YYYY-MM-DD') work_date,
+           q.total_amount total, q.payment_memo memo,
+           (SELECT string_agg(x.description, ' · ') FROM (
+              SELECT qi.description FROM quote_item qi WHERE qi.quote_id = q.id ORDER BY qi.id LIMIT 3) x) summary
+    FROM quote q
+    WHERE q.status = '성사' AND q.reservation_status = '예약중' AND (${sql.join(conds, sql` OR `)})
+    ORDER BY q.id DESC LIMIT 5
+  `);
+  return rows.map((r) => ({
+    quoteId: Number(r.id),
+    quoteNo: r.quote_no,
+    workDate: r.work_date,
+    total: Number(r.total),
+    memo: r.memo,
+    summary: r.summary ?? "",
+  }));
+}
+

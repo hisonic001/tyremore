@@ -98,11 +98,12 @@ export async function cardDaySums(ym: string): Promise<CardDaySums> {
       AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
     GROUP BY 1, 2 LIMIT 80
   `);
+  /* ⭐ 분할 몫의 날짜 = 받은 날(paid_on) 우선 (예약거래 2026-09-01) — 없으면 작업일 */
   const appSplit = await db.execute<{ d: string; m: string; amt: string }>(sql`
-    SELECT to_char(${D}, 'YYYY-MM-DD') d, pm.method m, SUM(pm.amount)::bigint amt
+    SELECT to_char(COALESCE(pm.paid_on, ${D}), 'YYYY-MM-DD') d, pm.method m, SUM(pm.amount)::bigint amt
     FROM quote_payment pm JOIN quote q ON q.id = pm.quote_id
     WHERE q.status = '성사' AND pm.method IN (${M})
-      AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
+      AND COALESCE(pm.paid_on, ${D}) >= ${start}::date AND COALESCE(pm.paid_on, ${D}) < ${nextStart}::date
     GROUP BY 1, 2 LIMIT 80
   `);
   /* 🔴 외상 수금은 그 판매가 아직 「외상」일 때만 — 결제수단을 카드로 바꾼 뒤에도 세면

@@ -15,3 +15,10 @@ export async function searchProducts(q: string, filter?: ProductFilter): Promise
 export async function searchVehicles(q: string): Promise<VehicleHit[]> {
   return findVehicles(q);
 }
+
+/** ⭐ 예약 찾기 (2026-09-01) — 판매 등록에서 차량을 고르면 예약 배너가 뜬다 */
+export async function findOpenReservations(opts: { vehicleId?: number | null; customerId?: number | null }) {
+  const { openReservations } = await import("./search");
+  return openReservations(opts);
+}
+

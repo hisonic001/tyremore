@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { cancelSale, updateSaleHead } from "@/lib/sale-edit";
+import { cancelSale, fulfillReservation, updateSaleHead } from "@/lib/sale-edit";
 import Link from "@/lib/link";
 import type { SaleRow } from "@/lib/sale-history";
 import { EXCLUSIVE, SPLITTABLE, splitLabel } from "@/lib/payments";
@@ -192,6 +192,15 @@ export function SaleCard({
               </span>
             )}
             {canceled && <span className="mr-1.5 rounded bg-slate-200 px-1.5 py-0.5 text-xs">취소</span>}
+            {/* ⭐ 예약 배지 (예약거래 2026-09-01) */}
+            {!canceled && s.reservationStatus === "예약중" && (
+              <span className="mr-1.5 rounded bg-violet-100 px-1.5 py-0.5 text-xs font-semibold text-violet-800">📌 예약중</span>
+            )}
+            {!canceled && s.reservationStatus === "시공완료" && (
+              <span className="mr-1.5 rounded bg-emerald-50 px-1.5 py-0.5 text-xs font-medium text-emerald-700">
+                시공 ✓{s.fulfilledOn ? ` ${s.fulfilledOn.slice(5)}` : ""}
+              </span>
+            )}
             {who}
             {/* ⭐ 차종도 같이 — 「현대 카니발 23나1111」 (사장님 요청 2026-08-09) */}
             {(s.plateNo || s.vehicleModel) && (
@@ -503,6 +512,29 @@ export function SaleCard({
                 </div>
               ) : (
                 <div className="mt-3 flex flex-wrap gap-2">
+                  {/* ⭐ 시공 완료 (예약거래 2026-09-01) — 이제야 재고가 빠진다. 두 번 눌러도 한 번만 */}
+                  {s.reservationStatus === "예약중" && (
+                    <button
+                      type="button"
+                      disabled={pending}
+                      onClick={() =>
+                        start(async () => {
+                          setError(null);
+                          const r = await fulfillReservation(s.quoteId);
+                          if (!r.ok) return setError(r.error);
+                          setNotice(
+                            r.shortages.length > 0
+                              ? `시공 완료 — ⚠️ 재고 부족: ${r.shortages.join(" · ")} (재주문 확인!)`
+                              : "시공 완료 — 재고가 차감됐습니다. 이제 MARS 에 올릴 수 있습니다.",
+                          );
+                          router.refresh();
+                        })
+                      }
+                      className="w-full rounded-lg bg-violet-700 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+                    >
+                      🔧 시공 완료 — 이제 재고 차감
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => setEditing(true)}
@@ -533,6 +565,8 @@ export function SaleCard({
               <p className="mt-2 text-xs text-slate-400">
                 품목마다 「고치기」로 수량·단가를 바꾸거나 지울 수 있습니다 — 재고가 알아서 따라갑니다.
                 통째로 잘못 들어갔으면 판매 취소를 쓰세요.
+                {s.reservationStatus === "예약중" &&
+                  " 예약 건은 아직 재고를 안 뺐습니다 — 취소해도 재고는 그대로고, 환불은 마이너스 단가 줄이나 카드 취소로 처리하세요."}
               </p>
             </>
           )}

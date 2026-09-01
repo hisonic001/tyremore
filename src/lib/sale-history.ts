@@ -57,7 +57,7 @@ export interface SaleRow {
   totalAmount: number;
   paymentMethod: string | null;
   /** ⭐ 분할 결제 내역 (2026-08-10) — 혼합이면 수단별 금액이 여기 있다. 아니면 빈 배열 */
-  payments: { method: string; amount: number }[];
+  payments: { method: string; amount: number; paidOn: string | null }[];
   /** ⭐ 외상 수금 이력 (2026-08-11) — 외상 건이 아니면 빈 배열 */
   collections: { id: number; amount: number; method: string; paidOn: string; memo: string | null }[];
   paymentMemo: string | null;
@@ -71,6 +71,9 @@ export interface SaleRow {
   createdAt: string | null;
   /** ⭐ 카드 일마감 (2026-08-26): 'ok' = POS 결제와 이어짐 · 'missing' = 그 날 POS 자료는 있는데 이 건이 없음 · null = 카드 아님/POS 자료 없음 */
   posMatch: "ok" | "missing" | null;
+  /** ⭐ 예약 (2026-09-01) — null(일반) | '예약중' | '시공완료' */
+  reservationStatus: string | null;
+  fulfilledOn: string | null;
   lines: SaleLine[];
 }
 
@@ -108,6 +111,8 @@ export async function saleHistory(opts: {
   includeCanceled?: boolean;
   /** ⭐ 결제 방법으로 좁히기 (사장님 요청 2026-08-07) */
   paymentMethod?: string;
+  /** ⭐ 예약중만 보기 (예약거래 2026-09-01) */
+  reserved?: boolean;
 }): Promise<SaleHistory> {
   const { db } = await import("@/db");
   const m = opts.month && /^\d{4}-\d{2}$/.test(opts.month) ? opts.month : null;
@@ -144,6 +149,7 @@ export async function saleHistory(opts: {
                OR EXISTS (SELECT 1 FROM quote_payment px WHERE px.quote_id = q.id AND px.method = ${opts.paymentMethod}))`
         : sql``
     }
+    ${opts.reserved ? sql`AND q.reservation_status = '예약중'` : sql``}
   `;
   /**
    * 🔴 질의는 **하나씩 차례로** (2026-08-11 2차 마비).
@@ -202,6 +208,8 @@ export async function saleHistory(opts: {
     spec: string | null;
     list_price: number | null;
     tyre_positions: string | null;
+    reservation_status: string | null;
+    fulfilled_on: string | null;
     created_hm: string | null;
     pos_n: number;
     pos_day_n: number;
@@ -210,7 +218,8 @@ export async function saleHistory(opts: {
   }>(sql`
     SELECT q.id quote_id, q.quote_no, q.status,
            -- 분할 결제 「카드:30000,현금:5000」 (2026-08-10) — 수단 이름에는 콜론·쉼표가 없다
-           (SELECT string_agg(pm.method || ':' || pm.amount, ',' ORDER BY pm.id)
+           -- 세 번째 칸 = 받은 날 (예약거래 2026-09-01, 비면 작업일 해석)
+           (SELECT string_agg(pm.method || ':' || pm.amount || ':' || COALESCE(to_char(pm.paid_on, 'YYYY-MM-DD'), ''), ',' ORDER BY pm.id)
               FROM quote_payment pm WHERE pm.quote_id = q.id) pay_split,
            -- 외상 수금 이력 (2026-08-11) — 메모까지 필요해서 JSON 으로 싣는다
            (SELECT json_agg(json_build_object('id', rp.id, 'amount', rp.amount, 'method', rp.method,
@@ -229,6 +238,7 @@ export async function saleHistory(opts: {
            (c.consent_signed_at IS NOT NULL) consent_signed,
            q.mars_memo, q.total_amount, q.payment_method, q.payment_memo,
            q.mars_status, q.mars_ref_no, q.tyre_positions,
+           q.reservation_status, to_char(q.fulfilled_on, 'YYYY-MM-DD') fulfilled_on,
            -- ⭐ 마지막 자동입력 시도 (2026-08-24) — 어디까지 갔고 왜 멈췄는지 카드에서 보인다
            (SELECT to_char(COALESCE(a.finished_at, a.started_at) AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI')
                    || ' ' || a.stage || COALESCE(' — ' || left(a.error, 140), '')
@@ -307,8 +317,8 @@ export async function saleHistory(opts: {
         paymentMethod: r.payment_method,
         payments: r.pay_split
           ? r.pay_split.split(",").map((x) => {
-              const [method, amt] = x.split(":");
-              return { method, amount: Number(amt) };
+              const [method, amt, on] = x.split(":");
+              return { method, amount: Number(amt), paidOn: on || null };
             })
           : [],
         paymentMemo: r.payment_memo,
@@ -320,6 +330,8 @@ export async function saleHistory(opts: {
           memo: c.memo,
         })),
         marsStatus: r.mars_status,
+        reservationStatus: r.reservation_status,
+        fulfilledOn: r.fulfilled_on,
         marsRefNo: r.mars_ref_no,
         marsLastTry: r.mars_last_try,
         tyrePositions: r.tyre_positions ? r.tyre_positions.split(",").map((x) => x.trim()).filter(Boolean) : [],
