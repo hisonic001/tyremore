@@ -75,6 +75,13 @@ async function writtenModels(): Promise<Set<string>> {
  * 🔴 한 화면에 서너 개면 충분하다. 열 개를 늘어놓으면 아무것도 안 고르시게 된다.
  */
 export async function suggestTopics(take = 4): Promise<Topic[]> {
+  /**
+   * 🔴 자리를 나눈다. 밀린 사진이 늘 몇 건씩 있어 그냥 채우면 **정보성 글감이 영영 안 보인다**
+   *    — 제가 가장 큰 지렛대라고 본 카테고리인데도. 권장 비중(시공 6 : 정보 3 : 공지 1)에 맞춰
+   *    사례는 최대 2건, 정보성 1, 계절 1로 둔다.
+   */
+  const CASE_MAX = Math.max(1, take - 2);
+  const cases: Topic[] = [];
   const out: Topic[] = [];
 
   /* ① 밀린 사진 폴더 — 사진이 이미 있으니 가장 센 글감 */
@@ -103,14 +110,15 @@ export async function suggestTopics(take = 4): Promise<Topic[]> {
     LIMIT 4`);
 
   for (const f of folders) {
-    if (out.length >= take) break;
+    if (cases.length >= CASE_MAX) break;
     const cat = inferCategory({
       maker: f.maker,
       model: f.model,
       hasTire: !!f.has_tire,
       services: (f.services ?? "").split(" ").filter(Boolean),
+      label: f.label,
     });
-    out.push({
+    cases.push({
       key: `folder-${f.id}`,
       kind: "밀린사진",
       title: `${f.label} — 사진 ${f.photo_count}장`,
@@ -123,7 +131,7 @@ export async function suggestTopics(take = 4): Promise<Topic[]> {
   }
 
   /* ② 원고도 폴더도 없는 최근 시공 */
-  if (out.length < take) {
+  if (cases.length < CASE_MAX) {
     const sales = await db.execute<{
       quote_id: number;
       car: string | null;
@@ -151,8 +159,8 @@ export async function suggestTopics(take = 4): Promise<Topic[]> {
       LIMIT 3`);
 
     for (const s of sales) {
-      if (out.length >= take) break;
-      out.push({
+      if (cases.length >= CASE_MAX) break;
+      cases.push({
         key: `sale-${s.quote_id}`,
         kind: "안쓴시공",
         title: `${s.car ?? "차종 미상"} — ${s.work_date}`,
@@ -162,18 +170,21 @@ export async function suggestTopics(take = 4): Promise<Topic[]> {
           model: s.model,
           hasTire: !!s.has_tire,
           services: (s.services ?? "").split(" ").filter(Boolean),
+          label: s.car,
         }),
         href: "/marketing/write",
       });
     }
   }
 
-  /* ③ 정보성 글감 — 시공이 없어도 쓸 수 있어 글감이 마르지 않는다 */
-  if (out.length < take) {
+  out.push(...cases);
+
+  /* ③ 정보성 글감 — 시공이 없어도 쓸 수 있어 글감이 마르지 않는다. 한 자리는 늘 비워 둔다 */
+  {
     const stats = await modelStats(3, 10);
     const already = await writtenModels();
     for (const m of stats) {
-      if (out.length >= take) break;
+      if (out.length >= cases.length + 1) break;
       const car = `${m.maker} ${m.model}`.trim();
       if ([...already].some((a) => a.includes(m.model))) continue;
       out.push({
@@ -195,7 +206,7 @@ export async function suggestTopics(take = 4): Promise<Topic[]> {
   }
 
   /* ④ 계절 — 속초 특유의 각도 */
-  if (out.length < take) {
+  {
     const month = Number(new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" }).slice(5, 7));
     const s = seasonTopic(month);
     if (s) {

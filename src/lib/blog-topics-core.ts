@@ -27,8 +27,23 @@ export type CategoryName = (typeof CATEGORIES)[number]["name"];
 /** 국산 제조사 — 이 밖은 수입으로 본다 */
 const DOMESTIC = ["현대", "기아", "제네시스", "쉐보레", "르노", "KG", "쌍용", "삼성", "대우", "한국GM"];
 
+/**
+ * 국산 차종 이름 — 🔴 **제조사를 모를 때 쓴다.**
+ * 사진 폴더 중 절반은 차량이 앱에 없어(과거 손님) 제조사가 null 이다. 그때 폴더 이름의
+ * 차종만 보고 「수입차」로 단정하면 포터2·K3 가 수입차 글이 된다 (실제로 그랬다).
+ */
+const DOMESTIC_MODELS = [
+  "포터", "봉고", "레이", "모닝", "스파크", "다마스", "라보",
+  "아반떼", "쏘나타", "그랜저", "K3", "K5", "K7", "K8", "K9", "스팅어",
+  "쏘렌토", "싼타페", "투싼", "스포티지", "셀토스", "니로", "코나", "베뉴", "트랙스", "트레일블레이저",
+  "팰리세이드", "펠리세이드", "모하비", "카니발", "스타리아", "스타렉스", "쏠라티",
+  "코란도", "렉스턴", "티볼리", "액티언", "토레스",
+  "말리부", "이쿼녹스", "트래버스", "콜로라도", "QM6", "SM6", "XM3", "아르카나", "그랑콜레오스",
+  "G70", "G80", "G90", "GV70", "GV80", "GV60",
+];
+
 /** 전기차로 볼 만한 이름 조각 */
-const EV_HINTS = ["테슬라", "모델3", "모델Y", "모델 3", "모델 Y", "아이오닉", "EV6", "EV9", "니로 EV", "코나 일렉트릭", "폴스타", "타이칸", "ID.4"];
+const EV_HINTS = ["테슬라", "모델3", "모델Y", "모델 3", "모델 Y", "아이오닉", "EV6", "EV9", "니로 EV", "코나 일렉트릭", "폴스타", "타이칸", "ID.4", "아이오닉5", "아이오닉6"];
 
 export interface CategoryInput {
   maker: string | null;
@@ -37,6 +52,12 @@ export interface CategoryInput {
   hasTire: boolean;
   /** 공임·정비 품목 이름들 */
   services: string[];
+  /**
+   * 🔴 폴더 이름 (`포터2 주간등교환`, `익스플로러 배터리`).
+   * 차량이 앱에 없을 때 **가장 믿을 만한 단서**다 — 사장님이 직접 붙이신 이름이라
+   * 차종과 작업이 다 들어 있다.
+   */
+  label?: string | null;
 }
 
 /**
@@ -45,14 +66,22 @@ export interface CategoryInput {
  *    글의 중심은 얼라인먼트다 (사장님 실제 글이 그렇다).
  */
 export function inferCategory(x: CategoryInput): CategoryName {
-  const svc = x.services.join(" ");
-  if (/얼라인|얼라이|정렬|토우|캠버/.test(svc)) return "휠얼라인먼트";
-  if (/배터리/.test(svc)) return "배터리";
-  if (!x.hasTire && svc.trim()) return "엔진오일/기타";
+  /** 품목 이름과 폴더 이름을 같이 본다 — 폴더 이름에 작업이 적혀 있는 경우가 많다 */
+  const hay = `${x.services.join(" ")} ${x.label ?? ""}`;
 
-  const name = `${x.maker ?? ""} ${x.model ?? ""}`;
+  if (/얼라인|얼라이|정렬|토우|캠버/.test(hay)) return "휠얼라인먼트";
+  if (/배터리/.test(hay)) return "배터리";
+  if (/엔진오일|미션오일|브레이크|패드|디스크|와이퍼|필터|등\s*교환|주간등|전조등|램프|퓨즈|TPMS|스캐너|진단|점검|경고등|워셔|벨트|점화|플러그/.test(hay))
+    return "엔진오일/기타";
+
+  const name = `${x.maker ?? ""} ${x.model ?? ""} ${x.label ?? ""}`;
   if (EV_HINTS.some((h) => name.includes(h))) return "전기차(EV) 타이어 교환";
-  const domestic = DOMESTIC.some((d) => (x.maker ?? "").includes(d));
+
+  /** 타이어 얘기가 아니면 굳이 국산/수입을 가르지 않는다 */
+  if (!x.hasTire) return "엔진오일/기타";
+
+  const domestic =
+    DOMESTIC.some((d) => (x.maker ?? "").includes(d)) || DOMESTIC_MODELS.some((m) => name.includes(m));
   return domestic ? "국산차 타이어 교환" : "수입차 타이어 교환";
 }
 

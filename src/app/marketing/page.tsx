@@ -1,4 +1,4 @@
-import { Camera, ChevronRight, Images, MessageSquareReply, PencilLine, PenLine } from "lucide-react";
+import { Camera, ChevronRight, Images, Lightbulb, MessageSquareReply, PencilLine, PenLine } from "lucide-react";
 import { redirect } from "next/navigation";
 import Link from "@/lib/link";
 import { hasPerm } from "@/lib/auth";
@@ -24,6 +24,13 @@ export default async function MarketingHome() {
      * ⭐ 맨 위에 둔다 (2026-09-02) — 사장님 "ai가 작성한 티가 남".
      * 시공 기록만으로 만든 글은 일반론이 된다. 후기를 채워 만든 글이 본선이다.
      */
+    {
+      href: "/marketing/topics",
+      Icon: Lightbulb,
+      title: "이번 주 쓸 글",
+      desc: "밀린 사진·최근 시공·이 매장 통계·계절을 보고 골라 드립니다. 뭘 쓸지 고민하지 마세요.",
+      badge: null,
+    },
     {
       href: "/marketing/photos",
       Icon: Images,
