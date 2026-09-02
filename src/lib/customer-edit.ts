@@ -124,3 +124,53 @@ export async function updateVehicleInfo(input: {
   refresh();
   return { ok: true };
 }
+
+/**
+ * ⭐ 개인 고객 차량을 거래처 차고로 보낸다 (사장님 요청 2026-09-02 — 거래처 화면 개편).
+ *
+ *   차고→개인 방향은 「새 손님 등록」이 자동으로 한다(sale.ts 이전 규칙) — 이건 그 반대다.
+ *   정비 이력(quote.vehicle_id)은 차량에 그대로 따라간다.
+ * 🔴 지난 판매의 귀속(quote.supplier_name·customer_id)은 판매에 박제 — 안 바뀐다.
+ *    지난 외상의 주인이 바뀌면 장부가 소급으로 흔들리기 때문에 일부러 안 건드린다.
+ * 🔴 사장님 전용 — 차량 소유를 옮기는 것은 손님·거래처 바꾸기와 같은 무게다.
+ */
+export async function moveVehicleToSupplier(
+  vehicleId: number,
+  supplier: string,
+): Promise<{ ok: true; plateNo: string; from: string } | { ok: false; error: string }> {
+  const { isOwner } = await import("./auth");
+  if (!(await isOwner())) return { ok: false, error: "차량 소유 이전은 사장님 계정 전용입니다" };
+  const name = supplier.trim();
+  if (!name) return { ok: false, error: "거래처를 골라 주세요" };
+  const [sup] = await db.execute<{ id: number }>(sql`
+    SELECT id FROM supplier WHERE name = ${name} AND is_active LIMIT 1
+  `);
+  if (!sup) return { ok: false, error: `활성 거래처 「${name}」 을(를) 찾을 수 없습니다` };
+
+  const [v] = await db.execute<{ id: number; plate_no: string; customer_id: number; owner_name: string; owner_supplier: string | null }>(sql`
+    SELECT v.id, v.plate_no, v.customer_id, c.name owner_name, c.supplier_name owner_supplier
+    FROM vehicle v JOIN customer c ON c.id = v.customer_id
+    WHERE v.id = ${vehicleId}
+  `);
+  if (!v) return { ok: false, error: "차량을 찾을 수 없습니다" };
+  if (v.owner_supplier === name) return { ok: false, error: "이미 이 거래처 차고의 차량입니다" };
+
+  const { ensureGarageCustomer } = await import("./garage");
+  const garageId = await ensureGarageCustomer(name);
+  const fromLabel = v.owner_supplier ? `${v.owner_supplier} 차고` : `개인 ${v.owner_name}`;
+  const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
+  await db.execute(sql`
+    UPDATE vehicle SET customer_id = ${garageId},
+      memo = COALESCE(memo || ' · ', '') || ${`${fromLabel}에게서 이전 ${today}`}
+    WHERE id = ${vehicleId}
+  `);
+  for (const p of ["/settings/suppliers", "/sale", "/sales"]) {
+    try {
+      revalidatePath(p);
+    } catch {
+      /* 요청 밖 */
+    }
+  }
+  return { ok: true, plateNo: v.plate_no, from: fromLabel };
+}
+

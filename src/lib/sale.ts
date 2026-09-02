@@ -22,6 +22,7 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { normalizePlate } from "./normalize";
+import { ensureGarageCustomer } from "./garage";
 import { customer, quote, quoteItem, quotePayment, serviceItem, stockItem, stockMovement, vehicle } from "@/db/schema";
 import { checkSplitPayments } from "./payments";
 import { ageAnchorSql } from "./tire-age";
@@ -565,26 +566,15 @@ export async function createSupplierVehicle(input: {
     return { ok: true, vehicleId: dup.id, customerId: dup.customerId, plateNo: dup.plateNo, makerName: dup.makerName, model: dup.model, mileage: dup.mileage, reused: true };
   }
 
-  // 차고 고객 찾기/만들기 — 링크(supplier_name)로만, 이름 비교 안 함
-  let [garage] = await db.execute<{ id: number }>(sql`
-    SELECT id FROM customer WHERE supplier_name = ${supplierName} LIMIT 1
-  `);
-  if (!garage) {
-    const [made] = await db.execute<{ id: number }>(sql`
-      INSERT INTO customer (name, name_search, type, supplier_name, memo)
-      VALUES (${supplierName}, ${supplierName.replace(/\s/g, "").toLowerCase()}, '법인', ${supplierName},
-              ${"거래처 차고 — " + supplierName + " 차량 보관용 (자동 생성)"})
-      RETURNING id
-    `);
-    garage = made;
-  }
+  // 차고 고객 찾기/만들기 — 링크(supplier_name)로만, 이름 비교 안 함 (정본: garage.ts)
+  const garageId = await ensureGarageCustomer(supplierName);
 
   const now = new Date();
   const mileage = Number((input.mileage ?? "").replace(/\D/g, "")) || null;
   const [v] = await db
     .insert(vehicle)
     .values({
-      customerId: Number(garage.id),
+      customerId: garageId,
       plateNo,
       plateNoNorm: plateNorm,
       makerName: input.makerName?.trim() || null,
@@ -596,7 +586,7 @@ export async function createSupplierVehicle(input: {
     .returning({ id: vehicle.id });
 
   refresh("/sale", "/sales");
-  return { ok: true, vehicleId: v.id, customerId: Number(garage.id), plateNo, makerName: input.makerName?.trim() || null, model: input.model?.trim() || null, mileage, reused: false };
+  return { ok: true, vehicleId: v.id, customerId: garageId, plateNo, makerName: input.makerName?.trim() || null, model: input.model?.trim() || null, mileage, reused: false };
 }
 
 /** 서비스·공임 찾기 (직접 추가용) */

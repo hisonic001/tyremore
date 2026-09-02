@@ -45,6 +45,8 @@ export interface SupplierRow {
   lastAt: string | null;
   /** ⭐ 청구서 부가세 방식 (월 정산, 2026-09-01) — '포함' | '별도' */
   vatMode: string;
+  /** ⭐ 사업자번호 (2026-09-02) — 채우면 계산서 자동확정·원장이 정확해진다. 숫자 10자리 */
+  bizNo: string | null;
 }
 
 /**
@@ -74,10 +76,11 @@ export async function listSuppliers(): Promise<SupplierRow[]> {
     memo: string | null;
     is_active: boolean;
     vat_mode: string;
+    biz_no: string | null;
     n: number;
     last_at: string | null;
   }>(sql`
-    SELECT s.id, s.name, s.phone, s.memo, s.is_active, s.vat_mode,
+    SELECT s.id, s.name, s.phone, s.memo, s.is_active, s.vat_mode, s.biz_no,
            (SELECT count(*)::int FROM purchase_invoice i
              WHERE replace(lower(i.supplier),' ','') = s.name_key) n,
            (SELECT max(i.issued_at) FROM purchase_invoice i
@@ -95,6 +98,7 @@ export async function listSuppliers(): Promise<SupplierRow[]> {
     invoiceCount: Number(r.n),
     lastAt: r.last_at,
     vatMode: r.vat_mode,
+    bizNo: r.biz_no,
   }));
 }
 
@@ -155,6 +159,8 @@ export async function updateSupplier(input: {
   memo?: string;
   /** ⭐ 청구서 부가세 방식 (월 정산) — '포함' | '별도'. 안 주면 안 건드린다 */
   vatMode?: string;
+  /** ⭐ 사업자번호 (2026-09-02) — 숫자 10자리. 빈 글자면 지운다. 안 주면 안 건드린다 */
+  bizNo?: string;
   /** 이름이 이미 있는 거래처와 겹칠 때, 합쳐도 된다고 확인했는가 */
   confirmMerge?: boolean;
 }): Promise<{ ok: true; merged?: boolean } | { ok: false; error: string; needsMerge?: string }> {
@@ -236,6 +242,18 @@ export async function updateSupplier(input: {
       updatedAt: new Date(),
     })
     .where(eq(supplier.id, input.id));
+  // ⭐ 사업자번호 — Drizzle 정의에 없는 칸이라 raw SQL (부분 유니크가 중복을 막는다)
+  if (input.bizNo !== undefined) {
+    const digits = input.bizNo.replace(/\D/g, "");
+    if (digits && digits.length !== 10) return { ok: false, error: "사업자번호는 숫자 10자리입니다" };
+    try {
+      await db.execute(sql`
+        UPDATE supplier SET biz_no = ${digits || null}, updated_at = now() WHERE id = ${input.id}
+      `);
+    } catch {
+      return { ok: false, error: "그 사업자번호는 다른 거래처에 이미 붙어 있습니다" };
+    }
+  }
   refresh();
   return { ok: true };
 }
@@ -286,3 +304,116 @@ export async function deleteSupplier(id: number): Promise<Result> {
   refresh();
   return { ok: true };
 }
+
+/* ============================================================
+ * ⭐ 거래처 한 장 — 연동 묶음 (사장님 요청 2026-09-02)
+ *   별명·차고 차량·돈 요약·월정산 규칙·사업자번호 제안을 한 번에.
+ * 🔴 돈이 섞여 있어 **사장님 전용** — 직원 화면은 기본 정보만 받는다.
+ *    질의는 순차 · LIMIT (2026-08-11 마비 관례).
+ * ========================================================== */
+export interface SupplierExtras {
+  /** 이름 → 외상·미지급 잔액 */
+  money: Record<string, { receivable: number; payable: number }>;
+  /** 이름 → 통장 이름 짝 */
+  aliases: Record<string, { key: string; raw: string }[]>;
+  /** 이름 → 차고 차량 */
+  garage: Record<string, { vehicleId: number; plateNo: string; model: string | null; lastVisit: string | null }[]>;
+  /** 이름 → 계산서에서 찾은 사업자번호 제안 (biz_no 없는 곳만) */
+  bizSuggest: Record<string, { bizNo: string; nameRaw: string; n: number }>;
+  /** 이름 → 월정산 규칙 kind (biz_no 로 이어진 것만) */
+  rule: Record<string, string>;
+}
+
+export async function supplierExtras(): Promise<SupplierExtras | null> {
+  const { isOwner } = await import("./auth");
+  if (!(await isOwner())) return null;
+  const { partyListData } = await import("./party-ledger");
+  const { normName, samePartyName } = await import("./recon-data");
+
+  const money: SupplierExtras["money"] = {};
+  for (const p of await partyListData()) {
+    money[p.name] = { receivable: p.receivableRemain, payable: p.payableRemain };
+  }
+
+  const aliases: SupplierExtras["aliases"] = {};
+  const aliasByKey = new Map<string, string>(); // normName(별명) → 거래처 이름
+  const aRows = await db.execute<{ alias_key: string; alias_raw: string; party_key: string }>(sql`
+    SELECT alias_key, alias_raw, party_key FROM party_alias WHERE party_key LIKE 'S:%' LIMIT 500
+  `);
+  for (const a of aRows) {
+    const name = a.party_key.slice(2);
+    (aliases[name] ??= []).push({ key: a.alias_key, raw: a.alias_raw });
+    aliasByKey.set(a.alias_key, name);
+  }
+
+  const garage: SupplierExtras["garage"] = {};
+  const gRows = await db.execute<{ supplier_name: string; id: number; plate_no: string; model: string | null; last: string | null }>(sql`
+    SELECT c.supplier_name, v.id, v.plate_no, v.model,
+           to_char(v.last_visit_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') last
+    FROM vehicle v JOIN customer c ON c.id = v.customer_id
+    WHERE c.supplier_name IS NOT NULL
+    ORDER BY v.id DESC LIMIT 300
+  `);
+  for (const g of gRows) {
+    (garage[g.supplier_name] ??= []).push({
+      vehicleId: Number(g.id),
+      plateNo: g.plate_no,
+      model: g.model,
+      lastVisit: g.last,
+    });
+  }
+
+  /* 사업자번호 제안 — 이미 올린 계산서의 상대 상호를 별명·이름으로 대조 (자동 저장 안 함) */
+  const noBiz = await db.execute<{ name: string }>(sql`
+    SELECT name FROM supplier WHERE is_active AND biz_no IS NULL LIMIT 100
+  `);
+  const usedBiz = await db.execute<{ biz_no: string }>(sql`
+    SELECT biz_no FROM supplier WHERE biz_no IS NOT NULL
+  `);
+  const used = new Set(usedBiz.map((r) => r.biz_no));
+  const counters = await db.execute<{ biz: string; nm: string; n: number }>(sql`
+    SELECT counterparty_biz_no biz, max(counterparty_name) nm, count(*)::int n
+    FROM tax_invoice
+    WHERE is_active AND counterparty_biz_no IS NOT NULL AND COALESCE(counterparty_name, '') <> ''
+    GROUP BY 1 ORDER BY 3 DESC LIMIT 400
+  `);
+  const bizSuggest: SupplierExtras["bizSuggest"] = {};
+  for (const s of noBiz) {
+    let best: { bizNo: string; nameRaw: string; n: number } | null = null;
+    for (const c of counters) {
+      if (used.has(c.biz)) continue;
+      const hit = aliasByKey.get(normName(c.nm)) === s.name || samePartyName(c.nm, s.name);
+      if (hit && (!best || Number(c.n) > best.n)) best = { bizNo: c.biz, nameRaw: c.nm, n: Number(c.n) };
+    }
+    if (best) bizSuggest[s.name] = best;
+  }
+
+  const rule: SupplierExtras["rule"] = {};
+  const rRows = await db.execute<{ name: string; kind: string }>(sql`
+    SELECT s.name, r.kind FROM supplier s JOIN tax_party_rule r ON r.biz_no = s.biz_no
+    WHERE s.biz_no IS NOT NULL LIMIT 200
+  `);
+  for (const r of rRows) rule[r.name] = r.kind;
+
+  return { money, aliases, garage, bizSuggest, rule };
+}
+
+/** ⭐ 최근 매입 5건 — 카드 펼칠 때 지연 로딩 (사장님 전용 — 매입가는 D-05) */
+export async function recentPurchases(
+  name: string,
+): Promise<{ ok: true; rows: { id: number; d: string; total: number | null; status: string; items: number }[] } | { ok: false; error: string }> {
+  const { isOwner } = await import("./auth");
+  if (!(await isOwner())) return { ok: false, error: "사장님 계정 전용입니다" };
+  const rows = await db.execute<{ id: number; d: string; total: number | null; status: string; items: number }>(sql`
+    SELECT i.id, to_char(i.issued_at, 'YYYY-MM-DD') d, i.total, i.status,
+           (SELECT count(*)::int FROM purchase_invoice_item x WHERE x.invoice_id = i.id) items
+    FROM purchase_invoice i
+    WHERE replace(lower(i.supplier), ' ', '') = ${name.replace(/\s/g, "").toLowerCase()}
+    ORDER BY i.issued_at DESC NULLS LAST, i.id DESC LIMIT 5
+  `);
+  return {
+    ok: true,
+    rows: rows.map((r) => ({ id: Number(r.id), d: r.d, total: r.total === null ? null : Number(r.total), status: r.status, items: Number(r.items) })),
+  };
+}
+

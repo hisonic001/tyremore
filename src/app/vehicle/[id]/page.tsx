@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { VehicleEditForm } from "./form";
+import { ToSupplier } from "./to-supplier";
+import { isOwner } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -128,6 +130,16 @@ export default async function VehiclePage({ params }: { params: Promise<{ id: st
           memo: row.v_memo,
         }}
       />
+      {/* ⭐ 거래처 차고로 보내기 (2026-09-02) — 사장님 전용 */}
+      {(await isOwner()) && (
+        <ToSupplier
+          vehicleId={Number(row.vehicle_id)}
+          plateNo={row.plate_no}
+          suppliers={(
+            await db.execute<{ name: string }>(sql`SELECT name FROM supplier WHERE is_active ORDER BY name LIMIT 100`)
+          ).map((r) => r.name)}
+        />
+      )}
     </main>
   );
 }

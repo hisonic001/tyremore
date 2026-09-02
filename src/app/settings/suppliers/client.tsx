@@ -7,8 +7,12 @@ import {
   deleteSupplier,
   setSupplierActive,
   updateSupplier,
+  type SupplierExtras,
   type SupplierRow,
 } from "@/lib/supplier";
+import { SupplierSheet } from "./sheet";
+
+const won = (n: number) => n.toLocaleString("ko-KR");
 
 /**
  * 거래처 추가 · 수정 · 삭제 (사장님 요청 2026-08-03)
@@ -19,7 +23,17 @@ import {
  *     갈라진 이름을 합치는 것이 이 화면의 가장 큰 쓸모라 막지 않고 한 번 더 묻는다
  *   · 매입 내역이 있으면 지우기 대신 숨기기. 옛 인보이스의 출처가 사라지면 안 된다
  */
-export function SupplierManager({ rows }: { rows: SupplierRow[] }) {
+export function SupplierManager({
+  rows,
+  extras,
+  owner,
+  payerOptions,
+}: {
+  rows: SupplierRow[];
+  extras: SupplierExtras | null;
+  owner: boolean;
+  payerOptions: string[];
+}) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [adding, setAdding] = useState(false);
@@ -121,7 +135,7 @@ export function SupplierManager({ rows }: { rows: SupplierRow[] }) {
 
       <ul className="mt-3 space-y-2">
         {shown.map((s) => (
-          <SupplierCard key={s.id} s={s} />
+          <SupplierCard key={s.id} s={s} extras={extras} owner={owner} />
         ))}
         {shown.length === 0 && (
           <li className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-slate-500">
@@ -129,6 +143,13 @@ export function SupplierManager({ rows }: { rows: SupplierRow[] }) {
           </li>
         )}
       </ul>
+
+      {/* 별명 추가 후보 — 이번 달 통장 출금 적요 (payables 와 같은 공급원) */}
+      <datalist id="supplier-payer-names">
+        {payerOptions.map((p) => (
+          <option key={p} value={p} />
+        ))}
+      </datalist>
 
       {hiddenCount > 0 && (
         <button
@@ -143,7 +164,7 @@ export function SupplierManager({ rows }: { rows: SupplierRow[] }) {
   );
 }
 
-function SupplierCard({ s }: { s: SupplierRow }) {
+function SupplierCard({ s, extras, owner }: { s: SupplierRow; extras: SupplierExtras | null; owner: boolean }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [editing, setEditing] = useState(false);
@@ -151,6 +172,8 @@ function SupplierCard({ s }: { s: SupplierRow }) {
   const [phone, setPhone] = useState(s.phone ?? "");
   const [memo, setMemo] = useState(s.memo ?? "");
   const [vatMode, setVatMode] = useState(s.vatMode ?? "포함");
+  const [bizNo, setBizNo] = useState(s.bizNo ?? "");
+  const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** 합칠 상대 이름 — 있으면 「합칠까요?」 를 띄운다 */
   const [merge, setMerge] = useState<string | null>(null);
@@ -159,7 +182,7 @@ function SupplierCard({ s }: { s: SupplierRow }) {
   function save(confirmMerge = false) {
     setError(null);
     start(async () => {
-      const r = await updateSupplier({ id: s.id, name, phone, memo, vatMode, confirmMerge });
+      const r = await updateSupplier({ id: s.id, name, phone, memo, vatMode, bizNo, confirmMerge });
       if (!r.ok) {
         if (r.needsMerge) return setMerge(r.needsMerge);
         return setError(r.error);
@@ -195,6 +218,13 @@ function SupplierCard({ s }: { s: SupplierRow }) {
             onChange={(e) => setMemo(e.target.value)}
             placeholder="메모"
             className="w-full rounded-lg border border-slate-300 px-3 py-2"
+          />
+          <input
+            value={bizNo}
+            onChange={(e) => setBizNo(e.target.value)}
+            placeholder="사업자번호 (숫자 10자리) — 채우면 계산서 자동확정이 정확해집니다"
+            inputMode="numeric"
+            className="tabular w-full rounded-lg border border-slate-300 px-3 py-2"
           />
           {/* ⭐ 청구서 부가세 방식 (월 정산, 2026-09-01) — AJ 처럼 부가세 별도 금액으로
               등록하는 곳은 청구서에서 ×1.1 로 계산된다 */}
@@ -298,6 +328,32 @@ function SupplierCard({ s }: { s: SupplierRow }) {
           {s.memo && <span className="text-slate-600">{s.memo}</span>}
         </div>
       )}
+      {/* ⭐ 연동 요약 칩 (2026-09-02) — 사장님 전용 */}
+      {owner && extras && (
+        <div className="tabular mt-1.5 flex flex-wrap gap-1.5 text-xs">
+          {s.bizNo && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">사업자 {s.bizNo}</span>}
+          {(extras.money[s.name]?.receivable ?? 0) > 0 && (
+            <span className="rounded bg-amber-50 px-1.5 py-0.5 font-medium text-amber-800">
+              외상 {won(extras.money[s.name].receivable)}원
+            </span>
+          )}
+          {(extras.money[s.name]?.payable ?? 0) > 0 && (
+            <span className="rounded bg-rose-50 px-1.5 py-0.5 font-medium text-rose-800">
+              미지급 {won(extras.money[s.name].payable)}원
+            </span>
+          )}
+          {(extras.garage[s.name]?.length ?? 0) > 0 && (
+            <span className="rounded bg-violet-50 px-1.5 py-0.5 text-violet-800">차량 {extras.garage[s.name].length}대</span>
+          )}
+          {(extras.aliases[s.name]?.length ?? 0) > 0 && (
+            <span className="rounded bg-sky-50 px-1.5 py-0.5 text-sky-800">이름 짝 {extras.aliases[s.name].length}</span>
+          )}
+          {extras.rule[s.name] && <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-800">{extras.rule[s.name]}</span>}
+          {!s.bizNo && extras.bizSuggest[s.name] && (
+            <span className="rounded bg-emerald-50 px-1.5 py-0.5 font-medium text-emerald-800">사업자번호 찾음 ✨</span>
+          )}
+        </div>
+      )}
 
       {error && <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
 
@@ -309,6 +365,15 @@ function SupplierCard({ s }: { s: SupplierRow }) {
         >
           고치기
         </button>
+        {owner && extras && (
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="rounded-lg border border-brand-300 bg-brand-50 px-4 py-2 text-sm font-medium text-brand-700"
+          >
+            {open ? "접기" : "한 장 보기"}
+          </button>
+        )}
         <button
           type="button"
           disabled={pending}
@@ -359,6 +424,8 @@ function SupplierCard({ s }: { s: SupplierRow }) {
             </button>
           ))}
       </div>
+
+      {owner && extras && open && <SupplierSheet s={s} extras={extras} />}
     </li>
   );
 }
