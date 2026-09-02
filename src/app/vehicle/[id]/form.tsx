@@ -32,6 +32,8 @@ export function VehicleEditForm({
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /* ⭐ 번호판이 바뀌면 뜻을 묻는다 (조혜진 사건 2026-09-02) — 차 바꿈 vs 오타 수정 */
+  const [plateChoice, setPlateChoice] = useState(false);
 
   const [name, setName] = useState(customer.name);
   const [phone, setPhone] = useState(customer.phone ?? "");
@@ -47,7 +49,7 @@ export function VehicleEditForm({
   const [vin, setVin] = useState(vehicle.vin ?? "");
   const [memo, setMemo] = useState(vehicle.memo ?? "");
 
-  function save() {
+  function save(plateChangeMode?: "fix" | "replace") {
     start(async () => {
       setError(null);
       setMsg(null);
@@ -72,8 +74,18 @@ export function VehicleEditForm({
         mileage: mileage ? Number(mileage.replace(/\D/g, "")) : null,
         vin,
         memo,
+        plateChangeMode,
       });
-      if (!rv.ok) return setError(rv.error);
+      if (!rv.ok) {
+        if (rv.needsPlateChoice) return setPlateChoice(true);
+        return setError(rv.error);
+      }
+      setPlateChoice(false);
+      if (rv.newVehicleId) {
+        // 차 바꿈 — 새 차량 카드로 이동 (옛 차와 과거 내역은 그대로)
+        router.push(`/vehicle/${rv.newVehicleId}`);
+        return;
+      }
       setMsg("저장했습니다");
       router.refresh();
     });
@@ -181,10 +193,44 @@ export function VehicleEditForm({
       {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
       {msg && <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{msg}</p>}
 
+      {/* ⭐ 번호판 변경의 뜻 확인 (2026-09-02 조혜진 사건 재발 방지) */}
+      {plateChoice && (
+        <div className="rounded-xl border-2 border-violet-400 bg-violet-50 p-3">
+          <p className="text-sm font-bold text-violet-900">
+            차량번호가 {vehicle.plateNo} → {plate.trim()} 로 바뀌었습니다
+          </p>
+          <p className="mt-1 text-xs text-violet-800">
+            <strong>차를 바꾸셨다면</strong> 새 차량으로 등록합니다 — 지금까지의 정비 내역은
+            이전 차({vehicle.plateNo})에 그대로 남고, 앞으로의 정비만 새 차로 나갑니다.
+          </p>
+          <div className="mt-2 flex flex-col gap-2">
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => save("replace")}
+              className="rounded-lg bg-violet-700 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              🚗 차를 바꿨어요 — 새 차량으로 등록 (권장)
+            </button>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => save("fix")}
+              className="rounded-lg border border-slate-300 bg-white py-2.5 text-sm text-slate-600 disabled:opacity-50"
+            >
+              번호 오타를 고친 것 — 이 차량 기록을 그대로 수정 (과거 내역 표시도 바뀜)
+            </button>
+            <button type="button" onClick={() => setPlateChoice(false)} className="text-xs text-slate-500 underline">
+              그만두기
+            </button>
+          </div>
+        </div>
+      )}
+
       <button
         type="button"
         disabled={pending}
-        onClick={save}
+        onClick={() => save()}
         className="w-full rounded-xl bg-slate-900 py-3.5 font-semibold text-white disabled:opacity-50"
       >
         {pending ? "저장 중…" : "저장"}

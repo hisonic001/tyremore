@@ -1,15 +1,12 @@
 import Link from "@/lib/link";
-import { hasPerm } from "@/lib/auth";
 import { findProducts, findVehicles, guessMode, tireBrands, type Mode } from "@/lib/search";
 import type { Season } from "@/lib/tire-attrs";
 import { SearchBox, SearchButton } from "./search-box";
 import { FilterPanel, ModeTabs } from "./search-ui";
 import { ProductCard, VehicleCard } from "./cards";
 import { ComparePanel } from "./compare-panel";
-import { pendingDraftCount } from "@/lib/blog-draft";
 import { ListRow } from "@/components/ui/list-row";
 import { StatusPill } from "@/components/ui/badge";
-import { PenLine } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -67,15 +64,7 @@ export default async function Home({
     (filter.inStock ? 1 : 0) +
     (filter.parts ? 1 : 0);
 
-  /**
-   * ⭐ 마케팅 진입 줄 (2026-09-02) — 사장님 "앱에서 마케팅 버튼을 못 찾겠음"
-   *
-   * 전에는 「초안이 있을 때만」 뜨는 배너였다. 그런데 초안은 마케팅 안에서만 만들어지므로
-   * **영영 안 뜨는 순환**이었다. 이제 검색 중이 아니면 **늘 보인다** — 할 일이 있으면
-   * 건수 배지가 붙는다. 탭바(5칸)는 늘리지 않기로 한 결정을 지키면서 길을 하나 더 낸다.
-   */
-  const canMarketing = !q && (await hasPerm("marketing"));
-  const draftsWaiting = canMarketing ? await pendingDraftCount().catch(() => 0) : 0;
+  /* 마케팅 진입 줄은 뺐다 (사장님 지시 2026-09-02 — "너무 눈에 띄어 없앰, 설정 메뉴를 쓰겠음") */
   const [vehicles, products, brands] = await Promise.all([
     mode === "customer" && q ? findVehicles(q) : Promise.resolve([]),
     mode === "product"
@@ -115,21 +104,6 @@ export default async function Home({
         </nav>
       </header>
 
-      {canMarketing && (
-        <div className="mb-3 rounded-card border border-slate-200 bg-white px-2.5 shadow-card">
-          <ListRow
-            href="/marketing"
-            icon={<PenLine className="size-5" />}
-            title="마케팅"
-            sub={
-              draftsWaiting > 0
-                ? "원고가 기다립니다 — 한마디 쓰고 복사해서 올리세요"
-                : "블로그 원고 만들기 · 리뷰 답글 초안"
-            }
-            right={draftsWaiting > 0 ? <StatusPill tone="accent">{draftsWaiting}개</StatusPill> : undefined}
-          />
-        </div>
-      )}
 
       <ModeTabs mode={mode} q={q} />
 
