@@ -161,7 +161,7 @@ async function computeHeadline(ym: string) {
 
 export async function closeMonth(ym: string): Promise<{ ok: true } | { ok: false; error: string }> {
   const session = await getSession();
-  if (!session || session.role !== "owner") return { ok: false, error: "사장님만 할 수 있습니다" };
+  if (!session || !(await (await import("./auth")).hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return { ok: false, error: "달이 이상합니다" };
   if (ym >= kstToday().slice(0, 7)) return { ok: false, error: "이 달이 끝난 뒤에 마감할 수 있습니다" };
 
@@ -181,7 +181,7 @@ export async function closeMonth(ym: string): Promise<{ ok: true } | { ok: false
 
 export async function reopenMonth(ym: string): Promise<{ ok: true } | { ok: false; error: string }> {
   const session = await getSession();
-  if (!session || session.role !== "owner") return { ok: false, error: "사장님만 할 수 있습니다" };
+  if (!session || !(await (await import("./auth")).hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   await db.execute(sql`DELETE FROM month_close WHERE ym = ${ym}`);
   revalidateFinance();
   return { ok: true };

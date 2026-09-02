@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { getSession } from "@/lib/auth";
+import { getSession, hasPerm } from "@/lib/auth";
 import Link from "@/lib/link";
 import { FinShell } from "@/components/fin/shell";
 import { pickYm } from "@/lib/ym";
@@ -29,7 +29,7 @@ export default async function FinanceUploadPage({
 }) {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (session.role !== "owner") redirect("/");
+  if (!(await hasPerm("finance"))) redirect("/"); // 권한 스위치 (2026-09-02)
 
   const sp = await searchParams;
   const ym = pickYm(sp.ym);

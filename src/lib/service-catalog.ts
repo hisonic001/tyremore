@@ -22,7 +22,7 @@
 import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { getSession, isOwner } from "@/lib/auth";
+import { getSession, hasPerm } from "@/lib/auth";
 
 function refresh() {
   for (const p of ["/settings/services", "/sale", "/sales"]) {
@@ -35,7 +35,7 @@ function refresh() {
 }
 
 async function guard(): Promise<{ ok: true; uid: number | null } | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "공임·정비 목록은 사장님 계정 전용입니다" };
+  if (!(await hasPerm("master"))) return { ok: false, error: "상품·가격·거래처 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const s = await getSession();
   return { ok: true, uid: s?.uid ?? null };
 }

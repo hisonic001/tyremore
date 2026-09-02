@@ -2,7 +2,7 @@ import Link from "@/lib/link";
 import { redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { getSession } from "@/lib/auth";
+import { getSession, hasPerm } from "@/lib/auth";
 import { finHealth } from "@/lib/fin-health";
 import { finPL } from "@/lib/fin-pl";
 import { kstToday, ymAdd, pickYm } from "@/lib/ym";
@@ -45,7 +45,7 @@ export default async function FinancePage({
 }) {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (session.role !== "owner") redirect("/");
+  if (!(await hasPerm("finance"))) redirect("/"); // 권한 스위치 (2026-09-02)
 
   // ⭐ 자료 건강 (감사 P3) — 전면 감사의 검증식을 화면이 상시 수행
   const health = await finHealth();

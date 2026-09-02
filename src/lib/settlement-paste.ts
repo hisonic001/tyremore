@@ -11,7 +11,7 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { isOwner } from "./auth";
+import { hasPerm } from "./auth";
 import { normalizePlate } from "./normalize";
 import { matchReply, parseReplyText, type OurLine, type ReplyRow } from "./settlement-core";
 import { parseReplyWorkbook } from "./settlement-sheet";
@@ -47,7 +47,7 @@ export async function previewReply(
   runId: number,
   fd: FormData,
 ): Promise<{ ok: true; preview: ReplyPreview } | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "정산은 사장님 계정 전용입니다" };
+  if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
 
   let rows: ReplyRow[];
   const file = fd.get("file");

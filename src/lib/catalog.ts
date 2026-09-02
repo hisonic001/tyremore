@@ -16,7 +16,7 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { brand, product, stockItem } from "@/db/schema";
-import { isOwner } from "./auth";
+import { hasPerm } from "./auth";
 
 function refresh(...paths: string[]) {
   for (const p of paths) {
@@ -49,7 +49,7 @@ export async function setProductActive(productId: number, active: boolean) {
 export async function setDisplayName(productId: number, name: string | null) {
   // 🔴 2026-08-27: 같은 파일의 setListPrice·hideUnpricedTires 는 전부 isOwner() 가 있는데
   //    이것만 빠져 있었다 — 손님에게 보이는 이름을 아무 계정이나 바꿀 수 있었다
-  if (!(await isOwner())) return { ok: false as const, error: "사장님 계정에서만 할 수 있습니다" };
+  if (!(await hasPerm("master"))) return { ok: false as const, error: "사장님 계정에서만 할 수 있습니다" };
   const v = name?.trim() || null;
   await db.update(product).set({ displayName: v, updatedAt: new Date() }).where(eq(product.id, productId));
   refresh("/", `/stock/${productId}`, "/settings/products");
@@ -70,7 +70,7 @@ export async function setListPrice(
   inclVat: number | null,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   // 🔴 기표가는 고객에게 말하는 가격의 출발점 — 사장님만 (2026-08-08 코드 리뷰)
-  if (!(await isOwner())) return { ok: false, error: "사장님 계정에서만 할 수 있습니다" };
+  if (!(await hasPerm("master"))) return { ok: false, error: "사장님 계정에서만 할 수 있습니다" };
   if (inclVat !== null && (!Number.isFinite(inclVat) || inclVat < 0 || inclVat > 100_000_000)) {
     return { ok: false, error: "기표가가 올바르지 않습니다" };
   }
@@ -112,7 +112,7 @@ export async function setBrandHandled(code: string, handled: boolean) {
  */
 export async function setBrandVatExcluded(code: string, excludes: boolean) {
   // 🔴 브랜드 전체 기표가를 일괄로 바꾼다 — 사장님만 (2026-08-08 코드 리뷰)
-  if (!(await isOwner())) return { ok: false as const, error: "사장님 계정에서만 할 수 있습니다" };
+  if (!(await hasPerm("master"))) return { ok: false as const, error: "사장님 계정에서만 할 수 있습니다" };
   await db.update(brand).set({ priceExcludesVat: excludes }).where(eq(brand.code, code));
   const r = await db.execute<{ n: number }>(sql`
     WITH u AS (
@@ -138,7 +138,7 @@ export async function setBrandVatExcluded(code: string, excludes: boolean) {
  */
 export async function hideUnpricedTires(): Promise<{ hidden: number; error?: string }> {
   // 🔴 상품을 무더기로 숨긴다 — 사장님만 (2026-08-08 코드 리뷰)
-  if (!(await isOwner())) return { hidden: 0, error: "사장님 계정에서만 할 수 있습니다" };
+  if (!(await hasPerm("master"))) return { hidden: 0, error: "사장님 계정에서만 할 수 있습니다" };
   const r = await db.execute<{ n: number }>(sql`
     WITH u AS (
       UPDATE product SET is_active = false, hidden_reason = 'no_price', updated_at = now()
@@ -160,7 +160,7 @@ export async function restoreProducts(
   reason: "no_price" | "manual" | "all",
 ): Promise<{ restored: number; error?: string }> {
   // 🔴 숨긴 상품을 무더기로 되살린다 — 사장님만 (2026-08-08 코드 리뷰)
-  if (!(await isOwner())) return { restored: 0, error: "사장님 계정에서만 할 수 있습니다" };
+  if (!(await hasPerm("master"))) return { restored: 0, error: "사장님 계정에서만 할 수 있습니다" };
   const where =
     reason === "all"
       ? sql`is_active = false`

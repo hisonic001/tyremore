@@ -1,4 +1,4 @@
-import { isOwner } from "@/lib/auth";
+import { hasPerm } from "@/lib/auth";
 import { buildStockWorkbook } from "@/lib/stock-sheet";
 
 export const dynamic = "force-dynamic";
@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
  */
 export async function GET() {
   // ⚠️ 매입가·재고금액은 사장님 파일에만 담는다 (D-05 5번) — 서버에서 아예 빼고 만든다
-  const buf = await buildStockWorkbook(await isOwner());
+  const buf = await buildStockWorkbook(await hasPerm("cost"));
   const d = new Date();
   const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const name = `타이어모어-재고-${stamp}.xlsx`;

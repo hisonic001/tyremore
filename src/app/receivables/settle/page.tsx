@@ -1,5 +1,5 @@
 import Link from "@/lib/link";
-import { isOwner, requireSession } from "@/lib/auth";
+import {hasPerm, requireSession } from "@/lib/auth";
 import { settlementBook, settleCandidates } from "@/lib/settlement-data";
 import { kstToday } from "@/lib/ym";
 import { StartForm } from "./start-form";
@@ -24,7 +24,7 @@ const TONE: Record<string, string> = {
  */
 export default async function SettleIndexPage() {
   await requireSession();
-  const owner = await isOwner();
+  const owner = await hasPerm("finance");
   if (!owner) {
     return (
       <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6">

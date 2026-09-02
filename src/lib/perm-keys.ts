@@ -18,9 +18,22 @@ export const PERM_KEYS = [
   "customer",
   "mars",
   "receivable_view",
+  /* ⭐ 2026-09-02 사장님 지시 "해금 가능한 기능들은 일단 넣어놓고 내가 체크로 결정" —
+     사장님 전용이던 영역도 스위치로 올린다. 기본은 꺼짐. **계정 관리만은 항상 사장님 전용**
+     (직원이 스스로 권한을 켜는 구멍을 막는다). */
+  "finance",
+  "reports",
+  "cost",
+  "master",
+  "reassign",
 ] as const;
 
 export type PermKey = (typeof PERM_KEYS)[number];
+
+/** 매장 일(기본 묶음) — 「전부 켜기」는 이 일곱 개만 켠다 */
+export const BASE_KEYS: readonly PermKey[] = ["sale", "sale_edit", "stock", "receiving", "customer", "mars", "receivable_view"];
+/** 사장님 영역(민감 묶음) — 사장님이 개별로만 해금 */
+export const OWNER_KEYS: readonly PermKey[] = ["finance", "reports", "cost", "master", "reassign"];
 
 /** 화면 표시용 — 설정→계정의 스위치 순서 그대로 */
 export const PERM_LABELS: Record<PermKey, { label: string; hint: string }> = {
@@ -30,7 +43,12 @@ export const PERM_LABELS: Record<PermKey, { label: string; hint: string }> = {
   receiving: { label: "입고·매입", hint: "인보이스 입고, 붙여넣기 매입 (매입가는 원래 사장님만)" },
   customer: { label: "고객·차량 수정", hint: "고객 정보·차량 정보 고치기" },
   mars: { label: "MARS 올리기", hint: "판매를 MARS 큐에 올리기" },
-  receivable_view: { label: "외상 보기", hint: "외상 장부 열람 (수금은 원래 사장님만)" },
+  receivable_view: { label: "외상 보기·수금", hint: "외상 장부 열람과 수금 넣기·한꺼번에 털기 (2026-09-02 묶음)" },
+  finance: { label: "돈 관리", hint: "재무 화면 전체 — 업로드·대조·미지급·월 정산·원장 (민감)" },
+  reports: { label: "보고서", hint: "매출·재고·마진 리포트 (마진이 보입니다)" },
+  cost: { label: "매입가·마진 보기", hint: "판매·재고·입고 화면의 매입원가와 마진 표시 + 매입가 수정" },
+  master: { label: "상품·가격·거래처 관리", hint: "상품·공임 목록, 기표가·할인율, 거래처 추가·수정" },
+  reassign: { label: "손님·거래처 바꾸기", hint: "판매의 주인을 다른 손님·거래처로 재배정" },
 };
 
 export type PermMap = Partial<Record<PermKey, boolean>>;
@@ -44,9 +62,9 @@ export function evalPerm(role: string, perms: PermMap | null | undefined, key: P
   return perms?.[key] === true;
 }
 
-/** 기존 직원 계정 이관·「전부 켜기」 버튼용 */
+/** 기존 직원 계정 이관·「전부 켜기」 버튼용 — 🔴 매장 일 7개만 (민감 5개는 개별 해금) */
 export function allOnPerms(): PermMap {
-  return Object.fromEntries(PERM_KEYS.map((k) => [k, true]));
+  return Object.fromEntries(BASE_KEYS.map((k) => [k, true]));
 }
 
 export const PERM_DENIED = "이 기능 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다";

@@ -1,6 +1,6 @@
 import Link from "@/lib/link";
 import { notFound, redirect } from "next/navigation";
-import { getSession } from "@/lib/auth";
+import { getSession, hasPerm } from "@/lib/auth";
 import { FinShell } from "@/components/fin/shell";
 import { TableWrap, Money } from "@/components/fin/table";
 import { StatusBadge } from "@/components/fin/badge";
@@ -62,7 +62,7 @@ export default async function FinancePartyLedgerPage({
 }) {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (session.role !== "owner") redirect("/");
+  if (!(await hasPerm("finance"))) redirect("/"); // 권한 스위치 (2026-09-02)
 
   const { key: rawKey } = await params;
   const key = decodeURIComponent(rawKey);

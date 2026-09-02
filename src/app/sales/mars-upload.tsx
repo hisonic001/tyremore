@@ -28,6 +28,8 @@ export function SalesList({
   hiddenCount,
   shown,
   owner = false,
+  canCollect = false,
+  canReassign = false,
 }: {
   days: SaleDay[];
   run: MarsRunRow | null;
@@ -35,6 +37,8 @@ export function SalesList({
   shown: number;
   /** ⭐ 손님·거래처 바꾸기는 사장님만 보인다 (2026-08-17) */
   owner?: boolean;
+  canCollect?: boolean;
+  canReassign?: boolean;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -257,6 +261,8 @@ export function SalesList({
                 {d.sales.map((s) => (
                   <SaleCard
                     owner={owner}
+                    canCollect={canCollect}
+                    canReassign={canReassign}
                     key={s.quoteId}
                     sale={s}
                     select={

@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/auth";
+import { getSession, hasPerm } from "@/lib/auth";
 import { pickYm } from "@/lib/ym";
 import { FinShell } from "@/components/fin/shell";
 import { depositReconData } from "@/lib/recon-data";
@@ -23,7 +23,7 @@ export default async function FinanceDepositsPage({
 }) {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (session.role !== "owner") redirect("/");
+  if (!(await hasPerm("finance"))) redirect("/"); // 권한 스위치 (2026-09-02)
 
   const sp = await searchParams;
   const ym = pickYm(sp.ym);

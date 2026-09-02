@@ -1,7 +1,7 @@
 import Link from "@/lib/link";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { isOwner } from "@/lib/auth";
+import { hasPerm } from "@/lib/auth";
 import { ALL_METHODS } from "@/lib/payments";
 import { marsAudit } from "@/lib/mars-audit";
 import { ResolveButton } from "./audit-resolve";
@@ -85,8 +85,10 @@ export default async function SalesPage({
         )[0]
       : null;
 
-  /** ⭐ 손님·거래처 바꾸기는 사장님만 (2026-08-17) — 질의는 순차로 */
-  const owner = await isOwner();
+  /* ⭐ 2026-09-02 권한 스위치 분리 — owner(매입가 표시=cost)·수금·재배정이 각자 스위치 */
+  const owner = await hasPerm("cost");
+  const canCollect = await hasPerm("receivable_view");
+  const canReassign = await hasPerm("reassign");
   // ⭐ MARS 실행 진행도 여기서 보인다 — /mars 페이지는 없앴다 (사장님 지시 2026-08-09)
   const run = await latestMarsRun();
   // ⭐ MARS 정합 감사 (2026-08-10 개선 전략) — 어긋난 건이 있을 때만 배너가 뜬다.
@@ -288,7 +290,7 @@ export default async function SalesPage({
       )}
 
       {/* ⭐ MARS 올리기 판 + 날짜별 목록 — 카드 체크·올리기·진행 로그가 한 화면 (2026-08-09) */}
-      <SalesList days={days} run={run} hiddenCount={hiddenCount} shown={shown} owner={owner} />
+      <SalesList days={days} run={run} hiddenCount={hiddenCount} shown={shown} owner={owner} canCollect={canCollect} canReassign={canReassign} />
 
       <div className="mt-6 text-center">
         <Link

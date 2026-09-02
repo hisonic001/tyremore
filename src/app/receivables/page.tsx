@@ -1,5 +1,5 @@
 import Link from "@/lib/link";
-import { isOwner, requirePerm } from "@/lib/auth";
+import { requirePerm } from "@/lib/auth";
 import { receivableBook } from "@/lib/receivable-book";
 import { BookFilter } from "./filter";
 import { BookList } from "./client";
@@ -25,9 +25,9 @@ export default async function ReceivablesPage({
   searchParams: Promise<{ kind?: string; settled?: string }>;
 }) {
   await requirePerm("receivable_view"); // 외상 보기 권한 (2026-09-02)
-  /* 🔴 2회차 수리 E1(2026-08-28): 수금은 사장님 전용이 됐다 — 직원에게는 보기만.
-     버튼을 남겨 두면 눌렀을 때 오류만 나서 더 답답하다. */
-  const owner = await isOwner();
+  /* 2026-09-02 사장님 지시: 외상 보기와 수금을 한 스위치로 —
+     이 페이지에 들어왔다 = 외상 권한이 있다 = 수금 버튼도 보인다. */
+  const owner = true;
   const sp = await searchParams;
   const kind = sp.kind === "supplier" || sp.kind === "customer" ? sp.kind : undefined;
   const includeSettled = sp.settled === "1";

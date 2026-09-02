@@ -17,8 +17,9 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { product, purchaseInvoice, purchaseInvoiceItem, stockItem, stockMovement, supplierItemCode } from "@/db/schema";
-import { getSession, isOwner } from "./auth";
+import { getSession, hasPerm } from "./auth";
 import { parsePastedPurchase, type PastedLine } from "./purchase-paste";
+import { PERM_DENIED } from "./perm-keys";
 
 function refresh(...paths: string[]) {
   for (const p of paths) {
@@ -147,6 +148,7 @@ export async function linkPastedCode(input: {
   productId: number;
   supplierName?: string | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("receiving"))) return { ok: false, error: PERM_DENIED };
   if (!(await getSession())) return { ok: false, error: "로그인이 필요합니다" };
   const supplier = input.supplier.trim();
   const code = input.code.trim();
@@ -177,6 +179,7 @@ export async function savePastedPurchase(input: {
   /** 붙여넣은 원문 — 나중에 파서를 고쳐 다시 읽을 수 있게 남긴다 */
   rawText?: string | null;
 }): Promise<{ ok: true; invoiceId: number; saved: number } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("receiving"))) return { ok: false, error: PERM_DENIED };
   const session = await getSession();
   if (!session) return { ok: false, error: "로그인이 필요합니다" };
 
@@ -250,9 +253,10 @@ export async function savePastedPurchase(input: {
 export async function receivePastedInvoice(
   invoiceId: number,
 ): Promise<{ ok: true; received: number; priceUpdated: number } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("receiving"))) return { ok: false, error: PERM_DENIED };
   const session = await getSession();
   if (!session) return { ok: false, error: "로그인이 필요합니다" };
-  const owner = await isOwner();
+  const owner = await hasPerm("cost");
 
   const [inv] = await db
     .select({ id: purchaseInvoice.id, supplier: purchaseInvoice.supplier, invoiceNo: purchaseInvoice.invoiceNo })

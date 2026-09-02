@@ -1,5 +1,5 @@
 import Link from "@/lib/link";
-import { isOwner } from "@/lib/auth";
+import { isOwner, hasPerm } from "@/lib/auth";
 import { listServiceCatalog } from "@/lib/service-catalog";
 import { Notice } from "@/components/ui/notice";
 import { ServiceManager } from "./client";
@@ -22,7 +22,7 @@ export default async function ServicesSettingsPage({
   searchParams: Promise<{ new?: string }>;
 }) {
   const sp = await searchParams;
-  const owner = await isOwner();
+  const owner = await hasPerm("master");
 
   return (
     <main className="mx-auto min-h-dvh max-w-2xl px-4 py-5 pb-24">

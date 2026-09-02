@@ -1,5 +1,5 @@
 import Link from "@/lib/link";
-import { isOwner, requireSession } from "@/lib/auth";
+import {hasPerm, requireSession } from "@/lib/auth";
 import { settlementView } from "@/lib/settlement-data";
 import { kstToday } from "@/lib/ym";
 import { SettleClient } from "./client";
@@ -20,7 +20,7 @@ export default async function SettleSupplierPage({
   searchParams: Promise<{ ym?: string }>;
 }) {
   await requireSession();
-  const owner = await isOwner();
+  const owner = await hasPerm("finance");
   const supplier = decodeURIComponent((await params).supplier);
   const sp = await searchParams;
   const today = kstToday();

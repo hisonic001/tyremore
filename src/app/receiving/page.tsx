@@ -1,6 +1,6 @@
 import Link from "@/lib/link";
 import { cookies } from "next/headers";
-import { isOwner } from "@/lib/auth";
+import { hasPerm } from "@/lib/auth";
 import { pendingInvoices, supplierList, zeroTotalInvoiceCount } from "@/lib/invoice";
 import { PendingList } from "./client";
 import { RegisterPurchase } from "./register";
@@ -21,7 +21,7 @@ export default async function ReceivingPage() {
    *    화면에서 감추는 것으로는 부족하다 — **서버에서 아예 빼고** 내려보낸다.
    *    입고 작업(수량·DOT·전량 입고)은 정비사도 그대로 할 수 있다.
    */
-  const owner = await isOwner();
+  const owner = await hasPerm("cost");
   const zeroN = owner ? await zeroTotalInvoiceCount() : 0; // 0원 매입 배지 (사장님만)
   const raw = await pendingInvoices();
   const invoices = owner

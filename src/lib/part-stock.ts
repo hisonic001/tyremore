@@ -14,6 +14,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { product } from "@/db/schema";
 import { getSession } from "./auth";
+import { PERM_DENIED } from "./perm-keys";
 
 /**
  * 표시 묶음 — 분류(category)가 있으면 그것을 믿고 (부품몰 이관 2026-08-14 부터
@@ -128,6 +129,7 @@ export async function setMinQty(
   productId: number,
   minQty: number | null,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("stock"))) return { ok: false, error: PERM_DENIED };
   if (!(await getSession())) return { ok: false, error: "로그인이 필요합니다" };
   const v = minQty === null || !Number.isFinite(minQty) || minQty <= 0 ? null : Math.round(minQty);
   await db.update(product).set({ minQty: v }).where(eq(product.id, productId));

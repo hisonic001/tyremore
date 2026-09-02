@@ -27,7 +27,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { priceRule, product } from "@/db/schema";
-import { isOwner } from "./auth";
+import { hasPerm } from "./auth";
 import { savePriceRuleCore } from "./pricing-core";
 
 export type RuleScope = "item" | "pattern" | "brand" | "category";
@@ -80,7 +80,7 @@ export async function getPrice(productId: number): Promise<PriceInfo | null> {
    *    "use server" export 는 로그인만 있으면 누구나 부를 수 있는 끝점이라
    *    여기서 직접 막아야 한다. 화면에서 감추는 것으로는 부족하다.
    */
-  if (!(await isOwner())) return null;
+  if (!(await hasPerm("master"))) return null;
   const [p] = await db.execute<{
     mars_item_no: string | null;
     pattern: string | null;
@@ -181,7 +181,7 @@ export async function savePriceRule(input: {
    *    본체는 pricing-core.savePriceRuleCore 로 옮겼다 — 인보이스 업로드가
    *    서버 안에서 쓰는 길은 권한과 무관하게 계속 돌아야 해서다.
    */
-  if (!(await isOwner())) return { ok: false, error: "사장님 계정에서만 할 수 있습니다" };
+  if (!(await hasPerm("master"))) return { ok: false, error: "사장님 계정에서만 할 수 있습니다" };
 
   const r = await savePriceRuleCore(input);
   if (!r.ok) return r;
@@ -196,7 +196,7 @@ export async function clearPriceRule(
   target: string,
   productId?: number,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "사장님 계정에서만 할 수 있습니다" };
+  if (!(await hasPerm("master"))) return { ok: false, error: "사장님 계정에서만 할 수 있습니다" };
   await db.delete(priceRule).where(and(eq(priceRule.scope, scope), eq(priceRule.target, target)));
   if (productId) refresh(`/stock/${productId}`);
   refresh("/");

@@ -1,5 +1,5 @@
 import Link from "@/lib/link";
-import { isOwner } from "@/lib/auth";
+import { hasPerm } from "@/lib/auth";
 import { SaleForm } from "./client";
 import { requirePerm } from "@/lib/auth";
 
@@ -25,7 +25,7 @@ export default async function SalePage() {
       <p className="mt-1 text-sm text-slate-500">
         저장하면 재고가 빠지고 정비 내역에 남습니다. MARS 는 정비 내역에서 골라 올립니다.
       </p>
-      <SaleForm owner={await isOwner()} />
+      <SaleForm owner={await hasPerm("cost")} />
     </main>
   );
 }

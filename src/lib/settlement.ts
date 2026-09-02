@@ -11,7 +11,7 @@
 import { sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { isOwner } from "./auth";
+import { hasPerm } from "./auth";
 import { settleReceivables } from "./receivable";
 import {
   addNewSalesCore,
@@ -28,7 +28,7 @@ import {
 
 export type { ApplyLineResult, ItemInstruction };
 
-const OWNER_ONLY = { ok: false as const, error: "정산은 사장님 계정 전용입니다" };
+const OWNER_ONLY = { ok: false as const, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
 
 function refresh() {
   for (const p of ["/receivables", "/receivables/settle", "/sales", "/"]) {
@@ -41,21 +41,21 @@ function refresh() {
 }
 
 export async function startSettlement(supplier: string, ym: string) {
-  if (!(await isOwner())) return OWNER_ONLY;
+  if (!(await hasPerm("finance"))) return OWNER_ONLY;
   const r = await startSettlementCore(supplier, ym);
   refresh();
   return r;
 }
 
 export async function addNewSales(runId: number) {
-  if (!(await isOwner())) return OWNER_ONLY;
+  if (!(await hasPerm("finance"))) return OWNER_ONLY;
   const r = await addNewSalesCore(runId);
   refresh();
   return r;
 }
 
 export async function saveDecision(input: Parameters<typeof saveDecisionCore>[0]) {
-  if (!(await isOwner())) return OWNER_ONLY;
+  if (!(await hasPerm("finance"))) return OWNER_ONLY;
   const r = await saveDecisionCore(input);
   refresh();
   return r;
@@ -65,35 +65,35 @@ export async function saveMatchedDecisions(
   runId: number,
   rows: { lineId: number; agreed: number | null; matchedBy: string; memo: string }[],
 ) {
-  if (!(await isOwner())) return OWNER_ONLY;
+  if (!(await hasPerm("finance"))) return OWNER_ONLY;
   const r = await saveMatchedDecisionsCore(runId, rows);
   refresh();
   return r;
 }
 
 export async function approveRest(runId: number) {
-  if (!(await isOwner())) return OWNER_ONLY;
+  if (!(await hasPerm("finance"))) return OWNER_ONLY;
   const r = await approveRestCore(runId);
   refresh();
   return r;
 }
 
 export async function applySettlement(runId: number) {
-  if (!(await isOwner())) return OWNER_ONLY;
+  if (!(await hasPerm("finance"))) return OWNER_ONLY;
   const r = await applySettlementCore(runId);
   refresh();
   return r;
 }
 
 export async function reopenRun(runId: number) {
-  if (!(await isOwner())) return OWNER_ONLY;
+  if (!(await hasPerm("finance"))) return OWNER_ONLY;
   const r = await reopenRunCore(runId);
   refresh();
   return r;
 }
 
 export async function deleteRun(runId: number) {
-  if (!(await isOwner())) return OWNER_ONLY;
+  if (!(await hasPerm("finance"))) return OWNER_ONLY;
   const r = await deleteRunCore(runId);
   refresh();
   return r;
@@ -114,7 +114,7 @@ export async function markDeposited(input: {
   | { ok: true; settled: number; applied: number; partialQuoteNo: string | null }
   | { ok: false; error: string }
 > {
-  if (!(await isOwner())) return OWNER_ONLY;
+  if (!(await hasPerm("finance"))) return OWNER_ONLY;
   const open = await db.execute<{ quote_id: number }>(sql`
     SELECT l.quote_id
     FROM settlement_line l

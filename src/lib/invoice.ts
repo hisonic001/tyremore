@@ -19,7 +19,7 @@ import { product, purchaseInvoice, purchaseInvoiceItem, stockItem, stockMovement
 import type { LineKind } from "./invoice-desc";
 import { parseInvoiceRows, parseInvoiceText, type ParsedInvoice } from "./invoice-parse";
 import { isPlausibleDot } from "./normalize";
-import { isOwner } from "./auth";
+import { hasPerm } from "./auth";
 // 권한 없는 내부용 — 정비사가 인보이스를 올려도 할인율 갱신이 끊기지 않게 (2026-08-08)
 import { savePriceRuleCore } from "./pricing-core";
 import { PERM_DENIED } from "./perm-keys";
@@ -965,6 +965,7 @@ async function claimDraft(invoiceId: number) {
 export async function resumeManualPurchase(
   invoiceId: number,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("receiving"))) return { ok: false, error: PERM_DENIED };
   const [inv] = await db.execute<{ id: number; invoice_no: string; status: string }>(
     sql`SELECT id, invoice_no, status FROM purchase_invoice WHERE id = ${invoiceId}`,
   );
@@ -997,7 +998,7 @@ export async function addProductToPurchase(input: {
 }): Promise<{ ok: true; model: string; qty: number } | { ok: false; error: string }> {
   if (!(await (await import("./auth")).hasPerm("receiving"))) return { ok: false, error: PERM_DENIED };
   // 🔴 매입가 쓰기는 사장님만 — 담기는 누구나, 값만 무시한다 (D-05, 2026-08-08)
-  if (input.unitCost !== undefined && !(await isOwner())) input = { ...input, unitCost: undefined };
+  if (input.unitCost !== undefined && !(await hasPerm("cost"))) input = { ...input, unitCost: undefined };
   const { invoiceId, productId } = input;
   const qty = Number(input.qty);
   if (!Number.isInteger(qty) || qty < 1) return { ok: false, error: "수량은 1 이상이어야 합니다" };
@@ -1095,7 +1096,7 @@ export async function updatePurchaseItem(input: {
 }): Promise<{ ok: boolean; error?: string }> {
   if (!(await (await import("./auth")).hasPerm("receiving"))) return { ok: false, error: PERM_DENIED };
   // 🔴 매입가 쓰기는 사장님만 — 수량 수정은 누구나 (D-05, 2026-08-08)
-  if (input.unitCost !== undefined && !(await isOwner())) input = { ...input, unitCost: undefined };
+  if (input.unitCost !== undefined && !(await hasPerm("cost"))) input = { ...input, unitCost: undefined };
   const set: Record<string, unknown> = {};
   if (input.qty !== undefined) {
     if (!Number.isInteger(input.qty) || input.qty < 1) return { ok: false, error: "수량을 확인해 주세요" };

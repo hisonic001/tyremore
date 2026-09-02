@@ -21,7 +21,7 @@ import { eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { purchaseInvoiceItem, stockItem, stockMovement } from "@/db/schema";
-import { getSession, isOwner } from "./auth";
+import { getSession, hasPerm } from "./auth";
 
 function refresh() {
   for (const p of ["/receiving/history", "/receiving", "/", "/stock"]) {
@@ -183,7 +183,7 @@ export async function updatePurchaseCost(input: {
   itemId: number;
   unitCost: number | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "매입가는 사장님 계정에서만 고칠 수 있습니다" };
+  if (!(await hasPerm("cost"))) return { ok: false, error: "매입가·마진 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   if (input.unitCost !== null && (!Number.isInteger(input.unitCost) || input.unitCost < 0)) {
     return { ok: false, error: "매입가를 확인해 주세요" };
   }

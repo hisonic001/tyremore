@@ -7,13 +7,13 @@
  *   파일 종류(통장·법인카드·홈택스 세금계산서)는 parseAnyFin 이 알아본다.
  *   실제 읽기는 fin-sheet.ts, 반영은 fin-ingest.ts.
  *
- * 🔴 돈 관리는 전부 **사장님 전용** — 액션마다 isOwner() 를 검사한다.
+ * 🔴 돈 관리 권한(finance 스위치) — 액션마다 hasPerm 을 검사한다 (2026-09-02 해금 가능).
  * ⭐ 미리보기와 확정에 **같은 파일을 두 번** 올린다 (stock-excel 교훈) — 파일이 정답.
  */
 import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { getSession, isOwner } from "@/lib/auth";
+import { getSession, hasPerm } from "@/lib/auth";
 import { getShopInfo } from "@/lib/shop";
 import { parseAnyFin } from "./fin-sheet";
 import { cancelFinUploadBatch, ingestCardDays, ingestCardDeposits, ingestCardTxns, ingestCashTxns, ingestPosTxns, ingestTaxInvoices } from "./fin-ingest";
@@ -128,7 +128,7 @@ function splitSkips(skipped: { line: number; reason: string; expected?: boolean 
 export async function previewFinUpload(
   fd: FormData,
 ): Promise<{ ok: true; preview: FinPreview } | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const t = await toBuffer(fd);
   if (!t.ok) return t;
   try {
@@ -290,7 +290,7 @@ export async function applyFinUpload(
   | { ok: true; source: string; newCount: number; dupCount: number; rowCount: number }
   | { ok: false; error: string }
 > {
-  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const t = await toBuffer(fd);
   if (!t.ok) return t;
   try {
@@ -344,7 +344,7 @@ export async function cancelFinUpload(
   uploadId: number,
   _fd?: FormData,
 ): Promise<{ ok: true; hidden: number } | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   if (!Number.isInteger(uploadId) || uploadId <= 0) return { ok: false, error: "배치 번호가 올바르지 않습니다" };
   const hidden = await cancelFinUploadBatch(uploadId);
   revalidatePath("/finance");

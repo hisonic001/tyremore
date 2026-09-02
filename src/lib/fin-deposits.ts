@@ -12,7 +12,7 @@
 import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { getSession, isOwner } from "@/lib/auth";
+import { getSession, hasPerm } from "@/lib/auth";
 import { payerKeyOf } from "./expense-cats";
 import { getDeposit, learnAlias, linkDepositToQuoteCore, linkDepositsToQuoteCore, markCardSettlementsCore } from "./deposit-core";
 import { revalidateFinance } from "./fin-revalidate";
@@ -24,7 +24,7 @@ import { depositTaxCandidates, depositSurePicks } from "./deposit-tax";
 import { confirmBankToTaxesCore, confirmTaxToBankCore } from "./recon-core";
 
 async function guard(): Promise<{ ok: true; uid: number | null } | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const s = await getSession();
   return { ok: true, uid: s?.uid ?? null };
 }

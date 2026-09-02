@@ -1,5 +1,5 @@
 import Link from "@/lib/link";
-import { isOwner } from "@/lib/auth";
+import { hasPerm } from "@/lib/auth";
 import { NO_BRAND, purchaseHistory } from "@/lib/purchase-history";
 import { PeriodFilter } from "@/components/ui/period-filter";
 import { ChipLink } from "@/components/ui/chip";
@@ -61,7 +61,7 @@ export default async function PurchaseHistoryPage({
   const active = explicit ?? "today";
 
   // 매입가 노출 여부는 **여기서** 정한다 (D-05 5번)
-  const h = await purchaseHistory(await isOwner(), {
+  const h = await purchaseHistory(await hasPerm("cost"), {
     month: active === "month" ? sp.month : active === "thisMonth" ? thisMonth : undefined,
     from: active === "today" ? today : active === "yesterday" ? yesterday : active === "range" ? sp.from : undefined,
     to: active === "today" ? today : active === "yesterday" ? yesterday : active === "range" ? sp.to : undefined,

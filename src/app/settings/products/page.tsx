@@ -2,7 +2,7 @@ import Link from "@/lib/link";
 import { asc, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { brand } from "@/db/schema";
-import { isOwner } from "@/lib/auth";
+import { hasPerm } from "@/lib/auth";
 import { catalogStats } from "@/lib/catalog";
 import { listReaders } from "@/lib/product-list";
 import { BrandToggle, BulkActions } from "./brand-controls";
@@ -89,7 +89,7 @@ export default async function ProductsPage({
  *    같은 타이어가 상품 두세 개로 갈라진 것을 대표 하나로 모은다.
  * ========================================================== */
 async function DupTab() {
-  if (!(await isOwner())) {
+  if (!(await hasPerm("master"))) {
     return (
       <p className="mt-4 rounded-xl bg-slate-100 px-4 py-3 text-sm text-slate-600">
         이력을 옮기는 기능이라 <strong>사장님만</strong> 쓸 수 있습니다.
@@ -104,7 +104,7 @@ async function DupTab() {
  * ① 목록 채우기 — 거래처가 준 상품목록 엑셀
  * ========================================================== */
 async function FillTab() {
-  if (!(await isOwner())) {
+  if (!(await hasPerm("master"))) {
     return (
       <p className="mt-4 rounded-xl bg-slate-100 px-4 py-3 text-sm text-slate-600">
         기표가를 고치는 기능이 들어 있어 <strong>사장님만</strong> 쓸 수 있습니다.

@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { setMarsReportTechAccess } from "@/lib/mars-eval";
 import { createAccount, resetPassword, savePerms, setActive, setRole, updateAccount, type UserRow } from "@/lib/user-admin";
-import { allOnPerms, PERM_KEYS, PERM_LABELS, type PermMap } from "@/lib/perm-keys";
+import { allOnPerms, BASE_KEYS, OWNER_KEYS, PERM_KEYS, PERM_LABELS, type PermMap } from "@/lib/perm-keys";
 
 /** ⭐ MARS 평가 리포트 정비사 열람 (사장님 요청 2026-08-10) — 계정 전체에 걸리는 스위치 하나 */
 export function MarsReportToggle({ allowed }: { allowed: boolean }) {
@@ -214,14 +214,14 @@ export function UserCard({ u }: { u: UserRow }) {
             <p className="text-sm font-medium text-slate-700">이 계정이 할 수 있는 일</p>
             <button
               type="button"
-              onClick={() => setPerms(allOnPerms())}
+              onClick={() => setPerms((p) => ({ ...p, ...allOnPerms() }))}
               className="text-xs text-slate-500 underline underline-offset-4"
             >
-              전부 켜기
+              매장 일 전부 켜기
             </button>
           </div>
           <ul className="mt-1.5 space-y-1">
-            {PERM_KEYS.map((k) => (
+            {BASE_KEYS.map((k) => (
               <li key={k}>
                 <label className="flex items-start gap-2">
                   <input
@@ -238,6 +238,27 @@ export function UserCard({ u }: { u: UserRow }) {
               </li>
             ))}
           </ul>
+          {/* ⭐ 사장님 영역 해금 (사장님 지시 2026-09-02 — "해금 가능한 기능들은 일단 넣어놓고") */}
+          <p className="mt-2.5 text-sm font-medium text-amber-800">사장님 영역 — 민감한 것들이라 개별로만</p>
+          <ul className="mt-1 space-y-1">
+            {OWNER_KEYS.map((k) => (
+              <li key={k}>
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={perms[k] === true}
+                    onChange={(e) => setPerms((p) => ({ ...p, [k]: e.target.checked }))}
+                    className="mt-0.5 h-4 w-4 accent-amber-600"
+                  />
+                  <span className="text-sm">
+                    {PERM_LABELS[k].label}
+                    <span className="ml-1.5 text-xs text-slate-400">{PERM_LABELS[k].hint}</span>
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-slate-400">계정 관리(이 화면)만은 항상 사장님 전용입니다 — 직원이 스스로 권한을 켜는 것을 막기 위해서입니다.</p>
           <button
             type="button"
             disabled={pending || !permsDirty}

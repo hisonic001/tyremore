@@ -1,7 +1,7 @@
 import Link from "@/lib/link";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { getSession, logout } from "@/lib/auth";
+import { getSession, logout, hasPerm } from "@/lib/auth";
 import { marsReportTechAllowed } from "@/lib/mars-eval";
 import { ChangePassword } from "./password";
 import type { ReactNode } from "react";
@@ -75,29 +75,31 @@ export default async function SettingsPage() {
 
   /* ⭐ 정비사도 MARS 평가 리포트를 볼 수 있게 켜 놨으면 여기로 들어간다 (2026-08-10) */
   const techMarsLink = session?.role === "tech" && (await marsReportTechAllowed());
+  /* ⭐ 권한 스위치 (2026-09-02) — 메뉴는 그 계정이 열 수 있는 것만 보인다 */
+  const can = {
+    finance: await hasPerm("finance"),
+    reports: await hasPerm("reports"),
+    stock: await hasPerm("stock"),
+    receivable: await hasPerm("receivable_view"),
+    master: await hasPerm("master"),
+  };
 
   const items = [
-    /* ⭐ 매출 리포트는 사장님 계정에만 보인다 (2026-08-06) — 화면 자체도 owner 만 연다 */
+    ...(can.reports
+      ? [{ href: "/reports", title: "매출·재고 리포트", desc: "월별 매출 · 결제수단 · 재고 · MARS 입력 평가" }]
+      : []),
+    /* ⭐ 계정 관리 — 유일하게 항상 사장님 전용 (직원이 스스로 권한을 켜는 구멍 방지, 2026-09-02) */
     ...(session?.role === "owner"
       ? [
           {
-            href: "/reports",
-            title: "매출·재고 리포트",
-            desc: "월별 매출 · 결제수단 · 재고 · MARS 입력 평가 (사장님 전용)",
-          },
-          /* ⭐ 계정 관리 (사장님 요청 2026-08-08) — 계정 만들기·권한·비밀번호 재설정 */
-          {
             href: "/settings/users",
             title: "계정 관리",
-            desc: "계정 만들기 · 사장님/정비사 권한 · 비밀번호 재설정 (사장님 전용)",
-          },
-          /* ⭐ 돈 관리 (ERP 1단계, 사장님 승인 2026-08-24) — 통장·법인카드 업로드와 자금 흐름 */
-          {
-            href: "/finance",
-            title: "돈 관리",
-            desc: "통장·법인카드 내역 올리기 · 월 자금 흐름 (사장님 전용)",
+            desc: "계정 만들기 · 할 수 있는 일 스위치 · 아이디·비밀번호 (항상 사장님 전용)",
           },
         ]
+      : []),
+    ...(can.finance
+      ? [{ href: "/finance", title: "돈 관리", desc: "통장·법인카드 내역 올리기 · 월 자금 흐름" }]
       : []),
     ...(techMarsLink
       ? [
@@ -108,25 +110,23 @@ export default async function SettingsPage() {
           },
         ]
       : []),
-    {
-      href: "/settings/products",
-      title: "상품",
-      desc: "거래처 목록으로 채우기 · 새 상품 등록 · 안 받는 것 숨기기",
-    },
+    ...(can.master
+      ? [{ href: "/settings/products", title: "상품", desc: "거래처 목록으로 채우기 · 새 상품 등록 · 안 받는 것 숨기기" }]
+      : []),
     /* ⭐ 공임·정비 목록 (사장님 요청 2026-08-31) — 판매의 「공임·정비 추가」 검색이 쓰는 목록 */
-    {
-      href: "/settings/services",
-      title: "공임·정비",
-      desc: "판매에서 고르는 공임 목록 — 이름·금액 고치기 · 새로 만들기 · 숨기기",
-    },
+    ...(can.master
+      ? [{ href: "/settings/services", title: "공임·정비", desc: "판매에서 고르는 공임 목록 — 이름·금액 고치기 · 새로 만들기 · 숨기기" }]
+      : []),
     /*
      * ⭐ 재고는 홈 메뉴에서 여기로 내려왔다 (사장님 지시 2026-08-06) —
      *    홈 자리는 정비 내역이 가져갔다. 재고 수량은 어차피 검색 카드에 보인다.
      */
-    { href: "/stock", title: "재고", desc: "창고에서 세는 화면 · 재고 목록 · DOT·수량 맞추기" },
-    { href: "/settings/suppliers", title: "거래처", desc: "추가 · 이름 고치기 · 합치기 · 숨기기" },
+    ...(can.stock ? [{ href: "/stock", title: "재고", desc: "창고에서 세는 화면 · 재고 목록 · DOT·수량 맞추기" }] : []),
+    ...(can.master ? [{ href: "/settings/suppliers", title: "거래처", desc: "추가 · 이름 고치기 · 합치기 · 숨기기" }] : []),
     // ⭐ 외상 장부 (2026-08-17) — 정비 내역 위쪽에도 길이 있지만 설정에서도 찾을 수 있게
-    { href: "/receivables", title: "외상 장부", desc: "거래처·손님별로 못 받은 돈 · 한꺼번에 털기" },
+    ...(can.receivable
+      ? [{ href: "/receivables", title: "외상 장부", desc: "거래처·손님별로 못 받은 돈 · 한꺼번에 털기" }]
+      : []),
     {
       href: "/settings/shop",
       title: "가게 정보",

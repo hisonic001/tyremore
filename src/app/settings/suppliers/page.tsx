@@ -1,6 +1,6 @@
 import Link from "@/lib/link";
 import { listSuppliers, supplierExtras } from "@/lib/supplier";
-import { isOwner } from "@/lib/auth";
+import { hasPerm } from "@/lib/auth";
 import { bankPayerOptions } from "@/lib/payables-view";
 import { kstToday } from "@/lib/ym";
 import { SupplierManager } from "./client";
@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 export default async function SuppliersPage() {
   const rows = await listSuppliers();
   const active = rows.filter((r) => r.isActive).length;
-  const owner = await isOwner();
+  const owner = await hasPerm("finance"); // 한 장(돈·별명·차량) — 돈 관리 스위치
   // 연동 묶음(돈·별명·차고·사업자번호 제안·규칙) — 함수 안에서 한 번 더 owner 를 확인한다
   const extras = owner ? await supplierExtras() : null;
   // 별명 추가 후보 — 이번 달 통장 출금 적요 (payables 와 같은 공급원)

@@ -121,6 +121,7 @@ export async function addSupplier(input: {
   phone?: string;
   memo?: string;
 }): Promise<Result> {
+  if (!(await (await import("./auth")).hasPerm("master"))) return { ok: false, error: "상품·가격·거래처 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const err = checkName(input.name);
   if (err) return { ok: false, error: err };
   const name = input.name.trim();
@@ -164,6 +165,7 @@ export async function updateSupplier(input: {
   /** 이름이 이미 있는 거래처와 겹칠 때, 합쳐도 된다고 확인했는가 */
   confirmMerge?: boolean;
 }): Promise<{ ok: true; merged?: boolean } | { ok: false; error: string; needsMerge?: string }> {
+  if (!(await (await import("./auth")).hasPerm("master"))) return { ok: false, error: "상품·가격·거래처 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const err = checkName(input.name);
   if (err) return { ok: false, error: err };
   const name = input.name.trim();
@@ -260,6 +262,7 @@ export async function updateSupplier(input: {
 
 /** 거래를 끊었을 때 — 목록에서 감춘다. 매입 내역은 그대로 남는다 */
 export async function setSupplierActive(id: number, active: boolean): Promise<Result> {
+  if (!(await (await import("./auth")).hasPerm("master"))) return { ok: false, error: "상품·가격·거래처 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   await db.update(supplier).set({ isActive: active, updatedAt: new Date() }).where(eq(supplier.id, id));
   refresh();
   return { ok: true };
@@ -272,6 +275,7 @@ export async function setSupplierActive(id: number, active: boolean): Promise<Re
  *    알 수 없게 된다. 대신 숨기기를 권한다.
  */
 export async function deleteSupplier(id: number): Promise<Result> {
+  if (!(await (await import("./auth")).hasPerm("master"))) return { ok: false, error: "상품·가격·거래처 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const [s] = await db.select().from(supplier).where(eq(supplier.id, id)).limit(1);
   if (!s) return { ok: false, error: "거래처를 찾지 못했습니다" };
 
@@ -325,8 +329,8 @@ export interface SupplierExtras {
 }
 
 export async function supplierExtras(): Promise<SupplierExtras | null> {
-  const { isOwner } = await import("./auth");
-  if (!(await isOwner())) return null;
+  const { hasPerm } = await import("./auth");
+  if (!(await hasPerm("finance"))) return null;
   const { partyListData } = await import("./party-ledger");
   const { normName, samePartyName } = await import("./recon-data");
 
@@ -402,8 +406,8 @@ export async function supplierExtras(): Promise<SupplierExtras | null> {
 export async function recentPurchases(
   name: string,
 ): Promise<{ ok: true; rows: { id: number; d: string; total: number | null; status: string; items: number }[] } | { ok: false; error: string }> {
-  const { isOwner } = await import("./auth");
-  if (!(await isOwner())) return { ok: false, error: "사장님 계정 전용입니다" };
+  const { hasPerm } = await import("./auth");
+  if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const rows = await db.execute<{ id: number; d: string; total: number | null; status: string; items: number }>(sql`
     SELECT i.id, to_char(i.issued_at, 'YYYY-MM-DD') d, i.total, i.status,
            (SELECT count(*)::int FROM purchase_invoice_item x WHERE x.invoice_id = i.id) items

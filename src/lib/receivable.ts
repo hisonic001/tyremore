@@ -16,7 +16,8 @@ import { eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { quote, receivablePayment } from "@/db/schema";
-import { isOwner } from "./auth";
+import { hasPerm } from "./auth";
+import { PERM_DENIED } from "./perm-keys";
 import { SPLITTABLE } from "./payments";
 import { planSettlement } from "./receivable-plan";
 
@@ -43,7 +44,12 @@ const METHODS: readonly string[] = SPLITTABLE;
  *
  * 🔴 되돌리려면 이 한 줄을 getSession() 으로 바꾸면 된다 — 세 곳이 이걸 같이 쓴다.
  */
-const OWNER_ONLY = { ok: false as const, error: "돈 관리는 사장님 계정 전용입니다" };
+/**
+ * 🔴 2026-09-02 사장님 지시: "외상보기와 외상 수금을 같이 묶어서" —
+ *    사장님 전용(2회차 수리 E1)에서 **「외상」 모듈 권한**으로 완화한다.
+ *    스위치를 켠 직원은 보기와 수금을 함께 한다 (owner 는 어차피 통과).
+ */
+const OWNER_ONLY = { ok: false as const, error: PERM_DENIED };
 
 export interface CollectionRow {
   id: number;
@@ -61,7 +67,7 @@ export async function addCollection(input: {
   paidOn?: string | null;
   memo?: string | null;
 }): Promise<{ ok: true; remain: number } | { ok: false; error: string }> {
-  if (!(await isOwner())) return OWNER_ONLY; // 2회차 수리 E1
+  if (!(await hasPerm("receivable_view"))) return OWNER_ONLY; // 외상 모듈 권한 (2026-09-02, E1 완화)
   const amount = Math.round(Number(input.amount));
   if (!Number.isFinite(amount) || amount <= 0) return { ok: false, error: "금액이 올바르지 않습니다" };
   if (!METHODS.includes(input.method)) return { ok: false, error: "수단이 올바르지 않습니다" };
@@ -122,7 +128,7 @@ export async function settleReceivables(input: {
   | { ok: true; settled: number; applied: number; partialQuoteNo: string | null }
   | { ok: false; error: string }
 > {
-  if (!(await isOwner())) return OWNER_ONLY; // 2회차 수리 E1
+  if (!(await hasPerm("receivable_view"))) return OWNER_ONLY; // 외상 모듈 권한 (2026-09-02, E1 완화)
   if (!METHODS.includes(input.method)) return { ok: false, error: "수단이 올바르지 않습니다" };
   const paidOn = input.paidOn?.trim() || null;
   if (paidOn && !/^\d{4}-\d{2}-\d{2}$/.test(paidOn)) {
@@ -213,7 +219,7 @@ export async function settleReceivables(input: {
  *       (2회차 보고 「눌렀는데 0건 처리하고 조용히 끝나는 것」)
  */
 export async function removeCollection(id: number): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (!(await isOwner())) return OWNER_ONLY; // 2회차 수리 E1
+  if (!(await hasPerm("receivable_view"))) return OWNER_ONLY; // 외상 모듈 권한 (2026-09-02, E1 완화)
   const gone = await db.delete(receivablePayment).where(eq(receivablePayment.id, id)).returning({ id: receivablePayment.id });
   if (gone.length === 0) return { ok: false, error: "그 수금 기록이 이미 없습니다 — 새로 고쳐 보세요" };
   refresh();

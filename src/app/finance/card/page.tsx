@@ -2,7 +2,7 @@ import Link from "@/lib/link";
 import { redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { getSession } from "@/lib/auth";
+import { getSession, hasPerm } from "@/lib/auth";
 import { pickYm, ymAdd } from "@/lib/ym";
 import { CARD_SETTLE_PATTERN_SQL } from "@/lib/expense-cats";
 import { FinShell } from "@/components/fin/shell";
@@ -35,7 +35,7 @@ export default async function FinanceCardPage({
 }) {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (session.role !== "owner") redirect("/");
+  if (!(await hasPerm("finance"))) redirect("/"); // 권한 스위치 (2026-09-02)
 
   const sp = await searchParams;
   const ym = pickYm(sp.ym);

@@ -11,7 +11,7 @@
 import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { getSession, isOwner } from "@/lib/auth";
+import { getSession, hasPerm } from "@/lib/auth";
 import { cashUsedSql, normName } from "./recon-data";
 import { planSettlement } from "./receivable-plan";
 import { exactPlan } from "./payables-plan";
@@ -30,7 +30,7 @@ export async function payToSupplier(input: {
   | { ok: true; applied: number; settled: number; leftover: number }
   | { ok: false; error: string }
 > {
-  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const session = await getSession();
   const supplier = input.supplier?.trim();
   if (!supplier) return { ok: false, error: "거래처를 골라 주세요" };
@@ -86,7 +86,7 @@ export async function payToSupplier(input: {
 export async function removePurchasePayment(
   paymentId: number,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const [pp] = await db.execute<{ id: number; invoice_id: number; amount: number; memo: string | null }>(sql`
     SELECT id, invoice_id, amount, memo FROM purchase_payment WHERE id = ${paymentId}
   `);
@@ -120,7 +120,7 @@ export async function removePurchasePayment(
 export async function undoPayFromWithdrawal(
   cashTxnId: number,
 ): Promise<{ ok: true; removed: number } | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const marks = await db.execute<{ id: number; ref_id: number; amount: number }>(sql`
     SELECT id, ref_id, amount FROM recon_match
     WHERE kind = '매입지급' AND src_table = 'cash_txn' AND src_id = ${cashTxnId} AND status = '확정'
@@ -158,7 +158,7 @@ export async function autoLinkExact(input: {
   cashTxnId: number;
   supplier: string;
 }): Promise<{ ok: true; n: number; amount: number } | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const session = await getSession();
   const supplier = input.supplier?.trim();
   if (!supplier) return { ok: false, error: "거래처가 없습니다" };
@@ -243,7 +243,7 @@ export async function addSupplierAlias(
   supplier: string,
   raw: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const name = raw.trim();
   const sup = supplier.trim();
   if (!sup) return { ok: false, error: "거래처가 없습니다" };
@@ -263,7 +263,7 @@ export async function removeSupplierAlias(
   supplier: string,
   aliasKey: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const done = await db.execute<{ alias_key: string }>(sql`
     DELETE FROM party_alias WHERE alias_key = ${aliasKey} AND party_key = ${"S:" + supplier.trim()}
     RETURNING alias_key
@@ -284,7 +284,7 @@ export async function skipWithdrawal(
   cashTxnId: number,
   restore = false,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const [c] = await db.execute<{ id: number; st: string }>(sql`
     SELECT id, recon_status st FROM cash_txn
     WHERE id = ${cashTxnId} AND source = '통장' AND is_active AND out_amount > 0 AND category = '매입대금'
@@ -322,7 +322,7 @@ export async function payFromWithdrawal(input: {
   | { ok: true; applied: number; settled: number; leftover: number }
   | { ok: false; error: string }
 > {
-  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const session = await getSession();
   const supplier = input.supplier?.trim();
   if (!supplier) return { ok: false, error: "거래처를 골라 주세요" };

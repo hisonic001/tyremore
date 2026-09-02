@@ -141,8 +141,9 @@ export async function moveVehicleToSupplier(
   vehicleId: number,
   supplier: string,
 ): Promise<{ ok: true; plateNo: string; from: string } | { ok: false; error: string }> {
-  const { isOwner } = await import("./auth");
-  if (!(await isOwner())) return { ok: false, error: "차량 소유 이전은 사장님 계정 전용입니다" };
+  /* 사장님 검증 지적(2026-09-02): 「고객·차량 수정」 권한을 준 직원도 돼야 한다 —
+     owner 전용에서 customer 모듈 권한으로 완화 (owner 는 어차피 통과) */
+  if (!(await (await import("./auth")).hasPerm("customer"))) return { ok: false, error: PERM_DENIED };
   const name = supplier.trim();
   if (!name) return { ok: false, error: "거래처를 골라 주세요" };
   const [sup] = await db.execute<{ id: number }>(sql`

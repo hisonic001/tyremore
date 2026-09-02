@@ -11,7 +11,7 @@
 import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { isOwner } from "@/lib/auth";
+import { hasPerm } from "@/lib/auth";
 import { EXPENSE_CATS, PAYER_KEY_SQL, payerKeyOf } from "./expense-cats";
 
 /**
@@ -29,7 +29,7 @@ import { EXPENSE_CATS, PAYER_KEY_SQL, payerKeyOf } from "./expense-cats";
 export async function previewUnset(
   cashTxnId: number,
 ): Promise<{ ok: true; payer: string; category: string; n: number; sum: number } | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const [row] = await db.execute<{ source: string; description: string; category: string | null }>(sql`
     SELECT source, description, category FROM cash_txn WHERE id = ${cashTxnId} AND is_active
   `);
@@ -50,7 +50,7 @@ export async function setExpenseCategory(
   /** 해제할 때만 본다 — 'one' 이 줄만 · 'all' 같은 상대·같은 분류 전부 (2회차 수리 A5) */
   opts?: { scope?: "one" | "all" },
 ): Promise<{ ok: true; applied: number; payer: string } | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "돈 관리는 사장님 계정 전용입니다" };
+  if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   if (category !== null && !(EXPENSE_CATS as readonly string[]).includes(category)) {
     return { ok: false, error: "분류가 올바르지 않습니다" };
   }

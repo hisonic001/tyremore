@@ -1,4 +1,4 @@
-import { isOwner } from "@/lib/auth";
+import {hasPerm } from "@/lib/auth";
 import { buildInvoiceWorkbook } from "@/lib/settlement-sheet";
 import { db } from "@/db";
 import { sql } from "drizzle-orm";
@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
  * 내려받는 순간 회차에 청구액 스냅샷을 찍는다 — 「원래 얼마 청구했나」의 정본.
  */
 export async function GET(req: Request) {
-  if (!(await isOwner())) return new Response("사장님 계정 전용입니다", { status: 403 });
+  if (!(await hasPerm("finance"))) return new Response("사장님 계정 전용입니다", { status: 403 });
   const url = new URL(req.url);
   const supplier = (url.searchParams.get("supplier") ?? "").trim();
   const ym = (url.searchParams.get("ym") ?? "").trim();

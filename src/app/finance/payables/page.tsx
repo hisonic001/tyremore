@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/auth";
+import { getSession, hasPerm } from "@/lib/auth";
 import { FinShell } from "@/components/fin/shell";
 import { payLinkData, payablesData } from "@/lib/recon-data";
 import { bankPayerOptions, payablesCardInfo } from "@/lib/payables-view";
@@ -22,7 +22,7 @@ export default async function FinancePayablesPage({
 }) {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (session.role !== "owner") redirect("/");
+  if (!(await hasPerm("finance"))) redirect("/"); // 권한 스위치 (2026-09-02)
 
   // 🔴 2025 감사 F18: 이번 달 고정 → 보는 달 (MonthNav) — 2025 달의 출금도 지급 잡기에 나온다
   const sp = await searchParams;

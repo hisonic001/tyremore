@@ -32,7 +32,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   const mp = await myPerms().catch(() => null);
   const hide: string[] = [];
   if (mp && mp.role !== "owner") {
-    hide.push("/finance");
+    if (mp.perms.finance !== true) hide.push("/finance"); // 돈 관리 스위치 (2026-09-02 해금 가능)
     if (mp.perms.sale !== true) hide.push("/sale");
   }
   return (

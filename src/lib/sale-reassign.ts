@@ -21,7 +21,7 @@ import { eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { quote } from "@/db/schema";
-import { isOwner } from "./auth";
+import { hasPerm } from "./auth";
 
 function refresh() {
   for (const p of ["/sales", "/", "/receivables"]) {
@@ -52,7 +52,7 @@ export async function reassignSale(input: {
   | { ok: true; from: string; to: string; warning: string | null }
   | { ok: false; error: string; needMarsConfirm?: boolean; needMoneyConfirm?: boolean }
 > {
-  if (!(await isOwner())) {
+  if (!(await hasPerm("reassign"))) {
     return { ok: false, error: "손님·거래처 바꾸기는 사장님 계정에서만 됩니다" };
   }
 

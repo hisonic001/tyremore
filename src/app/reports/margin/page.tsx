@@ -2,7 +2,7 @@ import Link from "@/lib/link";
 import { redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { getSession } from "@/lib/auth";
+import { getSession, hasPerm } from "@/lib/auth";
 import { kstToday, ymAdd } from "@/lib/ym";
 
 export const dynamic = "force-dynamic";
@@ -27,7 +27,7 @@ export default async function MarginReportPage({
 }) {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (session.role !== "owner") redirect("/");
+  if (!(await hasPerm("reports"))) redirect("/"); // 권한 스위치 (2026-09-02)
 
   const thisYm = kstToday().slice(0, 7);
   const sp = await searchParams;

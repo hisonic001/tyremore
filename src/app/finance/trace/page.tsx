@@ -1,4 +1,4 @@
-import { isOwner } from "@/lib/auth";
+import {hasPerm } from "@/lib/auth";
 import { traceMoney, type TraceRow } from "@/lib/money-trace";
 import { FinShell } from "@/components/fin/shell";
 import { Notice } from "@/components/ui/notice";
@@ -18,7 +18,7 @@ const won = (n: number) => n.toLocaleString("ko-KR");
 export default async function TracePage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
   const sp = await searchParams;
   const q = (sp.q ?? "").trim();
-  const owner = await isOwner();
+  const owner = await hasPerm("finance");
   const r = owner && q ? await traceMoney(q) : null;
 
   return (

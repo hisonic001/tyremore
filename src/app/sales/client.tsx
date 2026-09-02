@@ -26,12 +26,18 @@ export function SaleCard({
   sale: s,
   select,
   owner = false,
+  canCollect = false,
+  canReassign = false,
 }: {
   sale: SaleRow;
   /** ⭐ MARS 올리기 선택 모드 (사장님 지시 2026-08-09) — 있으면 카드가 체크박스가 된다 */
   select?: { eligible: boolean; checked: boolean; toggle: () => void; reason?: string | null };
-  /** ⭐ 손님·거래처 바꾸기는 사장님만 (2026-08-17) — 돈의 주인이 바뀌는 일이다 */
+  /** ⭐ 매입가·마진 표시 (2026-09-02 — cost 스위치. 전엔 owner 하나가 세 용도를 겸직) */
   owner?: boolean;
+  /** 외상 수금 UI (receivable_view 스위치) */
+  canCollect?: boolean;
+  /** 손님·거래처 바꾸기 (reassign 스위치) */
+  canReassign?: boolean;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -365,11 +371,11 @@ export function SaleCard({
 
           {/* ⭐ 외상 수금 (사장님 선택 2026-08-11) */}
           {s.paymentMethod === "외상" && !canceled && (
-            <CollectionPanel quoteId={s.quoteId} total={s.totalAmount} collections={s.collections} owner={owner} />
+            <CollectionPanel quoteId={s.quoteId} total={s.totalAmount} collections={s.collections} owner={canCollect} />
           )}
 
           {/* ⭐ 손님·거래처 바꾸기 (사장님 지시 2026-08-17) */}
-          {owner && reassigning && !canceled && (
+          {canReassign && reassigning && !canceled && (
             <ReassignPanel
               sale={s}
               onDone={(m) => {
@@ -543,7 +549,7 @@ export function SaleCard({
                     날짜·결제 고치기
                   </button>
                   {/* ⭐ 손님·거래처 바꾸기 (사장님 지시 2026-08-17) — 사장님 계정만 */}
-                  {owner && (
+                  {canReassign && (
                     <button
                       type="button"
                       onClick={() => setReassigning((v) => !v)}

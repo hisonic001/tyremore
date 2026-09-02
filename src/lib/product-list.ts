@@ -25,7 +25,7 @@
  */
 import { revalidatePath } from "next/cache";
 import * as XLSX from "xlsx";
-import { isOwner } from "./auth";
+import { hasPerm } from "./auth";
 import { applyCatalog, looksLikeCatalog, planCatalog, type ApplyResult, type CatalogPlan } from "./kumho-sheet";
 import { applyMaster, looksLikeMaster, planMaster } from "./kumho-master";
 import {
@@ -167,7 +167,7 @@ async function toRows(fd: FormData): Promise<Taken> {
 export async function previewProductList(
   fd: FormData,
 ): Promise<{ ok: true; plan: CatalogPlan } | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "사장님만 쓸 수 있습니다" };
+  if (!(await hasPerm("master"))) return { ok: false, error: "사장님만 쓸 수 있습니다" };
   const t = await toRows(fd);
   if (!t.ok) return t;
   try {
@@ -182,7 +182,7 @@ export async function previewProductList(
 export async function applyProductList(
   fd: FormData,
 ): Promise<(ApplyResult & { ok: true }) | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "사장님만 쓸 수 있습니다" };
+  if (!(await hasPerm("master"))) return { ok: false, error: "사장님만 쓸 수 있습니다" };
   const t = await toRows(fd);
   if (!t.ok) return t;
   try {

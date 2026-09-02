@@ -2,7 +2,7 @@ import Link from "@/lib/link";
 import { redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { getSession } from "@/lib/auth";
+import { getSession, hasPerm } from "@/lib/auth";
 import { ColumnChart, StackedBar, fmtShort, fmtWon } from "../charts";
 import type { Bar, Segment } from "../charts";
 
@@ -33,7 +33,7 @@ const NAME = sql`COALESCE(NULLIF(p.display_name, ''), p.pattern, p.raw_name)`;
 export default async function StockReportPage() {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (session.role !== "owner") redirect("/");
+  if (!(await hasPerm("reports"))) redirect("/"); // 권한 스위치 (2026-09-02)
 
   /**
    * 🔴 쿼리는 **하나씩 차례로** 실행한다 (2026-08-07 — 이 페이지만 Vercel 에서
