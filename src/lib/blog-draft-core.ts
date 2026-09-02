@@ -52,8 +52,15 @@ export function factsText(f: DraftFacts): string {
   const tires = f.tires.map((t) => `${t.name}${t.spec ? ` ${t.spec}` : ""} ${t.qty}본`).join(", ");
   return [
     `차량: ${car}${f.mileage ? `, 주행거리 ${f.mileage.toLocaleString("ko-KR")}km` : ""}`,
-    `시공: ${tires}`,
-    f.services.length ? `함께 한 작업: ${f.services.join(", ")}` : null,
+    /**
+     * 🔴 타이어가 없을 수 있다 (2026-09-02) — 얼라인먼트·배터리 같은 경정비 건이다.
+     *    그럴 땐 빈 줄을 내보내지 말고 사장님 후기·사진으로 쓰라고 알려 준다.
+     */
+    tires ? `시공: ${tires}` : null,
+    f.services.length ? `${tires ? "함께 한 작업" : "작업"}: ${f.services.join(", ")}` : null,
+    !tires && f.services.length === 0
+      ? "작업 내역: 앱에 품목이 안 남아 있습니다 — 사장님이 적으신 후기와 사진으로 쓰세요"
+      : null,
     `시기: ${f.season}`,
     `매장: 타이어모어 속초점 (미쉐린 가맹, 강원 속초)`,
   ]

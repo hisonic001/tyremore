@@ -118,11 +118,24 @@ export async function factsForDay(day: string, opts?: { quoteId?: number }): Pro
       const spec =
         r.width && rim ? `${r.width}${r.aspect && Number(r.aspect) !== 80 ? `/${r.aspect}` : ""}R${rim}` : null;
       f.tires.push({ name: r.description, spec, qty: Number(r.qty ?? 1) });
-    } else if (r.line_type === "service") {
-      f.services.push(r.description);
+    } else if (r.line_type === "service" || r.line_type === "custom") {
+      /**
+       * `custom` 도 받는다 (2026-09-02) — 경정비 이름이 여기 들어 있는 경우가 많다.
+       * 🔴 단 MARS 이관 자리표시자는 뺀다. 「품목 내역 없음」을 글에 옮기면 안 된다.
+       */
+      if (!/품목 내역 없음|내역 없음/.test(r.description)) f.services.push(r.description);
     }
   }
-  return [...map.values()].filter((f) => f.tires.length > 0);
+  /**
+   * 🔴 타이어가 있어야 한다는 조건은 **자동으로 고를 때만** 쓴다 (2026-09-02).
+   *
+   * 사장님이 사진 폴더나 판매를 **직접 고르신 경우**(quoteId 지정)에는 걸러내지 않는다 —
+   * 얼라인먼트·배터리·TPMS 같은 경정비 건은 타이어 품목이 없는데, 그게 블로그
+   * 「경정비 서비스」 카테고리이고 「속초 배터리 교체」처럼 **전화로 가장 빨리 이어지는** 글감이다.
+   * (실제로 쏘렌토 얼라인먼트 건이 이 조건에 걸려 통째로 빠져 있었다)
+   */
+  const all = [...map.values()];
+  return opts?.quoteId ? all : all.filter((f) => f.tires.length > 0);
 }
 
 /**
@@ -213,7 +226,9 @@ export async function recentSalesForBlog(days = 30, limit = 40): Promise<BlogCan
     FROM quote q
     LEFT JOIN vehicle       v  ON v.id = q.vehicle_id
     LEFT JOIN vehicle_maker mk ON mk.code = v.maker_code
-    JOIN quote_item qi ON qi.quote_id = q.id AND qi.line_type = 'tire'
+    -- 🔴 타이어만이 아니다 (2026-09-02) — 얼라인먼트·배터리 같은 경정비도 글감이다.
+    --    블로그 「경정비 서비스」 카테고리가 전화로 가장 빨리 이어진다.
+    JOIN quote_item qi ON qi.quote_id = q.id AND qi.line_type IN ('tire', 'service')
     WHERE q.status = '성사'
       AND q.supplier_name IS NULL
       AND COALESCE(q.payment_method, '') <> '서비스'
@@ -278,6 +293,8 @@ interface DraftJson {
   titles: string[];
   body: string;
   tags: string[];
+  /** ⭐ 사진이 있을 때만 (C단계) — 어느 파일을 몇 번 자리에 어떤 설명으로 넣을지 */
+  photos?: { file: string; slot: string; caption: string }[];
 }
 
 const SCHEMA = {
@@ -288,6 +305,29 @@ const SCHEMA = {
     titles: { type: "array", minItems: 3, maxItems: 3, items: { type: "string" } },
     body: { type: "string" },
     tags: { type: "array", minItems: 10, maxItems: 14, items: { type: "string" } },
+  },
+};
+
+/** 사진이 있을 때 쓰는 스키마 — 사진 배치 계획을 같이 받는다 */
+const SCHEMA_WITH_PHOTOS = {
+  type: "object",
+  additionalProperties: false,
+  required: ["titles", "body", "tags", "photos"],
+  properties: {
+    ...SCHEMA.properties,
+    photos: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["file", "slot", "caption"],
+        properties: {
+          file: { type: "string" },
+          slot: { type: "string" },
+          caption: { type: "string" },
+        },
+      },
+    },
   },
 };
 
@@ -310,6 +350,10 @@ export async function generateDraft(
     onLog?: (line: string) => void;
     /** ⭐ 사장님이 채운 작업 후기 (B단계) — 이게 있으면 글이 완전히 달라진다 */
     form?: BlogForm;
+    /** ⭐ 사진 (C단계) — 임시 폴더와 그 안의 파일 목록. 원본 폴더가 아니다 */
+    photos?: { dir: string; files: { photoId: number; tempName: string }[] };
+    /** 사진 폴더 id — 정렬 복사본을 만들 곳 */
+    folderId?: number;
   },
 ): Promise<GenerateResult | { ok: false; error: string }> {
   const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(blogDraft);
@@ -331,6 +375,10 @@ export async function generateDraft(
   const note = opts?.form ? formText(opts.form) : "";
   if (note) opts?.onLog?.("사장님이 적으신 후기를 함께 넣습니다");
 
+  /** ⭐ 사진 (C단계) — 임시 폴더의 `p00.jpg` 들. 원본 경로는 절대 안 나간다 */
+  const photoFiles = opts?.photos?.files ?? [];
+  if (photoFiles.length) opts?.onLog?.(`사진 ${photoFiles.length}장을 보여 줍니다`);
+
   const baseUser = [
     "아래 내용으로 블로그 글 초안을 써 주세요.",
     "",
@@ -351,6 +399,22 @@ export async function generateDraft(
           "🔴 주어진 사실이 이게 전부입니다. 손님이 무슨 말을 했는지, 무엇을 발견했는지는",
           "   적혀 있지 않으니 지어내지 마세요. 없으면 그 대목은 통째로 빼고 짧게 쓰는 편이 낫습니다.",
         ]),
+    ...(photoFiles.length
+      ? [
+          "",
+          "[사진]",
+          `사진 ${photoFiles.length}장이 준비돼 있습니다: ${photoFiles.map((p) => p.tempName).join(", ")}`,
+          "🔴 Read 도구로 **이 사진들을 전부 먼저 보세요.** 보고 나서 글을 쓰세요.",
+          "   ① 각 사진이 무엇인지 파악하고,",
+          "   ② 글의 흐름에 맞게 순서를 정해 `photos` 에 담으세요.",
+          "      slot 은 A-00 부터 (A=입고·진단, B=작업, C=출고·확인), caption 은 짧은 한국어 설명.",
+          "   ③ 본문 안에 그 자리를 `[사진 A-00 - 계기판 주행거리]` 처럼 **그대로 써 넣으세요.**",
+          "      사진 자리는 문단과 문단 사이에 한 줄로 둡니다.",
+          "   ④ 사진에서 본 것(마모 모양·수치 화면·제품 라벨)을 글에 쓰세요. 이게 글을 살립니다.",
+          "🔴 사진에 **번호판 글자가 읽히는 것**이 있으면 그 사진은 photos 에서 빼고,",
+          "   caption 에 「번호판 보임」이라고 적어 알려 주세요. 본문에는 절대 옮겨 적지 마세요.",
+        ]
+      : []),
     "",
     `글을 여는 각도: ${structure}`,
     titles.length ? `최근에 올린 글 제목(겹치지 않게): ${titles.slice(0, 8).join(" / ")}` : null,
@@ -368,9 +432,10 @@ export async function generateDraft(
       out = await generateJson<DraftJson>({
         system,
         user: feedback ? `${baseUser}\n\n앞서 쓴 글에서 이런 문제가 있었습니다. 고쳐 주세요:\n${feedback}` : baseUser,
-        schema: SCHEMA,
+        schema: photoFiles.length ? SCHEMA_WITH_PHOTOS : SCHEMA,
         effort: "medium",
         onLog: opts?.onLog,
+        imageDir: opts?.photos?.dir,
       });
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -399,6 +464,27 @@ export async function generateDraft(
     if (!note && !data.body.includes(OWNER_SLOT)) {
       data.body = `${data.body.trimEnd()}\n\n${OWNER_SLOT}`;
     }
+
+    /**
+     * ⭐ 사진 계획 (C단계) — 모델이 준 `p03.jpg` 를 우리 photoId 로 되돌린다.
+     * 🔴 개수를 대조한다. 사진을 줬는데 모델이 못 봤으면(계획이 비었으면) **조용히 넘어가지 않는다**
+     *    — 가장 나쁜 실패는 사진 없는 글이 그냥 나오는 것이다.
+     */
+    let plan: { photoId: number; slot: string; caption: string }[] = [];
+    if (photoFiles.length) {
+      const byTemp = new Map(photoFiles.map((p) => [p.tempName, p.photoId]));
+      plan = (data.photos ?? [])
+        .map((p) => ({ photoId: byTemp.get(p.file) ?? 0, slot: p.slot, caption: p.caption }))
+        .filter((p) => p.photoId > 0);
+      if (plan.length === 0) {
+        opts?.onLog?.("다시 씁니다 — 사진을 줬는데 배치 계획이 비었습니다");
+        lastErr = "사진을 보고도 배치를 안 정했습니다";
+        feedback = `준비된 사진(${photoFiles.map((p) => p.tempName).join(", ")})을 Read 로 전부 읽고, photos 에 배치를 반드시 담으세요.`;
+        continue;
+      }
+      opts?.onLog?.(`사진 ${plan.length}장의 자리를 잡았습니다 (준 것 ${photoFiles.length}장)`);
+    }
+
     const [row] = await db
       .insert(blogDraft)
       .values({
@@ -409,10 +495,19 @@ export async function generateDraft(
         facts,
         warn,
         form: opts?.form ? (opts.form as unknown as Record<string, unknown>) : null,
-        source: note ? "폼" : "auto",
+        source: photoFiles.length ? "사진" : note ? "폼" : "auto",
+        folderId: opts?.folderId ?? null,
+        photoPlan: plan.length ? plan : null,
         model,
       })
       .returning({ id: blogDraft.id });
+
+    /** 사장님이 벤츠 GLS 폴더에 손수 하시던 방식 그대로 — `_블로그\A-00 ….jpg` */
+    if (plan.length && opts?.folderId) {
+      const { makeOrderedCopies } = await import("./blog-photo-worker");
+      await makeOrderedCopies(opts.folderId, plan, opts.onLog).catch(() => null);
+    }
+
     return { ok: true, id: row.id, titles: data.titles, warn };
   }
   return { ok: false, error: lastErr || "초안을 만들지 못했습니다" };

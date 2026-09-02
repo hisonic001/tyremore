@@ -69,7 +69,7 @@ export async function blogAgentStatus(): Promise<AgentStatus> {
  * 대리인이 꺼져 있으면 아예 안 받는다 (「대기」로 굳어 사장님이 영문을 모르는 일을 막는다).
  */
 export async function requestBlogJob(
-  kind: "초안",
+  kind: "초안" | "스캔" | "정리",
   payload: Record<string, unknown> = {},
 ): Promise<{ ok: true; jobId: number; existing: boolean } | { ok: false; error: string }> {
   if (!(await hasPerm("marketing"))) return { ok: false, error: "마케팅 권한이 없습니다" };

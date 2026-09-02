@@ -170,6 +170,12 @@ export async function generateJsonViaCli<T>(opts: {
   model?: string;
   timeoutMs?: number;
   onLog?: (line: string) => void;
+  /**
+   * ⭐ 사진을 보여줄 폴더 (C단계) — 모델이 여기 파일을 Read 로 읽는다.
+   * 🔴 **원본 폴더를 주면 안 된다.** 폴더 이름에 번호판이 들어 있어 경로만으로 샌다.
+   *    임시 폴더에 `p00.jpg` 로 복사한 뒤 그 폴더를 준다 (blog-photo-worker.ts).
+   */
+  imageDir?: string;
 }): Promise<CliResult<T>> {
   const model = opts.model ?? "opus";
   const timeoutMs = opts.timeoutMs ?? 6 * 60_000;
@@ -188,8 +194,11 @@ export async function generateJsonViaCli<T>(opts: {
     "--effort",
     opts.effort ?? "medium",
     "--safe-mode",
-    "--tools",
-    "",
+    /**
+     * 사진이 있으면 Read 만 열어 준다 (그 임시 폴더만). 없으면 도구 없이 글만 쓴다.
+     * 🔴 --add-dir 에는 **임시 폴더**만 준다 — 원본 폴더명에 번호판이 들어 있다.
+     */
+    ...(opts.imageDir ? ["--tools", "Read", "--add-dir", opts.imageDir] : ["--tools", ""]),
     "--no-session-persistence",
     "--permission-mode",
     "dontAsk",

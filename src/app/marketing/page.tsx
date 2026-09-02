@@ -1,4 +1,4 @@
-import { Camera, ChevronRight, MessageSquareReply, PencilLine, PenLine } from "lucide-react";
+import { Camera, ChevronRight, Images, MessageSquareReply, PencilLine, PenLine } from "lucide-react";
 import { redirect } from "next/navigation";
 import Link from "@/lib/link";
 import { hasPerm } from "@/lib/auth";
@@ -25,11 +25,18 @@ export default async function MarketingHome() {
      * 시공 기록만으로 만든 글은 일반론이 된다. 후기를 채워 만든 글이 본선이다.
      */
     {
+      href: "/marketing/photos",
+      Icon: Images,
+      title: "사진으로 원고 만들기",
+      desc: "작업 사진 폴더에서 사진을 고르면, 글에 사진 자리까지 잡아 드립니다.",
+      badge: "권장",
+    },
+    {
       href: "/marketing/write",
       Icon: PencilLine,
-      title: "작업 후기 쓰고 원고 만들기",
-      desc: "왜 오셨는지·무엇을 보셨는지만 눌러 주세요. 이렇게 만든 글이 훨씬 자연스럽습니다.",
-      badge: "권장",
+      title: "사진 없이 후기만으로",
+      desc: "사진을 아직 안 옮기셨을 때. 왜 오셨는지·무엇을 보셨는지만 눌러 주세요.",
+      badge: null,
     },
     {
       href: "/marketing/checklist",

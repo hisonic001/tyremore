@@ -7,7 +7,7 @@
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { blogDraft } from "@/db/schema";
+import { blogDraft, blogFolder } from "@/db/schema";
 import { hasPerm } from "./auth";
 import { getDraft } from "./blog-draft";
 import { formHasMaterial, sanitizeForm } from "./blog-form";
@@ -51,6 +51,42 @@ export async function writeWithForm(
     };
   }
   const r = await requestBlogJob("초안", { quoteId, form: form as unknown as Record<string, unknown> });
+  if (!r.ok) return r;
+  return { ok: true, jobId: r.jobId };
+}
+
+/**
+ * ⭐ 「사진으로 원고 만들기」 (C단계, 2026-09-02)
+ *
+ * 사진 폴더 + 작업 후기 → 본문에 **사진 자리표시자**가 박힌 원고.
+ * 🔴 사진 원본은 서버로 오지 않는다. 여기서는 고른 **순서(id 배열)** 만 넘기고,
+ *    매장 PC 대리인이 자기 디스크에서 원본을 읽는다.
+ */
+export async function writeWithPhotos(
+  folderId: number,
+  photoIds: number[],
+  rawForm: unknown,
+): Promise<R & { jobId?: number }> {
+  const g = await guard();
+  if (g) return { ok: false, error: g };
+  const form = sanitizeForm(rawForm);
+  if (!formHasMaterial(form)) {
+    return { ok: false, error: "왜 오셨는지·무엇을 보셨는지 중 하나는 골라 주세요" };
+  }
+  const [row] = await db
+    .select({ quoteId: blogFolder.quoteId })
+    .from(blogFolder)
+    .where(eq(blogFolder.id, folderId))
+    .limit(1);
+  if (!row?.quoteId) return { ok: false, error: "이 폴더가 어느 시공인지 먼저 골라 주세요" };
+
+  const ids = photoIds.filter((n) => Number.isFinite(n)).slice(0, 60).map(Number);
+  const r = await requestBlogJob("초안", {
+    quoteId: row.quoteId,
+    folderId,
+    photoIds: ids,
+    form: form as unknown as Record<string, unknown>,
+  });
   if (!r.ok) return r;
   return { ok: true, jobId: r.jobId };
 }

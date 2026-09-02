@@ -1432,6 +1432,14 @@ export const blogDraft = pgTable(
     form: jsonb("form").$type<Record<string, unknown>>(),
     /** 'auto' = 시공기록만으로 | '폼' = 사장님이 후기를 채워 만든 것 */
     source: text("source").notNull().default("auto"),
+    /**
+     * ⭐ 어느 사진 폴더로 쓴 글인지 (C단계) — 정렬 복사본을 그 폴더 안에 만든다.
+     * 🔴 FK 를 걸지 않는다: blog_folder 는 blogDraft 아래에 선언돼 있고,
+     *    폴더가 사라져도(is_gone) 글은 남아야 한다.
+     */
+    folderId: bigint("folder_id", { mode: "number" }),
+    /** ⭐ 사진 배치 계획 (C단계) — [{ photoId, slot: 'A-04', caption }] */
+    photoPlan: jsonb("photo_plan").$type<{ photoId: number; slot: string; caption: string }[]>(),
     model: text("model").notNull(),
     publishedAt: timestamp("published_at", { withTimezone: true }),
     createdAt,
@@ -1503,5 +1511,74 @@ export const blogJob = pgTable(
     check("blog_job_kind", sql`${t.kind} IN ('초안','스캔','정리')`),
     check("blog_job_status", sql`${t.status} IN ('대기','실행중','완료','실패')`),
     index("idx_blog_job_open").on(t.status),
+  ],
+);
+
+/* ============================================================
+ * 3-21. blog_folder · blog_photo — 사장님 사진 폴더 (C단계, 2026-09-02)
+ *
+ * 사장님은 이미 시공 건별로 사진을 폴더에 모아 두신다:
+ *   `블로그 작업후기\264저6834 벤츠 GLS\` (73장) · `(미업로드)…` 는 아직 안 올린 것
+ *
+ * 🔴 **원본은 매장 PC 밖으로 나오지 않는다.** 폴더 하나가 248MB, 전체 1.3GB 다.
+ *    서버로 오는 것은 **160px 썸네일(base64, 장당 13KB 안팎)** 뿐이고, 그것도 화면
+ *    데이터에 싣지 않고 `/api/blog-photo/{id}/thumb` 로 한 장씩 내려 준다.
+ *    전 폴더를 담아도 DB 5MB 안팎 — 폰에서 격자가 빨리 뜬다.
+ *
+ * 🔴 폴더 이름에 번호판이 들어 있다(`264저6834 …`). 화면에는 가리고, AI 에 보낼 때는
+ *    임시 폴더로 `p00.jpg` 로 복사해 **경로에서 번호판을 지운다**.
+ *
+ * 🔴 OneDrive 「파일 온디맨드」 — 18개 폴더 중 8개가 구름에만 있다. 그대로 읽으면
+ *    수십 초를 기다리다 실패하고, 최악은 **사진 없는 글이 조용히 나오는 것**이다.
+ *    스캔할 때 `fs.stat().blocks === 0` 으로 잡아 `is_offline` 에 남기고 화면에 표시한다.
+ * ========================================================== */
+
+export const blogFolder = pgTable(
+  "blog_folder",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    /** 폴더 이름 그대로 (번호판 포함) — 대리인이 원본을 찾을 때 쓴다 */
+    name: text("name").notNull().unique(),
+    /** 화면에 보여줄 이름 — 번호판을 가린 것 */
+    label: text("label").notNull(),
+    /** 이름에서 뽑은 번호판(정규화) — 차량·판매 잇기용. 화면엔 안 쓴다 */
+    plate: text("plate"),
+    /** 이름이 '(미업로드)' 로 시작 — 사장님의 실제 대기열 */
+    isPending: boolean("is_pending").notNull().default(false),
+    photoCount: integer("photo_count").notNull().default(0),
+    videoCount: integer("video_count").notNull().default(0),
+    /** 구름에만 있어 못 읽는 장수 — 0 이 아니면 화면이 경고한다 */
+    offlineCount: integer("offline_count").notNull().default(0),
+    folderMtime: timestamp("folder_mtime", { withTimezone: true }),
+    vehicleId: bigint("vehicle_id", { mode: "number" }).references(() => vehicle.id),
+    quoteId: bigint("quote_id", { mode: "number" }).references(() => quote.id),
+    /** 폴더가 사라짐 — 지우지 않고 감춘다 (삭제는 하지 않는다는 관례) */
+    isGone: boolean("is_gone").notNull().default(false),
+    scannedAt: timestamp("scanned_at", { withTimezone: true }),
+    createdAt,
+  },
+  (t) => [index("idx_blog_folder_pending").on(t.isPending, t.folderMtime)],
+);
+
+export const blogPhoto = pgTable(
+  "blog_photo",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    folderId: bigint("folder_id", { mode: "number" })
+      .notNull()
+      .references(() => blogFolder.id, { onDelete: "cascade" }),
+    fileName: text("file_name").notNull(),
+    byteSize: integer("byte_size").notNull().default(0),
+    /** 🔴 구름에만 있음 — AI 에 보낼 때 먼저 내려받아야 한다 */
+    isOffline: boolean("is_offline").notNull().default(false),
+    isVideo: boolean("is_video").notNull().default(false),
+    takenAt: timestamp("taken_at", { withTimezone: true }),
+    /** 160px JPEG q55 를 base64 로 — 장당 13KB 안팎. 화면 데이터엔 안 싣는다 */
+    thumb: text("thumb"),
+    createdAt,
+  },
+  (t) => [
+    uniqueIndex("uq_blog_photo").on(t.folderId, t.fileName),
+    index("idx_blog_photo_folder").on(t.folderId),
   ],
 );

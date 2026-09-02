@@ -89,20 +89,31 @@ async function runOne(job: Claimed): Promise<void> {
    * 단건(폼으로 쓰기 · 「다르게 한 번 더」)이면 그 시공만, 아니면 오늘치 여러 건.
    * 🔴 폼은 명령줄로 안 넘긴다 — 한글이 깨진다. `--job` 을 주고 CLI 가 DB 에서 읽는다.
    */
-  const cliArgs = quoteId
-    ? ["tsx", "scripts/blog-draft.ts", "--agent", "--job", String(job.id)].concat(
-        p.variant ? ["--variant", String(p.variant)] : [],
-      )
-    : ["tsx", "scripts/blog-draft.ts", "--agent", "--limit", String(limit)];
+  const cliArgs =
+    job.kind === "스캔"
+      ? ["tsx", "scripts/blog-scan.ts", "--agent", "--job", String(job.id)]
+      : quoteId
+        ? ["tsx", "scripts/blog-draft.ts", "--agent", "--job", String(job.id)].concat(
+            p.variant ? ["--variant", String(p.variant)] : [],
+          )
+        : ["tsx", "scripts/blog-draft.ts", "--agent", "--limit", String(limit)];
 
-  log(`요청 #${job.id} (${job.kind}, ${quoteId ? `판매 ${quoteId}` : `최대 ${limit}건`}) 시작`);
+  const scan = job.kind === "스캔";
+  log(`요청 #${job.id} (${job.kind}${scan ? "" : quoteId ? `, 판매 ${quoteId}` : `, 최대 ${limit}건`}) 시작`);
   await appendLog(
     job.id,
-    quoteId ? "같은 시공으로 다시 만듭니다" : `원고 만들기를 시작합니다 (최대 ${limit}건)`,
+    scan
+      ? "사진 폴더를 훑습니다"
+      : quoteId
+        ? "같은 시공으로 다시 만듭니다"
+        : `원고 만들기를 시작합니다 (최대 ${limit}건)`,
   );
 
-  // 원고 하나에 1~3분. 넉넉히 잡되 굳으면 반드시 끊는다.
-  const timeoutMs = (quoteId ? 1 : limit) * 5 * 60_000 + 2 * 60_000;
+  /**
+   * 원고 하나에 1~3분. 스캔은 사진 400장 썸네일을 굽는 첫 회가 오래 걸린다(20분).
+   * 넉넉히 잡되 굳으면 반드시 끊는다.
+   */
+  const timeoutMs = scan ? 20 * 60_000 : (quoteId ? 1 : limit) * 5 * 60_000 + 2 * 60_000;
 
   const draftIds: number[] = [];
   let errorMsg = "";
@@ -171,11 +182,12 @@ async function runOne(job: Claimed): Promise<void> {
     });
   });
 
-  if (exit === 0 && draftIds.length > 0) {
+  /** 스캔은 초안을 안 만든다 — 끝났으면 완료다 */
+  if (exit === 0 && (scan || draftIds.length > 0)) {
     await sql`
       UPDATE blog_job SET status='완료', finished_at=now(), draft_ids=${sql.json(draftIds)}
       WHERE id=${job.id} AND status='실행중'`;
-    log(`요청 #${job.id} 완료 — 초안 ${draftIds.length}건`);
+    log(`요청 #${job.id} 완료${scan ? " — 폴더 훑기" : ` — 초안 ${draftIds.length}건`}`);
   } else {
     const msg =
       errorMsg ||

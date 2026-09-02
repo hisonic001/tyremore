@@ -45,6 +45,8 @@ export async function generateJson<T>(opts: {
   maxTokens?: number;
   /** 진행 상황 한 줄씩 — 대리인이 화면 로그에 흘려보낸다 (구독 길에서만 쓰인다) */
   onLog?: (line: string) => void;
+  /** ⭐ 사진을 보여줄 임시 폴더 (C단계) — 구독 길에서만 쓰인다 */
+  imageDir?: string;
 }): Promise<{ data: T; model: string }> {
   /**
    * 구독 길. `node:child_process` 를 쓰므로 **불릴 때만** 들여온다 —
@@ -58,6 +60,7 @@ export async function generateJson<T>(opts: {
       schema: opts.schema,
       effort: opts.effort,
       onLog: opts.onLog,
+      imageDir: opts.imageDir,
     });
     return { data: r.data, model: r.model };
   }

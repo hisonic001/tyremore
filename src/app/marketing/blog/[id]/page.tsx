@@ -25,6 +25,8 @@ export default async function BlogDraftPage({ params }: { params: Promise<{ id: 
           ownerNote: d.ownerNote,
           facts: d.facts,
           warn: d.warn,
+          source: d.source,
+          photoPlan: d.photoPlan ?? null,
         }}
       />
     </PageShell>

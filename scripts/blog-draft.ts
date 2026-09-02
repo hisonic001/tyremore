@@ -46,6 +46,8 @@ async function main() {
    */
   let jobForm: Record<string, unknown> | undefined;
   let jobQuoteId: number | null = null;
+  let jobFolderId: number | null = null;
+  let jobPhotoIds: number[] = [];
   const jobId = val("--job") ? Number(val("--job")) : null;
   if (jobId) {
     const postgres = (await import("postgres")).default;
@@ -53,9 +55,16 @@ async function main() {
     try {
       const [row] = await sql<{ payload: Record<string, unknown> | null }[]>`
         SELECT payload FROM blog_job WHERE id = ${jobId}`;
-      const p = (row?.payload ?? {}) as { quoteId?: number; form?: Record<string, unknown> };
+      const p = (row?.payload ?? {}) as {
+        quoteId?: number;
+        form?: Record<string, unknown>;
+        folderId?: number;
+        photoIds?: number[];
+      };
       jobQuoteId = p.quoteId ? Number(p.quoteId) : null;
       jobForm = p.form;
+      jobFolderId = p.folderId ? Number(p.folderId) : null;
+      jobPhotoIds = Array.isArray(p.photoIds) ? p.photoIds.map(Number) : [];
     } finally {
       await sql.end();
     }
@@ -81,13 +90,43 @@ async function main() {
       if (agent) process.exitCode = 1;
       return;
     }
-    const r = await generateDraft(f, { onLog, variant, form });
-    if (r.ok) {
-      say(`✅ 초안 #${r.id} — ${r.titles[0]}${r.warn ? `\n⚠️ ${r.warn}` : ""}`);
-      if (agent) say(`DRAFT_ID=${r.id}`);
-    } else {
-      say(agent ? `ERROR=${r.error}` : `❌ ${r.error}`);
-      if (agent) process.exitCode = 1;
+    /**
+     * ⭐ 사진 (C단계) — 임시 폴더에 `p00.jpg` 로 복사한 뒤 그 폴더만 모델에 열어 준다.
+     * 🔴 원본 폴더를 열면 폴더 이름의 번호판이 경로로 새어 나간다.
+     */
+    let prepared: Awaited<ReturnType<typeof import("../src/lib/blog-photo-worker").preparePhotosForAi>> | null = null;
+    if (jobFolderId && jobPhotoIds.length) {
+      const { preparePhotosForAi } = await import("../src/lib/blog-photo-worker");
+      prepared = await preparePhotosForAi(jobFolderId, jobPhotoIds, onLog);
+      if (prepared.photos.length === 0) {
+        await prepared.cleanup();
+        const msg = "고르신 사진을 하나도 못 읽었습니다 — 구름에만 있는 사진이면 폴더 목록에서 먼저 내려받아 주세요";
+        say(agent ? `ERROR=${msg}` : `❌ ${msg}`);
+        if (agent) process.exitCode = 1;
+        return;
+      }
+    }
+
+    try {
+      const r = await generateDraft(f, {
+        onLog,
+        variant,
+        form,
+        folderId: jobFolderId ?? undefined,
+        photos: prepared
+          ? { dir: prepared.dir, files: prepared.photos.map((p) => ({ photoId: p.photoId, tempName: p.tempName })) }
+          : undefined,
+      });
+      if (r.ok) {
+        say(`✅ 초안 #${r.id} — ${r.titles[0]}${r.warn ? `\n⚠️ ${r.warn}` : ""}`);
+        if (agent) say(`DRAFT_ID=${r.id}`);
+      } else {
+        say(agent ? `ERROR=${r.error}` : `❌ ${r.error}`);
+        if (agent) process.exitCode = 1;
+      }
+    } finally {
+      // 임시 폴더는 반드시 지운다 — 사진이 남아 있으면 안 된다
+      await prepared?.cleanup();
     }
     return;
   }
