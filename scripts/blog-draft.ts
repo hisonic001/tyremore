@@ -44,6 +44,7 @@ async function main() {
    *    사장님이 앱에서 채운 작업 후기 폼이 payload 에 들어 있다 — 그게 글의 알맹이다.
    *    폼을 명령줄 인자로 넘기면 한글이 깨지므로 DB 를 거친다.
    */
+  let jobTopic: { title: string; category: string; material: string } | undefined;
   let jobForm: Record<string, unknown> | undefined;
   let jobQuoteId: number | null = null;
   let jobFolderId: number | null = null;
@@ -60,7 +61,9 @@ async function main() {
         form?: Record<string, unknown>;
         folderId?: number;
         photoIds?: number[];
+        topic?: { title: string; category: string; material: string };
       };
+      jobTopic = p.topic;
       jobQuoteId = p.quoteId ? Number(p.quoteId) : null;
       jobForm = p.form;
       jobFolderId = p.folderId ? Number(p.folderId) : null;
@@ -68,6 +71,21 @@ async function main() {
     } finally {
       await sql.end();
     }
+  }
+
+  /** ⭐ 정보성 글 (D단계) — 시공이 없다. 「차종별 순정 제원」·「차량 관리팁」 */
+  if (jobTopic) {
+    const { generateTopicDraft } = await import("../src/lib/blog-draft");
+    say(`── 정보성 글: ${jobTopic.title}`);
+    const r = await generateTopicDraft({ ...jobTopic, onLog });
+    if (r.ok) {
+      say(`✅ 초안 #${r.id} — ${r.titles[0]}`);
+      if (agent) say(`DRAFT_ID=${r.id}`);
+    } else {
+      say(agent ? `ERROR=${r.error}` : `❌ ${r.error}`);
+      if (agent) process.exitCode = 1;
+    }
+    return;
   }
 
   const quoteId = jobQuoteId ?? (val("--quote") ? Number(val("--quote")) : null);

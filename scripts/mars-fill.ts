@@ -2798,7 +2798,6 @@ async function fillVehicleCheck(
 async function main_() {
   const {
     marsQueue,
-    markEntered,
     pendingVehicleChecks,
     markVehicleChecked,
     saveVehicleMarsNo,
@@ -2813,6 +2812,8 @@ async function main_() {
     marsReconcileTargets,
     promoteManualToPosted,
   } = await import("../src/lib/mars-queue");
+  /* 도장은 코어로 — 로봇은 요청 밖(세션 없음)이라 웹 게이트(markEntered)를 못 탄다 (2026-09-02 사고 수리) */
+  const { markEnteredCore: markEntered } = await import("../src/lib/mars-core");
   /** 대리인이 알려주는 실행 번호 — 시도 이력(mars_attempt)에 같이 남긴다 */
   const RUN_ID = Number(process.env.MARS_RUN_ID) || null;
 

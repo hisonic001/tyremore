@@ -513,6 +513,97 @@ export async function generateDraft(
   return { ok: false, error: lastErr || "초안을 만들지 못했습니다" };
 }
 
+/**
+ * ⭐ 시공 없이 쓰는 **정보성 글** (D단계, 2026-09-02)
+ *
+ * 「차종별 순정 제원」·「차량 관리팁」은 시공이 없어도 쓸 수 있어 **글감이 마르지 않는다.**
+ * 검색 의도가 분명하고 경쟁이 약해, 이 매장 블로그에서 가장 저평가된 카테고리다.
+ *
+ * 🔴 그냥 일반론을 쓰면 예전 글로 돌아간다. 그래서 **이 매장의 실제 통계**를 재료로 넣는다
+ *    — 「속초에서 셀토스 3대에 235/45R18을 넣었다」는 남이 못 쓰는 근거다.
+ */
+export async function generateTopicDraft(opts: {
+  title: string;
+  category: string;
+  /** 이 매장 통계 등 — 지시문에 그대로 들어간다 */
+  material: string;
+  onLog?: (line: string) => void;
+}): Promise<GenerateResult | { ok: false; error: string }> {
+  const titles = await recentBlogTitles();
+  const samples = await loadStyleSamples(2);
+  if (samples.length) opts.onLog?.(`사장님 글 ${samples.length}편을 문체 본보기로 넣습니다`);
+  const system = buildSystem(samples);
+
+  const facts = [`글 종류: ${opts.category}`, `주제: ${opts.title}`, "", opts.material].join("\n");
+
+  const baseUser = [
+    "아래 주제로 블로그 글 초안을 써 주세요. 이번 글은 **특정 손님의 시공기가 아니라 정보성 글**입니다.",
+    "",
+    "[주제와 재료]",
+    facts,
+    "",
+    "🔴 이 글은 손님 한 분의 이야기가 아니므로 「방문하신 고객님」으로 시작하지 마세요.",
+    "   대신 **이 매장에서 실제로 겪은 것**으로 시작하세요 — 위 통계가 그 근거입니다.",
+    "   예: 「속초에서 이 차종을 자주 봅니다. 지금까지 N대 작업했는데…」",
+    "🔴 위 재료에 없는 숫자를 지어내지 마세요. 제원표를 외워 쓰지 말고, 모르면 쓰지 마세요.",
+    "   차종 제원은 「차량 설명서나 운전석 문 안쪽 스티커를 보시라」고 안내하는 편이 정확합니다.",
+    "🔴 이 글에는 사진 자리표시자를 넣지 마세요.",
+    "",
+    titles.length ? `최근에 올린 글 제목(겹치지 않게): ${titles.slice(0, 8).join(" / ")}` : null,
+  ]
+    .filter((s) => s !== null)
+    .join("\n");
+
+  let lastErr = "";
+  let feedback = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let out: { data: DraftJson; model: string };
+    try {
+      out = await generateJson<DraftJson>({
+        system,
+        user: feedback ? `${baseUser}\n\n앞서 쓴 글의 문제입니다. 고쳐 주세요:\n${feedback}` : baseUser,
+        schema: SCHEMA,
+        effort: "medium",
+        onLog: opts.onLog,
+      });
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+    const { data, model } = out;
+    /** 정보성 글에는 손님이 없으니 redact 는 비지만, 번호판·전화 패턴은 그대로 본다 */
+    const leak = privacyFilter(`${data.titles.join("\n")}\n${data.body}`, []);
+    if (leak) {
+      lastErr = `개인정보로 보이는 글자(${leak})가 나와 버렸습니다`;
+      feedback = "번호판·전화번호처럼 보이는 숫자를 쓰지 마세요.";
+      continue;
+    }
+    const style = styleFilter(data.body);
+    if (style) {
+      opts.onLog?.(`다시 씁니다 — ${style.reason}`);
+      lastErr = style.reason;
+      feedback = style.fix;
+      continue;
+    }
+    if (!data.body.includes(OWNER_SLOT)) data.body = `${data.body.trimEnd()}\n\n${OWNER_SLOT}`;
+
+    const [row] = await db
+      .insert(blogDraft)
+      .values({
+        quoteId: null,
+        titles: data.titles.slice(0, 3),
+        body: data.body,
+        tags: data.tags.slice(0, 14),
+        facts,
+        warn: null,
+        source: "정보",
+        model,
+      })
+      .returning({ id: blogDraft.id });
+    return { ok: true, id: row.id, titles: data.titles, warn: null };
+  }
+  return { ok: false, error: lastErr || "초안을 만들지 못했습니다" };
+}
+
 /** KST 오늘 (YYYY-MM-DD) */
 export const kstToday = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
 

@@ -452,22 +452,12 @@ export async function markEntered(
   memo?: string | null,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!(await (await import("./auth")).hasPerm("mars"))) return { ok: false, error: PERM_DENIED };
-  const [q] = await db.select({ id: quote.id }).from(quote).where(eq(quote.id, quoteId)).limit(1);
-  if (!q) return { ok: false, error: "판매 기록을 찾을 수 없습니다" };
-
-  await db
-    .update(quote)
-    .set({
-      marsStatus: "전송완료",
-      marsSyncedAt: new Date(),
-      marsRefNo: refNo?.trim() || null,
-      marsMemo: memo?.trim() || null,
-      updatedAt: new Date(),
-    })
-    .where(eq(quote.id, quoteId));
-
-  refresh("/sales");
-  return { ok: true };
+  /* 실제 일은 코어(mars-core.ts) — 매장 PC 로봇은 요청 밖(세션 없음)이라 게이트 없는
+     코어를 직접 부른다 (2026-09-02 사고 수리 — cookies 예외로 로봇 5회 사망·MARS 중복 입력) */
+  const { markEnteredCore } = await import("./mars-core");
+  const r = await markEnteredCore(quoteId, refNo, memo);
+  if (r.ok) refresh("/sales");
+  return r;
 }
 
 /* ============================================================

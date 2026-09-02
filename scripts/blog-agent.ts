@@ -81,8 +81,14 @@ async function claim(): Promise<Claimed | null> {
 }
 
 async function runOne(job: Claimed): Promise<void> {
-  const p = (job.payload ?? {}) as { limit?: number; quoteId?: number; variant?: number };
-  const quoteId = p.quoteId ? Number(p.quoteId) : null;
+  const p = (job.payload ?? {}) as {
+    limit?: number;
+    quoteId?: number;
+    variant?: number;
+    topic?: unknown;
+  };
+  /** 시공 단건이거나 정보성 글이면 --job 한 건. 아니면 오늘치 여러 건 */
+  const quoteId = p.quoteId ? Number(p.quoteId) : p.topic ? -1 : null;
   const limit = Number(p.limit ?? 2);
 
   /**
