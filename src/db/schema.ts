@@ -1422,6 +1422,16 @@ export const blogDraft = pgTable(
     facts: text("facts").notNull(),
     /** 최근 블로그 글과 주제가 겹친다는 경고 등 */
     warn: text("warn"),
+    /**
+     * ⭐ 사장님이 채운 작업 후기 폼 (B단계, 2026-09-02) — blog-form.ts 의 BlogForm.
+     *
+     * 「AI 가 쓴 티」의 근본은 문체가 아니라 **사건이 없다**는 것이었다. 왜 오셨고,
+     * 뭘 봤고, 왜 이걸 권했는지가 여기 들어오면 모델이 일반론을 쓸 이유가 사라진다.
+     * 「다르게 한 번 더」가 이걸 그대로 다시 쓴다.
+     */
+    form: jsonb("form").$type<Record<string, unknown>>(),
+    /** 'auto' = 시공기록만으로 | '폼' = 사장님이 후기를 채워 만든 것 */
+    source: text("source").notNull().default("auto"),
     model: text("model").notNull(),
     publishedAt: timestamp("published_at", { withTimezone: true }),
     createdAt,

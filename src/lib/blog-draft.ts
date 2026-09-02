@@ -22,6 +22,7 @@ import { db } from "@/db";
 import { blogDraft } from "@/db/schema";
 import { generateJson } from "./ai";
 import { loadStyleSamples } from "./blog-samples";
+import { formText, type BlogForm } from "./blog-form";
 import { buildSystem, styleFilter } from "./blog-style";
 import {
   duplicateWarn,
@@ -174,6 +175,66 @@ export async function recentPendingDay(upto: string, backDays = 14): Promise<str
   return rows[0]?.day ?? null;
 }
 
+/**
+ * ⭐ 「작업 후기 쓰기」 화면이 고르는 최근 시공 목록 (B단계, 2026-09-02)
+ *
+ * 폴더 스캔(다음 단계) 전에도 바로 쓸 수 있게, 앱 판매 기록에서 바로 고른다.
+ * 이미 원고가 있는 건은 아래로 내리되 감추지는 않는다 — 「다시 쓰기」가 있다.
+ */
+export interface BlogCandidate {
+  quoteId: number;
+  quoteNo: string;
+  workDate: string;
+  car: string;
+  mileage: number | null;
+  tires: string;
+  qty: number;
+  hasDraft: boolean;
+}
+
+export async function recentSalesForBlog(days = 30, limit = 40): Promise<BlogCandidate[]> {
+  const rows = await db.execute<{
+    quote_id: number;
+    quote_no: string;
+    work_date: string;
+    car: string | null;
+    mileage: number | string | null;
+    tires: string | null;
+    qty: number | string | null;
+    has_draft: boolean;
+  }>(sql`
+    SELECT q.id AS quote_id, q.quote_no, q.work_date::text AS work_date,
+           NULLIF(TRIM(CONCAT_WS(' ', COALESCE(mk.name_ko, v.maker_name), v.model,
+                                 CASE WHEN v.year IS NULL THEN NULL ELSE v.year || '년식' END)), '') AS car,
+           COALESCE(q.mileage, v.mileage) AS mileage,
+           STRING_AGG(DISTINCT qi.description, ', ') AS tires,
+           SUM(qi.qty)::int AS qty,
+           EXISTS (SELECT 1 FROM blog_draft b WHERE b.quote_id = q.id AND b.status <> '버림') AS has_draft
+    FROM quote q
+    LEFT JOIN vehicle       v  ON v.id = q.vehicle_id
+    LEFT JOIN vehicle_maker mk ON mk.code = v.maker_code
+    JOIN quote_item qi ON qi.quote_id = q.id AND qi.line_type = 'tire'
+    WHERE q.status = '성사'
+      AND q.supplier_name IS NULL
+      AND COALESCE(q.payment_method, '') <> '서비스'
+      AND q.total_amount > 0
+      AND q.work_date >= (now() AT TIME ZONE 'Asia/Seoul')::date - make_interval(days => ${days})
+    GROUP BY q.id, q.quote_no, q.work_date, mk.name_ko, v.maker_name, v.model, v.year, q.mileage, v.mileage
+    ORDER BY has_draft ASC, q.work_date DESC, q.id DESC
+    LIMIT ${limit}`);
+
+  return rows.map((r) => ({
+    quoteId: Number(r.quote_id),
+    quoteNo: r.quote_no,
+    workDate: r.work_date,
+    car: r.car ?? "차종 미상",
+    mileage: r.mileage === null ? null : Number(r.mileage) || null,
+    tires: r.tires ?? "",
+    qty: Number(r.qty ?? 0),
+    hasDraft: !!r.has_draft,
+  }));
+}
+
 /* ------------------------------------------------------------------ */
 /* 최근 글 제목 — 같은 주제 반복 경고 (유사문서 판정 회피)                 */
 /* ------------------------------------------------------------------ */
@@ -243,7 +304,13 @@ export interface GenerateResult {
  */
 export async function generateDraft(
   f: DraftFacts,
-  opts?: { variant?: number; titles?: string[]; onLog?: (line: string) => void },
+  opts?: {
+    variant?: number;
+    titles?: string[];
+    onLog?: (line: string) => void;
+    /** ⭐ 사장님이 채운 작업 후기 (B단계) — 이게 있으면 글이 완전히 달라진다 */
+    form?: BlogForm;
+  },
 ): Promise<GenerateResult | { ok: false; error: string }> {
   const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(blogDraft);
   const structure = STRUCTURES[(Number(n) + (opts?.variant ?? 0)) % STRUCTURES.length];
@@ -260,17 +327,34 @@ export async function generateDraft(
   else opts?.onLog?.("사장님 글을 못 찾아 규칙만으로 씁니다 (BLOG_WORK_DIR 확인)");
   const system = buildSystem(samples);
 
+  /** ⭐ 사장님이 채운 후기 — 이게 있으면 「사건」이 생겨 일반론을 쓸 이유가 사라진다 */
+  const note = opts?.form ? formText(opts.form) : "";
+  if (note) opts?.onLog?.("사장님이 적으신 후기를 함께 넣습니다");
+
   const baseUser = [
-    "아래 시공 사실로 블로그 글 초안을 써 주세요.",
+    "아래 내용으로 블로그 글 초안을 써 주세요.",
     "",
+    "[시공 기록]",
     facts,
+    ...(note
+      ? [
+          "",
+          "[사장님이 직접 적으신 것 — 이 글의 알맹이입니다]",
+          note,
+          "",
+          "🔴 위 「사장님이 적으신 것」을 글의 중심에 두세요. 왜 오셨는지로 시작해,",
+          "   무엇을 봤는지를 이야기하고, 왜 그 제품을 권했는지로 이어 가세요.",
+          "   측정한 값이 있으면 반드시 그 숫자를 본문에 그대로 쓰세요.",
+        ]
+      : [
+          "",
+          "🔴 주어진 사실이 이게 전부입니다. 손님이 무슨 말을 했는지, 무엇을 발견했는지는",
+          "   적혀 있지 않으니 지어내지 마세요. 없으면 그 대목은 통째로 빼고 짧게 쓰는 편이 낫습니다.",
+        ]),
     "",
     `글을 여는 각도: ${structure}`,
     titles.length ? `최근에 올린 글 제목(겹치지 않게): ${titles.slice(0, 8).join(" / ")}` : null,
     opts?.variant ? "이전 초안과 다른 각도·다른 첫 문장으로." : null,
-    "",
-    "🔴 주어진 사실이 이게 전부입니다. 손님이 무슨 말을 했는지, 무엇을 발견했는지는",
-    "   적혀 있지 않으니 지어내지 마세요. 없으면 그 대목은 통째로 빼고 짧게 쓰는 편이 낫습니다.",
   ]
     .filter((s) => s !== null)
     .join("\n");
@@ -307,10 +391,13 @@ export async function generateDraft(
       feedback = style.fix;
       continue;
     }
-    if (!data.body.includes(OWNER_SLOT)) {
-      // 자리가 빠지면 첫 소제목 앞에 끼워 넣는다 — 사장님 육성 없는 글은 안 나가야 한다
-      data.body = data.body.replace(/\n(#{1,3} )/, `\n${OWNER_SLOT}\n\n$1`);
-      if (!data.body.includes(OWNER_SLOT)) data.body = `${data.body}\n\n${OWNER_SLOT}`;
+    /**
+     * 사장님 한마디 자리.
+     * 🔴 폼을 채우신 경우에는 **강요하지 않는다** — 4·5·7 자체가 사장님 육성이라
+     *    두 번 받을 이유가 없다 (B단계 결정 2026-09-02).
+     */
+    if (!note && !data.body.includes(OWNER_SLOT)) {
+      data.body = `${data.body.trimEnd()}\n\n${OWNER_SLOT}`;
     }
     const [row] = await db
       .insert(blogDraft)
@@ -318,9 +405,11 @@ export async function generateDraft(
         quoteId: f.quoteId,
         titles: data.titles.slice(0, 3),
         body: data.body,
-        tags: data.tags.slice(0, 10),
+        tags: data.tags.slice(0, 14),
         facts,
         warn,
+        form: opts?.form ? (opts.form as unknown as Record<string, unknown>) : null,
+        source: note ? "폼" : "auto",
         model,
       })
       .returning({ id: blogDraft.id });

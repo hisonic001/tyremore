@@ -10,6 +10,7 @@ import { db } from "@/db";
 import { blogDraft } from "@/db/schema";
 import { hasPerm } from "./auth";
 import { getDraft } from "./blog-draft";
+import { formHasMaterial, sanitizeForm } from "./blog-form";
 import { requestBlogJob } from "./blog-job";
 
 type R = { ok: true } | { ok: false; error: string };
@@ -30,13 +31,44 @@ export async function makeTodayDrafts(): Promise<R & { jobId?: number; existing?
   return { ok: true, jobId: r.jobId, existing: r.existing };
 }
 
-/** 「다르게 한 번 더」 — 같은 시공으로 구조를 바꿔 새 원고. 이것도 매장 PC 가 만든다 */
+/**
+ * ⭐ 「작업 후기 쓰고 원고 만들기」 (B단계, 2026-09-02)
+ *
+ * 사장님 평가 "ai가 작성한 티가 남" 의 근본 처방. 왜 오셨고·뭘 봤고·왜 이걸 권했는지가
+ * 들어가면 모델이 일반론을 쓸 이유가 없어진다. 재료가 하나도 없으면 아예 안 받는다.
+ */
+export async function writeWithForm(
+  quoteId: number,
+  rawForm: unknown,
+): Promise<R & { jobId?: number }> {
+  const g = await guard();
+  if (g) return { ok: false, error: g };
+  const form = sanitizeForm(rawForm);
+  if (!formHasMaterial(form)) {
+    return {
+      ok: false,
+      error: "왜 오셨는지·무엇을 보셨는지 중 하나는 골라 주세요 — 그게 없으면 뻔한 글이 됩니다",
+    };
+  }
+  const r = await requestBlogJob("초안", { quoteId, form: form as unknown as Record<string, unknown> });
+  if (!r.ok) return r;
+  return { ok: true, jobId: r.jobId };
+}
+
+/**
+ * 「다르게 한 번 더」 — 같은 시공으로 각도를 바꿔 새 원고. 이것도 매장 PC 가 만든다.
+ * 사장님이 채우셨던 후기가 있으면 **그대로 다시 쓴다** (두 번 채우실 이유가 없다).
+ */
 export async function regenerateDraft(id: number): Promise<R & { jobId?: number }> {
   const g = await guard();
   if (g) return { ok: false, error: g };
   const d = await getDraft(id);
   if (!d?.quoteId) return { ok: false, error: "원래 시공을 찾지 못했습니다" };
-  const r = await requestBlogJob("초안", { quoteId: d.quoteId, variant: 1 + (id % 3) });
+  const r = await requestBlogJob("초안", {
+    quoteId: d.quoteId,
+    variant: 1 + (id % 3),
+    ...(d.form ? { form: d.form } : {}),
+  });
   if (!r.ok) return r;
   return { ok: true, jobId: r.jobId };
 }

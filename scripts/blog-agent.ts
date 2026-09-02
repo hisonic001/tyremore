@@ -85,9 +85,12 @@ async function runOne(job: Claimed): Promise<void> {
   const quoteId = p.quoteId ? Number(p.quoteId) : null;
   const limit = Number(p.limit ?? 2);
 
-  /** 단건(「다르게 한 번 더」)이면 그 시공만, 아니면 오늘치 여러 건 */
+  /**
+   * 단건(폼으로 쓰기 · 「다르게 한 번 더」)이면 그 시공만, 아니면 오늘치 여러 건.
+   * 🔴 폼은 명령줄로 안 넘긴다 — 한글이 깨진다. `--job` 을 주고 CLI 가 DB 에서 읽는다.
+   */
   const cliArgs = quoteId
-    ? ["tsx", "scripts/blog-draft.ts", "--agent", "--quote", String(quoteId)].concat(
+    ? ["tsx", "scripts/blog-draft.ts", "--agent", "--job", String(job.id)].concat(
         p.variant ? ["--variant", String(p.variant)] : [],
       )
     : ["tsx", "scripts/blog-draft.ts", "--agent", "--limit", String(limit)];

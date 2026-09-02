@@ -1,4 +1,4 @@
-import { ChevronRight, MessageSquareReply, PenLine } from "lucide-react";
+import { Camera, ChevronRight, MessageSquareReply, PencilLine, PenLine } from "lucide-react";
 import { redirect } from "next/navigation";
 import Link from "@/lib/link";
 import { hasPerm } from "@/lib/auth";
@@ -20,11 +20,29 @@ export default async function MarketingHome() {
   const pending = await pendingDraftCount();
 
   const items = [
+    /**
+     * ⭐ 맨 위에 둔다 (2026-09-02) — 사장님 "ai가 작성한 티가 남".
+     * 시공 기록만으로 만든 글은 일반론이 된다. 후기를 채워 만든 글이 본선이다.
+     */
+    {
+      href: "/marketing/write",
+      Icon: PencilLine,
+      title: "작업 후기 쓰고 원고 만들기",
+      desc: "왜 오셨는지·무엇을 보셨는지만 눌러 주세요. 이렇게 만든 글이 훨씬 자연스럽습니다.",
+      badge: "권장",
+    },
+    {
+      href: "/marketing/checklist",
+      Icon: Camera,
+      title: "촬영 체크리스트",
+      desc: "작업 종류별로 어떤 사진을 몇 장 찍을지. 폰으로 보면서 찍으세요.",
+      badge: null,
+    },
     {
       href: "/marketing/blog",
       Icon: PenLine,
-      title: "블로그 초안",
-      desc: "매장 PC 가 그날 시공으로 원고를 만듭니다. 한마디 쓰고 복사해서 올리세요.",
+      title: "원고 목록",
+      desc: "만들어진 원고를 보고 복사합니다. 시공 기록만으로 빠르게 만들 수도 있습니다.",
       badge: pending > 0 ? `${pending}개 대기` : null,
     },
     {
