@@ -8,7 +8,9 @@
  *     (차종·연식·주행거리대·규격·본수·계절)을 지시문에 **반드시** 넣는다.
  *   · 그래도 문장 결이 균일하면 밀린다 — 본문에 `{{사장님_한마디}}` 자리를 남기고,
  *     사장님이 한두 줄 쓰기 전에는 복사가 안 된다 (화면이 막는다).
- *   · 사진은 안 보낸다. 번호판·이름·전화·정확한 주행거리·정확한 날짜도 안 보낸다.
+ *   · 사진은 안 보낸다. 번호판·이름·전화·정확한 날짜도 안 보낸다.
+ *     🔴 **주행거리는 정확한 km 를 보낸다** (2026-09-02) — 사장님 실제 글이 그렇게 쓰고,
+ *     뭉갠 숫자가 「AI 가 쓴 티」의 큰 축이었다. 번호판이 없으면 특정되지 않는다.
  *     모델이 지시를 어길 수 있으니 **출력을 정규식으로 한 번 더** 거른다 (privacyFilter).
  *
  * 🔴 프로그램이 블로그에 올리는 일은 없다. 발행은 사장님 손이다.
@@ -19,6 +21,8 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { blogDraft } from "@/db/schema";
 import { generateJson } from "./ai";
+import { loadStyleSamples } from "./blog-samples";
+import { buildSystem, styleFilter } from "./blog-style";
 import {
   duplicateWarn,
   factsText,
@@ -96,6 +100,8 @@ export async function factsForDay(day: string, opts?: { quoteId?: number }): Pro
         maker: r.maker,
         model: r.model,
         year: r.year === null ? null : Number(r.year),
+        // ⭐ 정확한 km 를 그대로 (2026-09-02) — 뭉갠 숫자가 「AI 티」의 큰 축이었다
+        mileage: km === null ? null : Number(km) || null,
         mileageBand: mileageBand(km === null ? null : Number(km)),
         tires: [],
         services: [],
@@ -195,31 +201,17 @@ export async function recentBlogTitles(): Promise<string[]> {
 /* 생성                                                                */
 /* ------------------------------------------------------------------ */
 
-/** 글 구조를 돌려 쓴다 — 같은 틀 반복은 유사문서 */
+/**
+ * 글 여는 각도를 돌려 쓴다 — 같은 틀 반복은 유사문서.
+ * 🔴 「계절 이야기로 시작」은 뺐다 (2026-09-02) — 그게 바로 사장님이 지적하신 「AI 티」였다.
+ *    전부 **그날의 일**에서 출발한다.
+ */
 const STRUCTURES = [
-  "이런 손님이 오셨다(상황) → 왜 이 타이어를 권했나 → 교체 뒤 달라진 점 → 같은 차 타시는 분께 체크리스트",
-  "결론 한 줄(이 차엔 이 타이어) → 규격·주행거리로 본 교체 시점 → 후보 비교표 → 마무리",
-  "계절 이야기로 시작 → 이 차종 타이어의 흔한 고민 → 이번 시공 기록 → 점검 체크리스트",
-  "Q&A 형식: 손님이 물어본 것 3가지에 답하는 글 → 마지막에 이번 시공 요약표",
+  "이 차가 왜 왔는지부터 → 보니까 이랬다 → 그래서 이걸 했다 → 같은 차 타시는 분께 한마디",
+  "결론 먼저(이 차엔 이 타이어를 넣었다) → 규격·주행거리로 본 판단 근거 → 작업 과정 → 마무리",
+  "이번 작업에서 가장 눈에 띄었던 것 하나 → 그게 왜 생기는지 → 이번엔 이렇게 처리했다",
+  "손님이 물어보신 것에 답하는 형식 → 마지막에 이번에 한 일 정리",
 ];
-
-const SYSTEM = `당신은 강원도 속초의 타이어 전문점 「타이어모어 속초점」 사장이 직접 쓰는 네이버 블로그 글을 대신 초안으로 써 주는 사람입니다.
-말투: 손님에게 말하듯 담백한 존댓말. 과장·감탄사·이모지 남발 없음. 1인칭("저희 매장", "제가").
-
-반드시 지킬 것 (네이버 노출 기준):
-- 첫 문단에 결론을 먼저. 서론 늘리지 않기.
-- 본문 1,200~1,800자. 채우기 문장으로 늘리지 말 것.
-- "속초"는 자연스럽게 2~3번만. 그 이상 반복 금지. 예: "속초 타이어 교체", "속초 미쉐린", "속초 수입차 타이어".
-- 소제목 3~5개. 그중 하나는 반드시 표(마크다운 표) 또는 체크리스트(- [ ]) 로 정보를 구조화.
-- 가격은 정확한 금액 대신 범위로, "재고·가격은 전화로 확인" 안내.
-- 최상급·홍보 표현 금지: "최고", "1등", "강추", "무조건", "역대급".
-- 본문 어딘가에 정확히 한 번 \`{{사장님_한마디}}\` 라는 글자를 그대로 넣을 것 (사장님이 직접 쓸 자리). 문단 하나가 통째로 그 자리여야 함.
-- 글 끝에 "※ 아래에 매장 지도(장소)를 붙여 주세요" 한 줄.
-- 태그는 10개 이하, 지역+차종+타이어명 조합.
-
-절대 쓰지 말 것 (개인정보):
-- 차량번호(일부라도), 손님 이름, 전화번호, 동네 이름, 차 색깔+모델 조합, 정확한 주행거리(주어진 "N만km대" 그대로만), 정확한 날짜, 손님의 사연·직업.
-- 주어진 사실에 없는 것을 지어내지 말 것. 모르는 건 일반론으로.`;
 
 interface DraftJson {
   titles: string[];
@@ -234,7 +226,7 @@ const SCHEMA = {
   properties: {
     titles: { type: "array", minItems: 3, maxItems: 3, items: { type: "string" } },
     body: { type: "string" },
-    tags: { type: "array", maxItems: 10, items: { type: "string" } },
+    tags: { type: "array", minItems: 10, maxItems: 14, items: { type: "string" } },
   },
 };
 
@@ -259,25 +251,39 @@ export async function generateDraft(
   const warn = duplicateWarn(f, titles);
   const facts = factsText(f);
 
-  const user = [
+  /**
+   * ⭐ 문체 정본 — 규칙 스무 개보다 **사장님이 실제로 쓰신 글 한 편**이 강하다 (2026-09-02).
+   *    매장 PC 에서만 읽힌다. 못 읽으면 규칙만으로 쓴다.
+   */
+  const samples = await loadStyleSamples(2);
+  if (samples.length) opts?.onLog?.(`사장님 글 ${samples.length}편을 문체 본보기로 넣습니다`);
+  else opts?.onLog?.("사장님 글을 못 찾아 규칙만으로 씁니다 (BLOG_WORK_DIR 확인)");
+  const system = buildSystem(samples);
+
+  const baseUser = [
     "아래 시공 사실로 블로그 글 초안을 써 주세요.",
     "",
     facts,
     "",
-    `글 구조: ${structure}`,
+    `글을 여는 각도: ${structure}`,
     titles.length ? `최근에 올린 글 제목(겹치지 않게): ${titles.slice(0, 8).join(" / ")}` : null,
     opts?.variant ? "이전 초안과 다른 각도·다른 첫 문장으로." : null,
+    "",
+    "🔴 주어진 사실이 이게 전부입니다. 손님이 무슨 말을 했는지, 무엇을 발견했는지는",
+    "   적혀 있지 않으니 지어내지 마세요. 없으면 그 대목은 통째로 빼고 짧게 쓰는 편이 낫습니다.",
   ]
     .filter((s) => s !== null)
     .join("\n");
 
   let lastErr = "";
-  for (let attempt = 0; attempt < 2; attempt++) {
+  /** 앞선 시도에서 잡힌 문제 — 다음 시도 지시문에 그대로 붙여 준다 */
+  let feedback = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
     let out: { data: DraftJson; model: string };
     try {
       out = await generateJson<DraftJson>({
-        system: SYSTEM,
-        user,
+        system,
+        user: feedback ? `${baseUser}\n\n앞서 쓴 글에서 이런 문제가 있었습니다. 고쳐 주세요:\n${feedback}` : baseUser,
         schema: SCHEMA,
         effort: "medium",
         onLog: opts?.onLog,
@@ -290,6 +296,15 @@ export async function generateDraft(
     const leak = privacyFilter(whole, f.redact);
     if (leak) {
       lastErr = `개인정보로 보이는 글자(${leak})가 나와 버렸습니다`;
+      feedback = "개인정보(번호판·이름·전화)를 절대 쓰지 마세요.";
+      continue;
+    }
+    /** ⭐ 「AI 가 쓴 티」 검사 (2026-09-02) — 걸리면 지적을 붙여 다시 쓰게 한다 */
+    const style = styleFilter(data.body);
+    if (style) {
+      opts?.onLog?.(`다시 씁니다 — ${style.reason}`);
+      lastErr = style.reason;
+      feedback = style.fix;
       continue;
     }
     if (!data.body.includes(OWNER_SLOT)) {

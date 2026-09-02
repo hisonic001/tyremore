@@ -14,6 +14,7 @@ const facts: DraftFacts = {
   maker: "현대자동차",
   model: "그랜저",
   year: 2019,
+  mileage: 82_400,
   mileageBand: mileageBand(82_400),
   tires: [{ name: "Primacy 4", spec: "235/45R18", qty: 4 }],
   services: ["휠얼라인먼트"],
@@ -29,11 +30,16 @@ describe("지시문에 들어가는 사실", () => {
     assert.equal(seasonPhrase("2026-08-29"), "8월 말, 한여름");
     assert.equal(seasonPhrase("2026-12-03"), "12월 초, 초겨울");
   });
-  it("사실 문장에 이름·번호판·정확한 km 가 없다", () => {
+  /**
+   * ⭐ 2026-09-02 — 주행거리를 **정확히** 넣는 것으로 바꿨다.
+   * 뭉갠 숫자("8만km대")가 사장님이 지적하신 「AI 가 쓴 티」의 큰 축이었고,
+   * 실제 발행 글은 "126,726km"처럼 정확히 쓴다. 번호판·이름은 여전히 안 나간다.
+   */
+  it("사실 문장에 이름·번호판은 없고 주행거리는 정확하다", () => {
     const t = factsText(facts);
-    assert.match(t, /그랜저 2019년식, 주행 8만km대/);
+    assert.match(t, /그랜저 2019년식, 주행거리 82,400km/);
     assert.match(t, /Primacy 4 235\/45R18 4본/);
-    assert.doesNotMatch(t, /김철수|박영희|82,?400|010/);
+    assert.doesNotMatch(t, /김철수|박영희|010-/);
   });
 });
 

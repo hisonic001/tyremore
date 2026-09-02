@@ -13,7 +13,15 @@ export interface DraftFacts {
   maker: string | null;
   model: string | null;
   year: number | null;
-  /** "8만km대" — 정확한 수치는 손님 특정 위험이라 만 단위로 뭉갠다 */
+  /**
+   * ⭐ 주행거리 — **정확한 km 를 그대로 쓴다** (2026-09-02).
+   *
+   * 전에는 "8만km대"로 뭉갰는데, 사장님이 실제로 발행하신 글은 "126,726km"처럼
+   * 정확히 쓰신다. 뭉갠 숫자는 아무 말도 안 한 것과 같아 「AI 가 쓴 티」의 큰 축이었다.
+   * 번호판·이름이 안 나가는 한 이 숫자만으로 손님을 특정할 수 없다.
+   */
+  mileage: number | null;
+  /** 쓰지 않는다 — 옛 초안 호환용으로만 남긴다 */
   mileageBand: string | null;
   tires: { name: string; spec: string | null; qty: number }[];
   services: string[];
@@ -43,7 +51,7 @@ export function factsText(f: DraftFacts): string {
   const car = [f.maker, f.model, f.year ? `${f.year}년식` : null].filter(Boolean).join(" ") || "차종 미상";
   const tires = f.tires.map((t) => `${t.name}${t.spec ? ` ${t.spec}` : ""} ${t.qty}본`).join(", ");
   return [
-    `차량: ${car}${f.mileageBand ? `, 주행 ${f.mileageBand}` : ""}`,
+    `차량: ${car}${f.mileage ? `, 주행거리 ${f.mileage.toLocaleString("ko-KR")}km` : ""}`,
     `시공: ${tires}`,
     f.services.length ? `함께 한 작업: ${f.services.join(", ")}` : null,
     `시기: ${f.season}`,
