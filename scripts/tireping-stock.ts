@@ -207,6 +207,10 @@ async function main() {
   const src = positional[0];
   const useNoDot = flags.has("--dot-unknown");
   const dry = flags.has("--dry");
+  /* ⭐ --zero-others (사장님 요청 2026-09-02 "그 이외의 상품들은 일단 지워줘") —
+     좁힌 제조사 밖의 줄은 재고수량을 0 으로 쓴다. 줄 삭제는 양식·토큰이 깨질 수
+     있어 안 한다 — 재고 0 이 판매 내리기와 같은 효과다. */
+  const zeroOthers = flags.has("--zero-others");
   const onlyBrand = values.get("--brand") ?? null;
   const stockFile = values.get("--stock-file") ?? null;
   if (!src) {
@@ -268,11 +272,13 @@ async function main() {
    */
   for (const line of [...lines].sort((x, y) => y.dotYear - x.dotYear)) {
     const p = line.product;
-    if (!p || !line.dotYear || !line.mine) continue;
+    /* ⭐ 등록 연식이 빈 줄(신규 등록 직후 꼴, 2026-09-02 실측)은 「연식 제한 없음」 —
+       DOT 아는 재고면 아무 연도나 배정한다. 정렬상 연식 지정 줄이 먼저 가져간다. */
+    if (!p || !line.mine) continue;
     let take = 0;
     for (const [year, n] of p.left) {
       if (n <= 0) continue;
-      const ok = year === "없음" ? useNoDot : Number(year) >= line.dotYear; // 규칙 ①·③
+      const ok = year === "없음" ? useNoDot : line.dotYear === 0 || Number(year) >= line.dotYear; // 규칙 ①·③ (연식 빈 줄은 제한 없음)
       if (!ok) continue;
       take += n;
       p.left.set(year, 0);
@@ -333,10 +339,19 @@ async function main() {
   }
 
   // ── 재고수량 칸만 고쳐 다시 쓴다 ───────────────────────
+  let zeroed = 0;
   for (const l of lines) {
-    if (!l.mine) continue; // 좁혔으면 남의 줄은 원래 값 그대로 둔다
+    if (!l.mine) {
+      if (zeroOthers) {
+        ws[XLSX.utils.encode_cell({ c: COL.재고수량, r: l.rowIndex })] = { t: "n", v: 0 };
+        zeroed++;
+      }
+      continue; // 좁혔으면 남의 줄은 (zero-others 아니면) 원래 값 그대로 둔다
+    }
     ws[XLSX.utils.encode_cell({ c: COL.재고수량, r: l.rowIndex })] = { t: "n", v: l.qty };
   }
+  if (zeroed > 0) console.log(`
+⭕ ${onlyBrand} 외 ${zeroed}줄은 재고 0 으로 내렸습니다 (판매 안 됨 — 줄 삭제 대신)`);
   const stamp = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Seoul" }).slice(0, 10).replace(/-/g, "");
   const tag = onlyBrand ? `_${onlyBrand}` : "";
   const out = path.join(path.dirname(src), `타이어핑_재고반영${tag}_${stamp}.xls`);
