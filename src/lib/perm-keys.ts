@@ -26,6 +26,9 @@ export const PERM_KEYS = [
   "cost",
   "master",
   "reassign",
+  /* ⭐ 마케팅 (2026-09-02) — 여기 없이 isOwner() 로만 막고 있어 정본 규칙에서 벗어나 있었다.
+     기본 꺼짐. 사장님이 직원에게 블로그 원고 쓰기를 맡기고 싶어지면 스위치로 열면 된다. */
+  "marketing",
 ] as const;
 
 export type PermKey = (typeof PERM_KEYS)[number];
@@ -33,7 +36,7 @@ export type PermKey = (typeof PERM_KEYS)[number];
 /** 매장 일(기본 묶음) — 「전부 켜기」는 이 일곱 개만 켠다 */
 export const BASE_KEYS: readonly PermKey[] = ["sale", "sale_edit", "stock", "receiving", "customer", "mars", "receivable_view"];
 /** 사장님 영역(민감 묶음) — 사장님이 개별로만 해금 */
-export const OWNER_KEYS: readonly PermKey[] = ["finance", "reports", "cost", "master", "reassign"];
+export const OWNER_KEYS: readonly PermKey[] = ["finance", "reports", "cost", "master", "reassign", "marketing"];
 
 /** 화면 표시용 — 설정→계정의 스위치 순서 그대로 */
 export const PERM_LABELS: Record<PermKey, { label: string; hint: string }> = {
@@ -49,6 +52,7 @@ export const PERM_LABELS: Record<PermKey, { label: string; hint: string }> = {
   cost: { label: "매입가·마진 보기", hint: "판매·재고·입고 화면의 매입원가와 마진 표시 + 매입가 수정" },
   master: { label: "상품·가격·거래처 관리", hint: "상품·공임 목록, 기표가·할인율, 거래처 추가·수정" },
   reassign: { label: "손님·거래처 바꾸기", hint: "판매의 주인을 다른 손님·거래처로 재배정" },
+  marketing: { label: "마케팅", hint: "네이버 블로그 원고·리뷰 답글 초안 만들기 (발행은 사람이 직접)" },
 };
 
 export type PermMap = Partial<Record<PermKey, boolean>>;

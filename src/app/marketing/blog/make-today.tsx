@@ -90,7 +90,7 @@ export function MakeTodayButton({
     <div className="flex flex-col items-end gap-2">
       <div className="flex items-center gap-2">
         <StatusPill tone={agent.alive ? "success" : "neutral"}>
-          {agent.alive ? "매장 PC 켜짐" : "매장 PC 꺼짐"}
+          {agent.alive ? `매장 PC 켜짐${agent.host ? ` (${agent.host})` : ""}` : "매장 PC 꺼짐"}
         </StatusPill>
         {busy ? (
           <Button variant="secondary" pending={pending} onClick={stop}>

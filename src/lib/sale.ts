@@ -25,7 +25,6 @@ import { normalizePlate } from "./normalize";
 import { ensureGarageCustomer } from "./garage";
 import { customer, quote, quoteItem, quotePayment, serviceItem, stockItem, stockMovement, vehicle } from "@/db/schema";
 import { checkSplitPayments } from "./payments";
-import { isReferral } from "./referral";
 import { ageAnchorSql } from "./tire-age";
 import type { NewCustomerInput } from "./sale-types";
 import { PERM_DENIED } from "./perm-keys";
@@ -91,8 +90,6 @@ export interface SaleInput {
    * MARS 점검표의 타이어 교체 표시가 이걸 그대로 따른다. 비면 본수로 짐작한다.
    */
   tyrePositions?: string[] | null;
-  /** ⭐ 어떻게 알고 오셨는지 (마케팅 0단계, 2026-08-29) — referral.ts REFERRALS 중 하나. 안 물으면 null */
-  referral?: string | null;
   /**
    * ⭐ 거래처 판매 (사장님 요청 2026-08-05) — "거래처 판매는 따로 MARS 에는
    *    등록하지 않아도 되게". 거래처 이름이 있으면 mars_status 를 「해당없음」으로
@@ -288,8 +285,6 @@ export async function saveSale(
             paymentMethod: payMethod,
             paidAmount: total,
             paymentMemo: input.memo ?? null,
-            // 어떻게 알고 오셨는지 — 목록에 없는 값은 버린다 (마케팅 0단계)
-            referral: isReferral(input.referral) ? input.referral : null,
             // 거래처 판매는 MARS 에 안 간다 (사장님 요청 2026-08-05)
             // 서비스(무상)도 MARS 에 안 간다 (2026-08-07) — 0원 매출 주문을 자동 전기하는 것은 위험하다
             // ⭐ '보류' = 자동으로 MARS 에 올라가지 않는다 (사장님 지시 2026-08-09).

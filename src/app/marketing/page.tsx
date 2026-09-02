@@ -1,7 +1,7 @@
 import { ChevronRight, MessageSquareReply, PenLine } from "lucide-react";
 import { redirect } from "next/navigation";
 import Link from "@/lib/link";
-import { isOwner } from "@/lib/auth";
+import { hasPerm } from "@/lib/auth";
 import { pendingDraftCount } from "@/lib/blog-draft";
 import { StatusPill } from "@/components/ui/badge";
 import { PageHeader, PageShell } from "@/components/ui/page";
@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
  * 검색광고 API 는 월 광고비가 50만원을 넘으면 붙인다 (지금 25만원 — 수집 자동화보다 계정 점검이 낫다).
  */
 export default async function MarketingHome() {
-  if (!(await isOwner())) redirect("/settings");
+  if (!(await hasPerm("marketing"))) redirect("/settings");
   const pending = await pendingDraftCount();
 
   const items = [
@@ -73,8 +73,8 @@ export default async function MarketingHome() {
             이 규모에서 돈을 아끼는 건 입찰가가 아니라 이 셋입니다. 비용 상위 5개 키워드 확인.
           </li>
           <li>
-            <strong>판매 등록</strong> — 결제 칸의 「어떻게 알고 오셨어요?」를 눌러 주세요.
-            광고가 돈이 됐는지 볼 수 있는 유일한 숫자입니다.
+            <strong>작업 사진</strong> — 시공 중 사진을 <strong>건별 폴더</strong>에 모아 두세요.
+            차량 정면·계기판 주행거리·문제 부위 접사·측정 화면(수치)이 글의 뼈대가 됩니다.
           </li>
         </ul>
       </section>

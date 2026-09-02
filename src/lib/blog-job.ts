@@ -15,7 +15,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { blogJob } from "@/db/schema";
-import { getSession, isOwner } from "./auth";
+import { getSession, hasPerm } from "./auth";
 
 /** 대리인이 살아 있다고 볼 시간 — 15초마다 찍으므로 60초면 넉넉하다 */
 const ALIVE_SEC = 60;
@@ -37,18 +37,31 @@ export interface AgentStatus {
   /** 'HH:MM:SS' — 마지막으로 살아 있다고 찍은 시각 */
   lastSeen: string | null;
   version: string | null;
+  /** 켜져 있는 컴퓨터 이름 (매장 PC 가 두 대다) */
+  host: string | null;
 }
 
-/** 매장 PC 대리인이 켜져 있는가 */
+/**
+ * 매장 PC 대리인이 켜져 있는가 — **두 대 중 하나라도** 최근에 찍었으면 켜짐.
+ * 가장 최근에 찍은 한 대를 대표로 보여 준다.
+ */
 export async function blogAgentStatus(): Promise<AgentStatus> {
-  const rows = await db.execute<{ alive: boolean; last_seen: string | null; version: string | null }>(sql`
+  const rows = await db.execute<{
+    alive: boolean;
+    last_seen: string | null;
+    version: string | null;
+    host: string | null;
+  }>(sql`
     SELECT now() - last_seen < ${`${ALIVE_SEC} seconds`}::interval AS alive,
            to_char(last_seen AT TIME ZONE 'Asia/Seoul', 'HH24:MI:SS') AS last_seen,
-           version
-    FROM agent_heartbeat WHERE name = 'blog'`);
+           version, host
+    FROM agent_heartbeat
+    WHERE name = 'blog'
+    ORDER BY last_seen DESC
+    LIMIT 1`);
   const r = rows[0];
-  if (!r) return { alive: false, lastSeen: null, version: null };
-  return { alive: !!r.alive, lastSeen: r.last_seen, version: r.version };
+  if (!r) return { alive: false, lastSeen: null, version: null, host: null };
+  return { alive: !!r.alive, lastSeen: r.last_seen, version: r.version, host: r.host };
 }
 
 /**
@@ -59,7 +72,7 @@ export async function requestBlogJob(
   kind: "초안",
   payload: Record<string, unknown> = {},
 ): Promise<{ ok: true; jobId: number; existing: boolean } | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "사장님 계정만 쓸 수 있습니다" };
+  if (!(await hasPerm("marketing"))) return { ok: false, error: "마케팅 권한이 없습니다" };
   const session = await getSession();
   if (!session) return { ok: false, error: "로그인이 필요합니다" };
 
@@ -133,7 +146,7 @@ export async function latestBlogJob(): Promise<BlogJobRow | null> {
 export async function cancelBlogJob(
   jobId: number,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "사장님 계정만 쓸 수 있습니다" };
+  if (!(await hasPerm("marketing"))) return { ok: false, error: "마케팅 권한이 없습니다" };
   const [r] = await db
     .select({ status: blogJob.status, startedAt: blogJob.startedAt })
     .from(blogJob)

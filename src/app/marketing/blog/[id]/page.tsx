@@ -1,5 +1,5 @@
 import { notFound, redirect } from "next/navigation";
-import { isOwner } from "@/lib/auth";
+import { hasPerm } from "@/lib/auth";
 import { getDraft } from "@/lib/blog-draft";
 import { PageHeader, PageShell } from "@/components/ui/page";
 import { DraftEditor } from "./draft-ui";
@@ -7,7 +7,7 @@ import { DraftEditor } from "./draft-ui";
 export const dynamic = "force-dynamic";
 
 export default async function BlogDraftPage({ params }: { params: Promise<{ id: string }> }) {
-  if (!(await isOwner())) redirect("/settings");
+  if (!(await hasPerm("marketing"))) redirect("/settings");
   const { id } = await params;
   const d = await getDraft(Number(id));
   if (!d) notFound();

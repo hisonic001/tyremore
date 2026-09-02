@@ -8,14 +8,14 @@ import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { blogDraft } from "@/db/schema";
-import { isOwner } from "./auth";
+import { hasPerm } from "./auth";
 import { getDraft } from "./blog-draft";
 import { requestBlogJob } from "./blog-job";
 
 type R = { ok: true } | { ok: false; error: string };
 
 async function guard(): Promise<string | null> {
-  return (await isOwner()) ? null : "사장님 계정만 쓸 수 있습니다";
+  return (await hasPerm("marketing")) ? null : "마케팅 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다";
 }
 
 /**

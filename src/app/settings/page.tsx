@@ -84,6 +84,7 @@ export default async function SettingsPage() {
     stock: await hasPerm("stock"),
     receivable: await hasPerm("receivable_view"),
     master: await hasPerm("master"),
+    marketing: await hasPerm("marketing"),
   };
 
   const items = [
@@ -98,11 +99,15 @@ export default async function SettingsPage() {
             title: "계정 관리",
             desc: "계정 만들기 · 할 수 있는 일 스위치 · 아이디·비밀번호 (항상 사장님 전용)",
           },
-          /* ⭐ 마케팅 (2026-08-29, docs/17) — 블로그 초안·리뷰 답글 초안. 발행은 사장님이 직접 */
+        ]
+      : []),
+    /* ⭐ 마케팅 (2026-09-02) — 권한 스위치로 옮겼다. 홈에도 진입 줄이 있다 */
+    ...(can.marketing
+      ? [
           {
             href: "/marketing",
             title: "마케팅",
-            desc: "네이버 블로그 초안 · 리뷰 답글 초안 (사장님 전용)",
+            desc: "네이버 블로그 원고 · 리뷰 답글 초안 — 발행은 직접 하십니다",
           },
         ]
       : []),

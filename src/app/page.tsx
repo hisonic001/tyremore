@@ -1,5 +1,5 @@
 import Link from "@/lib/link";
-import { getSession } from "@/lib/auth";
+import { hasPerm } from "@/lib/auth";
 import { findProducts, findVehicles, guessMode, tireBrands, type Mode } from "@/lib/search";
 import type { Season } from "@/lib/tire-attrs";
 import { SearchBox, SearchButton } from "./search-box";
@@ -7,6 +7,8 @@ import { FilterPanel, ModeTabs } from "./search-ui";
 import { ProductCard, VehicleCard } from "./cards";
 import { ComparePanel } from "./compare-panel";
 import { pendingDraftCount } from "@/lib/blog-draft";
+import { ListRow } from "@/components/ui/list-row";
+import { StatusPill } from "@/components/ui/badge";
 import { PenLine } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -65,9 +67,15 @@ export default async function Home({
     (filter.inStock ? 1 : 0) +
     (filter.parts ? 1 : 0);
 
-  const session = await getSession();
-  /* ⭐ 밤에 만들어 둔 블로그 초안 (마케팅 1단계, 2026-08-29) — 사장님 계정에만, 있을 때만 */
-  const draftsWaiting = session?.role === "owner" && !q ? await pendingDraftCount().catch(() => 0) : 0;
+  /**
+   * ⭐ 마케팅 진입 줄 (2026-09-02) — 사장님 "앱에서 마케팅 버튼을 못 찾겠음"
+   *
+   * 전에는 「초안이 있을 때만」 뜨는 배너였다. 그런데 초안은 마케팅 안에서만 만들어지므로
+   * **영영 안 뜨는 순환**이었다. 이제 검색 중이 아니면 **늘 보인다** — 할 일이 있으면
+   * 건수 배지가 붙는다. 탭바(5칸)는 늘리지 않기로 한 결정을 지키면서 길을 하나 더 낸다.
+   */
+  const canMarketing = !q && (await hasPerm("marketing"));
+  const draftsWaiting = canMarketing ? await pendingDraftCount().catch(() => 0) : 0;
   const [vehicles, products, brands] = await Promise.all([
     mode === "customer" && q ? findVehicles(q) : Promise.resolve([]),
     mode === "product"
@@ -107,17 +115,20 @@ export default async function Home({
         </nav>
       </header>
 
-      {draftsWaiting > 0 && (
-        <Link
-          href="/marketing/blog"
-          className="mb-3 flex items-center gap-3 rounded-card border border-accent-400 bg-amber-50 px-4 py-3 active:bg-amber-100"
-        >
-          <PenLine className="size-5 shrink-0 text-amber-800" />
-          <span className="min-w-0 flex-1 text-sm leading-snug text-amber-900">
-            <strong>블로그 초안 {draftsWaiting}개</strong>가 기다립니다 — 한마디 쓰고 복사해서 올리세요
-          </span>
-          <span className="shrink-0 text-xs font-semibold text-amber-800">열기 →</span>
-        </Link>
+      {canMarketing && (
+        <div className="mb-3 rounded-card border border-slate-200 bg-white px-2.5 shadow-card">
+          <ListRow
+            href="/marketing"
+            icon={<PenLine className="size-5" />}
+            title="마케팅"
+            sub={
+              draftsWaiting > 0
+                ? "원고가 기다립니다 — 한마디 쓰고 복사해서 올리세요"
+                : "블로그 원고 만들기 · 리뷰 답글 초안"
+            }
+            right={draftsWaiting > 0 ? <StatusPill tone="accent">{draftsWaiting}개</StatusPill> : undefined}
+          />
+        </div>
       )}
 
       <ModeTabs mode={mode} q={q} />

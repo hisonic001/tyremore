@@ -13,7 +13,7 @@
  * 🔴 붙여넣은 원문에서 이름·전화로 보이는 글자는 API 로 나가기 전에 가린다.
  */
 import { generateJson } from "./ai";
-import { isOwner } from "./auth";
+import { hasPerm } from "./auth";
 
 const SYSTEM = `당신은 강원도 속초 타이어 전문점 「타이어모어 속초점」 사장입니다. 네이버 플레이스 리뷰에 다는 답글을 씁니다.
 - 80~120자. 존댓말. 담백하게. 이모지는 많아야 하나.
@@ -39,7 +39,7 @@ function mask(text: string): string {
 }
 
 export async function draftReply(input: { rating: number; text: string }): Promise<{ ok: true; reply: string } | { ok: false; error: string }> {
-  if (!(await isOwner())) return { ok: false, error: "사장님 계정만 쓸 수 있습니다" };
+  if (!(await hasPerm("marketing"))) return { ok: false, error: "마케팅 권한이 없습니다" };
   const text = mask(input.text.trim()).slice(0, 1500);
   if (text.length < 5) return { ok: false, error: "리뷰 내용을 붙여넣어 주세요" };
   const rating = Math.min(5, Math.max(1, Math.round(input.rating || 5)));

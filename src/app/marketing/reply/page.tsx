@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { isOwner } from "@/lib/auth";
+import { hasPerm } from "@/lib/auth";
 import { PageHeader, PageShell } from "@/components/ui/page";
 import { ReplyForm } from "./reply-ui";
 
@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 /** 리뷰 답글 초안 — 붙여넣기 → 초안 → 복사. 저장하지 않는다 */
 export default async function ReplyPage() {
-  if (!(await isOwner())) redirect("/settings");
+  if (!(await hasPerm("marketing"))) redirect("/settings");
   return (
     <PageShell>
       <PageHeader title="리뷰 답글 초안" back={{ href: "/marketing", label: "마케팅" }} />

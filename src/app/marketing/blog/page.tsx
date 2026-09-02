@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import Link from "@/lib/link";
-import { isOwner } from "@/lib/auth";
+import { hasPerm } from "@/lib/auth";
 import { listDrafts } from "@/lib/blog-draft";
 import { blogAgentStatus, latestBlogJob } from "@/lib/blog-job";
 import { StatusPill } from "@/components/ui/badge";
@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 
 /** 블로그 초안 목록 — 아직 안 올린 것이 위에 온다 */
 export default async function BlogDraftList() {
-  if (!(await isOwner())) redirect("/settings");
+  if (!(await hasPerm("marketing"))) redirect("/settings");
   // 🔴 풀러를 아끼려고 순차로 부른다 (Promise.all 금지 — 2026-08-11 마비 사건)
   const rows = await listDrafts();
   const agent = await blogAgentStatus();

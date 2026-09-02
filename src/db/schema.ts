@@ -23,6 +23,7 @@ import {
   jsonb,
   numeric,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -633,10 +634,9 @@ export const quote = pgTable(
     tyrePositions: text("tyre_positions"),
 
     /**
-     * ⭐ 어떻게 알고 오셨는지 (마케팅 0단계, 2026-08-29 — docs/17)
-     *    광고비가 돈이 됐는지 볼 수 있는 **유일하게 믿을 만한 분모**다. 네이버는
-     *    「이 손님이 광고 보고 왔다」를 안 넘겨주므로, 결제 때 한 번 묻는 것이
-     *    어떤 API 조합보다 정확하다. 과거 건은 NULL. 값은 referral.ts REFERRALS.
+     * 어떻게 알고 오셨는지 — 🔴 **지금은 안 쓴다** (사장님 결정 2026-09-02 "필요없음").
+     *    결제 화면의 칸과 저장 경로를 전부 걷어냈고, 컬럼만 전부 NULL 인 채로 남겨 뒀다
+     *    (지우는 건 되돌릴 수 없고 얻는 게 없다). 다시 쓰자는 제안은 하지 않는다.
      */
     referral: text("referral"),
 
@@ -1448,15 +1448,27 @@ export const blogDraft = pgTable(
  *   누르고 한 시간을 기다린다. 원고는 1~3분짜리다. 자원(크롬 프로필)도 겹치지 않는다.
  * ========================================================== */
 
-/** 대리인이 살아 있는지 — 15초마다 스스로 찍는다. 앱은 60초 넘으면 「꺼져 있음」 */
-export const agentHeartbeat = pgTable("agent_heartbeat", {
-  /** 'mars' | 'blog' */
-  name: text("name").primaryKey(),
-  lastSeen: timestamp("last_seen", { withTimezone: true }).notNull().defaultNow(),
-  host: text("host"),
-  /** claude CLI 판번호 등 — 화면에 그대로 보여 문제를 짚기 쉽게 */
-  version: text("version"),
-});
+/**
+ * 대리인이 살아 있는지 — 15초마다 스스로 찍는다. 앱은 60초 넘으면 「꺼져 있음」.
+ *
+ * 🔴 열쇠가 (name, host) 두 칸인 이유: **매장 컴퓨터가 두 대**다
+ *    (사장님 2026-09-02 "매장 컴퓨터 두대를 클라우드 연동을 해서 쓰고 있음").
+ *    name 하나면 두 대가 서로 덮어써서 어느 쪽이 켜져 있는지 알 수 없다.
+ *    앱은 「둘 중 하나라도 최근에 찍었으면 켜짐」으로 본다.
+ */
+export const agentHeartbeat = pgTable(
+  "agent_heartbeat",
+  {
+    /** 'mars' | 'blog' */
+    name: text("name").notNull(),
+    /** 컴퓨터 이름 — 어느 PC 가 처리했는지 화면에 보여 준다 */
+    host: text("host").notNull().default("?"),
+    lastSeen: timestamp("last_seen", { withTimezone: true }).notNull().defaultNow(),
+    /** claude CLI 판번호 등 — 화면에 그대로 보여 문제를 짚기 쉽게 */
+    version: text("version"),
+  },
+  (t) => [primaryKey({ columns: [t.name, t.host] })],
+);
 
 export const blogJob = pgTable(
   "blog_job",

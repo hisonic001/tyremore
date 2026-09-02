@@ -42,11 +42,12 @@ function claudeVersion(): string {
 }
 
 async function beat(version: string) {
+  // 🔴 열쇠가 (name, host) — 매장 PC 가 두 대라 서로 덮어쓰면 안 된다
   await sql`
-    INSERT INTO agent_heartbeat (name, last_seen, host, version)
-    VALUES ('blog', now(), ${os.hostname()}, ${version})
-    ON CONFLICT (name) DO UPDATE
-      SET last_seen = now(), host = EXCLUDED.host, version = EXCLUDED.version`.catch(() => {});
+    INSERT INTO agent_heartbeat (name, host, last_seen, version)
+    VALUES ('blog', ${os.hostname()}, now(), ${version})
+    ON CONFLICT (name, host) DO UPDATE
+      SET last_seen = now(), version = EXCLUDED.version`.catch(() => {});
 }
 
 async function appendLog(id: number, line: string) {
@@ -191,11 +192,16 @@ async function main() {
   log(`클로드: ${version}`);
   log("끄려면 이 창에서 Ctrl+C");
 
-  // 지난번에 죽으면서 「실행중」으로 굳은 것 정리
+  /**
+   * 지난번에 죽으면서 「실행중」으로 굳은 것 정리.
+   * 🔴 20분이 지난 것만 건드린다 — **매장 PC 가 두 대**라, 옆 컴퓨터가 지금 만들고 있는
+   *    작업을 이 컴퓨터가 켜지면서 실패로 만들어 버리면 안 된다.
+   *    한 건 최대 제한이 12분이므로 20분이면 진짜로 굳은 것만 걸린다.
+   */
   await sql`
     UPDATE blog_job SET status='실패', finished_at=now(),
       error = COALESCE(error, '대리인이 다시 켜지며 중단 처리되었습니다')
-    WHERE status='실행중'`;
+    WHERE status='실행중' AND started_at < now() - interval '20 minutes'`;
 
   await beat(version);
   const heart = setInterval(() => void beat(version), HEARTBEAT_MS);
