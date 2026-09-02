@@ -1,7 +1,7 @@
 /**
  * 네이버 블로그 초안 (마케팅 1단계, 2026-08-29 — docs/17-네이버-마케팅.md)
  *
- * 밤 9시(크론) 또는 사장님이 버튼을 누르면, 그날 시공 중 블로그감을 골라 초안을 만들어 둔다.
+ * 사장님이 앱에서 버튼을 누르면 매장 PC 대리인이 그날 시공 중 블로그감을 골라 초안을 만든다.
  *
  * 왜 이렇게 하나 (SEO 전문가·현장 운영자 리뷰):
  *   · AI 글이 안 뜨는 이유는 「무색무취·경험 신호 없음」이다. 그래서 실제 시공 사실
@@ -142,6 +142,32 @@ export async function pickCandidates(day: string, limit: number): Promise<DraftF
   return out;
 }
 
+/**
+ * ⭐ 아직 글로 안 쓴 시공이 있는 **가장 최근 날짜** (2026-09-02)
+ *
+ * 사장님은 보통 아침에 버튼을 누르신다 — 그런데 그때 「오늘」은 아직 시공이 없어
+ * 늘 「글감이 없습니다」가 뜬다. 자동화의 목적은 **밀린 것을 비우는 것**이므로,
+ * 오늘이 비어 있으면 최근 14일 안에서 가장 최근에 밀린 날을 찾아 그날로 만든다.
+ * (WHERE 조건은 factsForDay 와 같아야 한다 — 여기서 찾고 저기서 못 쓰면 헛돈다)
+ */
+export async function recentPendingDay(upto: string, backDays = 14): Promise<string | null> {
+  const rows = await db.execute<{ day: string }>(sql`
+    SELECT q.work_date::text AS day
+    FROM quote q
+    JOIN quote_item qi ON qi.quote_id = q.id
+    WHERE q.status = '성사'
+      AND q.supplier_name IS NULL
+      AND COALESCE(q.payment_method, '') <> '서비스'
+      AND q.total_amount > 0
+      AND qi.line_type = 'tire'
+      AND q.work_date IS NOT NULL
+      AND q.work_date <= ${upto}::date
+      AND q.work_date >  ${upto}::date - make_interval(days => ${backDays})
+      AND NOT EXISTS (SELECT 1 FROM blog_draft b WHERE b.quote_id = q.id)
+    GROUP BY 1 ORDER BY 1 DESC LIMIT 1`);
+  return rows[0]?.day ?? null;
+}
+
 /* ------------------------------------------------------------------ */
 /* 최근 글 제목 — 같은 주제 반복 경고 (유사문서 판정 회피)                 */
 /* ------------------------------------------------------------------ */
@@ -225,7 +251,7 @@ export interface GenerateResult {
  */
 export async function generateDraft(
   f: DraftFacts,
-  opts?: { variant?: number; titles?: string[] },
+  opts?: { variant?: number; titles?: string[]; onLog?: (line: string) => void },
 ): Promise<GenerateResult | { ok: false; error: string }> {
   const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(blogDraft);
   const structure = STRUCTURES[(Number(n) + (opts?.variant ?? 0)) % STRUCTURES.length];
@@ -249,7 +275,13 @@ export async function generateDraft(
   for (let attempt = 0; attempt < 2; attempt++) {
     let out: { data: DraftJson; model: string };
     try {
-      out = await generateJson<DraftJson>({ system: SYSTEM, user, schema: SCHEMA, effort: "medium" });
+      out = await generateJson<DraftJson>({
+        system: SYSTEM,
+        user,
+        schema: SCHEMA,
+        effort: "medium",
+        onLog: opts?.onLog,
+      });
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
@@ -286,17 +318,34 @@ export async function generateDraft(
 export const kstToday = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
 
 /**
- * 밤 9시 크론·CLI·화면 버튼이 부르는 하루치 실행.
+ * CLI·매장 PC 대리인이 부르는 하루치 실행.
  * 후보를 고르고 순서대로 만든다. 하나가 실패해도 다음으로 간다.
  */
-export async function runNightly(opts: { day?: string; limit?: number; dry?: boolean } = {}) {
-  const day = opts.day ?? kstToday();
-  const picked = await pickCandidates(day, opts.limit ?? 3);
+export async function runNightly(
+  opts: { day?: string; limit?: number; dry?: boolean; onLog?: (line: string) => void } = {},
+) {
+  let day = opts.day ?? kstToday();
+  const log = opts.onLog ?? (() => {});
+  let picked = await pickCandidates(day, opts.limit ?? 3);
+
+  /* 날짜를 지정하지 않았는데 오늘이 비었으면, 밀려 있는 가장 최근 날로 옮겨 간다 */
+  if (picked.length === 0 && !opts.day) {
+    const back = await recentPendingDay(day);
+    if (back && back !== day) {
+      log(`오늘(${day})은 시공이 없어 ${back} 것으로 만듭니다`);
+      day = back;
+      picked = await pickCandidates(day, opts.limit ?? 3);
+    }
+  }
   const results: { quoteNo: string; facts: string; result: Awaited<ReturnType<typeof generateDraft>> | null }[] = [];
   if (opts.dry) return { day, results: picked.map((f) => ({ quoteNo: f.quoteNo, facts: factsText(f), result: null })) };
+  log(`글감 ${picked.length}건을 골랐습니다 (${day})`);
   const titles = await recentBlogTitles();
+  let i = 0;
   for (const f of picked) {
-    const result = await generateDraft(f, { titles });
+    i += 1;
+    log(`[${i}/${picked.length}] ${f.maker ?? ""} ${f.model ?? ""} — ${f.quoteNo}`.replace(/\s+/g, " ").trim());
+    const result = await generateDraft(f, { titles, onLog: opts.onLog });
     results.push({ quoteNo: f.quoteNo, facts: factsText(f), result });
   }
   return { day, results };

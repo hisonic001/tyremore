@@ -22,7 +22,8 @@
     "blog-draft": "tsx scripts/blog-draft.ts",
     "db:backup": "tsx scripts/backup-db.ts",
     "db:restore": "tsx scripts/restore-db.ts",
-    "mars:agent": "tsx scripts/mars-agent.ts"
+    "mars:agent": "tsx scripts/mars-agent.ts",
+    "blog:agent": "tsx scripts/blog-agent.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.122.0",

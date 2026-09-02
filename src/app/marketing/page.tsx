@@ -24,7 +24,7 @@ export default async function MarketingHome() {
       href: "/marketing/blog",
       Icon: PenLine,
       title: "블로그 초안",
-      desc: "밤 9시에 그날 시공으로 초안을 만들어 둡니다. 한마디 쓰고 복사해서 올리세요.",
+      desc: "매장 PC 가 그날 시공으로 원고를 만듭니다. 한마디 쓰고 복사해서 올리세요.",
       badge: pending > 0 ? `${pending}개 대기` : null,
     },
     {

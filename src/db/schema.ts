@@ -1433,3 +1433,53 @@ export const blogDraft = pgTable(
     index("idx_blog_draft_status").on(t.status, t.createdAt),
   ],
 );
+
+/* ============================================================
+ * 3-20. blog_job · agent_heartbeat — 앱 버튼 → 매장 PC 다리 (2026-09-02)
+ *
+ * 🔴 글은 매장 PC 에서만 만들어진다. 클로드 **구독**이 그 PC 에 로그인되어 있기
+ *    때문이다 (Vercel 에는 그 로그인이 없다). 그래서 mars_run 과 똑같은 다리를 둔다:
+ *
+ *      [앱 버튼] → blog_job 「대기」 → [scripts/blog-agent.ts] → claude -p
+ *                                          └ 진행 로그를 되쓴다 → [앱 화면]
+ *
+ * mars_run 에 kind 를 얹지 않고 표를 따로 둔 이유:
+ *   MARS 입력은 최대 70분짜리이고 「한 번에 하나」라, 그 뒤에 서면 사장님이 버튼을
+ *   누르고 한 시간을 기다린다. 원고는 1~3분짜리다. 자원(크롬 프로필)도 겹치지 않는다.
+ * ========================================================== */
+
+/** 대리인이 살아 있는지 — 15초마다 스스로 찍는다. 앱은 60초 넘으면 「꺼져 있음」 */
+export const agentHeartbeat = pgTable("agent_heartbeat", {
+  /** 'mars' | 'blog' */
+  name: text("name").primaryKey(),
+  lastSeen: timestamp("last_seen", { withTimezone: true }).notNull().defaultNow(),
+  host: text("host"),
+  /** claude CLI 판번호 등 — 화면에 그대로 보여 문제를 짚기 쉽게 */
+  version: text("version"),
+});
+
+export const blogJob = pgTable(
+  "blog_job",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    /** '초안' (앞으로 '스캔'·'정리'가 붙는다) */
+    kind: text("kind").notNull().default("초안"),
+    status: text("status").notNull().default("대기"),
+    /** 요청 내용 — 지금은 { limit } 뿐. 폴더·사진·양식이 여기로 들어온다 */
+    payload: jsonb("payload").$type<Record<string, unknown>>(),
+    /** 만들어진 blog_draft.id 들 — 끝나면 앱이 바로 그리로 보낸다 */
+    draftIds: jsonb("draft_ids").$type<number[]>(),
+    log: text("log"),
+    /** 사장님이 읽을 한국어 한 줄 (사용량 초과·로그인 만료 등) */
+    error: text("error"),
+    requestedBy: bigint("requested_by", { mode: "number" }).references(() => appUser.id),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => [
+    check("blog_job_kind", sql`${t.kind} IN ('초안','스캔','정리')`),
+    check("blog_job_status", sql`${t.status} IN ('대기','실행중','완료','실패')`),
+    index("idx_blog_job_open").on(t.status),
+  ],
+);

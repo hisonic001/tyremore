@@ -64,12 +64,17 @@ export function DraftEditor({ draft }: { draft: Draft }) {
       }
     });
 
+  /**
+   * 「다르게 한 번 더」 — 매장 PC 에 주문만 넣는다. 1~3분 뒤 목록 맨 위에 새 원고가 생긴다.
+   * (예전에는 여기서 바로 만들어 새 글로 넘어갔지만, 이제 만드는 곳이 매장 PC 다)
+   */
   const regen = () =>
     start(async () => {
       setMsg(null);
       const r = await regenerateDraft(draft.id);
       if (!r.ok) return setMsg(r.error);
-      router.push(`/marketing/blog/${r.newId}`);
+      setMsg("매장 PC 에 요청했습니다 — 1~3분 뒤 목록 맨 위에 새 원고가 생깁니다.");
+      router.refresh();
     });
 
   const mark = async (status: "발행" | "버림") => {

@@ -1,13 +1,18 @@
 /**
- * 블로그 초안 — 매장 PC 에서 직접 돌리기 (마케팅 1단계, docs/17)
+ * 블로그 초안 — 매장 PC 에서 돌린다 (docs/17)
  *
- *   npm run blog-draft -- --dry              오늘 후보와 지시문에 들어갈 사실만 보여준다 (API 안 부름)
- *   npm run blog-draft -- --limit 1          초안 1건만 만든다 — 처음 시험할 때
+ *   npm run blog-draft -- --dry              오늘 후보와 지시문에 들어갈 사실만 (모델 안 부름)
+ *   npm run blog-draft -- --limit 1          초안 1건만 — 처음 시험할 때
  *   npm run blog-draft                       오늘 최대 3건
  *   npm run blog-draft -- --day 2026-08-28   다른 날짜
  *   npm run blog-draft -- --quote 1234       특정 판매 한 건 (quote.id)
+ *   npm run blog-draft -- --api              구독 대신 API 키로 (기본은 구독)
  *
- * 평소에는 Vercel 크론(21:00)이 같은 일을 한다. 이 스크립트는 시험·수동용이다.
+ * ⭐ 기본이 **구독**이다 (AI_PROVIDER=cli). 이 PC 에 로그인된 클로드를 그대로 쓰므로
+ *    요금이 따로 나가지 않는다. `--api` 를 붙이면 ANTHROPIC_API_KEY 로 부른다.
+ *
+ * `--agent` 는 대리인(scripts/blog-agent.ts)이 붙인다 — 결과를 기계가 읽을 수 있게
+ * `DRAFT_ID=` / `ERROR=` 로 찍는다. 사람이 쓸 일은 없다.
  */
 import { config } from "dotenv";
 config({ path: ".env.local" });
@@ -19,42 +24,76 @@ async function main() {
     const i = args.indexOf(k);
     return i >= 0 ? args[i + 1] : undefined;
   };
+
+  // 🔴 db 를 들여오기 전에 정해야 한다 — 부르는 길(구독/API)은 환경변수로 전한다
+  if (!flag("--api")) process.env.AI_PROVIDER = "cli";
+
+  const agent = flag("--agent");
+  const say = (s: string) => console.log(s);
+  const onLog = (line: string) => console.log(line);
+
   // dotenv 를 먼저 읽어야 db 가 DATABASE_URL 을 본다 — 그래서 동적 import
-  const { runNightly, factsForDay, generateDraft, factsText, kstToday } = await import("../src/lib/blog-draft");
+  const { runNightly, factsForDay, generateDraft, factsText } = await import("../src/lib/blog-draft");
+
+  if (!flag("--dry")) {
+    say(`부르는 길: ${process.env.AI_PROVIDER === "cli" ? "구독 (매장 PC 클로드)" : "API 키"}`);
+  }
 
   const quoteId = val("--quote") ? Number(val("--quote")) : null;
   if (quoteId) {
     const [f] = await factsForDay("", { quoteId });
     if (!f) {
-      console.log(`❌ quote ${quoteId} 를 글감으로 못 씁니다 (성사·타이어 포함·거래처 아님 조건)`);
+      const msg = `quote ${quoteId} 를 글감으로 못 씁니다 (성사·타이어 포함·거래처 아님 조건)`;
+      say(agent ? `ERROR=${msg}` : `❌ ${msg}`);
+      process.exitCode = agent ? 1 : 0;
       return;
     }
-    console.log(`── ${f.quoteNo}\n${factsText(f)}\n`);
+    say(`── ${f.quoteNo}\n${factsText(f)}\n`);
     if (flag("--dry")) return;
-    const r = await generateDraft(f);
-    console.log(r.ok ? `✅ 초안 #${r.id} — ${r.titles[0]}${r.warn ? `\n⚠️ ${r.warn}` : ""}` : `❌ ${r.error}`);
+    const variant = val("--variant") ? Number(val("--variant")) : undefined;
+    const r = await generateDraft(f, { onLog, variant });
+    if (r.ok) {
+      say(`✅ 초안 #${r.id} — ${r.titles[0]}${r.warn ? `\n⚠️ ${r.warn}` : ""}`);
+      if (agent) say(`DRAFT_ID=${r.id}`);
+    } else {
+      say(agent ? `ERROR=${r.error}` : `❌ ${r.error}`);
+      if (agent) process.exitCode = 1;
+    }
     return;
   }
 
-  const day = val("--day") ?? kstToday();
+  const day = val("--day");
   const limit = val("--limit") ? Number(val("--limit")) : 3;
-  const { results } = await runNightly({ day, limit, dry: flag("--dry") });
+  const { day: usedDay, results } = await runNightly({ day, limit, dry: flag("--dry"), onLog });
   if (results.length === 0) {
-    console.log(`${day}: 글감이 없습니다 (성사된 타이어 시공 중 거래처·무상 제외, 이미 초안 있는 건 제외)`);
+    const msg = `${usedDay}: 글감이 없습니다 (성사된 타이어 시공 중 거래처·무상 제외, 이미 초안 있는 건 제외)`;
+    say(agent ? `ERROR=${msg}` : msg);
+    if (agent) process.exitCode = 1;
     return;
   }
+  let made = 0;
   for (const r of results) {
-    console.log(`── ${r.quoteNo}\n${r.facts}`);
-    if (r.result === null) console.log("   (dry — 만들지 않음)");
-    else if (r.result.ok) console.log(`   ✅ 초안 #${r.result.id} — ${r.result.titles[0]}${r.result.warn ? `\n   ⚠️ ${r.result.warn}` : ""}`);
-    else console.log(`   ❌ ${r.result.error}`);
-    console.log();
+    say(`── ${r.quoteNo}\n${r.facts}`);
+    if (r.result === null) say("   (dry — 만들지 않음)");
+    else if (r.result.ok) {
+      say(`   ✅ 초안 #${r.result.id} — ${r.result.titles[0]}${r.result.warn ? `\n   ⚠️ ${r.result.warn}` : ""}`);
+      if (agent) say(`DRAFT_ID=${r.result.id}`);
+      made += 1;
+    } else {
+      say(`   ❌ ${r.result.error}`);
+      if (agent) say(`ERROR=${r.result.error}`);
+    }
+    say("");
   }
+  // 한 건도 못 만들었으면 대리인에게 실패로 알린다
+  if (agent && !flag("--dry") && made === 0) process.exitCode = 1;
 }
 
 main()
-  .then(() => process.exit(0))
+  .then(() => process.exit(process.exitCode ?? 0))
   .catch((e) => {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (process.argv.includes("--agent")) console.log(`ERROR=${msg.split("\n")[0]}`);
     console.error(e);
     process.exit(1);
   });
