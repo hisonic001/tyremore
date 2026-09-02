@@ -7,6 +7,7 @@ import { ageBadge, dotLabel, receivedLabel } from "@/lib/tire-age";
 import { AttrsEditor } from "./attrs-editor";
 import { CopyLine, HideToggle, NameEditor, PriceEditor } from "./editor";
 import { AddDotRow, QtyEditor, ReceivedEditor } from "./qty-editor";
+import { requirePerm } from "@/lib/auth";
 
 const AGE_TONE = {
   warn: "bg-amber-50 text-amber-800",
@@ -23,6 +24,7 @@ export const dynamic = "force-dynamic";
  *   · 모르는 것은 「미확인」으로 두고, 실물을 볼 때 그 자리에서 확정한다
  */
 export default async function StockPage({ params }: { params: Promise<{ id: string }> }) {
+  await requirePerm("stock");
   const { id } = await params;
   const productId = Number(id);
   if (!Number.isFinite(productId)) notFound();

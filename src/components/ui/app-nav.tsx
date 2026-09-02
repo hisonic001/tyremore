@@ -34,8 +34,9 @@ const TABS = [
   },
 ];
 
-export function AppNav() {
+export function AppNav({ hide = [] }: { hide?: string[] }) {
   const path = usePathname();
+  const tabs = TABS.filter((t) => !hide.includes(t.href));
   if (path === "/sale" || path === "/login" || path.startsWith("/print/")) return null;
 
   return (
@@ -48,7 +49,7 @@ export function AppNav() {
             타이어<span className="text-brand-500">모어</span>
           </Link>
           <nav className="flex items-center gap-1">
-            {TABS.map(({ href, label, Icon, match }) => (
+            {tabs.map(({ href, label, Icon, match }) => (
               <Link
                 key={href}
                 href={href}
@@ -67,7 +68,7 @@ export function AppNav() {
       {/* 모바일 하단 탭바 */}
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur lg:hidden print:hidden">
         <div className="mx-auto grid max-w-3xl grid-cols-5">
-          {TABS.map(({ href, label, Icon, match }) => {
+          {tabs.map(({ href, label, Icon, match }) => {
             const on = match(path);
             return (
               <Link

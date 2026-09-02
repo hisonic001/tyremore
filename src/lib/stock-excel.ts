@@ -9,6 +9,7 @@
  */
 import { revalidatePath } from "next/cache";
 import { applyStock, diffStock, type StockDiff } from "./stock-sheet";
+import { PERM_DENIED } from "./perm-keys";
 
 const MAX_BYTES = 8 * 1024 * 1024;
 
@@ -39,6 +40,7 @@ export async function previewStockUpload(
 export async function applyStockUpload(
   fd: FormData,
 ): Promise<{ ok: true; changed: number } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("stock"))) return { ok: false, error: PERM_DENIED };
   const t = await toBuffer(fd);
   if (!t.ok) return t;
   try {

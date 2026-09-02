@@ -22,6 +22,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { quote, quotePayment, stockItem, stockMovement } from "@/db/schema";
 import { ALL_METHODS, checkSplitPayments } from "./payments";
+import { PERM_DENIED } from "./perm-keys";
 
 function refresh() {
   for (const p of ["/sales", "/", "/stock"]) {
@@ -47,6 +48,7 @@ export async function updateSaleHead(input: {
    */
   mileage?: number;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("sale_edit"))) return { ok: false, error: PERM_DENIED };
   const [q] = await db
     .select({ id: quote.id, status: quote.status, total: quote.totalAmount, vehicleId: quote.vehicleId })
     .from(quote)
@@ -131,6 +133,7 @@ export async function updateSaleHead(input: {
 export async function fulfillReservation(
   quoteId: number,
 ): Promise<{ ok: true; shortages: string[] } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("sale_edit"))) return { ok: false, error: PERM_DENIED };
   const [q] = await db.execute<{ id: number; status: string; reservation_status: string | null; quote_no: string }>(sql`
     SELECT id, status, reservation_status, quote_no FROM quote WHERE id = ${quoteId}
   `);
@@ -173,6 +176,7 @@ export async function cancelSale(
   | { ok: true; restored: number; marsWarning: string | null }
   | { ok: false; error: string; needMarsConfirm?: boolean }
 > {
+  if (!(await (await import("./auth")).hasPerm("sale_edit"))) return { ok: false, error: PERM_DENIED };
   const [q] = await db
     .select({ id: quote.id, status: quote.status, marsStatus: quote.marsStatus, quoteNo: quote.quoteNo })
     .from(quote)
@@ -412,6 +416,7 @@ export async function updateSaleLine(input: {
   /** ⭐ 줄별 메모 (2026-08-07) — null 이면 지운다, undefined 면 안 건드린다 */
   memo?: string | null;
 }): Promise<{ ok: true; shortage: number; warning: string | null } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("sale_edit"))) return { ok: false, error: PERM_DENIED };
   if (!Number.isInteger(input.qty) || input.qty <= 0) return { ok: false, error: "수량은 1 이상이어야 합니다" };
   // 마이너스 단가 허용 — 환불·카드 취소 줄 (사장님 요청 2026-08-21)
   if (!Number.isFinite(input.unitPrice)) return { ok: false, error: "단가가 올바르지 않습니다" };
@@ -452,6 +457,7 @@ export async function updateSaleLine(input: {
 export async function removeSaleLine(
   itemId: number,
 ): Promise<{ ok: true; restored: number; warning: string | null } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("sale_edit"))) return { ok: false, error: PERM_DENIED };
   const [line] = await db.execute<{ id: number; quote_id: number; product_id: number | null; qty: number }>(
     sql`SELECT id, quote_id, product_id, qty FROM quote_item WHERE id = ${itemId}`,
   );
@@ -486,6 +492,7 @@ export async function addSaleLine(input: {
   qty: number;
   unitPrice: number;
 }): Promise<{ ok: true; shortage: number; warning: string | null } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("sale_edit"))) return { ok: false, error: PERM_DENIED };
   if (!input.description.trim()) return { ok: false, error: "품목 이름이 없습니다" };
   if (!Number.isInteger(input.qty) || input.qty <= 0) return { ok: false, error: "수량은 1 이상이어야 합니다" };
   const e = await editableQuote(input.quoteId);

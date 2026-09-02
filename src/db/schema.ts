@@ -46,6 +46,11 @@ export const appUser = pgTable(
     pinHash: text("pin_hash"),
     name: text("name").notNull(),
     role: text("role").notNull(),
+    /**
+     * ⭐ 기능 모듈 권한 (2026-09-02) — 정본 src/lib/perm-keys.ts 의 PermMap.
+     *    owner 는 무시(전부 됨), tech 는 켜 둔 것만. NULL·{} = 전부 꺼짐.
+     */
+    perms: jsonb("perms"),
     isActive: boolean("is_active").notNull().default(true),
     createdAt,
   },

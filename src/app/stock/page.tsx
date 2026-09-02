@@ -5,6 +5,7 @@ import { listPartStock } from "@/lib/part-stock";
 import { oldByDotSql, staleNoDotSql } from "@/lib/tire-age";
 import { StockExcel } from "./excel-ui";
 import { PartStockList } from "./parts";
+import { requirePerm } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,7 @@ export const dynamic = "force-dynamic";
  *    거기서 들어온 재고도 여기 엑셀에 그대로 나온다.
  */
 export default async function StockPage() {
+  await requirePerm("stock");
   /**
    * 🔴 「묵었다」의 기준은 `tire-age.ts` 한 곳에만 둔다 (2026-08-27).
    *    여기와 재고 상세 배지가 서로 다른 기준을 쓰면 사장님이 앱을 못 믿게 된다.

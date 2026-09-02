@@ -10,11 +10,13 @@
  */
 import { randomBytes, scrypt as _scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
+import { cache } from "react";
 import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { db } from "@/db";
 import { appUser } from "@/db/schema";
+import { allOnPerms, evalPerm, type PermKey, type PermMap } from "./perm-keys";
 import { SESSION_COOKIE, SESSION_DAYS, sessionSecret, signSession, verifySession, type Session } from "./session";
 
 const scrypt = promisify(_scrypt) as (p: string, s: Buffer, l: number) => Promise<Buffer>;
@@ -51,6 +53,49 @@ export async function requireSession(): Promise<Session> {
 export async function isOwner(): Promise<boolean> {
   const s = await getSession();
   return s?.role === "owner";
+}
+
+/* ============================================================
+ * ⭐ 기능 모듈 권한 (사장님 요청 2026-09-02) — 정본 perm-keys.ts
+ *
+ * 🔴 권한은 쿠키가 아니라 **DB 에서** 읽는다 — 쿠키(무상태, 90일)는 로그인 때만
+ *    만들어져 스위치를 바꿔도 재로그인 전까지 안 바뀐다. uid 로 매번 조회하되
+ *    React cache 로 한 요청 안에서는 한 번만 나간다. 스위치 즉시 반영.
+ * ========================================================== */
+const userPermRow = cache(async (uid: number) => {
+  const [u] = await db
+    .select({ role: appUser.role, perms: appUser.perms, isActive: appUser.isActive })
+    .from(appUser)
+    .where(eq(appUser.id, uid))
+    .limit(1);
+  return u ?? null;
+});
+
+/** 이 기능을 쓸 수 있는가 — 서버 액션 게이트가 부른다 */
+export async function hasPerm(key: PermKey): Promise<boolean> {
+  const s = await getSession();
+  if (!s) return false;
+  if (s.role === "owner") return true; // owner 는 스위치 무관 (perm-keys 규칙과 동일)
+  const u = await userPermRow(s.uid);
+  if (!u || !u.isActive) return false;
+  return evalPerm(u.role, (u.perms ?? null) as PermMap | null, key);
+}
+
+/** 페이지용 — 권한 없으면 홈으로 */
+export async function requirePerm(key: PermKey): Promise<Session> {
+  const s = await requireSession();
+  if (!(await hasPerm(key))) redirect("/");
+  return s;
+}
+
+/** 네비·메뉴 노출용 — 내 역할과 스위치 맵 */
+export async function myPerms(): Promise<{ role: string; perms: PermMap } | null> {
+  const s = await getSession();
+  if (!s) return null;
+  if (s.role === "owner") return { role: "owner", perms: allOnPerms() };
+  const u = await userPermRow(s.uid);
+  if (!u || !u.isActive) return null;
+  return { role: u.role, perms: ((u.perms ?? {}) as PermMap) ?? {} };
 }
 
 export async function login(

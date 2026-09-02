@@ -23,6 +23,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { appUser } from "@/db/schema";
 import { getSession, hashPassword, isOwner, verifyPassword } from "./auth";
+import { PERM_KEYS, type PermKey, type PermMap } from "./perm-keys";
 
 function refresh() {
   try {
@@ -47,6 +48,8 @@ export interface UserRow {
   role: "owner" | "tech";
   isActive: boolean;
   isMe: boolean;
+  /** ⭐ 기능 모듈 스위치 (2026-09-02) — owner 는 무시(전부 됨) */
+  perms: PermMap;
 }
 
 export async function listUsers(): Promise<UserRow[] | null> {
@@ -59,10 +62,16 @@ export async function listUsers(): Promise<UserRow[] | null> {
       name: appUser.name,
       role: appUser.role,
       isActive: appUser.isActive,
+      perms: appUser.perms,
     })
     .from(appUser)
     .orderBy(asc(appUser.id));
-  return rows.map((r) => ({ ...r, role: r.role as "owner" | "tech", isMe: r.id === s.uid }));
+  return rows.map((r) => ({
+    ...r,
+    role: r.role as "owner" | "tech",
+    isMe: r.id === s.uid,
+    perms: ((r.perms ?? {}) as PermMap) ?? {},
+  }));
 }
 
 /** 새 계정 — 사장님이 만든다. 임시 비밀번호를 정해 알려주는 방식 */
@@ -91,6 +100,8 @@ export async function createAccount(input: {
     name,
     passwordHash: await hashPassword(input.password),
     role: input.role,
+    // ⭐ 새 직원 계정은 전부 꺼짐 (사장님 결정 2026-09-02) — 스위치를 켜 줘야 일할 수 있다
+    perms: {},
   });
   refresh();
   return { ok: true };
@@ -173,3 +184,58 @@ export async function changeMyPassword(
   await db.update(appUser).set({ passwordHash: await hashPassword(next) }).where(eq(appUser.id, s.uid));
   return { ok: true };
 }
+
+/**
+ * ⭐ 아이디·이름 바꾸기 (사장님 요청 2026-09-02)
+ *
+ *   내부 참조는 전부 id 번호라 파급이 없고, 세션도 uid 기준이라 본인 아이디를
+ *   바꿔도 로그아웃되지 않는다. 다음 로그인부터 새 아이디를 쓴다.
+ */
+export async function updateAccount(input: {
+  userId: number;
+  loginId: string;
+  name: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!(await isOwner())) return NOT_OWNER;
+  const loginId = input.loginId.trim().toLowerCase();
+  const name = input.name.trim();
+  if (!/^[a-z0-9._-]{2,30}$/.test(loginId)) {
+    return { ok: false, error: "아이디는 영문·숫자 2~30자로 해 주세요 (점·밑줄·대시 가능)" };
+  }
+  if (!name) return { ok: false, error: "이름을 넣어 주세요" };
+  const [dup] = await db
+    .select({ id: appUser.id })
+    .from(appUser)
+    .where(and(eq(appUser.loginId, loginId), ne(appUser.id, input.userId)))
+    .limit(1);
+  if (dup) return { ok: false, error: `아이디 「${loginId}」 는 이미 있습니다` };
+  const done = await db
+    .update(appUser)
+    .set({ loginId, name })
+    .where(eq(appUser.id, input.userId))
+    .returning({ id: appUser.id });
+  if (done.length === 0) return { ok: false, error: "계정을 찾을 수 없습니다" };
+  refresh();
+  return { ok: true };
+}
+
+/**
+ * ⭐ 기능 모듈 스위치 저장 (사장님 요청 2026-09-02) — 저장 즉시 반영된다
+ *    (권한은 쿠키가 아니라 DB 에서 매번 읽는다 — auth.ts hasPerm).
+ */
+export async function savePerms(
+  userId: number,
+  perms: PermMap,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!(await isOwner())) return NOT_OWNER;
+  // 아는 키만, boolean 만 받는다 — 임의 JSON 저장 방지
+  const clean: PermMap = {};
+  for (const k of PERM_KEYS) {
+    if (perms[k] === true) clean[k as PermKey] = true;
+  }
+  const done = await db.update(appUser).set({ perms: clean }).where(eq(appUser.id, userId)).returning({ id: appUser.id });
+  if (done.length === 0) return { ok: false, error: "계정을 찾을 수 없습니다" };
+  refresh();
+  return { ok: true };
+}
+

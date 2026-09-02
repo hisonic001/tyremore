@@ -18,6 +18,7 @@ import { getSession } from "./auth";
 import { isPlausibleDot, isValidDot } from "./normalize";
 import { ageAnchorSql, ymdKst } from "./tire-age";
 import { parseTireName, type Badge } from "./tire-name";
+import { PERM_DENIED } from "./perm-keys";
 
 /**
  * 화면 갱신. 웹 요청 밖(이관 스크립트·실사 배치)에서 호출되면 갱신할 화면이 없으므로
@@ -332,6 +333,7 @@ export async function setDotQty(input: {
   reason: string;
   userId?: number;
 }): Promise<{ ok: true; delta: number } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("stock"))) return { ok: false, error: PERM_DENIED };
   const { productId, qty, reason } = input;
   const dot = input.dot?.trim() || null;
 
@@ -461,6 +463,7 @@ export async function setLotReceivedDate(input: {
   /** `YYYY-MM-DD` (KST) */
   date: string;
 }): Promise<{ ok: true; n: number } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("stock"))) return { ok: false, error: PERM_DENIED };
   const session = await getSession();
   if (!session) return { ok: false, error: "다시 로그인해 주세요" };
 
@@ -538,6 +541,7 @@ export async function createProduct(input: {
   purchasePrice?: number | null;
   minQty?: number | null;
 }): Promise<{ ok: true; productId: number } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("stock"))) return { ok: false, error: PERM_DENIED };
   const itemType = input.itemType ?? "tire";
   if (!input.pattern?.trim()) {
     return { ok: false, error: itemType === "part" ? "부품 이름을 입력해 주세요" : "모델명을 입력해 주세요" };

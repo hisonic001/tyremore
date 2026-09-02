@@ -27,6 +27,7 @@ import { customer, quote, quoteItem, quotePayment, serviceItem, stockItem, stock
 import { checkSplitPayments } from "./payments";
 import { ageAnchorSql } from "./tire-age";
 import type { NewCustomerInput } from "./sale-types";
+import { PERM_DENIED } from "./perm-keys";
 
 function refresh(...paths: string[]) {
   for (const p of paths) {
@@ -202,6 +203,7 @@ export async function sellFromStock(
 export async function saveSale(
   input: SaleInput,
 ): Promise<{ ok: true; quoteId: number; quoteNo: string; shortages: string[] } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("sale"))) return { ok: false, error: PERM_DENIED };
   // ⭐ 부품(use) 줄은 기본 0원이지만 금액도 쓸 수 있다 (사장님 요청 2026-08-24 —
   //    "default 값은 0원이지만 금액도 쓸 수 있게"). 기표가·할인율은 부품에 없으니 비운다.
   const lines = input.lines
@@ -430,6 +432,7 @@ export async function saveSale(
 export async function createCustomerAndVehicle(
   input: NewCustomerInput,
 ): Promise<{ ok: true; customerId: number; vehicleId: number } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("sale"))) return { ok: false, error: PERM_DENIED };
   const name = input.name.trim();
   const plateNo = input.plateNo.trim();
   if (!name) return { ok: false, error: "이름을 넣어 주세요" };
@@ -551,6 +554,7 @@ export async function createSupplierVehicle(input: {
   | { ok: true; vehicleId: number; customerId: number; plateNo: string; makerName: string | null; model: string | null; mileage: number | null; reused: boolean }
   | { ok: false; error: string }
 > {
+  if (!(await (await import("./auth")).hasPerm("sale"))) return { ok: false, error: PERM_DENIED };
   const supplierName = input.supplier.trim();
   const plateNo = input.plateNo.trim();
   if (!supplierName) return { ok: false, error: "거래처가 없습니다" };

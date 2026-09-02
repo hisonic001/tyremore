@@ -22,6 +22,7 @@ import { isPlausibleDot } from "./normalize";
 import { isOwner } from "./auth";
 // 권한 없는 내부용 — 정비사가 인보이스를 올려도 할인율 갱신이 끊기지 않게 (2026-08-08)
 import { savePriceRuleCore } from "./pricing-core";
+import { PERM_DENIED } from "./perm-keys";
 
 /**
  * 인보이스 품번으로 우리 상품을 찾는다.
@@ -305,6 +306,7 @@ export async function saveInvoice(
 ): Promise<
   { ok: true; saved: number; skipped: number; priceUpdates: number } | { ok: false; error: string }
 > {
+  if (!(await (await import("./auth")).hasPerm("receiving"))) return { ok: false, error: PERM_DENIED };
   const pv = await previewInvoice(fileName, bytes);
   if ("error" in pv) return { ok: false, error: pv.error };
 
@@ -483,6 +485,7 @@ export async function pendingInvoices(): Promise<PendingInvoice[]> {
  *    여기서 지우면 재고만 남고 근거가 사라진다.
  */
 export async function removeInvoiceItem(itemId: number): Promise<{ ok: boolean; error?: string }> {
+  if (!(await (await import("./auth")).hasPerm("receiving"))) return { ok: false, error: PERM_DENIED };
   const [line] = await db
     .select()
     .from(purchaseInvoiceItem)
@@ -507,6 +510,7 @@ export async function removeInvoiceItem(itemId: number): Promise<{ ok: boolean; 
 
 /** 인보이스 통째로 지우기 — 잘못 올렸을 때 */
 export async function removeInvoice(invoiceId: number): Promise<{ ok: boolean; error?: string }> {
+  if (!(await (await import("./auth")).hasPerm("receiving"))) return { ok: false, error: PERM_DENIED };
   const [got] = await db.execute<{ received: number }>(
     sql`SELECT COALESCE(SUM(received_qty),0)::int received
         FROM purchase_invoice_item WHERE invoice_id = ${invoiceId}`,
@@ -602,6 +606,7 @@ export async function linkInvoiceItemTo(
   itemId: number,
   productId: number,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("receiving"))) return { ok: false, error: PERM_DENIED };
   const [line] = await db.execute<{ cai: string; description: string; supplier: string; product_id: number | null }>(sql`
     SELECT ii.cai, ii.description, i.supplier, ii.product_id
     FROM purchase_invoice_item ii JOIN purchase_invoice i ON i.id = ii.invoice_id
@@ -637,6 +642,7 @@ export async function linkInvoiceItemTo(
 export async function createProductFromInvoiceItem(
   itemId: number,
 ): Promise<{ ok: true; productId: number } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("receiving"))) return { ok: false, error: PERM_DENIED };
   const [line] = await db.execute<{
     id: number;
     cai: string;
@@ -868,6 +874,7 @@ export async function startManualPurchase(
   supplier: string,
   memo?: string,
 ): Promise<{ ok: true; invoiceId: number } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("receiving"))) return { ok: false, error: PERM_DENIED };
   const name = supplier.trim();
   if (!name) return { ok: false, error: "거래처를 입력해 주세요" };
   /**
@@ -988,6 +995,7 @@ export async function addProductToPurchase(input: {
   qty: number;
   unitCost?: number | null;
 }): Promise<{ ok: true; model: string; qty: number } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("receiving"))) return { ok: false, error: PERM_DENIED };
   // 🔴 매입가 쓰기는 사장님만 — 담기는 누구나, 값만 무시한다 (D-05, 2026-08-08)
   if (input.unitCost !== undefined && !(await isOwner())) input = { ...input, unitCost: undefined };
   const { invoiceId, productId } = input;
@@ -1085,6 +1093,7 @@ export async function updatePurchaseItem(input: {
   /** ⭐ 담을 때 적어 두는 DOT (2026-08-08) — null/빈 값이면 지운다 */
   dot?: string | null;
 }): Promise<{ ok: boolean; error?: string }> {
+  if (!(await (await import("./auth")).hasPerm("receiving"))) return { ok: false, error: PERM_DENIED };
   // 🔴 매입가 쓰기는 사장님만 — 수량 수정은 누구나 (D-05, 2026-08-08)
   if (input.unitCost !== undefined && !(await isOwner())) input = { ...input, unitCost: undefined };
   const set: Record<string, unknown> = {};
@@ -1150,6 +1159,7 @@ export async function receiveAll(
   | { ok: true; created: number; failed: string[]; skipped: number }
   | { ok: false; error: string }
 > {
+  if (!(await (await import("./auth")).hasPerm("receiving"))) return { ok: false, error: PERM_DENIED };
   const lines = (await pendingLines()).filter((l) => l.invoiceId === invoiceId);
   if (lines.length === 0) return { ok: false, error: "입고할 것이 없습니다" };
 
@@ -1271,6 +1281,7 @@ export async function receiveLine(input: {
   dot?: string | null;
   userId?: number;
 }): Promise<{ ok: true; created: number } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("receiving"))) return { ok: false, error: PERM_DENIED };
   const dot = input.dot?.trim() || null;
   if (dot && !isPlausibleDot(dot)) {
     return { ok: false, error: `DOT '${dot}' 를 확인해 주세요 (주차 01~53, 최근 15년)` };

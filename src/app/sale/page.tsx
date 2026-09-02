@@ -1,6 +1,7 @@
 import Link from "@/lib/link";
 import { isOwner } from "@/lib/auth";
 import { SaleForm } from "./client";
+import { requirePerm } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +10,7 @@ export const dynamic = "force-dynamic";
  * 저장하면 재고가 빠지고 MARS 입력 대기열에 올라간다.
  */
 export default async function SalePage() {
+  await requirePerm("sale");
   return (
     <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6 lg:max-w-6xl">
       <div className="flex items-center justify-between">

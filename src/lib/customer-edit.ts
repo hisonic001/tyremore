@@ -17,6 +17,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { normalizePlate } from "./normalize";
 import { customer, vehicle } from "@/db/schema";
+import { PERM_DENIED } from "./perm-keys";
 
 function refresh() {
   for (const p of ["/", "/sale", "/sales"]) {
@@ -34,6 +35,7 @@ export async function updateCustomerInfo(input: {
   phone?: string | null;
   address?: string | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("customer"))) return { ok: false, error: PERM_DENIED };
   const name = input.name.trim();
   if (!name) return { ok: false, error: "이름은 비울 수 없습니다" };
   const [c] = await db.select({ id: customer.id }).from(customer).where(eq(customer.id, input.customerId)).limit(1);
@@ -63,6 +65,7 @@ export async function updateVehicleInfo(input: {
   vin?: string | null;
   memo?: string | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("customer"))) return { ok: false, error: PERM_DENIED };
   const fuelType = input.fuelType?.trim() || null;
   if (fuelType && !["Fuel", "Diesel", "Hybird", "BEV", "LPG"].includes(fuelType)) {
     return { ok: false, error: "연료 종류가 올바르지 않습니다" };

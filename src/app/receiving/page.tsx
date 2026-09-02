@@ -5,6 +5,7 @@ import { pendingInvoices, supplierList, zeroTotalInvoiceCount } from "@/lib/invo
 import { PendingList } from "./client";
 import { RegisterPurchase } from "./register";
 import { PastePurchase } from "./paste";
+import { requirePerm } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,7 @@ export const dynamic = "force-dynamic";
  *   ② 실물이 도착하면 확정 → 재고가 된다
  */
 export default async function ReceivingPage() {
+  await requirePerm("receiving");
   /**
    * 🔴 매입 단가는 사장님만 본다 (D-05 5번 — 2026-08-08 코드 리뷰로 구멍 발견).
    *    화면에서 감추는 것으로는 부족하다 — **서버에서 아예 빼고** 내려보낸다.

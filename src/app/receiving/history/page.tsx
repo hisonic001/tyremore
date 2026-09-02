@@ -6,6 +6,7 @@ import { ChipLink } from "@/components/ui/chip";
 import { EmptyState } from "@/components/ui/empty";
 import { HistoryList } from "./client";
 import { SupplierSearch } from "./supplier-search";
+import { requirePerm } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +45,7 @@ export default async function PurchaseHistoryPage({
     brand?: string;
   }>;
 }) {
+  await requirePerm("receiving");
   const sp = await searchParams;
 
   /**

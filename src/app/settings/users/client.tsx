@@ -3,7 +3,8 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { setMarsReportTechAccess } from "@/lib/mars-eval";
-import { createAccount, resetPassword, setActive, setRole, type UserRow } from "@/lib/user-admin";
+import { createAccount, resetPassword, savePerms, setActive, setRole, updateAccount, type UserRow } from "@/lib/user-admin";
+import { allOnPerms, PERM_KEYS, PERM_LABELS, type PermMap } from "@/lib/perm-keys";
 
 /** ⭐ MARS 평가 리포트 정비사 열람 (사장님 요청 2026-08-10) — 계정 전체에 걸리는 스위치 하나 */
 export function MarsReportToggle({ allowed }: { allowed: boolean }) {
@@ -51,6 +52,14 @@ export function UserCard({ u }: { u: UserRow }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [pwOpen, setPwOpen] = useState(false);
   const [pw, setPw] = useState("");
+  /* ⭐ 아이디·이름 바꾸기 (2026-09-02) */
+  const [idOpen, setIdOpen] = useState(false);
+  const [loginId, setLoginId] = useState(u.loginId);
+  const [name, setName] = useState(u.name);
+  /* ⭐ 기능 스위치 (2026-09-02) — 저장 즉시 반영 */
+  const [perms, setPerms] = useState<PermMap>(u.perms);
+  const [permsOpen, setPermsOpen] = useState(false);
+  const permsDirty = JSON.stringify(perms) !== JSON.stringify(u.perms);
 
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>, okMsg: string) =>
     start(async () => {
@@ -111,6 +120,28 @@ export function UserCard({ u }: { u: UserRow }) {
         >
           비밀번호 재설정
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            setIdOpen(!idOpen);
+            setMsg(null);
+          }}
+          className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-600"
+        >
+          아이디·이름 바꾸기
+        </button>
+        {u.role === "tech" && (
+          <button
+            type="button"
+            onClick={() => {
+              setPermsOpen(!permsOpen);
+              setMsg(null);
+            }}
+            className="rounded-lg border border-brand-300 bg-brand-50 px-3 py-2 text-sm font-medium text-brand-700"
+          >
+            할 수 있는 일 {Object.values(u.perms).filter(Boolean).length}/{PERM_KEYS.length}
+          </button>
+        )}
         {!u.isMe && (
           <button
             type="button"
@@ -142,6 +173,78 @@ export function UserCard({ u }: { u: UserRow }) {
             className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
           >
             재설정
+          </button>
+        </div>
+      )}
+
+      {idOpen && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-2">
+          <input
+            value={loginId}
+            onChange={(e) => setLoginId(e.target.value)}
+            placeholder="아이디 (영문·숫자 2~30자)"
+            className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          />
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="이름"
+            className="w-28 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          />
+          <button
+            type="button"
+            disabled={pending || !loginId.trim() || !name.trim()}
+            onClick={() =>
+              run(
+                () => updateAccount({ userId: u.id, loginId, name }),
+                "바꿨습니다 — 다음 로그인부터 새 아이디를 씁니다 (지금 로그인은 그대로)",
+              )
+            }
+            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+          >
+            저장
+          </button>
+        </div>
+      )}
+
+      {/* ⭐ 기능 모듈 스위치 (사장님 요청 2026-09-02) — 정비사 계정만. 저장 즉시 반영 */}
+      {permsOpen && u.role === "tech" && (
+        <div className="mt-2 rounded-lg bg-slate-50 p-2.5">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium text-slate-700">이 계정이 할 수 있는 일</p>
+            <button
+              type="button"
+              onClick={() => setPerms(allOnPerms())}
+              className="text-xs text-slate-500 underline underline-offset-4"
+            >
+              전부 켜기
+            </button>
+          </div>
+          <ul className="mt-1.5 space-y-1">
+            {PERM_KEYS.map((k) => (
+              <li key={k}>
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={perms[k] === true}
+                    onChange={(e) => setPerms((p) => ({ ...p, [k]: e.target.checked }))}
+                    className="mt-0.5 h-4 w-4 accent-brand-600"
+                  />
+                  <span className="text-sm">
+                    {PERM_LABELS[k].label}
+                    <span className="ml-1.5 text-xs text-slate-400">{PERM_LABELS[k].hint}</span>
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            disabled={pending || !permsDirty}
+            onClick={() => run(() => savePerms(u.id, perms), "저장했습니다 — 즉시 반영됩니다 (재로그인 불필요)")}
+            className="mt-2 w-full rounded-lg bg-brand-600 py-2 text-sm font-semibold text-white disabled:opacity-40"
+          >
+            스위치 저장
           </button>
         </div>
       )}

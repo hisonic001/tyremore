@@ -24,6 +24,7 @@ import { db } from "@/db";
 import { quote } from "@/db/schema";
 import { marsMissing } from "./mars-ready";
 import { requestMarsRun } from "./mars-run";
+import { PERM_DENIED } from "./perm-keys";
 
 function refresh(...paths: string[]) {
   for (const p of paths) {
@@ -147,6 +148,7 @@ export async function queueForMars(
   | { ok: true; queued: number; runExisting: boolean; warning: string | null }
   | { ok: false; error: string }
 > {
+  if (!(await (await import("./auth")).hasPerm("mars"))) return { ok: false, error: PERM_DENIED };
   const { getSession } = await import("./auth");
   if (!(await getSession())) return { ok: false, error: "로그인이 필요합니다" };
   const ids = quoteIds.filter((n) => Number.isInteger(n) && n > 0);
@@ -449,6 +451,7 @@ export async function markEntered(
   refNo?: string | null,
   memo?: string | null,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("mars"))) return { ok: false, error: PERM_DENIED };
   const [q] = await db.select({ id: quote.id }).from(quote).where(eq(quote.id, quoteId)).limit(1);
   if (!q) return { ok: false, error: "판매 기록을 찾을 수 없습니다" };
 
