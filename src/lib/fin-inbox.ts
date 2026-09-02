@@ -22,6 +22,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { monthRange } from "./ym";
 import { depositReconData, payLinkData, normName } from "./recon-data";
+import { a1OpenTransfers } from "./self-audit";
 import { taxCashData } from "./tax-recon";
 import { payerKeyOf } from "./expense-cats";
 
@@ -96,37 +97,15 @@ export async function finInbox(ym: string): Promise<FinInbox> {
     });
   }
 
-  /* ── ② 계좌이체 판매 미연결 (self-audit A1 과 같은 질의) ── */
-  const a1 = await db.execute<{ id: number; quote_no: string; d: string; total: number; who: string }>(sql`
-    SELECT q.id, q.quote_no, to_char(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date), 'YYYY-MM-DD') d,
-           q.total_amount total, COALESCE(q.supplier_name, c.name, '?') who
-    FROM quote q LEFT JOIN customer c ON c.id = q.customer_id
-    WHERE q.status = '성사' AND q.payment_method IN ('계좌이체', '혼합') AND q.total_amount > 0
-      AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${start}::date
-      AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${nextStart}::date
-      AND NOT EXISTS (SELECT 1 FROM recon_match m
-        WHERE m.kind = '이체입금' AND m.ref_table = 'quote' AND m.ref_id = q.id)
-    ORDER BY 3 DESC LIMIT 60
-  `);
+  /* ── ② 계좌이체 판매 미연결 — 정본 a1OpenTransfers (self-audit·추적 화면과 같은 함수) ── */
+  const a1 = await a1OpenTransfers({ from: start, to: nextStart });
   for (const r of a1) {
-    // 후보 입금 — money-trace 와 같은 규칙 (금액 정확·미사용·−3~+5일)
-    const cand = await db.execute<{ id: number; d: string; description: string }>(sql`
-      SELECT x.id, to_char(x.occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD') d, x.description
-      FROM cash_txn x
-      WHERE x.source = '통장' AND x.is_active AND x.in_amount = ${Number(r.total)}
-        AND x.recon_status IN ('미대조', '제안') AND x.category IS NULL
-        AND (x.occurred_at AT TIME ZONE 'Asia/Seoul')::date BETWEEN ${r.d}::date - 3 AND ${r.d}::date + 5
-      LIMIT 2
-    `);
     put(r.who, {
-      text: `계좌이체 판매 ${won(Number(r.total))}원 (${r.d.slice(5)} ${r.quote_no}) — 입금과 안 이어짐${cand.length === 0 ? " · 동액 입금 없음(미수·현금?)" : ""}`,
+      text: `계좌이체 판매 ${won(r.total)}원 (${r.d.slice(5)} ${r.quoteNo}) — 입금과 안 이어짐${r.candCount === 0 ? " · 동액 입금 없음(미수·현금?)" : ""}`,
       tone: "warn",
       href: `/finance/trace?q=${encodeURIComponent(r.who)}`,
-      linkDeposit:
-        cand.length === 1
-          ? { cashTxnId: Number(cand[0].id), quoteId: Number(r.id), label: `${cand[0].d} 입금 「${payerKeyOf("통장", cand[0].description)}」와 잇기` }
-          : undefined,
-      aside: { quoteId: Number(r.id) },
+      linkDeposit: r.cand ? { cashTxnId: r.cand.cashTxnId, quoteId: r.quoteId, label: `${r.cand.label}와 잇기` } : undefined,
+      aside: { quoteId: r.quoteId },
     });
   }
 

@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Search } from "lucide-react";
-import { traceLinkDeposit } from "@/lib/trace-actions";
+import { markSaleSettledAside, traceLinkDeposit } from "@/lib/trace-actions";
 import { useConfirm } from "@/components/ui/confirm";
 import { Notice } from "@/components/ui/notice";
 
@@ -78,3 +78,44 @@ export function TraceLinkButton({
     </div>
   );
 }
+
+/** 통장에 안 찍히는 수령(개인계좌·현금) — 인박스와 같은 정본(markSaleSettledAside).
+ *  사장님 제보 2026-09-02: 렉카(상혁) — 이 버튼이 인박스에만 있어서 검사 목록에선 처리할 길이 없었다. */
+export function TraceAsideButton({ quoteId, title, amount }: { quoteId: number; title: string; amount: number }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [ask, confirmDialog] = useConfirm();
+  const [error, setError] = useState<string | null>(null);
+
+  const go = async () => {
+    const ok = await ask({
+      title: "개인계좌·현금으로 받은 판매인가요?",
+      body: `${title} ${won(amount)}원
+법인 통장에 안 찍히는 돈이라 확인 끝으로 표시합니다. 잘못 표시했으면 다시 눌러도 한 번만 기록됩니다.`,
+      confirmLabel: "받았음 — 확인 끝",
+    });
+    if (!ok) return;
+    start(async () => {
+      setError(null);
+      const r = await markSaleSettledAside(quoteId);
+      if (!r.ok) return setError(r.error);
+      router.refresh();
+    });
+  };
+
+  return (
+    <span className="inline-block">
+      {confirmDialog}
+      <button
+        type="button"
+        disabled={pending}
+        onClick={go}
+        className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 disabled:opacity-40"
+      >
+        개인계좌·현금으로 받음
+      </button>
+      {error && <Notice tone="error">{error}</Notice>}
+    </span>
+  );
+}
+

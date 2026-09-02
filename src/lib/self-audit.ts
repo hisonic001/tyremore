@@ -41,37 +41,76 @@ export interface AuditRun {
   items: AuditItem[];
 }
 
+/* ============================================================
+ * ⭐ A1 정본 — 계좌이체 판매인데 이체입금 자국이 없는 것 + 이을 만한 입금 후보.
+ *    감사(A1)·홈 인박스·돈 추적 화면이 **같은 함수**를 쓴다 (판정 재작성 금지 원칙).
+ *    후보 규칙: 금액 정확·미사용·−3~+5일 (money-trace 와 동일).
+ * ========================================================== */
+export interface A1Row {
+  quoteId: number;
+  quoteNo: string;
+  /** YYYY-MM-DD */
+  d: string;
+  total: number;
+  who: string;
+  candCount: number;
+  /** 후보가 정확히 1건일 때만 — 그 자리 ⚡잇기용 */
+  cand: { cashTxnId: number; label: string } | null;
+}
+
+export async function a1OpenTransfers(range: { from: string; to?: string }): Promise<A1Row[]> {
+  const rows = await db.execute<{ id: number; quote_no: string; d: string; total: number; who: string }>(sql`
+    SELECT q.id, q.quote_no,
+           to_char(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date), 'YYYY-MM-DD') d,
+           q.total_amount total, COALESCE(q.supplier_name, c.name, '?') who
+    FROM quote q LEFT JOIN customer c ON c.id = q.customer_id
+    WHERE q.status = '성사' AND q.payment_method IN ('계좌이체', '혼합') AND q.total_amount > 0
+      AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${range.from}::date
+      ${range.to ? sql`AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${range.to}::date` : sql``}
+      AND NOT EXISTS (SELECT 1 FROM recon_match m
+        WHERE m.kind = '이체입금' AND m.ref_table = 'quote' AND m.ref_id = q.id)
+    ORDER BY 3 DESC LIMIT 60
+  `);
+  const out: A1Row[] = [];
+  for (const r of rows) {
+    const cand = await db.execute<{ id: number; d: string; description: string }>(sql`
+      SELECT x.id, to_char(x.occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD') d, x.description
+      FROM cash_txn x
+      WHERE x.source = '통장' AND x.is_active AND x.in_amount = ${Number(r.total)}
+        AND x.recon_status IN ('미대조', '제안') AND x.category IS NULL
+        AND (x.occurred_at AT TIME ZONE 'Asia/Seoul')::date BETWEEN ${r.d}::date - 3 AND ${r.d}::date + 5
+      LIMIT 2
+    `);
+    out.push({
+      quoteId: Number(r.id),
+      quoteNo: r.quote_no,
+      d: r.d,
+      total: Number(r.total),
+      who: r.who,
+      candCount: cand.length,
+      cand: cand.length === 1 ? { cashTxnId: Number(cand[0].id), label: `${cand[0].d} 입금 「${cand[0].description.slice(0, 24)}」` } : null,
+    });
+  }
+  return out;
+}
+
 export async function runSelfAudit(): Promise<AuditItem[]> {
   const items: AuditItem[] = [];
   /* 🔴 A1 은 「이번 달」이 아니라 최근 45일 — 달이 바뀌어도 못 받은 돈은 못 받은 돈이다
      (2026-09-01 실측: 9/1 이 되자 8월 미수 26건이 감사에서 사라졌다) */
   const start = new Date(Date.parse(kstToday()) - 45 * 86400000).toISOString().slice(0, 10);
 
-  /* ① 계좌이체 판매인데 이체입금 자국 없음 — 이번 달 (미광전력 유형) */
-  const a1 = await db.execute<{ quote_no: string; d: string; total: number; who: string; cand: number }>(sql`
-    SELECT q.quote_no, to_char(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date), 'MM-DD') d,
-           q.total_amount total, COALESCE(q.supplier_name, c.name, '?') who,
-           (SELECT count(*)::int FROM cash_txn x
-             WHERE x.source = '통장' AND x.is_active AND x.in_amount = q.total_amount
-               AND x.recon_status IN ('미대조', '제안') AND x.category IS NULL
-               AND (x.occurred_at AT TIME ZONE 'Asia/Seoul')::date
-                   BETWEEN COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) - 3
-                       AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) + 5) cand
-    FROM quote q LEFT JOIN customer c ON c.id = q.customer_id
-    WHERE q.status = '성사' AND q.payment_method IN ('계좌이체', '혼합') AND q.total_amount > 0
-      AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${start}::date
-      AND NOT EXISTS (SELECT 1 FROM recon_match m
-        WHERE m.kind = '이체입금' AND m.ref_table = 'quote' AND m.ref_id = q.id)
-    ORDER BY 2 DESC LIMIT 60
-  `);
+  /* ① 계좌이체 판매인데 이체입금 자국 없음 (미광전력 유형) — 정본 a1OpenTransfers */
+  const a1 = await a1OpenTransfers({ from: start });
   if (a1.length > 0) {
     items.push({
       code: "A1",
       title: "계좌이체 판매인데 통장 입금과 안 이어진 것 (최근 45일)",
       n: a1.length,
       samples: a1.slice(0, 6).map((r) =>
-        `${r.d} ${r.who} ${Number(r.total).toLocaleString()}원 (${r.quote_no})${Number(r.cand) > 0 ? " — 이을 만한 입금 있음 ⚡" : " — 동액 입금 없음(미수금·다르게 받았을 수 있음)"}`,
+        `${r.d.slice(5)} ${r.who} ${r.total.toLocaleString()}원 (${r.quoteNo})${r.candCount > 0 ? " — 이을 만한 입금 있음 ⚡" : " — 동액 입금 없음(미수금·다르게 받았을 수 있음)"}`,
       ),
+      // 추적 화면 기본이 이 목록이다 — 눌러서 그 자리에서 처리 (2026-09-02)
       href: "/finance/trace",
     });
   }

@@ -1,8 +1,11 @@
 import {hasPerm } from "@/lib/auth";
 import { traceMoney, type TraceRow } from "@/lib/money-trace";
+import { a1OpenTransfers, type A1Row } from "@/lib/self-audit";
+import { kstToday } from "@/lib/ym";
+import Link from "@/lib/link";
 import { FinShell } from "@/components/fin/shell";
 import { Notice } from "@/components/ui/notice";
-import { TraceSearch, TraceLinkButton } from "./client";
+import { TraceSearch, TraceLinkButton, TraceAsideButton } from "./client";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +23,12 @@ export default async function TracePage({ searchParams }: { searchParams: Promis
   const q = (sp.q ?? "").trim();
   const owner = await hasPerm("finance");
   const r = owner && q ? await traceMoney(q) : null;
+  /* ⭐ 검색어가 없으면 = 정합성 검사에서 눌러 들어온 것 — 「확인할 것」 목록을 바로 보여주고
+     그 자리에서 처리한다 (사장님 제보 2026-09-02: "링크를 누르면 검색창 하나만 달랑").
+     목록은 감사 A1 과 같은 정본(a1OpenTransfers, 45일). */
+  const open = owner && !q
+    ? await a1OpenTransfers({ from: new Date(Date.parse(kstToday()) - 45 * 86400000).toISOString().slice(0, 10) })
+    : null;
 
   return (
     <FinShell tab="trace">
@@ -32,6 +41,7 @@ export default async function TracePage({ searchParams }: { searchParams: Promis
       ) : (
         <>
           <TraceSearch initial={q} />
+          {open && <OpenList rows={open} />}
           {r?.hint && <Notice tone="info">{r.hint}</Notice>}
           {r && r.rows.length > 0 && (
             <ul className="mt-3 space-y-2">
@@ -79,3 +89,58 @@ function Row({ row }: { row: TraceRow }) {
     </li>
   );
 }
+
+/* ============================================================
+ * ⭐ 확인할 것 목록 (2026-09-02) — 감사 A1 과 같은 정본. 그 자리에서 처리:
+ *   후보가 하나면 ⚡잇기, 통장에 안 찍히는 돈이면 「개인계좌·현금으로 받음」.
+ * ========================================================== */
+function OpenList({ rows }: { rows: A1Row[] }) {
+  if (rows.length === 0) {
+    return <Notice tone="info">확인할 계좌이체 판매가 없습니다 — 최근 45일 전부 입금과 이어져 있습니다 ✅</Notice>;
+  }
+  return (
+    <section className="mt-4">
+      <h2 className="text-sm font-bold text-slate-700">
+        확인할 것 — 계좌이체 판매인데 통장 입금과 안 이어진 {rows.length}건 (최근 45일)
+      </h2>
+      <p className="mt-0.5 text-xs text-slate-400">
+        진짜 아직 못 받은 돈(미수)이거나, 개인계좌·현금으로 받았거나, 입금자명이 달라 못 이어진 것입니다.
+      </p>
+      <ul className="mt-2 space-y-2">
+        {rows.map((a) => (
+          <li key={a.quoteId} className="rounded-xl border border-amber-200 bg-white p-3">
+            <div className="tabular flex items-baseline justify-between gap-2 text-sm">
+              <span className="min-w-0 truncate">
+                <strong>{a.who}</strong>
+                <span className="ml-1.5 text-slate-500">{a.d.slice(5)} · {a.quoteNo}</span>
+              </span>
+              <span className="shrink-0 font-bold text-amber-800">{won(a.total)}원</span>
+            </div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              {a.cand ? (
+                <TraceLinkButton
+                  action={{ cashTxnId: a.cand.cashTxnId, quoteId: a.quoteId, label: `${a.cand.label}와 잇기` }}
+                  title={a.who}
+                  amount={a.total}
+                />
+              ) : (
+                <span className="text-xs text-slate-400">동액 입금 없음</span>
+              )}
+              <TraceAsideButton quoteId={a.quoteId} title={a.who} amount={a.total} />
+              <Link
+                href={`/finance/trace?q=${encodeURIComponent(a.who)}`}
+                className="text-xs text-slate-500 underline underline-offset-4"
+              >
+                이 상대 추적 →
+              </Link>
+            </div>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-xs text-slate-400">
+        진짜 미수(아직 안 받은 돈)는 그대로 두시면 됩니다 — 입금이 올라오면 ⚡잇기가 나타납니다.
+      </p>
+    </section>
+  );
+}
+
