@@ -6,6 +6,8 @@ import { queueForMars } from "@/lib/mars-queue";
 import { cancelMarsRun, requestMarsRun, type MarsRunRow } from "@/lib/mars-run";
 import type { SaleDay, SaleRow } from "@/lib/sale-history";
 import { SaleCard } from "./client";
+import { removeCollection } from "@/lib/receivable";
+import { useConfirm } from "@/components/ui/confirm";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
 
@@ -287,20 +289,7 @@ export function SalesList({
               {d.collections.length > 0 && (
                 <ul className="mt-1.5 space-y-1">
                   {d.collections.map((c) => (
-                    <li key={c.id}>
-                      <div className="tabular flex items-baseline gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm">
-                        <span className="shrink-0 font-semibold text-emerald-800">💰 외상 수금</span>
-                        <span className="min-w-0 flex-1 truncate text-emerald-900">
-                          {c.who}
-                          {c.plateNo && <span className="ml-1 text-emerald-700">{c.plateNo}</span>}
-                          <span className="ml-1.5 text-xs text-emerald-600">
-                            {c.quoteNo} · {c.workDate.slice(5)} 정비 · {c.method}
-                          </span>
-                          {c.memo && <span className="ml-1.5 text-xs text-emerald-600">— {c.memo}</span>}
-                        </span>
-                        <span className="shrink-0 font-bold text-emerald-800">+{won(c.amount)}원</span>
-                      </div>
-                    </li>
+                    <CollectionLine key={c.id} c={c} canCollect={canCollect} />
                   ))}
                 </ul>
               )}
@@ -316,5 +305,63 @@ export function SalesList({
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * ⭐ 외상 수금 줄 + 되돌리기 (사장님 제보 2026-09-03 — "테스트로 1000원을 넣었는데
+ *    되돌리는게 불가함"). 지우기는 수금과 같은 정본(removeCollection, 외상 권한) —
+ *    지우면 그 판매의 잔액이 다시 살아나고 이 줄도 사라진다.
+ */
+function CollectionLine({ c, canCollect }: { c: SaleDay["collections"][number]; canCollect: boolean }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [ask, confirmDialog] = useConfirm();
+  const [err, setErr] = useState<string | null>(null);
+
+  const undo = async () => {
+    const ok = await ask({
+      title: "이 수금을 되돌릴까요?",
+      body: `${c.who} · ${c.quoteNo} · ${c.method} ${c.amount.toLocaleString()}원\n수금 기록이 지워지고 그만큼 외상 잔액이 다시 살아납니다.`,
+      confirmLabel: "되돌리기",
+      tone: "danger",
+    });
+    if (!ok) return;
+    start(async () => {
+      setErr(null);
+      const r = await removeCollection(c.id);
+      if (!r.ok) return setErr(r.error);
+      router.refresh();
+    });
+  };
+
+  return (
+    <li>
+      {confirmDialog}
+      <div className="tabular flex items-baseline gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm">
+        <span className="shrink-0 font-semibold text-emerald-800">💰 외상 수금</span>
+        <span className="min-w-0 flex-1 truncate text-emerald-900">
+          {c.who}
+          {c.plateNo && <span className="ml-1 text-emerald-700">{c.plateNo}</span>}
+          <span className="ml-1.5 text-xs text-emerald-600">
+            {c.quoteNo} · {c.workDate.slice(5)} 정비 · {c.method}
+          </span>
+          {c.memo && <span className="ml-1.5 text-xs text-emerald-600">— {c.memo}</span>}
+        </span>
+        <span className="shrink-0 font-bold text-emerald-800">+{won(c.amount)}원</span>
+        {canCollect && (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={undo}
+            title="수금 되돌리기 — 외상 잔액이 다시 살아납니다"
+            className="shrink-0 rounded-lg px-1.5 text-xs text-emerald-600 underline underline-offset-2 active:text-red-600 disabled:opacity-40"
+          >
+            되돌리기
+          </button>
+        )}
+      </div>
+      {err && <p className="mt-0.5 rounded-lg bg-red-50 px-2 py-1 text-xs text-red-700">{err}</p>}
+    </li>
   );
 }
