@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 import {
   Activity,
   BarChart3,
+  BookMarked,
   BookOpen,
   Boxes,
   ChevronRight,
@@ -53,6 +54,7 @@ const ICONS: Record<string, ReactNode> = {
   "/stock": <Boxes className="size-5" />,
   "/settings/suppliers": <Truck className="size-5" />,
   "/settings/services": <Wrench className="size-5" />,
+  "/settings/spec": <BookMarked className="size-5" />,
   "/receivables": <BookOpen className="size-5" />,
   "/settings/shop": <Store className="size-5" />,
   "/status": <Activity className="size-5" />,
@@ -136,6 +138,20 @@ export default async function SettingsPage() {
      */
     ...(can.stock ? [{ href: "/stock", title: "재고", desc: "창고에서 세는 화면 · 재고 목록 · DOT·수량 맞추기" }] : []),
     ...(can.master ? [{ href: "/settings/suppliers", title: "거래처", desc: "추가 · 이름 고치기 · 합치기 · 숨기기" }] : []),
+    /*
+     * ⭐ 차종별 순정 제원 (사장님 요청 2026-09-03) — 「내가 한번더 검수하겠음」
+     *    제조사 취급설명서에서 옮겨 온 값을 원문과 나란히 놓고 확인하는 화면.
+     *    확인 전에는 휠너트 토크 같은 위험 값의 숫자가 앱 어디에도 안 나온다.
+     */
+    ...(can.master
+      ? [
+          {
+            href: "/settings/spec",
+            title: "차종별 순정 제원",
+            desc: "공기압 · 휠너트 토크 · 오일 규격 — 설명서 원문과 나란히 확인",
+          },
+        ]
+      : []),
     // ⭐ 외상 장부 (2026-08-17) — 정비 내역 위쪽에도 길이 있지만 설정에서도 찾을 수 있게
     ...(can.receivable
       ? [{ href: "/receivables", title: "외상 장부", desc: "거래처·손님별로 못 받은 돈 · 한꺼번에 털기" }]

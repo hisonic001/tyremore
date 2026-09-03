@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { VehicleEditForm } from "./form";
 import { ToSupplier } from "./to-supplier";
+import { VehicleSpecBlock } from "./spec-block";
 import { hasPerm } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -130,6 +131,9 @@ export default async function VehiclePage({ params }: { params: Promise<{ id: st
           memo: row.v_memo,
         }}
       />
+      {/* ⭐ 순정 제원 (2026-09-03) — 확인된 값만, 세대를 아는 차만 */}
+      <VehicleSpecBlock vehicleId={Number(row.vehicle_id)} />
+
       {/* ⭐ 거래처 차고로 보내기 (2026-09-02) — 사장님 전용 */}
       {(await hasPerm("customer")) && (
         <ToSupplier

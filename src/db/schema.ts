@@ -448,6 +448,14 @@ export const vehicle = pgTable(
     mileageAt: timestamp("mileage_at", { withTimezone: true }),
     /** 순정규격 대신 이것을 쓴다 (D-04). 판매할 때마다 자동으로 쌓인다 */
     lastFittedSize: text("last_fitted_size"),
+    /**
+     * 차종·세대 (D-04 3차 개정, 2026-09-03). model 자유 텍스트는 그대로 두고
+     * 코드 칸 하나만 옆에 붙인다.
+     * 🔴 괄호코드로 확실할 때만 채운다. 그냥 「쏘렌토」처럼 세대를 모르는 차는 NULL 이
+     *    정상이다 — 연식으로 짐작해 채우면 그 차들이 전부 틀린 제원을 갖는다.
+     *    (vehicleGeneration 은 이 파일 아래쪽에 정의돼 있어 참조는 걸지 않는다)
+     */
+    generationId: bigint("generation_id", { mode: "number" }),
     lastVisitAt: timestamp("last_visit_at", { withTimezone: true }),
     memo: text("memo"),
     isActive: boolean("is_active").notNull().default(true),
@@ -1581,4 +1589,189 @@ export const blogPhoto = pgTable(
     uniqueIndex("uq_blog_photo").on(t.folderId, t.fileName),
     index("idx_blog_photo_folder").on(t.folderId),
   ],
+);
+
+/* ============================================================
+ * 차종별 순정 제원 (D-04 3차 개정, 2026-09-03)
+ *
+ * 이 표들은 **틀리면 사람이 다치는 자료**다. 휠너트 토크가 틀리면 바퀴가 빠지고,
+ * 오일 용량이 틀리면 엔진이 상한다. 그래서 「모르면 비워 둔다」가 정상 상태이고,
+ * 값보다 **근거가 먼저**다 — spec_source(우리가 직접 받아 온 원문)와
+ * spec_citation(원문 어디에서 나왔나) 없이는 값이 존재할 수 없는 구조다.
+ * kumho_material.source_label 과 같은 태도를 잇는다.
+ * ========================================================== */
+
+export const vehicleModel = pgTable(
+  "vehicle_model",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    makerCode: text("maker_code")
+      .notNull()
+      .references(() => vehicleMaker.code),
+    /** 정본 이름. 「포터2」 — 「포터 Ⅱ」·「포터」는 별칭표로 흡수한다 */
+    nameKo: text("name_ko").notNull(),
+    createdAt,
+  },
+  (t) => [uniqueIndex("uq_vehicle_model").on(t.makerCode, t.nameKo)],
+);
+
+/**
+ * 세대·변형 — **제원의 실제 주인**. 취급설명서 한 권이 대개 이 한 줄이다.
+ *
+ * 🔴 variantKey 는 사장님이 이미 괄호에 쓰시던 글자를 그대로 쓴다 (MQ4 · MQ4-HEV · CN7-N).
+ *    제조사 취급설명서 주소가 `full_webhelp/MQ4/2022/…` 라 근거를 바로 찾을 수 있다.
+ * 🔴 yearFrom/yearTo 는 **그 세대가 실제로 생산된 기간**이다. 우리 차량 연식으로
+ *    채우면 안 된다 — 자료에 `싼타페(TM)` 2009년 차가 있어서 그대로 넣으면
+ *    「TM 은 2009년부터」라는 거짓말이 표에 박힌다. 취급설명서에서 확인될 때까지 비운다.
+ */
+export const vehicleGeneration = pgTable(
+  "vehicle_generation",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    modelId: bigint("model_id", { mode: "number" })
+      .notNull()
+      .references(() => vehicleModel.id),
+    variantKey: text("variant_key").notNull().unique(),
+    /** 제조사 프로젝트 코드 = 취급설명서 주소의 한 칸 */
+    projCode: text("proj_code"),
+    phase: text("phase"),
+    powertrain: text("powertrain"),
+    yearFrom: integer("year_from"),
+    yearTo: integer("year_to"),
+    label: text("label").notNull(),
+    bodyType: text("body_type"),
+    manualUrl: text("manual_url"),
+    note: text("note"),
+    createdAt,
+  },
+  (t) => [
+    index("idx_vg_model").on(t.modelId, t.yearFrom),
+    index("idx_vg_proj").on(t.projCode),
+    check("vg_phase", sql`${t.phase} IS NULL OR ${t.phase} IN ('초기형','페이스리프트','2차 페이스리프트')`),
+    check(
+      "vg_pt",
+      sql`${t.powertrain} IS NULL OR ${t.powertrain} IN ('가솔린','디젤','LPG','하이브리드','PHEV','전기','수소')`,
+    ),
+  ],
+);
+
+/**
+ * 별칭 — vehicle.model 자유 텍스트를 흡수한다 (vehicle_maker_alias 와 같은 방식).
+ * 🔴 세대를 못 정하는 것(그냥 '쏘렌토' 43대)은 generationId 를 NULL 로 둔다.
+ *    억지로 채우면 그 순간 43대가 전부 틀린 제원을 갖는다.
+ */
+export const vehicleModelAlias = pgTable("vehicle_model_alias", {
+  rawModel: text("raw_model").primaryKey(),
+  modelId: bigint("model_id", { mode: "number" }).references(() => vehicleModel.id),
+  generationId: bigint("generation_id", { mode: "number" }).references(() => vehicleGeneration.id),
+  /** '괄호코드' | '이름만' | '손으로' */
+  matchedBy: text("matched_by"),
+  createdAt,
+});
+
+/**
+ * 근거 — 우리가 **직접 받아 온 원문**. 이게 없으면 검증이 성립하지 않는다.
+ * 🔴 모델에게 웹 도구를 주지 않는다. Node 가 페이지를 받아 bodyText 에 넣고,
+ *    모델은 그 글자만 본다. 어느 주소를 읽었는지 우리가 확실히 알아야 하기 때문이다.
+ * 🔴 requestedBy 가 NOT NULL 인 것은 **사람이 눌러야만 받아 온다**는 뜻이다 (자동 수집 금지).
+ */
+export const specSource = pgTable(
+  "spec_source",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    generationId: bigint("generation_id", { mode: "number" }).references(() => vehicleGeneration.id),
+    url: text("url").notNull(),
+    host: text("host").notNull(),
+    title: text("title"),
+    /** '제조사설명서' | '거래처카탈로그' | '매장확인' | '정비지침서' */
+    kind: text("kind").notNull(),
+    /** 1=제조사 공식 … 5=출처 불명 */
+    trustRank: integer("trust_rank").notNull(),
+    /** 🔴 교차검증의 뜻 — 커뮤니티 열 곳이 같은 말을 해도 발행자가 하나면 1개로 센다 */
+    independenceKey: text("independence_key").notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+    /** fetched_at::date 는 시간대에 따라 달라져 인덱스로 못 쓴다 (Postgres 42P17) */
+    fetchedOn: date("fetched_on").notNull(),
+    httpStatus: integer("http_status"),
+    contentSha256: text("content_sha256"),
+    bodyText: text("body_text").notNull(),
+    requestedBy: bigint("requested_by", { mode: "number" })
+      .notNull()
+      .references(() => appUser.id),
+    createdAt,
+  },
+  (t) => [
+    index("idx_spec_source_gen").on(t.generationId),
+    uniqueIndex("uq_spec_source_url_day").on(t.url, t.fetchedOn),
+    check("ss_rank", sql`${t.trustRank} BETWEEN 1 AND 5`),
+  ],
+);
+
+/**
+ * 값 — 항목이 계속 늘어나므로 세로로 쌓는다.
+ * 🔴 status='승인' 은 **사장님이 원문과 나란히 보고 누르셨다**는 뜻이다.
+ *    그 전에는 위험 값(휠너트 토크·오일 용량)의 숫자를 화면에도 블로그에도 내보내지 않는다.
+ */
+export const vehicleSpec = pgTable(
+  "vehicle_spec",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    generationId: bigint("generation_id", { mode: "number" })
+      .notNull()
+      .references(() => vehicleGeneration.id),
+    /** 같은 항목의 여러 줄 묶음 — 18인치 한 벌 / 20인치 한 벌 */
+    groupNo: integer("group_no").notNull().default(1),
+    groupLabel: text("group_label"),
+    /** spec-core.ts 의 SPEC_ITEMS 키 */
+    item: text("item").notNull(),
+    /** 앞/뒤, 엔진 종류 등 조건 */
+    qualifier: jsonb("qualifier"),
+    numMin: numeric("num_min", { precision: 10, scale: 3 }),
+    numMax: numeric("num_max", { precision: 10, scale: 3 }),
+    unit: text("unit"),
+    textValue: text("text_value"),
+    status: text("status").notNull().default("검수대기"),
+    risk: text("risk").notNull().default("보통"),
+    /** 독립된 출처끼리 값이 어긋남 — 사장님께 먼저 보여드린다 */
+    conflict: boolean("conflict").notNull().default(false),
+    verifiedBy: bigint("verified_by", { mode: "number" }).references(() => appUser.id),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    verifyNote: text("verify_note"),
+    createdBy: text("created_by"),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    index("idx_vehicle_spec_gen").on(t.generationId, t.item),
+    index("idx_vehicle_spec_wait").on(t.status),
+    check("vs_status", sql`${t.status} IN ('검수대기','승인','보류','거절')`),
+    check("vs_risk", sql`${t.risk} IN ('높음','보통','낮음')`),
+    check("vs_value", sql`${t.numMin} IS NOT NULL OR ${t.textValue} IS NOT NULL`),
+    check("vs_range", sql`${t.numMax} IS NULL OR ${t.numMin} IS NULL OR ${t.numMax} >= ${t.numMin}`),
+    /** 🔴 사람이 검수하지 않은 '승인' 은 만들 수 없다 */
+    check("vs_verified", sql`${t.status} <> '승인' OR (${t.verifiedBy} IS NOT NULL AND ${t.verifiedAt} IS NOT NULL)`),
+  ],
+);
+
+/**
+ * 인용 — 🔴 **이 표가 이 설계의 심장이다.** 인용 없이 값이 존재할 수 없다.
+ * quote 는 원문에 그대로 있는 글자여야 하고, 값의 숫자가 그 안에 실제로 들어 있어야 한다
+ * (src/lib/spec-verify.ts 의 specFilter 가 기계로 대조한다).
+ */
+export const specCitation = pgTable(
+  "spec_citation",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    specId: bigint("spec_id", { mode: "number" })
+      .notNull()
+      .references(() => vehicleSpec.id, { onDelete: "cascade" }),
+    sourceId: bigint("source_id", { mode: "number" })
+      .notNull()
+      .references(() => specSource.id),
+    quote: text("quote").notNull(),
+    /** 원문에서 몇 번째 글자에 있었나 — 나중에 사람이 눈으로 찾을 때 쓴다 */
+    quotePos: integer("quote_pos").notNull(),
+    createdAt,
+  },
+  (t) => [uniqueIndex("uq_spec_citation").on(t.specId, t.sourceId)],
 );
