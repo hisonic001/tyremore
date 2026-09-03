@@ -94,19 +94,38 @@ async function main() {
      *    기아 새 설명서는 목차가 200 으로 열려도 형식이 달라 제원 쪽이 안 잡힌 적이 있다.
      *    거기서 멈춰 버리면 옆 연식에 멀쩡히 있는 설명서를 못 본다.
      */
+    /**
+     * 🔴 「목차가 열렸다」가 아니라 **「우리에게 필요한 쪽이 실제로 있다」** 를 본다.
+     *
+     *    두 번 데었다 (2026-09-03):
+     *      ① 기아 새 설명서는 목차가 200 으로 열려도 형식이 달라 제원 쪽이 0장이었다
+     *      ② 갓 올라온 2027년 그랜저 설명서에는 **「타이어 및 휠」 쪽이 아직 없었다** —
+     *         최신 연식만 보고 멈추니 값이 34개에서 14개로 줄었다 (공기압·토크가 통째로 빠짐)
+     *
+     *    그래서 「타이어 및 휠」이 있는 연식을 먼저 찾고, 끝내 없으면
+     *    제원 쪽이 하나라도 있던 연식으로 물러선다.
+     */
     let base = "";
     let toc: Awaited<ReturnType<typeof fetchToc>> | null = null;
+    let fallback: { base: string; toc: Awaited<ReturnType<typeof fetchToc>> } | null = null;
     for (const y of years) {
       const b = manualBase(gen.maker, gen.proj, y)!;
       const t = await fetchToc(b, site.toc);
-      const found = t.status === 200 ? pickSpecTopics(t.entries).length : 0;
-      console.log(`  목차 ${t.status} ${y}년  (${t.entries.length}줄, 제원 ${found}장)  ${t.url}`);
-      if (found) {
+      const picked = t.status === 200 ? pickSpecTopics(t.entries) : [];
+      const hasTire = picked.some((e) => /타이어\s*및\s*휠/.test(e.title));
+      console.log(`  목차 ${t.status} ${y}년  (${t.entries.length}줄, 제원 ${picked.length}장${hasTire ? ", 타이어 있음" : ""})  ${t.url}`);
+      if (hasTire) {
         base = b;
         toc = t;
         break;
       }
+      if (picked.length && !fallback) fallback = { base: b, toc: t };
       await sleep(700);
+    }
+    if (!toc && fallback) {
+      console.log("  (타이어 쪽이 있는 연식을 못 찾아, 제원 쪽이 있던 연식으로 갑니다)");
+      base = fallback.base;
+      toc = fallback.toc;
     }
     if (!toc || !base) {
       console.error("  설명서를 못 찾았습니다. 연식을 직접 넣어 보세요:  --year 2022");
@@ -135,6 +154,14 @@ async function main() {
     const rank = rankSource(base);
     let ok = 0;
     let bad = 0;
+    /**
+     * 🔴 한 벌 번호는 **차종 안에서 안 겹쳐야 한다.**
+     *    파서마다 1번부터 세기 때문에, 그대로 두면 「타이어 18인치 한 벌」과
+     *    「디젤 엔진오일 한 벌」이 둘 다 1번이 된다. 그러면 검수 화면에서 한 상자에
+     *    섞여 보이고, 18인치 타이어를 확인하려고 누르면 엔진오일까지 같이 확인된다.
+     *    (2026-09-03 실측으로 실제 그랬다)
+     */
+    let groupBase = 0;
     for (const t of topics) {
       await sleep(800);
       const url = joinUrl(base, t.href);
@@ -153,14 +180,19 @@ async function main() {
         const [s] = await sql<{ id: number }[]>`
           INSERT INTO spec_source (generation_id, url, host, title, kind, trust_rank, independence_key,
                                    http_status, content_sha256, body_text, requested_by)
-          VALUES (${gen.id}, ${url}, ${new URL(url).host}, ${page.title || t.title}, '제조사설명서',
+          /* 🔴 제목은 **목차 제목**을 먼저 쓴다. 기아 페이지의 <title> 은 어느 쪽이든
+             「사용설명서(요약본)」로 똑같아서, 그대로 두면 검수 화면에서 어느 쪽에서
+             나온 값인지 구별이 안 된다 (2026-09-03 실측) */
+          VALUES (${gen.id}, ${url}, ${new URL(url).host}, ${t.title || page.title}, '제조사설명서',
                   ${rank.rank}, ${rank.independenceKey}, ${page.status}, ${page.sha256}, ${page.bodyText}, ${u.id})
-          ON CONFLICT (url, fetched_on) DO UPDATE SET body_text = EXCLUDED.body_text
+          ON CONFLICT (url, fetched_on) DO UPDATE SET body_text = EXCLUDED.body_text, title = EXCLUDED.title
           RETURNING id`;
         sourceId = s.id;
       }
 
+      let maxGroup = 0;
       for (const c of page.specs) {
+        maxGroup = Math.max(maxGroup, c.groupNo);
         const problem = specFilter(c, page.bodyText, { bodyType });
         const label = specItem(c.item)?.label ?? c.item;
         const shown = c.textValue ?? bothUnits(c.numMin!, c.numMax ?? null, c.unit!);
@@ -177,7 +209,7 @@ async function main() {
         const [spec] = await sql<{ id: number }[]>`
           INSERT INTO vehicle_spec (generation_id, group_no, group_label, item, qualifier,
                                     num_min, num_max, unit, text_value, status, risk, created_by)
-          VALUES (${gen.id}, ${c.groupNo}, ${c.groupLabel ?? null}, ${c.item},
+          VALUES (${gen.id}, ${groupBase + c.groupNo}, ${c.groupLabel ?? null}, ${c.item},
                   ${c.qualifier ? sql.json(c.qualifier) : null},
                   ${c.numMin ?? null}, ${c.numMax ?? null}, ${c.unit ?? null}, ${c.textValue ?? null},
                   '검수대기', ${specItem(c.item)?.risk ?? "보통"}, ${"설명서옮김"})
@@ -187,6 +219,7 @@ async function main() {
           VALUES (${spec.id}, ${sourceId}, ${c.quote}, ${Math.max(0, page.bodyText.indexOf(c.quote))})
           ON CONFLICT (spec_id, source_id) DO NOTHING`;
       }
+      groupBase += maxGroup;
     }
 
     console.log(`\n합계 — 통과 ${ok}개 · 걸림 ${bad}개`);

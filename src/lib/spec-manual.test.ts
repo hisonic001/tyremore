@@ -126,6 +126,30 @@ describe("타이어·휠 표를 값으로", () => {
   });
 });
 
+/**
+ * 🔴 「차량 제원」 쪽의 치수 표. 여기서 `235/60 R18` 은 값이 아니라
+ *    **어느 타이어일 때인지 알려주는 조건**이다 (쏘렌토 MQ4 실측 2026-09-03).
+ *    그대로 읽으면 규격만 덜렁 든 가짜 한 벌이 네 개 생겼었다.
+ */
+const DIMENSION_TABLE = `
+<table><thead><tr><th><p>항목</p></th><th><p>구분</p></th><th><p>타이어</p></th><th><p>치수(mm)</p></th></tr></thead><tbody>
+  <tr><td rowspan="2"><p>윤거</p></td><td><p>전</p></td><td><p>235/60 R18</p></td><td><p>1,646</p></td></tr>
+  <tr><td><p>후</p></td><td><p>255/45 R20</p></td><td><p>1,637</p></td></tr>
+</tbody></table>`;
+
+describe("타이어 규격이 있다고 다 타이어 표는 아니다", () => {
+  it("🔴 치수 표에서는 아무것도 뽑지 않는다 — 휠·공기압·토크 칸이 없다", () => {
+    assert.deepEqual(parseTireWheelTable(parseTable(DIMENSION_TABLE)), []);
+  });
+
+  it("휠 칸만 있어도 타이어 표로 본다", () => {
+    const t = `<table><thead><tr><th><p>형식</p></th><th><p>휠</p></th></tr></thead>
+      <tbody><tr><td><p>195/65R15</p></td><td><p>6.0Jx15</p></td></tr></tbody></table>`;
+    const got = parseTireWheelTable(parseTable(t));
+    assert.equal(got.length, 2);
+  });
+});
+
 describe("오일 표를 값으로", () => {
   const got = parseOilTable(parseTable(OIL_TABLE));
   const find = (item: string) => got.filter((c) => c.item === item);

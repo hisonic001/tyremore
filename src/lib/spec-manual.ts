@@ -159,6 +159,16 @@ export function parseTireWheelTable(g: Grid): HarvestedSpec[] {
       cols.push({ i: c, item: "wheel_nut_torque", unit: u.unit, alt: u.alt, where: null });
   }
 
+  /**
+   * 🔴 타이어 규격 칸 하나만으로 「타이어 표」라고 단정하지 않는다.
+   *    「차량 제원」 쪽의 **치수 표**가 이렇게 생겼다 (쏘렌토 MQ4 실측 2026-09-03):
+   *      윤거 | 전 | 235/60 R18 | 1,646
+   *    여기서 235/60 R18 은 값이 아니라 **어느 타이어일 때인지 알려주는 조건**이다.
+   *    그대로 읽으면 규격만 덜렁 든 가짜 한 벌이 네 개 생긴다.
+   *    휠·공기압·토크 칸이 하나라도 같이 있어야 진짜 타이어 표다.
+   */
+  if (cols.length < 2) return [];
+
   const out: HarvestedSpec[] = [];
   let groupNo = 0;
   for (const row of bodyRows) {
