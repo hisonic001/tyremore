@@ -9,17 +9,17 @@ import type { Bar, Segment } from "./charts";
 export const dynamic = "force-dynamic";
 
 /**
- * ⭐ 매출 리포트 — 사장님 전용 (2026-08-06)
+ * ⭐ 매출 리포트 — 사장님 전용 (2026-08-06 → 2026-09-03 확장·디자인 리프레시)
  *
- *   "월 마감 매출 요약 화면 … 그래픽과 그래프 등을 더해서 다각도에서
- *    매장 운영에 도움이 되도록 제대로 만들고 싶은데 (사장 어카운트만 확인 가능)"
+ *   "월 마감 매출 요약 화면 … 다각도에서 매장 운영에 도움이 되도록"
+ *   + 2026-09-03: 개인/거래처 갈라 보기 · 브랜드별 타이어 본수 · 마진율 요약,
+ *     그리고 "토스나 notion 같이 세련되고 트렌디한 ux ui" — 정보는 명확하게,
+ *     시각적 군더더기는 최소로, 그래픽은 적재적소에.
  *
- * 각도 다섯: ①이번 달 핵심 숫자(전월·작년 대비) ②일별 흐름 ③12개월 추이
- *            ④결제수단 구성 ⑤많이 판 품목.
- * 날짜는 실제 정비한 날(work_date) 기준 — 입력한 날이 아니라 판 날로 집계한다.
- *
- * 🔴 마진 각도는 아직 없다: 판매 줄에 매입원가가 기록된 건이 0건이다
- *    (MARS 백필 3,112건에는 매입가 자체가 없다). 기록이 쌓이면 여기에 더한다.
+ * 각도: ①핵심 숫자(헤드라인+보조 줄) ②개인·거래처 ③일별 ④12개월 ⑤요일별
+ *       ⑥결제수단 ⑦브랜드 본수 ⑧톱10 품목.
+ * 모집단 정본 = 성사 + 정비한 날(work_date) — 화면 하단에 명시.
+ * 🔴 순위 막대는 글자 뒤에 깔지 않는다 (사장님 제보 2026-08-07 — 아래 줄로).
  */
 
 /** 실제 판 날 — 백필·수기 입력 모두 이 열로 모은다 */
@@ -48,7 +48,7 @@ export default async function ReportsPage({
   if (!session) redirect("/login");
   if (!(await hasPerm("reports"))) redirect("/"); // 권한 스위치 (2026-09-02)
 
-  const today = kstToday(); // "2026-08-06"
+  const today = kstToday();
   const thisYm = today.slice(0, 7);
   const sp = await searchParams;
   const ym = typeof sp.ym === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(sp.ym) && sp.ym <= thisYm ? sp.ym : thisYm;
@@ -58,12 +58,13 @@ export default async function ReportsPage({
 
   const start = `${ym}-01`;
   const nextStart = `${ymAdd(ym, 1)}-01`;
-  const winStart = `${ymAdd(ym, -12)}-01`; // 13개월 창 — 작년 같은 달까지 포함
+  const winStart = `${ymAdd(ym, -12)}-01`;
+  const yearStart = `${yy}-01-01`;
   const prevYm = ymAdd(ym, -1);
   const lastYearYm = ymAdd(ym, -12);
   const daysInMonth = new Date(yy, mm, 0).getDate();
 
-  const [months, daily, pay, guests, top, prevSpanRows] = await Promise.all([
+  const [months, daily, pay, guests, top, prevSpanRows, split, supTop, brands, marginRows] = await Promise.all([
     db.execute<{ ym: string; n: number; amt: string }>(sql`
       SELECT to_char(${D}, 'YYYY-MM') ym, count(*)::int n, COALESCE(SUM(total_amount),0)::bigint amt
       FROM quote
@@ -77,9 +78,7 @@ export default async function ReportsPage({
       GROUP BY 1
     `),
     db.execute<{ p: string; n: number; amt: string }>(sql`
-      -- ⭐ 분할 결제는 수단별 금액으로 갈라 센다 (2026-08-10).
-      --    분할 내역이 있으면 그 줄들로, 없으면 판매 전체가 그 수단으로.
-      --    (옛 「혼합」 건은 내역이 없어 혼합 그대로 남는다)
+      -- ⭐ 분할 결제는 수단별 금액으로 갈라 센다 (2026-08-10)
       SELECT p, count(DISTINCT qid)::int n, COALESCE(SUM(amt),0)::bigint amt
       FROM (
         SELECT q.id qid,
@@ -93,7 +92,6 @@ export default async function ReportsPage({
       ) t
       GROUP BY 1 ORDER BY amt DESC
     `),
-    // 신규 vs 재방문 — 그 손님의 생애 첫 성사 판매가 이번 달이면 신규
     db.execute<{ new_n: number; ret_n: number }>(sql`
       WITH s AS (
         SELECT customer_id, ${D} d FROM quote
@@ -110,13 +108,11 @@ export default async function ReportsPage({
       SELECT qi.description name, SUM(qi.qty)::int q, COALESCE(SUM(qi.final_price * qi.qty),0)::bigint amt
       FROM quote_item qi JOIN quote qq ON qq.id = qi.quote_id
       WHERE qq.status = '성사'
-        -- 0원 부품 소모는 판 것이 아니다 (2026-08-11). 금액 있는 부품은 집계한다 (2026-08-24)
         AND NOT (qi.line_type = 'use' AND qi.final_price = 0)
         AND COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${start}::date
         AND COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${nextStart}::date
       GROUP BY 1 ORDER BY amt DESC LIMIT 10
     `),
-    // 진행 중인 달은 전월 「같은 기간(1~오늘 일자)」과 비교해야 공정하다
     isCurrent
       ? db.execute<{ n: number; amt: string }>(sql`
           SELECT count(*)::int n, COALESCE(SUM(total_amount),0)::bigint amt
@@ -125,6 +121,47 @@ export default async function ReportsPage({
             AND EXTRACT(DAY FROM ${D}) <= ${todayDay}
         `)
       : Promise.resolve([] as { n: number; amt: string }[]),
+    /* ⭐ 개인 vs 거래처 (2026-09-03) — 쏘카·AJ 물량이 섞이면 가게 체질이 안 보인다 */
+    db.execute<{ biz: boolean; n: number; amt: string }>(sql`
+      SELECT (supplier_name IS NOT NULL) biz, count(*)::int n, COALESCE(SUM(total_amount),0)::bigint amt
+      FROM quote
+      WHERE status = '성사' AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
+      GROUP BY 1
+    `),
+    db.execute<{ name: string; n: number; amt: string }>(sql`
+      SELECT supplier_name name, count(*)::int n, COALESCE(SUM(total_amount),0)::bigint amt
+      FROM quote
+      WHERE status = '성사' AND supplier_name IS NOT NULL
+        AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
+      GROUP BY 1 ORDER BY amt DESC LIMIT 5
+    `),
+    /* ⭐ 브랜드별 타이어 본수 — 이번 달 + 올해 누적 (2026-09-03) */
+    db.execute<{ brand: string; mq: number; yq: number }>(sql`
+      SELECT COALESCE(b.name_ko, p.brand_code, '기타') brand,
+             COALESCE(SUM(qi.qty) FILTER (WHERE ${sql.raw(`COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date)`)} >= ${start}::date), 0)::int mq,
+             SUM(qi.qty)::int yq
+      FROM quote_item qi
+      JOIN quote qq ON qq.id = qi.quote_id
+      LEFT JOIN product p ON p.id = qi.product_id
+      LEFT JOIN brand b ON b.code = p.brand_code
+      WHERE qq.status = '성사' AND qi.line_type = 'tire'
+        AND COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${yearStart}::date
+        AND COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${nextStart}::date
+      GROUP BY 1 ORDER BY 2 DESC, 3 DESC LIMIT 12
+    `),
+    /* ⭐ 마진율 — 원가(margin)가 기록된 줄만. 0원 매입 등 원가 빈 건은 제외하고 그 비중을 밝힌다 */
+    db.execute<{ ym: string; m: string; base: string; known: string; total: string }>(sql`
+      SELECT to_char(COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date), 'YYYY-MM') ym,
+             COALESCE(SUM(qi.margin) FILTER (WHERE qi.margin IS NOT NULL), 0)::bigint m,
+             COALESCE(SUM(qi.final_price * qi.qty) FILTER (WHERE qi.margin IS NOT NULL), 0)::bigint base,
+             COALESCE(SUM(qi.final_price * qi.qty) FILTER (WHERE qi.margin IS NOT NULL), 0)::bigint known,
+             COALESCE(SUM(qi.final_price * qi.qty), 0)::bigint total
+      FROM quote_item qi JOIN quote qq ON qq.id = qi.quote_id
+      WHERE qq.status = '성사'
+        AND COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${prevYm + "-01"}::date
+        AND COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${nextStart}::date
+      GROUP BY 1
+    `),
   ]);
 
   const byYm = new Map(months.map((m) => [m.ym, { n: m.n, amt: Number(m.amt) }]));
@@ -133,7 +170,7 @@ export default async function ReportsPage({
   const lastYear = byYm.get(lastYearYm) ?? { n: 0, amt: 0 };
   const prevSpan = prevSpanRows[0] ? { n: prevSpanRows[0].n, amt: Number(prevSpanRows[0].amt) } : null;
 
-  // --- 12개월 추이 (보고 있는 달이 맨 오른쪽) ---
+  // --- 12개월 추이 ---
   const trend: Bar[] = [];
   for (let i = 11; i >= 0; i--) {
     const k = ymAdd(ym, -i);
@@ -147,7 +184,7 @@ export default async function ReportsPage({
     });
   }
 
-  // --- 일별 (빈 날은 0 으로 채워 달력 모양을 유지) ---
+  // --- 일별 ---
   const byDay = new Map(daily.map((d) => [d.day, { n: d.n, amt: Number(d.amt) }]));
   const days: Bar[] = [];
   for (let d = 1; d <= daysInMonth; d++) {
@@ -159,7 +196,7 @@ export default async function ReportsPage({
     });
   }
 
-  // --- 결제수단 (색은 고정 배정 — 달이 바뀌어도 카드는 늘 파랑) ---
+  // --- 결제수단 (색 고정 — 색약 검증 통과 팔레트, 변경 금지) ---
   const PAY_COLOR: Record<string, string> = {
     카드: "#2a78d6",
     현금: "#eb6834",
@@ -176,11 +213,7 @@ export default async function ReportsPage({
   const avg = cur.n > 0 ? Math.round(cur.amt / cur.n) : 0;
   const topMax = top.length ? Number(top[0].amt) : 0;
 
-  /**
-   * ⭐ 요일별 분석 (사장님 요청 2026-08-08).
-   *    이미 불러온 일별 데이터에서 계산한다 — 진행 중인 달은 오늘까지만 세고,
-   *    요일마다 든 날 수가 달라서 막대는 합계, 풍선에 하루 평균을 같이 적는다.
-   */
+  // --- 요일별 ---
   const WD = ["일", "월", "화", "수", "목", "금", "토"];
   const lastDay = isCurrent ? todayDay : daysInMonth;
   const wk = Array.from({ length: 7 }, () => ({ amt: 0, n: 0, days: 0 }));
@@ -191,7 +224,6 @@ export default async function ReportsPage({
     wk[w].n += v.n;
     wk[w].days += 1;
   }
-  // 월요일부터 일요일 순으로 — 가게 한 주의 흐름대로
   const weekBars: Bar[] = [1, 2, 3, 4, 5, 6, 0].map((w) => ({
     label: `${WD[w]}`,
     value: wk[w].amt,
@@ -203,6 +235,33 @@ export default async function ReportsPage({
   const salesDelta = isCurrent ? pct(cur.amt, prevSpan?.amt ?? 0) : pct(cur.amt, prev.amt);
   const yearDelta = isCurrent ? null : pct(cur.amt, lastYear.amt);
 
+  // --- 개인 vs 거래처 (2026-09-03) ---
+  const person = split.find((s) => !s.biz) ?? { n: 0, amt: "0" };
+  const biz = split.find((s) => s.biz) ?? { n: 0, amt: "0" };
+  const personAmt = Number(person.amt);
+  const bizAmt = Number(biz.amt);
+  const splitSegs: Segment[] = [
+    { label: "개인 손님", value: personAmt, color: "#009944" },
+    { label: "거래처", value: bizAmt, color: "#7c5cd6" },
+  ].filter((s) => s.value > 0);
+  const supMax = supTop.length ? Number(supTop[0].amt) : 0;
+
+  // --- 브랜드 본수 (2026-09-03) ---
+  const brandMonth: Bar[] = brands
+    .filter((b) => Number(b.mq) > 0)
+    .map((b) => ({ label: b.brand.replace(/타이어$/, ""), value: Number(b.mq), hint: `${b.brand} · 이번 달 ${b.mq}본 · 올해 ${b.yq}본` }));
+  const tireMonthTotal = brands.reduce((s, b) => s + Number(b.mq), 0);
+  const tireYearTotal = brands.reduce((s, b) => s + Number(b.yq), 0);
+
+  // --- 마진율 (2026-09-03) — 원가 기록 있는 줄 기준, 커버리지 명시 ---
+  const mCur = marginRows.find((r) => r.ym === ym);
+  const mPrev = marginRows.find((r) => r.ym === prevYm);
+  const rate = (r?: { m: string; base: string }) =>
+    r && Number(r.base) > 0 ? (Number(r.m) / Number(r.base)) * 100 : null;
+  const marginRate = rate(mCur);
+  const marginPrevRate = rate(mPrev);
+  const coverage = mCur && Number(mCur.total) > 0 ? Math.round((Number(mCur.known) / Number(mCur.total)) * 100) : 0;
+
   return (
     <main className="mx-auto min-h-dvh max-w-3xl px-4 py-5 pb-24 lg:max-w-6xl">
       <Link href="/settings" className="text-sm text-slate-500 underline underline-offset-4">
@@ -211,177 +270,274 @@ export default async function ReportsPage({
 
       <header className="mt-3 flex items-center justify-between">
         <h1 className="text-xl font-bold">매출 리포트</h1>
-        <span className="text-xs text-slate-400">사장님 전용</span>
+        <div className="flex gap-1">
+          <span className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white">매출</span>
+          <Link href="/reports/stock" className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-100">
+            재고
+          </Link>
+          <Link href="/reports/margin" className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-100">
+            마진
+          </Link>
+          <Link href="/reports/mars" className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-100">
+            MARS
+          </Link>
+        </div>
       </header>
 
-      {/* 매출 ↔ 재고 오가기 (재고 리포트: 사장님 요청 2026-08-07) */}
-      <div className="mt-3 flex gap-1.5">
-        <span className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white">매출</span>
-        <Link href="/reports/stock" className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-600">
-          재고
-        </Link>
-        {/* ⭐ MARS 입력 평가 (사장님 요청 2026-08-10) */}
-        <Link href="/reports/mars" className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-600">
-          MARS 평가
-        </Link>
-      </div>
-
-      {/* 달 넘기기 */}
-      <div className="mt-3 flex items-center justify-between rounded-xl border border-slate-200 bg-white px-2 py-2">
-        <Link href={`/reports?ym=${prevYm}`} className="rounded-lg px-3 py-2 text-sm font-medium text-slate-600 active:bg-slate-100">
-          ← {Number(prevYm.slice(5))}월
-        </Link>
-        <div className="text-center">
-          <div className="font-bold">
-            {yy}년 {mm}월
-          </div>
-          {isCurrent && <div className="text-xs text-amber-700">1~{todayDay}일 진행 중</div>}
-        </div>
-        {isCurrent ? (
-          <span className="px-3 py-2 text-sm text-slate-300">{Number(ymAdd(ym, 1).slice(5))}월 →</span>
-        ) : (
-          <Link href={`/reports?ym=${ymAdd(ym, 1)}`} className="rounded-lg px-3 py-2 text-sm font-medium text-slate-600 active:bg-slate-100">
-            {Number(ymAdd(ym, 1).slice(5))}월 →
-          </Link>
-        )}
-      </div>
-
-      {/* ---- ① 핵심 숫자 ---- */}
-      <section className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <div className="col-span-2 rounded-xl border border-slate-200 bg-white p-4 lg:col-span-4">
-          <div className="text-sm text-slate-500">매출</div>
-          <div className="mt-1 text-3xl font-bold">{fmtWon(cur.amt)}</div>
-          <div className="mt-1 space-x-3 text-sm">
-            {salesDelta !== null && (
-              <Delta v={salesDelta} label={isCurrent ? `전월 1~${todayDay}일 대비` : "전월 대비"} />
+      {/* ---- ① 헤드라인 — 토스식 계층: 큰 숫자 하나 + 증감 칩 + 보조 줄 (2026-09-03 리프레시) ---- */}
+      <section className="mt-4 rounded-card border border-slate-200 bg-white p-5 shadow-card">
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-slate-500">
+            {yy}년 {mm}월 매출{isCurrent && <span className="ml-1 text-slate-400">· 1~{todayDay}일 진행 중</span>}
+          </span>
+          <span className="flex items-center gap-1 text-sm">
+            <Link href={`/reports?ym=${prevYm}`} className="rounded-lg px-2 py-1 text-slate-400 active:bg-slate-100">
+              ←
+            </Link>
+            {isCurrent ? (
+              <span className="px-2 py-1 text-slate-200">→</span>
+            ) : (
+              <Link href={`/reports?ym=${ymAdd(ym, 1)}`} className="rounded-lg px-2 py-1 text-slate-400 active:bg-slate-100">
+                →
+              </Link>
             )}
-            {yearDelta !== null && <Delta v={yearDelta} label={`작년 ${mm}월 대비`} />}
-          </div>
+          </span>
         </div>
-        <Tile label="판매 건수" value={`${cur.n}건`} sub={!isCurrent && prev.n > 0 ? `전월 ${prev.n}건` : undefined} />
-        <Tile label="건당 평균" value={fmtWon(avg)} />
-        <Tile label="새 손님" value={`${g.new_n}명`} sub="이번이 첫 방문" />
-        <Tile label="다시 온 손님" value={`${g.ret_n}명`} sub="전에도 온 적 있음" />
+        <div className="tabular mt-1 text-[34px] font-extrabold leading-tight tracking-tight">{fmtWon(cur.amt)}</div>
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {salesDelta !== null && <DeltaChip v={salesDelta} label={isCurrent ? `전월 같은 기간` : "전월"} />}
+          {yearDelta !== null && <DeltaChip v={yearDelta} label={`작년 ${mm}월`} />}
+        </div>
+        {/* 보조 숫자 — 보더 없는 한 줄, 여백으로 구분 */}
+        <div className="tabular mt-4 grid grid-cols-2 gap-x-4 gap-y-2.5 sm:grid-cols-3 lg:grid-cols-5">
+          <Stat label="판매 건수" value={`${cur.n}건`} />
+          <Stat label="건당 평균" value={fmtWon(avg)} />
+          <Stat label="새 손님" value={`${g.new_n}명`} />
+          <Stat label="다시 온 손님" value={`${g.ret_n}명`} />
+          <Stat
+            label="마진율"
+            value={marginRate === null ? "—" : `${marginRate.toFixed(1)}%`}
+            sub={marginRate === null ? "원가 기록 없음" : `원가 있는 매출 ${coverage}% 기준${
+              marginPrevRate !== null && marginRate !== null
+                ? ` · 전월 ${marginPrevRate.toFixed(1)}%`
+                : ""
+            }`}
+            href="/reports/margin"
+          />
+        </div>
       </section>
 
       {cur.n === 0 && (
-        <p className="mt-4 rounded-xl border border-slate-200 bg-white p-4 text-center text-slate-500">
+        <p className="mt-4 rounded-card border border-slate-200 bg-white p-4 text-center text-slate-500">
           이 달에는 성사된 판매가 없습니다
         </p>
       )}
 
-      {/* PC 에서 그래프·목록을 나란히 (사장님 승인 2026-08-08) */}
       <div className="mt-4 grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
-      {/* ---- ② 일별 흐름 ---- */}
-      <Section title="일별 매출" sub="막대에 손을 대면 그날의 건수·금액이 뜹니다">
-        <ColumnChart data={days} height={170} />
-      </Section>
+        {/* ---- ② 개인 vs 거래처 (2026-09-03) ---- */}
+        <Section title="개인 · 거래처" sub="거래처(렌트카 등) 물량을 갈라 봐야 가게 체질이 보입니다">
+          {splitSegs.length ? (
+            <>
+              <StackedBar parts={splitSegs} clipId="split-clip" />
+              <ul className="mt-3 space-y-1.5">
+                {[
+                  { label: "개인 손님", amt: personAmt, n: Number(person.n), color: "#009944" },
+                  { label: "거래처", amt: bizAmt, n: Number(biz.n), color: "#7c5cd6" },
+                ]
+                  .filter((r) => r.amt > 0)
+                  .map((r) => (
+                    <li key={r.label} className="flex items-center justify-between text-sm">
+                      <span className="flex items-center gap-2 text-slate-600">
+                        <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: r.color }} />
+                        {r.label}
+                        <span className="text-xs text-slate-400">{r.n}건</span>
+                      </span>
+                      <span className="tabular-nums font-medium">
+                        {fmtWon(r.amt)}
+                        <span className="ml-2 text-slate-400">{cur.amt > 0 ? Math.round((r.amt / cur.amt) * 100) : 0}%</span>
+                      </span>
+                    </li>
+                  ))}
+              </ul>
+              {supTop.length > 0 && (
+                <>
+                  <p className="mt-4 text-xs font-medium text-slate-400">거래처 TOP {supTop.length}</p>
+                  <ol className="mt-1.5 space-y-2">
+                    {supTop.map((t) => {
+                      const amt = Number(t.amt);
+                      const w = supMax > 0 ? Math.max(2, Math.round((amt / supMax) * 100)) : 0;
+                      return (
+                        <li key={t.name}>
+                          <Link href={`/sales?supplier=${encodeURIComponent(t.name)}&range=month&month=${ym}`} className="block active:opacity-70">
+                            <div className="flex items-baseline justify-between gap-3 text-sm">
+                              <span className="min-w-0 truncate">{t.name}</span>
+                              <span className="shrink-0 tabular-nums text-slate-600">
+                                {t.n}건 · <strong className="text-slate-900">{fmtShort(amt)}</strong>
+                              </span>
+                            </div>
+                            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                              <div className="h-1.5 rounded-full bg-[#7c5cd6]" style={{ width: `${w}%` }} />
+                            </div>
+                          </Link>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </>
+              )}
+            </>
+          ) : (
+            <p className="text-sm text-slate-400">아직 없습니다</p>
+          )}
+        </Section>
 
-      {/* ---- ③ 12개월 추이 ---- */}
-      <Section title="최근 12개월" sub="보고 있는 달이 진한 색입니다">
-        <ColumnChart data={trend} height={190} color="#6da7ec" hotColor="#1c5cab" />
-        <details className="mt-2">
-          <summary className="cursor-pointer text-xs text-slate-400">표로 보기</summary>
-          <table className="mt-2 w-full text-sm">
-            <tbody>
-              {[...trend].reverse().map((t) => (
-                <tr key={t.hint} className="border-t border-slate-100">
-                  <td className="py-1.5 text-slate-600">{t.hint.split(" · ")[0]}</td>
-                  <td className="py-1.5 text-right text-slate-500">{t.hint.split(" · ")[1]}</td>
-                  <td className="py-1.5 text-right font-medium tabular-nums">{fmtShort(t.value)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </details>
-      </Section>
+        {/* ---- ③ 브랜드별 타이어 본수 (2026-09-03) ---- */}
+        <Section title="브랜드별 타이어 본수" sub={`이번 달 ${tireMonthTotal}본 · 올해 누적 ${tireYearTotal}본`}>
+          {brandMonth.length ? (
+            <>
+              <ColumnChart data={brandMonth} height={170} unit="본" />
+              <ul className="tabular mt-2 space-y-1 text-xs text-slate-500">
+                {brands
+                  .filter((b) => Number(b.yq) > 0)
+                  .slice(0, 6)
+                  .map((b) => (
+                    <li key={b.brand} className="flex justify-between">
+                      <span>{b.brand}</span>
+                      <span>
+                        이번 달 {b.mq}본 · <strong className="text-slate-700">올해 {b.yq}본</strong>
+                      </span>
+                    </li>
+                  ))}
+              </ul>
+            </>
+          ) : (
+            <p className="text-sm text-slate-400">이번 달 타이어 판매가 아직 없습니다</p>
+          )}
+        </Section>
 
-      {/* ---- ④ 요일별 (사장님 요청 2026-08-08) ---- */}
-      <Section
-        title="요일별 매출"
-        sub={`${isCurrent ? `1~${todayDay}일 기준` : `${mm}월 전체`} · 막대에 손을 대면 건수·하루 평균이 뜹니다`}
-      >
-        <ColumnChart data={weekBars} height={170} />
-      </Section>
+        {/* ---- ④ 일별 흐름 ---- */}
+        <Section title="일별 매출" sub="막대에 손을 대면 그날의 건수·금액이 뜹니다">
+          <ColumnChart data={days} height={170} />
+        </Section>
 
-      {/* ---- ⑤ 결제수단 ---- */}
-      <Section title="결제수단">
-        {segs.length ? (
-          <>
-            <StackedBar parts={segs} clipId="pay-clip" />
-            <ul className="mt-3 space-y-1.5">
-              {segs.map((s) => (
-                <li key={s.label} className="flex items-center justify-between text-sm">
-                  <span className="flex items-center gap-2 text-slate-600">
-                    <span className="inline-block h-3 w-3 rounded-sm" style={{ backgroundColor: s.color }} />
-                    {s.label}
-                  </span>
-                  <span className="tabular-nums font-medium">
-                    {fmtWon(s.value)}
-                    <span className="ml-2 text-slate-400">
-                      {cur.amt > 0 ? Math.round((s.value / cur.amt) * 100) : 0}%
+        {/* ---- ⑤ 12개월 추이 ---- */}
+        <Section title="최근 12개월" sub="보고 있는 달이 진한 색입니다">
+          <ColumnChart data={trend} height={190} />
+          <details className="mt-2">
+            <summary className="cursor-pointer text-xs text-slate-400">표로 보기</summary>
+            <table className="mt-2 w-full text-sm">
+              <tbody>
+                {[...trend].reverse().map((t) => (
+                  <tr key={t.hint} className="border-t border-slate-100">
+                    <td className="py-1.5 text-slate-600">{t.hint.split(" · ")[0]}</td>
+                    <td className="py-1.5 text-right text-slate-500">{t.hint.split(" · ")[1]}</td>
+                    <td className="py-1.5 text-right font-medium tabular-nums">{fmtShort(t.value)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </details>
+        </Section>
+
+        {/* ---- ⑥ 요일별 ---- */}
+        <Section
+          title="요일별 매출"
+          sub={`${isCurrent ? `1~${todayDay}일 기준` : `${mm}월 전체`} · 하루 평균은 막대에 손을 대면 보입니다`}
+        >
+          <ColumnChart data={weekBars} height={170} />
+        </Section>
+
+        {/* ---- ⑦ 결제수단 ---- */}
+        <Section title="결제수단">
+          {segs.length ? (
+            <>
+              <StackedBar parts={segs} clipId="pay-clip" />
+              <ul className="mt-3 space-y-1.5">
+                {segs.map((s) => (
+                  <li key={s.label} className="flex items-center justify-between text-sm">
+                    <span className="flex items-center gap-2 text-slate-600">
+                      <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: s.color }} />
+                      {s.label}
                     </span>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </>
-        ) : (
-          <p className="text-sm text-slate-400">아직 없습니다</p>
-        )}
-      </Section>
-
-      {/* ---- ⑥ 많이 판 품목 ---- */}
-      <Section wide title="많이 판 품목 톱10" sub="금액 순 · 막대는 1위 대비 크기">
-        {top.length ? (
-          /* 🔴 막대를 글자 뒤에 깔지 않는다 (2026-08-07 재고 리포트에서 같은 문제 제보) */
-          <ol className="space-y-2">
-            {top.map((t) => {
-              const amt = Number(t.amt);
-              const w = topMax > 0 ? Math.max(2, Math.round((amt / topMax) * 100)) : 0;
-              return (
-                <li key={t.name}>
-                  <div className="flex items-baseline justify-between gap-3 text-sm">
-                    <span className="min-w-0 truncate">{t.name}</span>
-                    <span className="shrink-0 tabular-nums text-slate-600">
-                      {t.q}개 · <strong className="text-slate-900">{fmtShort(amt)}</strong>
+                    <span className="tabular-nums font-medium">
+                      {fmtWon(s.value)}
+                      <span className="ml-2 text-slate-400">
+                        {cur.amt > 0 ? Math.round((s.value / cur.amt) * 100) : 0}%
+                      </span>
                     </span>
-                  </div>
-                  <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-100">
-                    <div className="h-2 rounded-full bg-[#2a78d6]" style={{ width: `${w}%` }} />
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-        ) : (
-          <p className="text-sm text-slate-400">아직 없습니다</p>
-        )}
-      </Section>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p className="text-sm text-slate-400">아직 없습니다</p>
+          )}
+        </Section>
+
+        {/* ---- ⑧ 많이 판 품목 ---- */}
+        <Section wide title="많이 판 품목 톱10" sub="금액 순 · 막대는 1위 대비 크기">
+          {top.length ? (
+            /* 🔴 막대를 글자 뒤에 깔지 않는다 (2026-08-07 제보) — 글자 아래 얇은 줄로 */
+            <ol className="space-y-2">
+              {top.map((t) => {
+                const amt = Number(t.amt);
+                const w = topMax > 0 ? Math.max(2, Math.round((amt / topMax) * 100)) : 0;
+                return (
+                  <li key={t.name}>
+                    <div className="flex items-baseline justify-between gap-3 text-sm">
+                      <span className="min-w-0 truncate">{t.name}</span>
+                      <span className="shrink-0 tabular-nums text-slate-600">
+                        {t.q}개 · <strong className="text-slate-900">{fmtShort(amt)}</strong>
+                      </span>
+                    </div>
+                    <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                      <div className="h-1.5 rounded-full bg-[#009944]" style={{ width: `${w}%` }} />
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          ) : (
+            <p className="text-sm text-slate-400">아직 없습니다</p>
+          )}
+        </Section>
       </div>
 
       <p className="mt-4 text-xs text-slate-400">
-        정비한 날(work_date) 기준 · 성사된 판매만 집계 · 마진(매입원가) 각도는 원가 기록이 쌓이면 추가됩니다
+        정비한 날(work_date) 기준 · 성사된 판매만 집계 · 마진율은 원가가 기록된 판매 줄만으로 계산합니다
       </p>
     </main>
   );
 }
 
-function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="text-sm text-slate-500">{label}</div>
-      <div className="mt-1 text-xl font-bold">{value}</div>
-      {sub && <div className="mt-0.5 text-xs text-slate-400">{sub}</div>}
-    </div>
+/** 보조 숫자 한 칸 — 보더 없이 여백으로 (2026-09-03 리프레시) */
+function Stat({ label, value, sub, href }: { label: string; value: string; sub?: string; href?: string }) {
+  const body = (
+    <>
+      <div className="text-xs text-slate-400">{label}</div>
+      <div className="mt-0.5 font-bold">{value}</div>
+      {sub && <div className="mt-0.5 text-[11px] leading-tight text-slate-400">{sub}</div>}
+    </>
+  );
+  return href ? (
+    <Link href={href} className="block active:opacity-70">
+      {body}
+    </Link>
+  ) : (
+    <div>{body}</div>
   );
 }
 
-function Delta({ v, label }: { v: number; label: string }) {
+/** 증감 칩 — 상승은 브랜드 그린, 하락은 회색 (빨강 경보 아님 — 정보지 사고가 아니다) */
+function DeltaChip({ v, label }: { v: number; label: string }) {
   const up = v >= 0;
   return (
-    <span className={up ? "text-green-700" : "text-red-600"}>
-      {label} {up ? "▲" : "▼"} {Math.abs(v)}%
+    <span
+      className={`tabular inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${
+        up ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"
+      }`}
+    >
+      {up ? "▲" : "▼"} {Math.abs(v)}%<span className="font-normal opacity-70">{label}</span>
     </span>
   );
 }
@@ -394,13 +550,11 @@ function Section({
 }: {
   title: string;
   sub?: string;
-  /** PC 2열 배치에서 전체 폭 (긴 목록용) */
   wide?: boolean;
   children: React.ReactNode;
 }) {
-  // 간격은 부모 grid 의 gap 이 준다 — PC 2열 배치와 폰 1열 모두에서 맞는다 (2026-08-08)
   return (
-    <section className={`rounded-xl border border-slate-200 bg-white p-4 ${wide ? "lg:col-span-2" : ""}`}>
+    <section className={`rounded-card border border-slate-200 bg-white p-4 shadow-card ${wide ? "lg:col-span-2" : ""}`}>
       <h2 className="font-semibold">{title}</h2>
       {sub && <p className="mt-0.5 text-xs text-slate-400">{sub}</p>}
       <div className="mt-3">{children}</div>

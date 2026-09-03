@@ -5,7 +5,8 @@
  * SVG 몇 십 줄이면 되고, 클라이언트 JS 가 0 이라 폰에서도 즉시 뜬다.
  *
  * 색은 검증기를 통과한 팔레트만 쓴다 (라이트 전용 — 앱에 다크모드 없음):
- *   단일 계열(막대)  #2a78d6  · 강조 #1c5cab · 흐림 #6da7ec
+ *   단일 계열(막대)  브랜드 그린 #009944 · 강조 #00722f (2026-09-03 리프레시 —
+ *   "색은 브랜드 그린+슬레이트로 제한" — 단일 색상 계열이라 색약 안전)
  *   구성비(결제수단) #2a78d6 / #eb6834 / #1baf7a — 3색 전 쌍 색약 검사 통과.
  *     #1baf7a 는 흰 바탕 대비가 3:1 미만이라 **범례에 금액·비율을 반드시 병기**한다.
  * 값 라벨은 최대·강조 막대에만 단다(전부 달면 그래프가 표가 된다).
@@ -51,13 +52,16 @@ function barPath(x: number, y: number, w: number, h: number, r: number): string 
 export function ColumnChart({
   data,
   height = 180,
-  color = "#2a78d6",
-  hotColor = "#1c5cab",
+  color = "#009944",
+  hotColor = "#00722f",
+  unit = "",
 }: {
   data: Bar[];
   height?: number;
   color?: string;
   hotColor?: string;
+  /** 값 라벨 뒤에 붙일 단위 — 본수 차트는 "본" (2026-09-03) */
+  unit?: string;
 }) {
   const W = 700;
   const PL = 6;
@@ -80,7 +84,7 @@ export function ColumnChart({
           <g key={f}>
             <line x1={PL} x2={W - PR} y1={y} y2={y} stroke="#e1e0d9" strokeWidth="1" />
             <text x={PL} y={y - 4} fontSize="10" fill="#898781">
-              {fmtShort(max * f)}
+              {fmtShort(max * f)}{unit}
             </text>
           </g>
         );
@@ -100,7 +104,7 @@ export function ColumnChart({
             {d.value > 0 && <path d={barPath(x, y, bw, h, 4)} fill={d.hot ? hotColor : color} />}
             {labeled && (
               <text x={x + bw / 2} y={y - 5} textAnchor="middle" fontSize="11" fontWeight="600" fill="#0b0b0b">
-                {fmtShort(d.value)}
+                {fmtShort(d.value)}{unit}
               </text>
             )}
             {d.label && (
