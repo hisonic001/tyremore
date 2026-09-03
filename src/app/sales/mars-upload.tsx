@@ -247,6 +247,10 @@ export function SalesList({
                 <span className="tabular text-sm text-slate-500">
                   {d.qty > 0 && `타이어 ${d.qty}본 · `}
                   {won(d.amount)}원
+                  {/* ⭐ 외상 수금 (2026-09-03) — 매출과 색으로 구분, 합계(d.amount)에 안 섞임 */}
+                  {d.collectedSum > 0 && (
+                    <span className="ml-1.5 font-medium text-emerald-700">· 외상 수금 +{won(d.collectedSum)}원</span>
+                  )}
                 </span>
               </div>
               {/*
@@ -278,6 +282,28 @@ export function SalesList({
                   />
                 ))}
               </ul>
+              {/* ⭐ 그날 받은 외상 수금 (사장님 요청 2026-09-03 — 정산한 날에도 정비내역에).
+                  카드 복제가 아니라 줄 — MARS 선택·건수·매출 합계에 안 섞인다 */}
+              {d.collections.length > 0 && (
+                <ul className="mt-1.5 space-y-1">
+                  {d.collections.map((c) => (
+                    <li key={c.id}>
+                      <div className="tabular flex items-baseline gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm">
+                        <span className="shrink-0 font-semibold text-emerald-800">💰 외상 수금</span>
+                        <span className="min-w-0 flex-1 truncate text-emerald-900">
+                          {c.who}
+                          {c.plateNo && <span className="ml-1 text-emerald-700">{c.plateNo}</span>}
+                          <span className="ml-1.5 text-xs text-emerald-600">
+                            {c.quoteNo} · {c.workDate.slice(5)} 정비 · {c.method}
+                          </span>
+                          {c.memo && <span className="ml-1.5 text-xs text-emerald-600">— {c.memo}</span>}
+                        </span>
+                        <span className="shrink-0 font-bold text-emerald-800">+{won(c.amount)}원</span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </section>
           ))}
           {hiddenCount > 0 && (

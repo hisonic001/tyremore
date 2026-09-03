@@ -77,11 +77,31 @@ export interface SaleRow {
   lines: SaleLine[];
 }
 
+/** ⭐ 그날 받은 외상 수금 한 줄 (사장님 요청 2026-09-03 — 정산한 날에도 정비내역에) */
+export interface DayCollection {
+  id: number;
+  quoteId: number;
+  quoteNo: string;
+  amount: number;
+  method: string;
+  who: string;
+  plateNo: string | null;
+  /** 그 판매의 정비한 날 — 「(8/18 정비)」 표기용 */
+  workDate: string;
+  memo: string | null;
+}
+
 export interface SaleDay {
   date: string;
   qty: number;
   amount: number;
   sales: SaleRow[];
+  /**
+   * ⭐ 그날 받은 외상 수금 (2026-09-03) — 🔴 amount(매출 합계)에는 절대 안 더한다.
+   *    같은 돈이 판 날과 받은 날에 두 번 잡히면 안 된다 — 별도 표기 전용.
+   */
+  collections: DayCollection[];
+  collectedSum: number;
 }
 
 export interface SaleHistory {
@@ -367,14 +387,69 @@ export async function saleHistory(opts: {
   }
 
   const dayMap = new Map<string, SaleDay>();
+  const dayOf = (date: string) =>
+    dayMap.get(date) ??
+    dayMap.set(date, { date, qty: 0, amount: 0, sales: [], collections: [], collectedSum: 0 }).get(date)!;
   for (const s of map.values()) {
-    const d =
-      dayMap.get(s.workDate) ??
-      dayMap.set(s.workDate, { date: s.workDate, qty: 0, amount: 0, sales: [] }).get(s.workDate)!;
+    const d = dayOf(s.workDate);
     d.sales.push(s);
     if (s.status !== "취소") {
       d.qty += s.lines.filter((l) => l.lineType === "tire").reduce((n, l) => n + l.qty, 0);
       d.amount += s.totalAmount;
+    }
+  }
+
+  /**
+   * ⭐ 외상 수금을 「받은 날」 그룹에 싣는다 (사장님 요청 2026-09-03).
+   * 🔴 매출 합계(d.amount·totalAmount)에는 절대 안 더한다 — 판 날에 이미 세었다.
+   *    수금 정본은 receivable_payment 그대로(외상 장부와 같은 표), 새 판정 없음.
+   *    수금만 있고 판매가 없는 날도 그룹이 생긴다. 예약중 필터에선 생략.
+   */
+  if (!opts.reserved) {
+    const colls = await db.execute<{
+      id: number;
+      quote_id: number;
+      quote_no: string;
+      amount: number;
+      method: string;
+      paid_on: string;
+      memo: string | null;
+      who: string;
+      plate_no: string | null;
+      work_date: string;
+    }>(sql`
+      SELECT rp.id, q.id quote_id, q.quote_no, rp.amount, rp.method,
+             to_char(rp.paid_on, 'YYYY-MM-DD') paid_on, rp.memo,
+             COALESCE(q.supplier_name, c.name, '손님') who, v.plate_no,
+             to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM-DD') work_date
+      FROM receivable_payment rp
+      JOIN quote q ON q.id = rp.quote_id
+      LEFT JOIN customer c ON c.id = q.customer_id
+      LEFT JOIN vehicle v ON v.id = q.vehicle_id
+      WHERE q.status = '성사' AND q.payment_method = '외상'
+        ${m ? sql`AND to_char(rp.paid_on, 'YYYY-MM') = ${m}` : sql``}
+        ${from ? sql`AND rp.paid_on >= ${from}::date` : sql``}
+        ${to ? sql`AND rp.paid_on <= ${to}::date` : sql``}
+        ${opts.customerId ? sql`AND q.customer_id = ${opts.customerId}` : sql``}
+        ${opts.vehicleId ? sql`AND q.vehicle_id = ${opts.vehicleId}` : sql``}
+        ${opts.supplierName ? sql`AND q.supplier_name = ${opts.supplierName}` : sql``}
+      ORDER BY rp.paid_on DESC, rp.id DESC
+      LIMIT 300
+    `);
+    for (const r of colls) {
+      const d = dayOf(r.paid_on);
+      d.collections.push({
+        id: Number(r.id),
+        quoteId: Number(r.quote_id),
+        quoteNo: r.quote_no,
+        amount: Number(r.amount),
+        method: r.method,
+        who: r.who,
+        plateNo: r.plate_no,
+        workDate: r.work_date,
+        memo: r.memo,
+      });
+      d.collectedSum += Number(r.amount);
     }
   }
 
