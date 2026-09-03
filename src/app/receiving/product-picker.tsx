@@ -156,7 +156,18 @@ export function ProductPicker({
                   >
                     −
                   </button>
-                  <span className="tabular w-10 text-center text-lg font-bold">{n}</span>
+                  {/* ⭐ 숫자 직접 입력 (사장님 요청 2026-09-03 — 100개면 100번 클릭 불편) */}
+                  <input
+                    value={n}
+                    onChange={(e) =>
+                      setQty((s) => ({
+                        ...s,
+                        [h.productId]: Math.max(1, Math.min(9999, Number(e.target.value.replace(/[^0-9]/g, "")) || 1)),
+                      }))
+                    }
+                    inputMode="numeric"
+                    className="tabular h-11 w-16 rounded-lg border border-slate-300 text-center text-lg font-bold"
+                  />
                   <button
                     type="button"
                     onClick={() => step(h.productId, 1)}

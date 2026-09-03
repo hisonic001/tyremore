@@ -13,6 +13,7 @@ import { EXCLUSIVE, SPLITTABLE } from "@/lib/payments";
 import { CustomerPick, type NewCustomerDraft } from "./customer-pick";
 import { listSaleDrafts, removeSaleDraft, saveSaleDraft, type SaleDraft, type SaleDraftState } from "./draft-store";
 import { useConfirm } from "@/components/ui/confirm";
+import { AmountBox } from "@/components/ui/amount-box";
 
 const won = (n: number) => n.toLocaleString();
 
@@ -894,40 +895,7 @@ function LineRow({
   );
 }
 
-/**
- * ⭐ 줄 합계 금액 칸 — 양방향 (사장님 지시 2026-08-18).
- *    "단가는 조정가능하지만 수량을 곱한 금액이 조정이 되지 않는 것이 불편함."
- *    금액을 치면 단가 = 금액÷수량(반올림)으로 따라온다. 나누어떨어지지 않으면
- *    단가가 정수로 잡히며 금액이 몇 원 조정된다 — 손을 떼면 확정값을 보여준다.
- */
-function AmountBox({
-  qty,
-  unitPrice,
-  onUnit,
-}: {
-  qty: number;
-  unitPrice: number;
-  onUnit: (unit: number) => void;
-}) {
-  const [draft, setDraft] = useState<string | null>(null);
-  const shown = draft ?? won(unitPrice * qty);
-  return (
-    <input
-      value={shown}
-      inputMode="numeric"
-      className="tabular h-9 w-24 rounded-lg border border-slate-300 px-2 text-right text-sm font-semibold"
-      onFocus={() => setDraft(won(unitPrice * qty))}
-      onChange={(e) => {
-        // '-' 허용 — 환불·카드 취소 줄 (2026-08-21)
-        const raw = signedStr(e.target.value);
-        setDraft(showSigned(raw));
-        const total = signedInt(raw);
-        onUnit(qty > 0 ? Math.round(total / qty) : total);
-      }}
-      onBlur={() => setDraft(null)}
-    />
-  );
-}
+/* AmountBox 는 공용 부품으로 추출 (2026-09-03) — components/ui/amount-box.tsx 가 정본 */
 
 
 function TirePick({ onAdd }: { onAdd: (p: ProductHit) => void }) {

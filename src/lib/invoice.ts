@@ -1135,7 +1135,7 @@ export async function updatePurchaseItem(input: {
   return { ok: true };
 }
 
-async function recalcInvoiceTotals(invoiceId: number) {
+export async function recalcInvoiceTotals(invoiceId: number) {
   await db.execute(sql`
     UPDATE purchase_invoice SET
       total_qty = s.qty, subtotal = s.amt,

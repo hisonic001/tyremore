@@ -207,6 +207,12 @@ export async function updatePurchaseCost(input: {
     .set({ purchasePrice: input.unitCost })
     .where(eq(stockItem.purchaseItemId, line.id));
 
+  /* 🔴 기존 버그 수리 (2026-09-03): 단가를 고치고도 invoice 총계를 안 다시 셈해
+     subtotal/vat/total 이 옛 값으로 남았다 — 세금계산서 대조(총액끼리)가 어긋나는
+     구멍. 재계산 정본(invoice.ts recalcInvoiceTotals — ×1.1 규칙 한 곳)을 부른다. */
+  const { recalcInvoiceTotals } = await import("./invoice");
+  await recalcInvoiceTotals(Number(line.invoiceId));
+
   refresh();
   return { ok: true };
 }

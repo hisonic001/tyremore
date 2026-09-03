@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { AmountBox } from "@/components/ui/amount-box";
 import {
   receiveAll,
   removeInvoice,
@@ -90,6 +91,12 @@ function ManualLedger({ inv, owner }: { inv: PendingInvoice; owner: boolean }) {
   const [notice, setNotice] = useState<string | null>(null);
   /** 🔴 확정은 두 번 눌러야 한다 (사장님 요청 2026-08-09) — 누르는 순간 재고가 되기 때문 */
   const [arm, setArm] = useState(false);
+  /**
+   * ⭐ 매입가 입력 기준 (사장님 요청 2026-09-03 — "어떤 자료는 VAT 포함으로 명기").
+   *    저장은 언제나 세전(불변식 — 세금계산서 대조가 총액끼리라 깨지면 안 됨).
+   *    「포함」이면 입력값을 ÷1.1 환산해 저장하고 그 사실을 바로 보여준다.
+   */
+  const [vatIncl, setVatIncl] = useState(false);
 
   const total = inv.lines.reduce((s, l) => s + (l.unitCost ?? 0) * l.qty, 0);
 
@@ -130,13 +137,31 @@ function ManualLedger({ inv, owner }: { inv: PendingInvoice; owner: boolean }) {
       <p className="mt-2 text-sm text-indigo-800">
         규격이나 모델로 찾아 담으세요. <strong>여러 품목을 이어서 담을 수 있습니다.</strong>
       </p>
+      {owner && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-sm">
+          <span className="text-indigo-800">매입가 입력 기준</span>
+          {([false, true] as const).map((v) => (
+            <button
+              key={String(v)}
+              type="button"
+              onClick={() => setVatIncl(v)}
+              className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+                vatIncl === v ? "bg-indigo-700 text-white" : "bg-white text-indigo-800 ring-1 ring-indigo-300"
+              }`}
+            >
+              {v ? "VAT 포함가로 입력" : "VAT 별도(세전)"}
+            </button>
+          ))}
+          {vatIncl && <span className="text-xs text-indigo-600">입력값을 ÷1.1 세전으로 바꿔 저장합니다</span>}
+        </div>
+      )}
       <ProductPicker invoiceId={inv.invoiceId} tone="indigo" />
 
       {/* 담긴 목록 — 수량과 매입가를 여기서 정한다 */}
       {inv.lines.length > 0 && (
         <ul className="mt-3 space-y-2">
           {inv.lines.map((l) => (
-            <ManualRow key={l.itemId} line={l} owner={owner} />
+            <ManualRow key={l.itemId} line={l} owner={owner} vatIncl={vatIncl} />
           ))}
         </ul>
       )}
@@ -211,7 +236,7 @@ function ManualLedger({ inv, owner }: { inv: PendingInvoice; owner: boolean }) {
   );
 }
 
-function ManualRow({ line, owner }: { line: PendingInvoice["lines"][number]; owner: boolean }) {
+function ManualRow({ line, owner, vatIncl }: { line: PendingInvoice["lines"][number]; owner: boolean; vatIncl: boolean }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [qty, setQty] = useState(line.qty);
@@ -219,6 +244,21 @@ function ManualRow({ line, owner }: { line: PendingInvoice["lines"][number]; own
   /** ⭐ 담을 때 DOT 를 바로 적는다 (사장님 요청 2026-08-08) — DOT 다른 물건은 줄이 나뉜다 */
   const [dot, setDot] = useState(line.dot ?? "");
   const [err, setErr] = useState<string | null>(null);
+  /** 포함 모드에서 마지막으로 환산·저장한 안내 — 「세전 N원으로 저장」 */
+  const [savedNet, setSavedNet] = useState<number | null>(null);
+
+  const clampQty = (n: number) => Math.max(1, Math.min(9999, Math.round(n) || 1));
+  const saveCost = (raw: string, nextQty = qty) => {
+    if (raw === "") {
+      setSavedNet(null);
+      return save({ qty: nextQty, unitCost: null });
+    }
+    const v = Number(raw) || 0;
+    const net = vatIncl ? Math.round(v / 1.1) : v;
+    setCost(String(net));
+    setSavedNet(vatIncl ? net : null);
+    save({ qty: nextQty, unitCost: net });
+  };
 
   const save = (next: { qty?: number; unitCost?: number | null; dot?: string | null }) =>
     start(async () => {
@@ -240,19 +280,26 @@ function ManualRow({ line, owner }: { line: PendingInvoice["lines"][number]; own
             type="button"
             className={BTN}
             onClick={() => {
-              const v = Math.max(1, qty - 1);
+              const v = clampQty(qty - 1);
               setQty(v);
               save({ qty: v });
             }}
           >
             −
           </button>
-          <span className="tabular w-10 text-center font-bold">{qty}본</span>
+          {/* ⭐ 숫자 직접 입력 (사장님 요청 2026-09-03 — "100개를 담으려면 100번 클릭") */}
+          <input
+            value={qty}
+            onChange={(e) => setQty(clampQty(Number(e.target.value.replace(/[^0-9]/g, "")) || 1))}
+            onBlur={() => save({ qty })}
+            inputMode="numeric"
+            className="tabular h-10 w-14 rounded-lg border border-indigo-300 text-center font-bold"
+          />
           <button
             type="button"
             className={BTN}
             onClick={() => {
-              const v = qty + 1;
+              const v = clampQty(qty + 1);
               setQty(v);
               save({ qty: v });
             }}
@@ -275,20 +322,42 @@ function ManualRow({ line, owner }: { line: PendingInvoice["lines"][number]; own
         {/* 🔴 매입가 칸은 사장님만 — 정비사 화면에 있으면 값이 보이고, 지운 채 저장하면 덮어써진다 */}
         {owner && (
           <label className="ml-auto flex items-center gap-1">
-            <span className="text-xs text-slate-500">본당(VAT 별도)</span>
+            <span className="text-xs text-slate-500">{vatIncl ? "본당(VAT 포함 입력)" : "본당(VAT 별도)"}</span>
             <input
               value={cost === "" ? "" : Number(cost).toLocaleString()}
               onChange={(e) => setCost(e.target.value.replace(/\D/g, ""))}
-              onBlur={() => save({ qty, unitCost: cost === "" ? null : Number(cost) })}
+              onBlur={() => saveCost(cost)}
               inputMode="numeric"
-              placeholder="세전 단가"
-              title="부가세를 뺀 단가를 넣으세요 — 장부 합계에 10%가 자동으로 붙습니다 (세 포함 단가를 넣으면 이중 부가세가 됩니다)"
+              placeholder={vatIncl ? "포함 단가" : "세전 단가"}
+              title={vatIncl ? "부가세 포함 단가를 넣으면 ÷1.1 세전으로 바꿔 저장합니다" : "부가세를 뺀 단가를 넣으세요 — 장부 합계에 10%가 자동으로 붙습니다"}
               className="tabular h-10 w-28 rounded-lg border border-indigo-300 px-2 text-right"
             />
             <span className="text-xs text-slate-500">원</span>
           </label>
         )}
+        {/* ⭐ 줄 금액 — 판매와 같은 양방향 (2026-09-03): 금액을 치면 단가가 역산된다 */}
+        {owner && (
+          <label className="flex items-center gap-1">
+            <span className="text-xs text-slate-500">금액{vatIncl ? "(포함 입력)" : "(세전)"}</span>
+            <AmountBox
+              qty={qty}
+              unitPrice={Number(cost) || 0}
+              allowNegative={false}
+              className="tabular h-10 w-28 rounded-lg border border-indigo-300 px-2 text-right font-semibold"
+              onUnit={(u) => {
+                const net = vatIncl ? Math.round(u / 1.1) : u;
+                setCost(net > 0 ? String(net) : "");
+                setSavedNet(vatIncl && net > 0 ? net : null);
+                save({ qty, unitCost: net > 0 ? net : null });
+              }}
+            />
+            <span className="text-xs text-slate-500">원</span>
+          </label>
+        )}
       </div>
+      {savedNet !== null && (
+        <span className="text-xs font-medium text-emerald-700">→ 세전 {savedNet.toLocaleString()}원으로 저장했습니다</span>
+      )}
       {err && <span className="text-xs text-red-600">{err}</span>}
       {pending && <span className="text-xs text-slate-400">저장 중…</span>}
     </li>

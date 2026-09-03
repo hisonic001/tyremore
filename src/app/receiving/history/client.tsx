@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { AmountBox } from "@/components/ui/amount-box";
 import { deletePurchaseInvoice, deletePurchaseLine, updatePurchaseCost } from "@/lib/purchase-edit";
 import type { PurchaseDay, PurchaseInvoiceRow, PurchaseLine } from "@/lib/purchase-history";
 
@@ -171,10 +172,11 @@ function LineRow({ l, owner, onMessage }: { l: PurchaseLine; owner: boolean; onM
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [cost, setCost] = useState(l.unitCost !== null ? String(l.unitCost) : "");
+  /** ⭐ 포함가 입력 (2026-09-03) — 켜면 입력값을 ÷1.1 세전으로 바꿔 저장 (저장 정본은 언제나 세전) */
+  const [vatIncl, setVatIncl] = useState(false);
   const [ask, setAsk] = useState(false);
 
-  const saveCost = () => {
-    const v = cost === "" ? null : Number(cost);
+  const saveCostValue = (v: number | null) => {
     if (v === l.unitCost) return;
     start(async () => {
       setError(null);
@@ -182,6 +184,13 @@ function LineRow({ l, owner, onMessage }: { l: PurchaseLine; owner: boolean; onM
       if (!r.ok) return setError(r.error);
       router.refresh();
     });
+  };
+  const saveCost = () => {
+    if (cost === "") return saveCostValue(null);
+    const v = Number(cost);
+    const net = vatIncl ? Math.round(v / 1.1) : v; // 포함가 입력 — 세전 환산 저장 (2026-09-03)
+    setCost(String(net));
+    saveCostValue(net);
   };
 
   const removeLine = () => {
@@ -214,20 +223,45 @@ function LineRow({ l, owner, onMessage }: { l: PurchaseLine; owner: boolean; onM
             </div>
             {/* 매입가 — 사장님은 그 자리에서 고친다. 재고의 원가도 같이 맞춰진다 */}
             {owner ? (
-              <label className="mt-0.5 flex items-center justify-end gap-1 text-xs text-slate-500">
-                {l.unit}당
-                <input
-                  value={cost === "" ? "" : Number(cost).toLocaleString()}
-                  onChange={(e) => setCost(e.target.value.replace(/\D/g, ""))}
-                  onBlur={saveCost}
-                  inputMode="numeric"
-                  placeholder="—"
-                  className="tabular h-8 w-24 rounded-lg border border-slate-300 px-2 text-right text-xs"
-                />
-                원
-              </label>
+              <>
+                <label className="mt-0.5 flex items-center justify-end gap-1 text-xs text-slate-500">
+                  {l.unit}당<span className="text-slate-400">(세전)</span>
+                  <input
+                    value={cost === "" ? "" : Number(cost).toLocaleString()}
+                    onChange={(e) => setCost(e.target.value.replace(/\D/g, ""))}
+                    onBlur={saveCost}
+                    inputMode="numeric"
+                    placeholder="—"
+                    title={vatIncl ? "부가세 포함 단가를 넣으면 ÷1.1 세전으로 바꿔 저장합니다" : "VAT 별도(세전) 단가"}
+                    className="tabular h-8 w-24 rounded-lg border border-slate-300 px-2 text-right text-xs"
+                  />
+                  원
+                </label>
+                {/* ⭐ 금액 양방향 + 포함가 입력 (사장님 요청 2026-09-03) — 판매와 같은 규칙 */}
+                <div className="mt-0.5 flex items-center justify-end gap-1 text-xs text-slate-500">
+                  금액
+                  <AmountBox
+                    qty={l.qty}
+                    unitPrice={Number(cost) || 0}
+                    allowNegative={false}
+                    className="tabular h-8 w-24 rounded-lg border border-slate-300 px-2 text-right text-xs font-semibold"
+                    onUnit={(u) => {
+                      const net = vatIncl ? Math.round(u / 1.1) : u;
+                      setCost(net > 0 ? String(net) : "");
+                      saveCostValue(net > 0 ? net : null);
+                    }}
+                  />
+                  원
+                  <label className="ml-1 flex items-center gap-0.5">
+                    <input type="checkbox" checked={vatIncl} onChange={(e) => setVatIncl(e.target.checked)} className="h-3.5 w-3.5 accent-slate-600" />
+                    포함가 입력
+                  </label>
+                </div>
+              </>
             ) : l.unitCost !== null ? (
-              <div className="text-xs text-slate-500">{l.unit}당 {won(l.unitCost)}원</div>
+              <div className="text-xs text-slate-500">
+                {l.unit}당 {won(l.unitCost)}원 <span className="text-slate-400">· 금액 {won(l.unitCost * l.qty)}원 (VAT 별도)</span>
+              </div>
             ) : null}
           </div>
           {ask ? (
