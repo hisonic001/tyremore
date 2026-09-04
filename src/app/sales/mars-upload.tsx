@@ -129,9 +129,23 @@ export function SalesList({
     });
   }
 
+  /**
+   * ⭐ 상단 정리 (사장님 선택 2026-09-04) — 보라 판이 항상 크게 떠 있어 본문보다
+   *    먼저 눈에 들어왔다. 할 일(올릴 것·대기·실행 중·실패·선택 중)이 있을 때만
+   *    큰 판, 없으면 조용한 한 줄.
+   */
+  const hasWork =
+    busy || selecting || eligibleCount > 0 || waitingCount > 0 || run?.status === "실패" || !!error || !!msg;
+
   return (
     <>
+      {!hasWork && (
+        <p className="mt-4 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-400">
+          MARS 자동 올리기 — 지금 올릴 것이 없습니다
+        </p>
+      )}
       {/* ── MARS 올리기 판 — 옛 /mars 페이지가 이 안으로 들어왔다 ── */}
+      {hasWork && (
       <div className="sticky top-0 z-10 mt-4 rounded-xl border border-indigo-300 bg-indigo-50 p-3 shadow-sm">
         {busy ? (
           <>
@@ -235,21 +249,21 @@ export function SalesList({
         )}
         {msg && <p className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{msg}</p>}
       </div>
+      )}
 
       {days.length === 0 ? (
         <p className="mt-6 rounded-xl border border-dashed border-slate-300 p-8 text-center text-slate-500">
           정비 내역이 없습니다
         </p>
       ) : (
-        <div className="mt-4 space-y-4">
+        <div className="mt-4 space-y-5">
           {/*
-            ⭐ 한 줄 카드 개편 (사장님 피드백 2026-09-04 — "가독성과 정보의 명확성이
-               떨어진다"). 날짜가 카드 하나(토스 거래내역 문법), 판매는 그 안의 행 —
-               2열 격자(lg:grid-cols-2)를 걷어냈다. 행 사이는 divide 선.
+            ⭐ 영수증형 개별 카드 (사장님 재피드백 2026-09-04 — "정비마다 카드별로
+               나뉘는 것이 더 나았던 듯"). 날짜는 배경 위 헤더, 아래 단일 열 카드.
           */}
           {days.map((d) => (
-            <section key={d.date} className="rounded-card border border-slate-200 bg-white px-2 pb-1.5 shadow-card lg:px-3">
-              <div className="flex items-baseline justify-between px-1.5 pb-1 pt-3">
+            <section key={d.date}>
+              <div className="flex items-baseline justify-between px-1">
                 <h2 className="tabular font-semibold">{d.date}</h2>
                 <span className="tabular text-sm text-slate-500">
                   {d.qty > 0 && `타이어 ${d.qty}본 · `}
@@ -260,7 +274,7 @@ export function SalesList({
                   )}
                 </span>
               </div>
-              <ul className="divide-y divide-slate-100">
+              <ul className="mt-1.5 space-y-2">
                 {d.sales.map((s) => (
                   <SaleCard
                     owner={owner}
@@ -284,7 +298,7 @@ export function SalesList({
               {/* ⭐ 그날 받은 외상 수금 (사장님 요청 2026-09-03 — 정산한 날에도 정비내역에).
                   카드 복제가 아니라 줄 — MARS 선택·건수·매출 합계에 안 섞인다 */}
               {d.collections.length > 0 && (
-                <ul className="mt-1 space-y-1 px-1.5 pb-1.5">
+                <ul className="mt-1.5 space-y-1">
                   {d.collections.map((c) => (
                     <CollectionLine key={c.id} c={c} canCollect={canCollect} />
                   ))}

@@ -173,10 +173,11 @@ export function SaleCard({
   }
 
   /**
-   * ⭐ 한 줄 카드 개편 (사장님 피드백 2026-09-04 — "가독성과 정보의 명확성이
-   *    떨어진다"). 날짜 카드 안의 행이다 — 토스 거래내역 문법(ListRow 문법):
-   *    1행 이름·차량 ↔ 금액 크게 / 2행 품목 요약 ↔ 결제수단 / 3행 문제 배지만.
-   *    정상 완료 건은 배지 0개 — MARS ✓·포스 ✓·완납·시공 ✓ 은 펼치면 보인다.
+   * ⭐ 영수증형 개별 카드 (사장님 재피드백 2026-09-04 — 모형 3안 중 선택).
+   *    1차 개편(날짜 카드 속 한 줄 행)이 품목을 한 줄로 뭉개 명확성을 죽였다.
+   *    정비마다 카드 한 장, 안은 영수증: 이름·차량 / 품목 줄별 금액 /
+   *    결제수단 ↔ 합계 크게 / 문제 배지만. 정상 완료 건은 배지 0개 —
+   *    MARS ✓·포스 ✓·완납·시공 ✓ 은 펼치면 보인다.
    */
   const remain =
     s.paymentMethod === "외상" && !canceled
@@ -191,51 +192,74 @@ export function SaleCard({
 
   return (
     <li
-      className={`${canceled ? "opacity-60" : ""} ${
-        // 선택 모드: 체크된 행은 테두리로, 체크 못 하는 행은 흐리게
-        select ? (select.checked ? "rounded-control ring-2 ring-indigo-600" : select.eligible ? "" : "opacity-40") : ""
+      className={`rounded-card border border-slate-200 bg-white shadow-card ${canceled ? "opacity-60" : ""} ${
+        // 선택 모드: 체크된 카드는 테두리로, 체크 못 하는 카드는 흐리게
+        select ? (select.checked ? "ring-2 ring-indigo-600" : select.eligible ? "" : "opacity-40") : ""
       }`}
     >
       <button
         type="button"
         onClick={() => (select ? select.eligible && select.toggle() : setOpen(!open))}
-        className="w-full rounded-control px-1.5 py-3 text-left transition-colors active:bg-slate-100 lg:px-2.5 lg:hover:bg-slate-50"
+        className="w-full rounded-card p-3 text-left transition-colors active:bg-slate-50 lg:hover:bg-slate-50"
       >
-        <div className="flex items-baseline justify-between gap-3">
-          <span className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-snug">
-            {select && select.eligible && (
-              <span
-                className={`mr-2 inline-block h-5 w-5 shrink-0 translate-y-1 rounded border-2 text-center text-sm leading-4 ${
-                  select.checked ? "border-indigo-600 bg-indigo-600 text-white" : "border-slate-300 bg-white"
-                }`}
-              >
-                {select.checked ? "✓" : ""}
+        {/* ── 머리: 누구 · 무슨 차 ── */}
+        <div className="flex items-baseline gap-2">
+          {select && select.eligible && (
+            <span
+              className={`inline-block h-5 w-5 shrink-0 translate-y-0.5 rounded border-2 text-center text-sm leading-4 ${
+                select.checked ? "border-indigo-600 bg-indigo-600 text-white" : "border-slate-300 bg-white"
+              }`}
+            >
+              {select.checked ? "✓" : ""}
+            </span>
+          )}
+          <span className="min-w-0 truncate text-[15px] font-semibold leading-snug">{who}</span>
+          {/* ⭐ 차종도 같이 — 「현대 카니발 23나1111」 (사장님 요청 2026-08-09) */}
+          {(s.plateNo || s.vehicleModel) && (
+            <span className="min-w-0 truncate text-[13px] text-slate-500">
+              {[s.makerName, s.vehicleModel, s.plateNo].filter(Boolean).join(" ")}
+            </span>
+          )}
+        </div>
+
+        {/* ── 품목 — 줄별 금액 (옛 PC 카드 문법을 전 화면으로, 2026-09-04) ── */}
+        <div className="mt-2 space-y-1 border-t border-slate-100 pt-2">
+          {s.lines.map((l) => (
+            <div key={l.itemId} className="flex items-baseline justify-between gap-3 text-sm text-slate-600">
+              <span className="min-w-0 truncate">
+                {l.lineType === "service" && <span className="mr-1 text-xs text-slate-400">공임</span>}
+                {l.lineType === "use" && <span className="mr-1 text-xs text-sky-600">부품 사용</span>}
+                {l.description}
+                {l.spec && <span className="tabular ml-1 text-slate-500">{l.spec}</span>}
               </span>
-            )}
-            {who}
-            {/* ⭐ 차종도 같이 — 「현대 카니발 23나1111」 (사장님 요청 2026-08-09) */}
-            {(s.plateNo || s.vehicleModel) && (
-              <span className="ml-2 text-[13px] font-normal text-slate-500">
-                {[s.makerName, s.vehicleModel, s.plateNo].filter(Boolean).join(" ")}
+              {/* ⭐ 「4 × 142,000 = 568,000원」 — 총액이 맨 끝에 (사장님 요청 2026-08-21). 1개면 금액만 */}
+              <span className="tabular shrink-0">
+                {l.qty > 1 ? (
+                  <>
+                    <span className="text-slate-400">
+                      {l.qty} × {won(l.finalPrice)} =
+                    </span>{" "}
+                    <span className="font-medium text-slate-700">{won(l.finalPrice * l.qty)}원</span>
+                  </>
+                ) : (
+                  <>{won(l.finalPrice)}원</>
+                )}
               </span>
-            )}
+            </div>
+          ))}
+          {s.lines.length === 0 && <div className="text-sm text-slate-400">품목 없음</div>}
+        </div>
+
+        {/* ── 합계: 결제수단 ↔ 총액 크게 ── */}
+        <div className="mt-2 flex items-baseline justify-between gap-3 border-t border-slate-100 pt-2">
+          {/* 분할 결제는 「카드+현금」 으로 (2026-08-10) — 수단별 금액은 펼치면 나온다 */}
+          <span className="text-[13px] text-slate-500">
+            {s.payments.length ? s.payments.map((p) => p.method).join("+") : (s.paymentMethod ?? "")}
           </span>
           <span
-            className={`tabular shrink-0 text-[17px] font-bold leading-snug ${canceled ? "text-slate-400 line-through" : ""}`}
+            className={`tabular shrink-0 text-[18px] font-extrabold leading-snug ${canceled ? "text-slate-400 line-through" : ""}`}
           >
             {won(s.totalAmount)}원
-          </span>
-        </div>
-        <div className="mt-0.5 flex items-baseline justify-between gap-3">
-          {/* ⭐ 품목 요약 — 타이어 규격도 같이 (사장님 요청 2026-08-07). 상세는 펼치면 */}
-          <span className="min-w-0 truncate text-[13px] leading-snug text-slate-500">
-            {s.lines
-              .map((l) => `${l.description}${l.spec ? ` ${l.spec}` : ""}${l.qty > 1 ? ` ×${l.qty}` : ""}`)
-              .join(" · ") || "품목 없음"}
-          </span>
-          {/* 분할 결제는 「카드+현금」 으로 (2026-08-10) — 금액은 펼치면 나온다 */}
-          <span className="tabular shrink-0 text-xs text-slate-400">
-            {s.payments.length ? s.payments.map((p) => p.method).join("+") : (s.paymentMethod ?? "")}
           </span>
         </div>
         {/* ⭐ 문제 배지 줄 — 지금 신경 쓸 것만 (사장님 답변 2026-09-04). 없으면 줄 자체가 없다 */}

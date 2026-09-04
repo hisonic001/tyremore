@@ -175,6 +175,18 @@ export default async function SalesPage({
         <p className="mt-1 text-sm text-slate-500">날짜별로 무엇을 정비했는지. 여기서 고치고 취소합니다.</p>
       )}
 
+      {/* ⭐ 헤드라인 (상단 정리 2026-09-04) — 보고 있는 기간의 돈이 가장 먼저 읽힌다 */}
+      <div className="mt-3">
+        <p className="tabular text-2xl font-extrabold leading-tight tracking-tight">{won(h.totalAmount)}원</p>
+        <p className="tabular mt-0.5 text-[13px] text-slate-500">
+          {active === "today" && `오늘(${today}) · `}
+          {active === "yesterday" && `어제(${yesterday}) · `}
+          {active === "thisMonth" && `${thisMonth} · `}
+          {pay && `${pay}만 · `}
+          {h.saleCount}건
+        </p>
+      </div>
+
       {/* ⭐ 기간 필터 — 오늘·이번 달·전체·월·기간 (사장님 요청 2026-08-05) */}
       <PeriodFilter
         basePath="/sales"
@@ -216,13 +228,6 @@ export default async function SalesPage({
         }
       />
 
-      <p className="tabular mt-3 text-sm text-slate-600">
-        {active === "today" && `오늘(${today}) · `}
-        {active === "yesterday" && `어제(${yesterday}) · `}
-        {active === "thisMonth" && `${thisMonth} · `}
-        {pay && `${pay}만 · `}
-        {h.saleCount}건 · {won(h.totalAmount)}원
-      </p>
       {/* ⭐ 미수금 총액 — 외상 필터일 때 (사장님 선택 2026-08-11). 기간과 무관하게 전체 잔액이다 */}
       {receivable && (
         <Link
