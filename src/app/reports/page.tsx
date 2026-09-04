@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, hasPerm } from "@/lib/auth";
+import { marginSql, marginBaseSql } from "@/lib/margin-def";
 import { ColumnChart, StackedBar, fmtShort, fmtWon } from "./charts";
 import { Section, Stat, DeltaChip } from "./ui";
 import { BrandTires, type BrandTireRow } from "./brand-tires";
@@ -168,12 +169,13 @@ export default async function ReportsPage({
       HAVING COALESCE(SUM(qi.qty) FILTER (WHERE ${sql.raw(`COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date)`)} >= ${start}::date), 0) > 0
       ORDER BY 3 DESC, 4 DESC LIMIT 200
     `),
-    /* ⭐ 마진율 — 원가(margin)가 기록된 줄만. 0원 매입 등 원가 빈 건은 제외하고 그 비중을 밝힌다 */
+    /* ⭐ 마진율 — 정의 정본은 lib/margin-def.ts (2026-09-04 개정: 공임 매출 포함,
+     *   소모품 원가 차감, 원가 모르는 물품은 제외하고 커버리지로 명시) */
     db.execute<{ ym: string; m: string; base: string; known: string; total: string }>(sql`
       SELECT to_char(COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date), 'YYYY-MM') ym,
-             COALESCE(SUM(qi.margin) FILTER (WHERE qi.margin IS NOT NULL), 0)::bigint m,
-             COALESCE(SUM(qi.final_price * qi.qty) FILTER (WHERE qi.margin IS NOT NULL), 0)::bigint base,
-             COALESCE(SUM(qi.final_price * qi.qty) FILTER (WHERE qi.margin IS NOT NULL), 0)::bigint known,
+             COALESCE(SUM(${marginSql}), 0)::bigint m,
+             COALESCE(SUM(${marginBaseSql}), 0)::bigint base,
+             COALESCE(SUM(${marginBaseSql}), 0)::bigint known,
              COALESCE(SUM(qi.final_price * qi.qty), 0)::bigint total
       FROM quote_item qi JOIN quote qq ON qq.id = qi.quote_id
       WHERE qq.status = '성사'
@@ -344,7 +346,7 @@ export default async function ReportsPage({
           <Stat
             label="마진율"
             value={marginRate === null ? "—" : `${marginRate.toFixed(1)}%`}
-            sub={marginRate === null ? "원가 기록 없음" : `원가 있는 매출 ${coverage}% 기준${
+            sub={marginRate === null ? "원가 기록 없음" : `공임 포함 · 매출 ${coverage}% 기준${
               marginPrevRate !== null && marginRate !== null
                 ? ` · 전월 ${marginPrevRate.toFixed(1)}%`
                 : ""
