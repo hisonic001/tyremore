@@ -381,6 +381,11 @@ export function parseAnyFin(buf: Buffer, myBizNo: string | null, fileName?: stri
     if (headText.includes("월별입금내역")) {
       return { kind: "carddeposit", ...parseCardDepositSheet(wb.Sheets[name], rows) };
     }
+    // ⭐ 여신협회 「기간별 입금내역 조회 - 세부내역」 (사장님 양식 변경 2026-09-04) —
+    //    일별·카드사별 줄을 월로 묶어 같은 carddeposit 정본에 싣는다
+    if (headText.includes("기간별입금내역")) {
+      return { kind: "carddeposit", ...parseCardDepositDetailSheet(wb.Sheets[name], rows) };
+    }
   }
   return { kind: "cash", ...withFileCoverage(parseFinFile(buf, fileName), fileName) };
 }
@@ -600,6 +605,73 @@ function parseCardDepositSheet(ws: XLSX.WorkSheet, rows: unknown[][]): CardDepos
     rawCsv: XLSX.utils.sheet_to_csv(ws),
     periodFrom: months[0] ? months[0] + "-01" : null,
     periodTo: months[months.length - 1] ? months[months.length - 1] + "-01" : null,
+    sumTotal: out.reduce((s, r) => s + r.depositAmount, 0),
+  };
+}
+
+/**
+ * ⭐ 여신협회 「기간별 입금내역 조회 - 세부내역」 (사장님 양식 변경 2026-09-04)
+ *
+ *   실측(기간별입금내역_세부내역 (1).xls, 2026-08): 머리행 3행 —
+ *   No.·입금일자·카드사·가맹점번호·결제은행·결제계좌·매출건수·매출금액·
+ *   보류금액·부가세대리납부금액·기타입금·실입금. 119줄, 실입금 합이 파일
+ *   표기 합계(71,302,135)와 일치함을 확인.
+ *
+ *   저장 정본(card_deposit)은 월×카드사 한 줄이므로 **여기서 월로 묶는다** —
+ *   옛 「월별입금내역」과 같은 결과가 되도록 (입금일 기준 월, 같은 기준).
+ *   입금액 = 실입금 + 기타입금 (보류됐다 나중에 풀린 돈이 기타입금으로 온다).
+ *   ⚠️ 월 중간까지만 받은 파일이면 그 달은 반쪽 합계가 된다 — 기간(periodFrom/To)을
+ *   실제 입금일 범위로 내보내 업로드 화면·커버리지가 어디까지인지 보여준다.
+ */
+function parseCardDepositDetailSheet(ws: XLSX.WorkSheet, rows: unknown[][]): CardDepositParseResult {
+  const h = findHeader(rows, ["입금일자", "카드사", "실입금"]);
+  if (!h) throw new Error("기간별 입금내역(세부)의 머리행을 찾지 못했습니다");
+  const toInt = (v: unknown) => toWon(v) ?? 0;
+  const agg = new Map<string, NormalizedCardDeposit>();
+  const skipped: SheetSkip[] = [];
+  let from: string | null = null;
+  let to: string | null = null;
+  for (let i = h.at + 1; i < rows.length; i++) {
+    const r = rows[i];
+    const date = String(cell(r, h.col, "입금일자") ?? "").trim().slice(0, 10);
+    const cardCo = String(cell(r, h.col, "카드사") ?? "").trim();
+    if (date === "" && cardCo === "") continue;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      if (!/합계|소계/.test(date + cardCo)) skipped.push({ line: i + 1, reason: `입금일자 「${date}」를 못 읽음` });
+      continue;
+    }
+    if (!from || date < from) from = date;
+    if (!to || date > to) to = date;
+    const key = `${date.slice(0, 7)}|${cardCo || "(카드사 미상)"}`;
+    const cur =
+      agg.get(key) ??
+      (() => {
+        const fresh: NormalizedCardDeposit = {
+          month: date.slice(0, 7),
+          cardCo: cardCo || "(카드사 미상)",
+          saleCnt: 0,
+          saleAmount: 0,
+          vatAgency: 0,
+          depositAmount: 0,
+        };
+        agg.set(key, fresh);
+        return fresh;
+      })();
+    cur.saleCnt += toInt(cell(r, h.col, "매출건수"));
+    cur.saleAmount += toInt(cell(r, h.col, "매출금액"));
+    cur.vatAgency += toInt(cell(r, h.col, "부가세대리납부금액"));
+    cur.depositAmount += toInt(cell(r, h.col, "실입금")) + toInt(cell(r, h.col, "기타입금"));
+  }
+  const out = [...agg.values()].sort((a, b) => (a.month + a.cardCo).localeCompare(b.month + b.cardCo));
+  if (out.length === 0) throw new Error("읽을 수 있는 입금 줄이 없습니다");
+  return {
+    source: "카드매출입금",
+    formatName: "여신협회 기간별 입금내역(세부)",
+    rows: out,
+    skipped,
+    rawCsv: XLSX.utils.sheet_to_csv(ws),
+    periodFrom: from,
+    periodTo: to,
     sumTotal: out.reduce((s, r) => s + r.depositAmount, 0),
   };
 }
