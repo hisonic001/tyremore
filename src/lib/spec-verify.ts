@@ -229,12 +229,19 @@ export function specFilter(
 const OFFICIAL_HOSTS = [
   "ownersmanual.hyundai.com",
   "ownersmanual.kia.com",
+  "ownersmanual.genesis.com",
   "owners.hyundai.com",
   "www.kia.com",
   "service.tesla.com",
   "webmanual.kia.com",
   "webmanual.hyundai.com",
   "www.genesis.com",
+  /**
+   * 🔴 현대 공식 자료실 — 「취급설명서 (단종차종)」 PDF 2,669건이 여기 있다.
+   *    제조사 온라인 설명서에는 **현행 세대만** 올라오므로, 구형(그랜드 스타렉스 TQ ·
+   *    싼타페 DM · 그랜저 HG · 아반떼 AD …)은 여기서만 구할 수 있다 (2026-09-03 확인).
+   */
+  "www.hyundai.com",
 ];
 
 export type SourceRank = 1 | 2 | 3 | 4 | 5;

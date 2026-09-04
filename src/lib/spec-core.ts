@@ -230,8 +230,13 @@ export function bothUnits(min: number, max: number | null, unit: string): string
 /* 모양 검사 — 형태가 아닌 값은 애초에 안 받는다                          */
 /* ------------------------------------------------------------------ */
 
-/** 235/60R18 · 265/70 R17 · 145/80R13 */
-export const TIRE_SIZE_RE = /^\d{3}\/\d{2}\s?[RZ]\s?\d{2}(\.\d)?$/;
+/**
+ * 235/60R18 · 265/70 R17 · 145/80R13 · 215/70R16C · 215/65R17 XL
+ * 🔴 뒤에 붙는 글자를 받아 준다. 상용 타이어의 `C`(승합·화물)와 `XL`(강화)은
+ *    실제 취급설명서에 그대로 적혀 있다 — 안 받아 주면 그랜드 스타렉스·포터 같은
+ *    상용차 표를 통째로 못 읽는다 (2026-09-03 실측).
+ */
+export const TIRE_SIZE_RE = /^(\(?P\)?|LT)?\s?\d{3}\/\d{2}\s?[RZ]\s?\d{2}(\.\d)?\s?(C|LT|XL|RF)?$/;
 /** 7.5Jx18 · 8.5J x 20 */
 export const WHEEL_SIZE_RE = /^\d{1,2}(\.\d)?J\s?[xX×]\s?\d{2}(\.\d)?$/;
 /** 0W-20 · 5W-30 · 10W-40 — 실제로 쓰이는 것만 */
@@ -242,9 +247,9 @@ export const VISCOSITIES = [
 ];
 
 export function looksLikeTireSize(v: string): boolean {
-  const s = v.replace(/\s/g, "");
-  if (!TIRE_SIZE_RE.test(v.trim()) && !TIRE_SIZE_RE.test(s)) return false;
-  const m = /^(\d{3})\/(\d{2})/.exec(s);
+  const s = v.replace(/\s/g, "").toUpperCase();
+  if (!TIRE_SIZE_RE.test(v.trim().toUpperCase()) && !TIRE_SIZE_RE.test(s)) return false;
+  const m = /(\d{3})\/(\d{2})/.exec(s);
   if (!m) return false;
   const width = Number(m[1]);
   const aspect = Number(m[2]);

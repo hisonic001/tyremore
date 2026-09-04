@@ -97,6 +97,32 @@ export function unitsInHeader(header: string): { unit: string | null; alt: strin
   return { unit: null, alt: null };
 }
 
+/**
+ * 이 칸 가까이에 있는 **묶음 이름**을 찾는다 (`왜건(미니버스)` · `밴`).
+ *
+ * 🔴 종이 설명서는 묶음 이름을 여러 칸 한가운데에 한 번만 적는다. 그러면
+ *    `[뒤] 325` 와 `[뒤] 350` 이 이름 없이 나란히 떠서 **어느 것이 왜건이고
+ *    어느 것이 밴인지 알 수 없다** (그랜드 스타렉스 TQ 실측 2026-09-03).
+ *
+ * 🔴 이 값은 **이름표로만 쓴다.** 단위나 항목 종류를 정하는 데는 절대 안 쓴다 —
+ *    두 칸 떨어진 `휠 너트 체결 토크` 를 끌어와 공기압을 토크로 읽는 사고가 나기 때문이다.
+ *    이름을 잘못 붙여도 숫자와 단위는 그대로고, 사장님이 원문 줄을 보고 판단하신다.
+ */
+function nearbyGroupLabel(g: Grid, col: number, head: number, skip: RegExp): string | null {
+  for (let r = 0; r < head; r++) {
+    let best: { d: number; v: string } | null = null;
+    for (let c = 0; c < (g.cells[r]?.length ?? 0); c++) {
+      const v = (g.cells[r][c] ?? "").trim();
+      if (!v || skip.test(v.replace(/\s+/g, ""))) continue;
+      const d = Math.abs(c - col);
+      if (d > 2) continue;
+      if (!best || d < best.d) best = { d, v };
+    }
+    if (best) return best.v;
+  }
+  return null;
+}
+
 /** 머리글 두 줄을 한 줄로 — `추천 공기압 [kpa(psi)]` + `앞` */
 function headerOf(g: Grid, col: number): { full: string; leaf: string } {
   const parts: string[] = [];
@@ -139,24 +165,42 @@ export function parseTireWheelTable(g: Grid): HarvestedSpec[] {
   }
   if (sizeCol < 0) return [];
 
-  interface Col { i: number; item: string; unit: string | null; alt: string | null; where: string | null }
+  interface Col { i: number; item: string; unit: string | null; alt: string | null; where: string | null; group?: string | null }
   const cols: Col[] = [{ i: sizeCol, item: "tire_size", unit: null, alt: null, where: null }];
   if (wheelCol >= 0) cols.push({ i: wheelCol, item: "wheel_size", unit: null, alt: null, where: null });
+  /**
+   * 🔴 **표 전체 머리글**도 본다.
+   *    종이 설명서(PDF)는 `추천공기압 kPa(psi)` 를 네 칸 한가운데에 한 번만 적고,
+   *    각 칸 위에는 `앞`·`뒤` 만 적는다. 칸별 머리글만 보면 가운데 칸 하나만 공기압으로
+   *    읽히고 나머지 세 칸은 통째로 버려진다 (그랜드 스타렉스 TQ 실측 2026-09-03).
+   *    그래서 「이 표가 공기압 표라고 어딘가에 적혀 있고, 이 칸 머리가 앞/뒤이면」
+   *    공기압 칸으로 본다. 단위도 표 전체 머리글에서 가져온다.
+   */
+  const allHeader = g.cells
+    .slice(0, head)
+    .flat()
+    .filter((v, i, a) => v && a.indexOf(v) === i)
+    .join(" ");
+  const allUnits = unitsInHeader(allHeader);
+  const headerSaysPressure = /공기압/.test(allHeader.replace(/\s+/g, ""));
+
   for (let c = 0; c < width; c++) {
     if (c === sizeCol || c === wheelCol) continue;
     const { full, leaf } = headerOf(g, c);
     const flat = full.replace(/\s+/g, "");
     const u = unitsInHeader(full);
-    if (/공기압/.test(flat))
-      cols.push({
-        i: c,
-        item: "tire_pressure",
-        unit: u.unit,
-        alt: u.alt,
-        where: /앞|전륜/.test(leaf) ? "앞" : /뒤|후륜/.test(leaf) ? "뒤" : null,
-      });
-    else if (/너트|토크/.test(flat))
-      cols.push({ i: c, item: "wheel_nut_torque", unit: u.unit, alt: u.alt, where: null });
+    const where = /앞|전륜|전$/.test(leaf) ? "앞" : /뒤|후륜|후$/.test(leaf) ? "뒤" : null;
+    /* 앞/뒤·공기압·단위·항목 이름은 묶음 이름이 아니다 */
+    const SKIP =
+      /^(앞|뒤|전|후|전륜|후륜|구분|휠|타이어|항목|치수|형식|종류|규격|사이즈|장착|장착타이어|예비타이어)$|공기압|토크|너트|단위|kPa|psi|kgf|N·m|mm/i;
+    const group = where ? nearbyGroupLabel(g, c, head, SKIP) : null;
+    if (/공기압/.test(flat)) {
+      cols.push({ i: c, item: "tire_pressure", unit: u.unit ?? allUnits.unit, alt: u.alt ?? allUnits.alt, where, group });
+    } else if (/너트|토크/.test(flat)) {
+      cols.push({ i: c, item: "wheel_nut_torque", unit: u.unit ?? allUnits.unit, alt: u.alt, where: null });
+    } else if (headerSaysPressure && where) {
+      cols.push({ i: c, item: "tire_pressure", unit: allUnits.unit, alt: allUnits.alt, where, group });
+    }
   }
 
   /**
@@ -188,6 +232,10 @@ export function parseTireWheelTable(g: Grid): HarvestedSpec[] {
         const n = readNumCell(raw);
         /* 🔴 단위를 못 읽으면 값을 버린다. 단위 없는 숫자는 위험하기만 하다 */
         if (!n || !c.unit) continue;
+        const qual: Record<string, string> = {};
+        if (c.where) qual["위치"] = c.where;
+        /* 같은 앞/뒤가 두 벌 있으면(왜건·밴) 어느 쪽인지 이름을 붙여 준다 */
+        if (c.group) qual["구분"] = c.group;
         out.push({
           ...base,
           numMin: n.min,
@@ -195,7 +243,7 @@ export function parseTireWheelTable(g: Grid): HarvestedSpec[] {
           unit: c.unit,
           altNum: n.alt,
           altUnit: n.alt !== null ? c.alt : null,
-          qualifier: c.where ? { 위치: c.where } : undefined,
+          qualifier: Object.keys(qual).length ? qual : undefined,
         });
       }
     }
@@ -230,11 +278,27 @@ export function parseOilTable(g: Grid): HarvestedSpec[] {
   const head = Math.max(1, g.headRows);
   const width = g.cells[0]?.length ?? 0;
   if (g.cells.length <= head || width < 3) return [];
+  const bodyRows = g.cells.slice(head);
+
+  /**
+   * 🔴 이름 칸도 **내용으로** 찾는다. 첫 칸이라고 단정하면 안 된다 —
+   *    종이 설명서는 「전구의 용량」 표와 「추천오일 및 용량」 표를 좌우로 나란히 싣는다.
+   *    그러면 첫 칸은 전구 이름이고, 오일 이름은 한참 오른쪽에 있다
+   *    (그랜드 스타렉스 TQ 3쪽 실측 2026-09-03).
+   */
+  let nameCol = -1;
+  for (let c = 0; c < width; c++) {
+    if (bodyRows.some((r) => oilItemsFor((r[c] ?? "").trim()))) {
+      nameCol = c;
+      break;
+    }
+  }
+  if (nameCol < 0) return [];
 
   let qtyCol = -1;
   let specCol = -1;
   let qtyUnit: string | null = null;
-  for (let c = 0; c < width; c++) {
+  for (let c = nameCol + 1; c < width; c++) {
     const { full } = headerOf(g, c);
     if (qtyCol < 0 && /용량/.test(full)) {
       qtyCol = c;
@@ -243,18 +307,39 @@ export function parseOilTable(g: Grid): HarvestedSpec[] {
   }
   if (qtyCol < 0 && specCol < 0) return [];
 
+  /**
+   * 🔴 **머리글이 값 칸 바로 위에 안 놓일 수 있다.** 종이 설명서는 숫자를 오른쪽으로
+   *    맞추고 머리글은 가운데에 놓아서, `용량(ℓ)` 이 값보다 한 칸 왼쪽에 얹힌다.
+   *    머리글이 가리킨 칸에 숫자가 하나도 없으면 바로 옆 칸을 본다
+   *    (그랜드 스타렉스 TQ 3쪽 실측 2026-09-03).
+   */
+  const hasNum = (c: number) => c >= 0 && c < width && bodyRows.some((r) => readNumCell((r[c] ?? "").trim()));
+  const hasText = (c: number) => c >= 0 && c < width && bodyRows.some((r) => (r[c] ?? "").trim().length > 2);
+  if (qtyCol >= 0 && !hasNum(qtyCol)) {
+    if (hasNum(qtyCol + 1)) qtyCol += 1;
+    else if (hasNum(qtyCol - 1) && qtyCol - 1 > nameCol) qtyCol -= 1;
+  }
+  if (specCol >= 0 && !hasText(specCol)) {
+    if (hasText(specCol + 1)) specCol += 1;
+  }
+
   const out: HarvestedSpec[] = [];
   let groupNo = 0;
-  for (let r = head; r < g.cells.length; r++) {
-    const row = g.cells[r];
-    const name = (row[0] ?? "").trim();
+  for (const row of bodyRows) {
+    const name = (row[nameCol] ?? "").trim();
     const items = oilItemsFor(name);
+    /**
+     * 🔴 **이름이 그 줄에 없으면 건너뛴다.** 종이 설명서는 이름 칸을 세로로 합쳐
+     *    가운데에 한 번만 적어서, 위아래 줄 중 한 줄에만 글자가 놓인다.
+     *    없는 줄에 위 이름을 끌어다 붙이면 「엔진오일 디젤 = 연료탱크 용량」 같은
+     *    엉뚱한 짝이 생긴다. 짝이 틀리느니 그 줄을 버리는 게 낫다.
+     *    (이름이 놓인 줄은 조건·용량·사양이 모두 그 줄 것이라 짝이 정확하다)
+     */
     if (!items) continue;
     groupNo++;
     const quote = rowToText(row);
-    /* 조건 칸 — `가솔린 엔진` · `스마트스트림 G2.5 T-GDi` (첫 칸과 같은 글자는 뺀다) */
     const cond = row
-      .slice(1, Math.min(qtyCol < 0 ? width : qtyCol, width))
+      .slice(nameCol + 1, qtyCol < 0 ? width : qtyCol)
       .map((s) => s.trim())
       .filter((s, i, a) => s && s !== name && a.indexOf(s) === i);
     const qualifier = cond.length ? { 조건: cond.join(" ") } : undefined;
@@ -262,8 +347,7 @@ export function parseOilTable(g: Grid): HarvestedSpec[] {
 
     if (items.qty && qtyCol >= 0) {
       const n = readNumCell(row[qtyCol] ?? "");
-      /* 🔴 머리글에 단위가 없으면 칸 안에서 찾는다 (현대 `용량` / `4.3 ℓ`).
-         둘 다 없으면 값을 버린다 — 단위 없는 숫자는 위험하기만 하다 */
+      /* 머리글에 단위가 없으면 칸 안에서 찾는다 (현대 `용량` / `4.3 ℓ`) */
       const unit = qtyUnit ?? n?.unit ?? null;
       if (n && unit) {
         out.push({
@@ -283,7 +367,6 @@ export function parseOilTable(g: Grid): HarvestedSpec[] {
       if (items.spec && text) {
         out.push({ item: items.spec, textValue: text, quote, groupNo, groupLabel: label, qualifier });
       }
-      /* 점도는 따로 한 줄 더 — 현장에서 제일 자주 묻는 값이다 */
       if (items.qty === "engine_oil_qty") {
         const v = viscosityIn(text);
         if (v) out.push({ item: "engine_oil_viscosity", textValue: v, quote, groupNo, groupLabel: label, qualifier });
