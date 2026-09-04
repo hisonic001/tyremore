@@ -8,6 +8,25 @@ import { CARD_SETTLE_PATTERN_SQL, payerKeyOf } from "./expense-cats";
 import { monthRange } from "./ym";
 import { cashUsedSql, normName } from "./recon-data";
 
+/**
+ * ⭐ 「계산서 경유로 돈 확인됨」 판정 정본 (사장님 제보 2026-09-04 — 신형호/신아건설)
+ *
+ *   돈이 회사 이름으로 와서 판매↔입금 직결은 없지만,
+ *   판매 ↔ 매출계산서 ↔ 통장입금 사슬이 recon_match 에 확정으로 완성돼 있으면
+ *   그 판매의 돈은 확인이 끝난 것이다.
+ *
+ * 🔴 쿼리에서 quote 별칭이 **q** 여야 한다.
+ *    쓰는 곳: a1OpenTransfers(감사 A1·홈 인박스·돈 추적 목록) ·
+ *    transferSalesMissing(입금 화면 「짝 못 찾은 판매」).
+ *    money-trace 의 판매 카드는 같은 사슬을 자체 표기(tax_cashok)로 이미 본다 —
+ *    거기는 「계산서 경로로 돈 확인됨」 글자에 count 가 필요해서 이 조각을 못 쓴다.
+ */
+export const taxChainCoveredSql = sql`EXISTS (SELECT 1 FROM recon_match mq
+  JOIN recon_match mc ON mc.kind = '매출계산서' AND mc.src_table = 'tax_invoice'
+    AND mc.src_id = mq.src_id AND mc.ref_table = 'cash_txn' AND mc.status = '확정'
+  WHERE mq.kind = '매출계산서' AND mq.src_table = 'tax_invoice'
+    AND mq.ref_table = 'quote' AND mq.ref_id = q.id AND mq.status = '확정')`;
+
 /** ⭐ 이름 별명 학습 (사장님 요청 2026-08-24) — 한 번 이어준 입금자명은 다음부터 바로 알아본다 */
 export async function learnAlias(aliasRaw: string, partyKey: string, partyLabel: string): Promise<void> {
   const key = normName(aliasRaw);

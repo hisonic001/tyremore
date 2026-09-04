@@ -12,6 +12,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { CASH_LAT, DONE, findAmountComboNear, nearTolerance } from "./tax-recon";
+import { taxChainCoveredSql } from "./deposit-core";
 import { cashUsedSql, normName, samePartyName, similarPartyName, type DepositSuggestion } from "./recon-data";
 import { payerKeyOf } from "./expense-cats";
 import { monthRange } from "./ym";
@@ -189,6 +190,8 @@ export async function transferSalesMissing(ym: string): Promise<TransferSale[]> 
       AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
       -- 🔴 사장님 지적(2026-08-26): 나눠 받은 판매(535,000 = 425,000 + 110,000)는 일부만 이어져도 남은 금액이 있다
       AND q.total_amount > COALESCE((SELECT SUM(m.amount) FROM recon_match m WHERE m.kind = '이체입금' AND m.ref_table = 'quote' AND m.ref_id = q.id AND m.status = '확정'), 0)
+      -- ⭐ 계산서 경유로 돈이 확인된 판매는 뺀다 (사장님 제보 2026-09-04 — 정본 조각 deposit-core.taxChainCoveredSql)
+      AND NOT ${taxChainCoveredSql}
     ORDER BY ${D} DESC, q.id DESC LIMIT 100
   `);
   /* 후보: 통장 입금 중 (미분류 또는 「판매입금」으로 분류해 둔 것) 남은 금액이 있고,

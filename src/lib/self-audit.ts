@@ -20,6 +20,7 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
+import { taxChainCoveredSql } from "./deposit-core";
 import { kstToday } from "./ym";
 
 export interface AuditItem {
@@ -69,15 +70,8 @@ export async function a1OpenTransfers(range: { from: string; to?: string }): Pro
       ${range.to ? sql`AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${range.to}::date` : sql``}
       AND NOT EXISTS (SELECT 1 FROM recon_match m
         WHERE m.kind = '이체입금' AND m.ref_table = 'quote' AND m.ref_id = q.id)
-      /* ⭐ 계산서 경유로 돈이 이미 확인된 판매는 미연결이 아니다 (사장님 제보 2026-09-04
-         — 신형호 Q26-0903-015: 돈은 신아건설(주) 이름으로 왔고 그 입금은 매출 계산서와
-         확정으로 이어져 있는데, A1 이 「이체입금」 직결만 보고 계속 띄웠다.
-         판매 ↔ 매출계산서 ↔ 통장입금 사슬이 recon_match 에 완성돼 있으면 확인 끝. */
-      AND NOT EXISTS (SELECT 1 FROM recon_match mq
-        JOIN recon_match mc ON mc.kind = '매출계산서' AND mc.src_table = 'tax_invoice'
-          AND mc.src_id = mq.src_id AND mc.ref_table = 'cash_txn' AND mc.status = '확정'
-        WHERE mq.kind = '매출계산서' AND mq.src_table = 'tax_invoice'
-          AND mq.ref_table = 'quote' AND mq.ref_id = q.id AND mq.status = '확정')
+      /* ⭐ 계산서 경유로 돈이 이미 확인된 판매는 미연결이 아니다 (2026-09-04, 정본 조각) */
+      AND NOT ${taxChainCoveredSql}
     ORDER BY 3 DESC LIMIT 60
   `);
   const out: A1Row[] = [];
