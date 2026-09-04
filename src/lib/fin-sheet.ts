@@ -202,7 +202,14 @@ function parseBank(rows: unknown[][], h: { at: number; col: Map<string, number> 
     if (r.every((c) => String(c ?? "").trim() === "")) continue;
     const when = toKstDateTime(cell(r, h.col, "거래일시"));
     if (!when) {
-      // 아래 합계·안내 행일 수 있다 — 날짜가 없으면 조용히 넘기되 셈은 남긴다
+      /**
+       * ⭐ 신한 grid_exceldata 는 맨 아래 「합계」 꼬리 줄이 붙는다 (사장님 제보
+       *    2026-09-04 — 거래는 다 읽혔는데 이 꼬리가 「거래일시 못 읽음」 경고로
+       *    떠서 파일이 깨진 것처럼 보였다). 합계·소계 줄은 자료가 아니다 —
+       *    조용히 넘긴다. 진짜 날짜 파손만 경고로 남긴다.
+       */
+      const rowText = r.map((c) => String(c ?? "").trim()).join("");
+      if (/합계|소계/.test(rowText)) continue;
       skipped.push({ line: i + 1, reason: "거래일시를 못 읽음" });
       continue;
     }
