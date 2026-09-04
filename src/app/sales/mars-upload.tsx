@@ -299,8 +299,8 @@ export function SalesList({
                   카드 복제가 아니라 줄 — MARS 선택·건수·매출 합계에 안 섞인다 */}
               {d.collections.length > 0 && (
                 <ul className="mt-1.5 space-y-1">
-                  {d.collections.map((c) => (
-                    <CollectionLine key={c.id} c={c} canCollect={canCollect} />
+                  {groupCollections(d.collections).map((g) => (
+                    <CollectionGroup key={g[0].id} items={g} canCollect={canCollect} />
                   ))}
                 </ul>
               )}
@@ -323,8 +323,16 @@ export function SalesList({
  * ⭐ 외상 수금 줄 + 되돌리기 (사장님 제보 2026-09-03 — "테스트로 1000원을 넣었는데
  *    되돌리는게 불가함"). 지우기는 수금과 같은 정본(removeCollection, 외상 권한) —
  *    지우면 그 판매의 잔액이 다시 살아나고 이 줄도 사라진다.
+ *
+ * ⭐ 같은 거래처를 한꺼번에 정산하면 **한 줄로 묶는다** (사장님 제보 2026-09-04 —
+ *    "그날 수금 받은 것만 뜨면 되는데 과거 내역까지 전부 뜸"). 실은 전부 그날 받은
+ *    수금인데, 건별 줄마다 과거 정비 날짜가 붙어 과거 내역이 뜨는 것처럼 보였다.
+ *    이제 받은 돈이 한 줄, 어느 정비 값인지는 눌러야 나온다.
  */
-function CollectionLine({ c, canCollect }: { c: SaleDay["collections"][number]; canCollect: boolean }) {
+type DayColl = SaleDay["collections"][number];
+
+/** 되돌리기 한 건 — 묶음 안 줄과 단독 줄이 같이 쓴다 */
+function useUndoCollection(c: DayColl) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [ask, confirmDialog] = useConfirm();
@@ -345,34 +353,103 @@ function CollectionLine({ c, canCollect }: { c: SaleDay["collections"][number]; 
       router.refresh();
     });
   };
+  return { undo, pending, err, confirmDialog };
+}
 
+function UndoButton({ pending, undo }: { pending: boolean; undo: () => void }) {
+  return (
+    <button
+      type="button"
+      disabled={pending}
+      onClick={undo}
+      title="수금 되돌리기 — 외상 잔액이 다시 살아납니다"
+      className="shrink-0 rounded-lg px-1.5 text-xs text-emerald-600 underline underline-offset-2 active:text-red-600 disabled:opacity-40"
+    >
+      되돌리기
+    </button>
+  );
+}
+
+/** 묶음 안의 건별 줄 — 어느 정비 값인지 + 되돌리기 */
+function CollectionItemRow({ c, canCollect }: { c: DayColl; canCollect: boolean }) {
+  const { undo, pending, err, confirmDialog } = useUndoCollection(c);
   return (
     <li>
       {confirmDialog}
-      <div className="tabular flex items-baseline gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm">
-        <span className="shrink-0 font-semibold text-emerald-800">💰 외상 수금</span>
-        <span className="min-w-0 flex-1 truncate text-emerald-900">
-          {c.who}
-          {c.plateNo && <span className="ml-1 text-emerald-700">{c.plateNo}</span>}
-          <span className="ml-1.5 text-xs text-emerald-600">
-            {c.quoteNo} · {c.workDate.slice(5)} 정비 · {c.method}
-          </span>
-          {c.memo && <span className="ml-1.5 text-xs text-emerald-600">— {c.memo}</span>}
+      <div className="tabular flex items-baseline gap-2 text-xs text-emerald-800">
+        <span className="min-w-0 flex-1 truncate">
+          {c.quoteNo} · {c.workDate.slice(5)} 정비
+          {c.plateNo && <span className="ml-1 text-emerald-600">{c.plateNo}</span>}
+          {c.memo && <span className="ml-1.5 text-emerald-600">— {c.memo}</span>}
         </span>
-        <span className="shrink-0 font-bold text-emerald-800">+{won(c.amount)}원</span>
-        {canCollect && (
-          <button
-            type="button"
-            disabled={pending}
-            onClick={undo}
-            title="수금 되돌리기 — 외상 잔액이 다시 살아납니다"
-            className="shrink-0 rounded-lg px-1.5 text-xs text-emerald-600 underline underline-offset-2 active:text-red-600 disabled:opacity-40"
-          >
-            되돌리기
-          </button>
-        )}
+        <span className="shrink-0 font-semibold">+{won(c.amount)}원</span>
+        {canCollect && <UndoButton pending={pending} undo={undo} />}
       </div>
       {err && <p className="mt-0.5 rounded-lg bg-red-50 px-2 py-1 text-xs text-red-700">{err}</p>}
     </li>
   );
+}
+
+/** 한 명(거래처·손님)의 그날 수금 — 1건이면 한 줄, 여러 건이면 묶음 한 줄 + 펼침 */
+function CollectionGroup({ items, canCollect }: { items: DayColl[]; canCollect: boolean }) {
+  const first = items[0];
+  const total = items.reduce((s, c) => s + c.amount, 0);
+  const single = useUndoCollection(first);
+
+  if (items.length === 1) {
+    const c = first;
+    return (
+      <li>
+        {single.confirmDialog}
+        <div className="tabular flex items-baseline gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm">
+          <span className="shrink-0 font-semibold text-emerald-800">💰 외상 수금</span>
+          <span className="min-w-0 flex-1 truncate text-emerald-900">
+            {c.who}
+            {c.plateNo && <span className="ml-1 text-emerald-700">{c.plateNo}</span>}
+            <span className="ml-1.5 text-xs text-emerald-600">
+              {c.quoteNo} · {c.workDate.slice(5)} 정비 · {c.method}
+            </span>
+            {c.memo && <span className="ml-1.5 text-xs text-emerald-600">— {c.memo}</span>}
+          </span>
+          <span className="shrink-0 font-bold text-emerald-800">+{won(c.amount)}원</span>
+          {canCollect && <UndoButton pending={single.pending} undo={single.undo} />}
+        </div>
+        {single.err && <p className="mt-0.5 rounded-lg bg-red-50 px-2 py-1 text-xs text-red-700">{single.err}</p>}
+      </li>
+    );
+  }
+
+  return (
+    <li>
+      <details className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm">
+        <summary className="tabular flex cursor-pointer list-none items-baseline gap-2">
+          <span className="shrink-0 font-semibold text-emerald-800">💰 외상 수금</span>
+          <span className="min-w-0 flex-1 truncate text-emerald-900">
+            {first.who}
+            <span className="ml-1.5 text-xs text-emerald-600">
+              {first.method} · 정비 {items.length}건 값 — 눌러서 내역
+            </span>
+          </span>
+          <span className="shrink-0 font-bold text-emerald-800">+{won(total)}원</span>
+        </summary>
+        <ul className="mt-1.5 space-y-1 border-t border-emerald-200 pt-1.5">
+          {items.map((c) => (
+            <CollectionItemRow key={c.id} c={c} canCollect={canCollect} />
+          ))}
+        </ul>
+      </details>
+    </li>
+  );
+}
+
+/** 같은 사람·같은 수단끼리 순서 보존하며 묶는다 */
+function groupCollections(colls: DayColl[]): DayColl[][] {
+  const groups = new Map<string, DayColl[]>();
+  for (const c of colls) {
+    const k = `${c.who}|${c.method}`;
+    const g = groups.get(k);
+    if (g) g.push(c);
+    else groups.set(k, [c]);
+  }
+  return [...groups.values()];
 }
