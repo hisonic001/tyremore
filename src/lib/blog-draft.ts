@@ -23,7 +23,7 @@ import { blogDraft } from "@/db/schema";
 import { generateJson } from "./ai";
 import { loadStyleSamples } from "./blog-samples";
 import { formText, type BlogForm } from "./blog-form";
-import { buildSystem, styleFilter } from "./blog-style";
+import { buildSystem, styleFilter, titleFilter } from "./blog-style";
 import {
   duplicateWarn,
   factsText,
@@ -457,6 +457,18 @@ export async function generateDraft(
       continue;
     }
     /**
+     * ⭐ 제목 검사 (2026-09-04) — 제목에는 검사가 하나도 없었다.
+     *    실측으로 앱이 만든 제목이 38~58자라 **전부 모바일에서 잘렸고**,
+     *    「여름 끝물 9월…」 같은 계절 제목까지 나왔다.
+     */
+    const title = titleFilter(data.titles);
+    if (title) {
+      opts?.onLog?.(`다시 씁니다 — ${title.reason}`);
+      lastErr = title.reason;
+      feedback = title.fix;
+      continue;
+    }
+    /**
      * 사장님 한마디 자리.
      * 🔴 폼을 채우신 경우에는 **강요하지 않는다** — 4·5·7 자체가 사장님 육성이라
      *    두 번 받을 이유가 없다 (B단계 결정 2026-09-02).
@@ -582,6 +594,13 @@ export async function generateTopicDraft(opts: {
       opts.onLog?.(`다시 씁니다 — ${style.reason}`);
       lastErr = style.reason;
       feedback = style.fix;
+      continue;
+    }
+    const title = titleFilter(data.titles);
+    if (title) {
+      opts.onLog?.(`다시 씁니다 — ${title.reason}`);
+      lastErr = title.reason;
+      feedback = title.fix;
       continue;
     }
     if (!data.body.includes(OWNER_SLOT)) data.body = `${data.body.trimEnd()}\n\n${OWNER_SLOT}`;

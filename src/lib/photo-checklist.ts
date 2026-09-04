@@ -29,6 +29,12 @@ export interface Shot {
   why: string;
   /** 🔴 이것만은 꼭 — 이 글의 신뢰를 만드는 컷 */
   must?: boolean;
+  /**
+   * 사진이 아니라 **10~15초 영상**. 체류시간에 가장 큰 지렛대라 한 자리 둔다
+   * (사장님 확인 2026-09-04 — 「가능, 10초짜리 한 개」).
+   * 🔴 못 찍은 날에도 원고가 막히면 안 되므로 **꼭(must)은 아니다.**
+   */
+  video?: boolean;
 }
 
 /** 작업 종류 — 블로그 카테고리와 그대로 맞물린다 */
@@ -64,6 +70,16 @@ const COMMON_OPEN: Omit<Shot, "slot">[] = [
 ];
 
 const COMMON_CLOSE: Omit<Shot, "slot">[] = [
+  /**
+   * 🔴 영상 한 자리 (2026-09-04). 밸런서가 도는 것·토크렌치 조이는 것·공기압 넣는 것 중
+   *    그날 되는 것 하나면 된다. 읽는 사람이 멈춰 서서 보게 되는 유일한 장치다.
+   */
+  {
+    act: "B",
+    label: "🎬 작업 장면 10초 영상 (밸런서·토크렌치·공기압 중 하나)",
+    why: "읽는 분이 멈춰 서서 봅니다 — 체류시간에 가장 큰 힘",
+    video: true,
+  },
   { act: "C", label: "작업 완료 부위", why: "작업 전과 대비되어야 합니다" },
   { act: "C", label: "계기판 최종 확인 (공기압·경고등 소거)", why: "마무리의 신뢰" },
   { act: "C", label: "출고 차량 측면", why: "글의 마지막 사진" },
@@ -143,7 +159,11 @@ export function shotsFor(kind: WorkKind, ev = false): Shot[] {
 }
 
 /** 화면 요약용 — 「타이어 교체: 16컷 (꼭 5컷)」 */
-export function shotSummary(kind: WorkKind, ev = false): { total: number; must: number } {
+export function shotSummary(kind: WorkKind, ev = false): { total: number; must: number; video: number } {
   const all = shotsFor(kind, ev);
-  return { total: all.length, must: all.filter((s) => s.must).length };
+  return {
+    total: all.filter((s) => !s.video).length,
+    must: all.filter((s) => s.must).length,
+    video: all.filter((s) => s.video).length,
+  };
 }
