@@ -7,6 +7,7 @@ import Link from "@/lib/link";
 import type { SaleRow } from "@/lib/sale-history";
 import { EXCLUSIVE, SPLITTABLE, splitLabel } from "@/lib/payments";
 import { signedStr, showSigned } from "@/lib/signed-input";
+import { StatusPill } from "@/components/ui/badge";
 import { CollectionPanel } from "./collections";
 import { AddLine, EditableLine } from "./line-edit";
 import { ReassignPanel } from "./reassign";
@@ -171,23 +172,37 @@ export function SaleCard({
     });
   }
 
+  /**
+   * ⭐ 한 줄 카드 개편 (사장님 피드백 2026-09-04 — "가독성과 정보의 명확성이
+   *    떨어진다"). 날짜 카드 안의 행이다 — 토스 거래내역 문법(ListRow 문법):
+   *    1행 이름·차량 ↔ 금액 크게 / 2행 품목 요약 ↔ 결제수단 / 3행 문제 배지만.
+   *    정상 완료 건은 배지 0개 — MARS ✓·포스 ✓·완납·시공 ✓ 은 펼치면 보인다.
+   */
+  const remain =
+    s.paymentMethod === "외상" && !canceled
+      ? s.totalAmount - s.collections.reduce((sum, c) => sum + c.amount, 0)
+      : 0;
+  const hasBadges =
+    canceled ||
+    s.reservationStatus === "예약중" ||
+    remain > 0 ||
+    (!canceled && s.posMatch === "missing") ||
+    (!canceled && s.marsStatus === "미전송");
+
   return (
     <li
-      className={`rounded-card border bg-white shadow-card ${
-        canceled ? "border-slate-200 opacity-60" : "border-slate-200"
-      } ${
-        // 선택 모드: 체크된 카드는 테두리로, 체크 못 하는 카드는 흐리게
-        select ? (select.checked ? "ring-2 ring-indigo-600" : select.eligible ? "" : "opacity-40") : ""
+      className={`${canceled ? "opacity-60" : ""} ${
+        // 선택 모드: 체크된 행은 테두리로, 체크 못 하는 행은 흐리게
+        select ? (select.checked ? "rounded-control ring-2 ring-indigo-600" : select.eligible ? "" : "opacity-40") : ""
       }`}
     >
-      {/* ⭐ PC 는 카드가 세로로 크고 내용이 더 드러난다 (사장님 요청 2026-08-08) — 폰은 그대로 */}
       <button
         type="button"
         onClick={() => (select ? select.eligible && select.toggle() : setOpen(!open))}
-        className="w-full rounded-card p-3 text-left transition-colors active:bg-slate-50 lg:p-5 lg:hover:bg-slate-50"
+        className="w-full rounded-control px-1.5 py-3 text-left transition-colors active:bg-slate-100 lg:px-2.5 lg:hover:bg-slate-50"
       >
-        <div className="flex items-baseline justify-between gap-2">
-          <span className="min-w-0 truncate font-semibold lg:text-lg">
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-snug">
             {select && select.eligible && (
               <span
                 className={`mr-2 inline-block h-5 w-5 shrink-0 translate-y-1 rounded border-2 text-center text-sm leading-4 ${
@@ -197,96 +212,59 @@ export function SaleCard({
                 {select.checked ? "✓" : ""}
               </span>
             )}
-            {canceled && <span className="mr-1.5 rounded bg-slate-200 px-1.5 py-0.5 text-xs">취소</span>}
-            {/* ⭐ 예약 배지 (예약거래 2026-09-01) */}
-            {!canceled && s.reservationStatus === "예약중" && (
-              <span className="mr-1.5 rounded bg-violet-100 px-1.5 py-0.5 text-xs font-semibold text-violet-800">📌 예약중</span>
-            )}
-            {!canceled && s.reservationStatus === "시공완료" && (
-              <span className="mr-1.5 rounded bg-emerald-50 px-1.5 py-0.5 text-xs font-medium text-emerald-700">
-                시공 ✓{s.fulfilledOn ? ` ${s.fulfilledOn.slice(5)}` : ""}
-              </span>
-            )}
             {who}
             {/* ⭐ 차종도 같이 — 「현대 카니발 23나1111」 (사장님 요청 2026-08-09) */}
             {(s.plateNo || s.vehicleModel) && (
-              <span className="ml-2 text-sm font-normal text-slate-500">
+              <span className="ml-2 text-[13px] font-normal text-slate-500">
                 {[s.makerName, s.vehicleModel, s.plateNo].filter(Boolean).join(" ")}
               </span>
             )}
           </span>
-          <span className={`tabular shrink-0 font-bold lg:text-xl ${canceled ? "line-through" : ""}`}>
+          <span
+            className={`tabular shrink-0 text-[17px] font-bold leading-snug ${canceled ? "text-slate-400 line-through" : ""}`}
+          >
             {won(s.totalAmount)}원
           </span>
         </div>
-        <div className="mt-0.5 flex items-baseline justify-between gap-2 text-xs text-slate-500 lg:mt-1 lg:text-sm">
-          {/* 폰: 한 줄 요약 (지금까지 그대로) */}
-          <span className="truncate lg:hidden">
-            {/* ⭐ 타이어 규격도 같이 (사장님 요청 2026-08-07) */}
+        <div className="mt-0.5 flex items-baseline justify-between gap-3">
+          {/* ⭐ 품목 요약 — 타이어 규격도 같이 (사장님 요청 2026-08-07). 상세는 펼치면 */}
+          <span className="min-w-0 truncate text-[13px] leading-snug text-slate-500">
             {s.lines
               .map((l) => `${l.description}${l.spec ? ` ${l.spec}` : ""}${l.qty > 1 ? ` ×${l.qty}` : ""}`)
               .join(" · ") || "품목 없음"}
           </span>
-          <span className="hidden lg:block" />
-          <span className="tabular shrink-0">
-            {/* 분할 결제는 「카드+현금」 으로 (2026-08-10) — 금액은 펼치면 나온다 */}
+          {/* 분할 결제는 「카드+현금」 으로 (2026-08-10) — 금액은 펼치면 나온다 */}
+          <span className="tabular shrink-0 text-xs text-slate-400">
             {s.payments.length ? s.payments.map((p) => p.method).join("+") : (s.paymentMethod ?? "")}
+          </span>
+        </div>
+        {/* ⭐ 문제 배지 줄 — 지금 신경 쓸 것만 (사장님 답변 2026-09-04). 없으면 줄 자체가 없다 */}
+        {hasBadges && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            {canceled && <StatusPill>취소</StatusPill>}
+            {!canceled && s.reservationStatus === "예약중" && <StatusPill tone="reserve">📌 예약중</StatusPill>}
             {/* ⭐ 외상 잔액 (2026-08-11) — 접힌 채로도 얼마 남았는지 보인다 */}
-            {s.paymentMethod === "외상" && !canceled && (() => {
-              const remain = s.totalAmount - s.collections.reduce((sum, c) => sum + c.amount, 0);
-              return remain > 0 ? (
-                <span className="ml-1.5 font-semibold text-red-600">잔액 {won(remain)}</span>
-              ) : (
-                <span className="ml-1.5 font-semibold text-emerald-700">완납</span>
-              );
-            })()}
-            {/* ⭐ 카드 일마감 표식 (2026-08-26) — POS 결제와 이어졌나 */}
-            {!canceled && s.posMatch === "ok" && <span className="ml-1.5 font-semibold text-sky-700">포스 ✓</span>}
+            {remain > 0 && <StatusPill tone="error">외상 잔액 {won(remain)}원</StatusPill>}
+            {/* ⭐ 카드 일마감 (2026-08-26) — POS 결제와 안 이어진 건. 누르면 일마감 화면 */}
             {!canceled && s.posMatch === "missing" && (
-              <Link href={`/finance/card?ym=${s.workDate.slice(0, 7)}&d=${s.workDate}`} className="ml-1.5 font-semibold text-amber-600 underline">
+              <Link
+                href={`/finance/card?ym=${s.workDate.slice(0, 7)}&d=${s.workDate}`}
+                onClick={(e) => e.stopPropagation()}
+                className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800 underline underline-offset-2"
+              >
                 POS에 없음
               </Link>
             )}
-            {/* ⭐ MARS 표식 (사장님 지시 2026-08-09) — ✓ 올라감 · 올리는 중 = 체크 후 대기 */}
-            {s.marsStatus === "전송완료" && <span className="ml-1.5 font-semibold text-indigo-600">MARS ✓</span>}
-            {s.marsStatus === "미전송" && !canceled && (
-              <span className="ml-1.5 text-amber-600">MARS 올리는 중</span>
-            )}
-          </span>
-        </div>
+            {/* MARS 미전송 = 체크 후 로봇 대기 (사장님 지시 2026-08-09) */}
+            {!canceled && s.marsStatus === "미전송" && <StatusPill tone="warn">MARS 올리는 중</StatusPill>}
+          </div>
+        )}
         {/* ⭐ 선택 모드에서 체크가 막힌 이유 (사장님 지시 2026-08-17) — 이유 없이 안 눌리면 답답하다 */}
         {select && !select.eligible && select.reason && (
           <p className="mt-1 text-xs font-medium text-amber-700">⚠️ {select.reason}</p>
         )}
-        {/* PC: 품목을 줄별로 펼쳐서 — 펼치지 않아도 무엇을 얼마에 했는지 보인다 */}
-        <div className="mt-2 hidden space-y-1 lg:block">
-          {s.lines.map((l) => (
-            <div key={l.itemId} className="flex items-baseline justify-between gap-3 text-sm text-slate-600">
-              <span className="min-w-0 truncate">
-                {l.lineType === "service" && <span className="mr-1 text-xs text-slate-400">공임</span>}
-                {l.lineType === "use" && <span className="mr-1 text-xs text-sky-600">부품 사용</span>}
-                {l.description}
-                {l.spec && <span className="tabular ml-1 text-slate-500">{l.spec}</span>}
-              </span>
-              {/* ⭐ 「4 × 142,000 = 568,000원」 — 총액이 맨 끝에 (사장님 요청 2026-08-21). 1개면 금액만 */}
-              <span className="tabular shrink-0">
-                {l.qty > 1 ? (
-                  <>
-                    <span className="text-slate-500">
-                      {l.qty} × {won(l.finalPrice)} =
-                    </span>{" "}
-                    <span className="font-semibold text-slate-800">{won(l.finalPrice * l.qty)}원</span>
-                  </>
-                ) : (
-                  <>{won(l.finalPrice)}원</>
-                )}
-              </span>
-            </div>
-          ))}
-          {s.lines.length === 0 && <div className="text-sm text-slate-400">품목 없음</div>}
-        </div>
         {/* ⭐ 판매 등록 때 적은 비고 — 펼치지 않아도 보인다 (사장님 요청 2026-08-06) */}
-        {s.paymentMemo && <p className="mt-0.5 truncate text-xs text-amber-700 lg:mt-1.5 lg:text-sm">📝 {s.paymentMemo}</p>}
+        {s.paymentMemo && <p className="mt-1 truncate text-[13px] text-amber-700">📝 {s.paymentMemo}</p>}
       </button>
 
       {open && (
@@ -353,6 +331,11 @@ export function SaleCard({
             ) : null}
             {s.tyrePositions.length > 0 && <p>갈아 끼운 바퀴: {s.tyrePositions.join(" · ")}</p>}
             {s.paymentMemo && <p>메모: {s.paymentMemo}</p>}
+            {/* ⭐ 정상 표식은 접힌 행에서 뺐다 (2026-09-04 개편) — 여기서 확인한다 */}
+            {!canceled && s.reservationStatus === "시공완료" && (
+              <p className="tabular text-emerald-700">시공 완료 ✓{s.fulfilledOn ? ` ${s.fulfilledOn.slice(5)}` : ""}</p>
+            )}
+            {!canceled && s.posMatch === "ok" && <p className="text-sky-700">포스 일마감 확인 ✓</p>}
             {/* '보류'(아직 안 올림)는 굳이 안 적는다 — 올린 것·안 가는 것만 남긴다 */}
             {s.marsStatus !== "보류" && (
               <p className="tabular">

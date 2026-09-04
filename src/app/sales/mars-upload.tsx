@@ -241,10 +241,15 @@ export function SalesList({
           정비 내역이 없습니다
         </p>
       ) : (
-        <div className="mt-4 space-y-5">
+        <div className="mt-4 space-y-4">
+          {/*
+            ⭐ 한 줄 카드 개편 (사장님 피드백 2026-09-04 — "가독성과 정보의 명확성이
+               떨어진다"). 날짜가 카드 하나(토스 거래내역 문법), 판매는 그 안의 행 —
+               2열 격자(lg:grid-cols-2)를 걷어냈다. 행 사이는 divide 선.
+          */}
           {days.map((d) => (
-            <section key={d.date}>
-              <div className="flex items-baseline justify-between px-1">
+            <section key={d.date} className="rounded-card border border-slate-200 bg-white px-2 pb-1.5 shadow-card lg:px-3">
+              <div className="flex items-baseline justify-between px-1.5 pb-1 pt-3">
                 <h2 className="tabular font-semibold">{d.date}</h2>
                 <span className="tabular text-sm text-slate-500">
                   {d.qty > 0 && `타이어 ${d.qty}본 · `}
@@ -255,15 +260,7 @@ export function SalesList({
                   )}
                 </span>
               </div>
-              {/*
-                🔴 그날 판매가 1건이면 2열을 쓰지 않는다 (사장님 버그 제보 2026-08-08).
-                   2열 격자에서 카드가 왼쪽 반칸만 차지하고 합계 금액만 허공에 떠 보였다.
-              */}
-              <ul
-                className={`mt-1.5 grid grid-cols-1 items-start gap-2 ${
-                  d.sales.length > 1 ? "lg:grid-cols-2" : ""
-                }`}
-              >
+              <ul className="divide-y divide-slate-100">
                 {d.sales.map((s) => (
                   <SaleCard
                     owner={owner}
@@ -287,7 +284,7 @@ export function SalesList({
               {/* ⭐ 그날 받은 외상 수금 (사장님 요청 2026-09-03 — 정산한 날에도 정비내역에).
                   카드 복제가 아니라 줄 — MARS 선택·건수·매출 합계에 안 섞인다 */}
               {d.collections.length > 0 && (
-                <ul className="mt-1.5 space-y-1">
+                <ul className="mt-1 space-y-1 px-1.5 pb-1.5">
                   {d.collections.map((c) => (
                     <CollectionLine key={c.id} c={c} canCollect={canCollect} />
                   ))}

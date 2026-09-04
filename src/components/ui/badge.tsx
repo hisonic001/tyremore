@@ -15,6 +15,8 @@ const STATUS_TONE = {
   neutral: "bg-slate-100 text-slate-600",
   /** 할 일 수 강조 — 브랜드 노랑(검정 글자 전용) */
   accent: "bg-accent-400 text-slate-900",
+  /** 예약중 — 다른 상태색(성공·경고·오류·정보)과 겹치지 않는 보라 (2026-09-04) */
+  reserve: "bg-violet-100 text-violet-800",
 } as const;
 
 export function StatusPill({ tone = "neutral", children }: { tone?: keyof typeof STATUS_TONE; children: ReactNode }) {

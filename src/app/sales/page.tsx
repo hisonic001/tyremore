@@ -145,8 +145,9 @@ export default async function SalesPage({
     return s ? `?${s}` : "";
   };
 
+  // ⭐ 한 줄 행 개편(2026-09-04)으로 2열 격자가 사라져 PC 폭을 좁혔다 — 넓으면 이름↔금액 시선 이동이 길다
   return (
-    <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6 lg:max-w-6xl">
+    <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6 lg:max-w-3xl">
       <div className="flex items-center justify-between">
         <Link href="/" className="text-sm text-slate-500 underline underline-offset-4">
           ← 검색으로
