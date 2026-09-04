@@ -5,6 +5,7 @@ import { db } from "@/db";
 import { getSession, hasPerm } from "@/lib/auth";
 import { ColumnChart, StackedBar, fmtShort, fmtWon } from "./charts";
 import { Section, Stat, DeltaChip } from "./ui";
+import { BrandTires, type BrandTireRow } from "./brand-tires";
 import type { Bar, Segment } from "./charts";
 
 export const dynamic = "force-dynamic";
@@ -65,7 +66,7 @@ export default async function ReportsPage({
   const lastYearYm = ymAdd(ym, -12);
   const daysInMonth = new Date(yy, mm, 0).getDate();
 
-  const [months, daily, pay, guests, top, prevSpanRows, split, supTop, brands, marginRows] = await Promise.all([
+  const [months, daily, pay, guests, top, prevSpanRows, split, supTop, brands, brandModels, marginRows] = await Promise.all([
     db.execute<{ ym: string; n: number; amt: string }>(sql`
       SELECT to_char(${D}, 'YYYY-MM') ym, count(*)::int n, COALESCE(SUM(total_amount),0)::bigint amt
       FROM quote
@@ -149,6 +150,23 @@ export default async function ReportsPage({
         AND COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${yearStart}::date
         AND COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${nextStart}::date
       GROUP BY 1 ORDER BY 2 DESC, 3 DESC LIMIT 12
+    `),
+    /* ⭐ 브랜드→모델 드릴다운 (사장님 요청 2026-09-04) — 막대를 누르면 어떤
+     *   타이어를 몇 본 팔았는지. 이번 달 팔린 모델만 (막대와 같은 모집단) */
+    db.execute<{ brand: string; name: string; mq: number; yq: number }>(sql`
+      SELECT COALESCE(b.name_ko, p.brand_code, '기타') brand, qi.description name,
+             COALESCE(SUM(qi.qty) FILTER (WHERE ${sql.raw(`COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date)`)} >= ${start}::date), 0)::int mq,
+             SUM(qi.qty)::int yq
+      FROM quote_item qi
+      JOIN quote qq ON qq.id = qi.quote_id
+      LEFT JOIN product p ON p.id = qi.product_id
+      LEFT JOIN brand b ON b.code = p.brand_code
+      WHERE qq.status = '성사' AND qi.line_type = 'tire'
+        AND COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${yearStart}::date
+        AND COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${nextStart}::date
+      GROUP BY 1, 2
+      HAVING COALESCE(SUM(qi.qty) FILTER (WHERE ${sql.raw(`COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date)`)} >= ${start}::date), 0) > 0
+      ORDER BY 3 DESC, 4 DESC LIMIT 200
     `),
     /* ⭐ 마진율 — 원가(margin)가 기록된 줄만. 0원 매입 등 원가 빈 건은 제외하고 그 비중을 밝힌다 */
     db.execute<{ ym: string; m: string; base: string; known: string; total: string }>(sql`
@@ -247,10 +265,18 @@ export default async function ReportsPage({
   ].filter((s) => s.value > 0);
   const supMax = supTop.length ? Number(supTop[0].amt) : 0;
 
-  // --- 브랜드 본수 (2026-09-03) ---
-  const brandMonth: Bar[] = brands
+  // --- 브랜드 본수 (2026-09-03) + 모델 드릴다운 (2026-09-04) ---
+  const brandRows: BrandTireRow[] = brands
     .filter((b) => Number(b.mq) > 0)
-    .map((b) => ({ label: b.brand.replace(/타이어$/, ""), value: Number(b.mq), hint: `${b.brand} · 이번 달 ${b.mq}본 · 올해 ${b.yq}본` }));
+    .map((b) => ({
+      brand: b.brand,
+      short: b.brand.replace(/타이어$/, ""),
+      mq: Number(b.mq),
+      yq: Number(b.yq),
+      models: brandModels
+        .filter((m) => m.brand === b.brand)
+        .map((m) => ({ name: m.name, mq: Number(m.mq), yq: Number(m.yq) })),
+    }));
   const tireMonthTotal = brands.reduce((s, b) => s + Number(b.mq), 0);
   const tireYearTotal = brands.reduce((s, b) => s + Number(b.yq), 0);
 
@@ -392,11 +418,11 @@ export default async function ReportsPage({
           )}
         </Section>
 
-        {/* ---- ③ 브랜드별 타이어 본수 (2026-09-03) ---- */}
-        <Section title="브랜드별 타이어 본수" sub={`이번 달 ${tireMonthTotal}본 · 올해 누적 ${tireYearTotal}본`}>
-          {brandMonth.length ? (
+        {/* ---- ③ 브랜드별 타이어 본수 (2026-09-03, 드릴다운 2026-09-04) ---- */}
+        <Section title="브랜드별 타이어 본수" sub={`이번 달 ${tireMonthTotal}본 · 올해 누적 ${tireYearTotal}본 — 막대를 누르면 모델이 보입니다`}>
+          {brandRows.length ? (
             <>
-              <ColumnChart data={brandMonth} height={170} unit="본" />
+              <BrandTires rows={brandRows} />
               <ul className="tabular mt-2 space-y-1 text-xs text-slate-500">
                 {brands
                   .filter((b) => Number(b.yq) > 0)

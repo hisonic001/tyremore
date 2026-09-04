@@ -55,6 +55,7 @@ export function ColumnChart({
   color = "#009944",
   hotColor = "#00722f",
   unit = "",
+  onBarClick,
 }: {
   data: Bar[];
   height?: number;
@@ -62,6 +63,11 @@ export function ColumnChart({
   hotColor?: string;
   /** 값 라벨 뒤에 붙일 단위 — 본수 차트는 "본" (2026-09-03) */
   unit?: string;
+  /**
+   * ⭐ 막대 클릭 (2026-09-04, 브랜드 드릴다운) — 클라이언트 부품에서 쓸 때만
+   *    넘긴다. 서버 페이지에서는 함수를 못 넘기므로 저절로 기존 그대로다.
+   */
+  onBarClick?: (index: number) => void;
 }) {
   const W = 700;
   const PL = 6;
@@ -97,7 +103,11 @@ export function ColumnChart({
         const y = PT + innerH - h;
         const labeled = d.value > 0 && (d.hot || i === maxIdx);
         return (
-          <g key={i}>
+          <g
+            key={i}
+            onClick={onBarClick ? () => onBarClick(i) : undefined}
+            className={onBarClick ? "cursor-pointer" : undefined}
+          >
             <title>{d.hint}</title>
             {/* 값이 0 이어도 마우스가 닿게 투명 판을 깐다 */}
             <rect x={PL + slot * i} y={PT} width={slot} height={innerH} fill="transparent" />
