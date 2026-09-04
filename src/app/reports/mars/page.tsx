@@ -5,6 +5,7 @@ import { db } from "@/db";
 import { getSession } from "@/lib/auth";
 import { canViewMarsReport, getMarsQuarterTarget } from "@/lib/mars-eval";
 import { TargetForm } from "./target-form";
+import { ColumnChart } from "../charts";
 
 export const dynamic = "force-dynamic";
 
@@ -75,7 +76,7 @@ export default async function MarsEvalPage({
   const prevQ = quarter === 1 ? `${year - 1}-4` : `${year}-${quarter - 1}`;
   const nextQ = quarter === 4 ? `${year + 1}-1` : `${year}-${quarter + 1}`;
 
-  const [tireRows, soaRows, backfillRows, target] = await Promise.all([
+  const [tireRows, soaRows, backfillRows, target, pendBreak, monthly] = await Promise.all([
     // ① 타이어 본수 — 미쉐린그룹/타브랜드 × MARS 등록/미등록 (해당없음 = 거래처·무상, 소매 아님 → 제외)
     db.execute<{ grp: string; registered: boolean; qty: number }>(sql`
       -- 미쉐린 그룹 = 미쉐린(MI) + BF굿리치(BFG)
@@ -111,6 +112,28 @@ export default async function MarsEvalPage({
         AND ${D} >= ${start}::date AND ${D} < ${end}::date
     `),
     getMarsQuarterTarget(year, quarter),
+    /* ⭐ 미등록 물량 드릴다운 (사장님 선택 2026-09-03) — 상태별로 갈라야 다음 행동이 보인다 */
+    db.execute<{ st: string; qty: number; sales: number }>(sql`
+      SELECT q.mars_status st, SUM(qi.qty)::int qty, count(DISTINCT q.id)::int sales
+      FROM quote_item qi
+      JOIN quote q ON q.id = qi.quote_id
+      JOIN product p ON p.id = qi.product_id AND p.item_type = 'tire'
+      WHERE q.status = '성사' AND q.mars_status IN ('미전송', '보류', '수동처리')
+        AND ${D} >= ${start}::date AND ${D} < ${end}::date
+      GROUP BY 1 ORDER BY 2 DESC
+    `),
+    /* ⭐ 등록 비율 월별 추이 (사장님 선택 2026-09-03) — 분기 스냅샷의 흐름 보기 */
+    db.execute<{ ym: string; reg: number; tot: number }>(sql`
+      SELECT to_char(${D}, 'YYYY-MM') ym,
+             COALESCE(SUM(qi.qty) FILTER (WHERE q.mars_status = '전송완료'), 0)::int reg,
+             SUM(qi.qty)::int tot
+      FROM quote_item qi
+      JOIN quote q ON q.id = qi.quote_id
+      JOIN product p ON p.id = qi.product_id AND p.item_type = 'tire'
+      WHERE q.status = '성사' AND q.mars_status IN ('전송완료', '미전송', '보류', '수동처리')
+        AND ${D} >= (${start}::date - interval '3 months') AND ${D} < ${end}::date
+      GROUP BY 1 ORDER BY 1
+    `),
   ]);
 
   const pick = (grp: string, registered: boolean) =>
@@ -157,14 +180,17 @@ export default async function MarsEvalPage({
       </header>
 
       {isOwner && (
-        <div className="mt-3 flex gap-1.5">
-          <Link href="/reports" className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-600">
+        <div className="mt-3 flex gap-1">
+          <Link href="/reports" className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-100">
             매출
           </Link>
-          <Link href="/reports/stock" className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-600">
+          <Link href="/reports/stock" className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-100">
             재고
           </Link>
-          <span className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white">MARS 평가</span>
+          <Link href="/reports/margin" className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-100">
+            마진
+          </Link>
+          <span className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white">MARS</span>
         </div>
       )}
 
@@ -204,7 +230,13 @@ export default async function MarsEvalPage({
           {pendTotal > 0 && (
             <div className="text-right text-sm">
               <div className="font-semibold text-amber-700">아직 안 올린 타이어 {pendTotal}본</div>
-              <div className="text-slate-500">MARS 에 올려야 점수에 들어갑니다</div>
+              {/* ⭐ 드릴다운 (2026-09-03) — 상태를 갈라야 다음 행동이 보인다 */}
+              <div className="tabular text-xs text-slate-500">
+                {pendBreak.map((b) => `${b.st} ${b.qty}본(${b.sales}건)`).join(" · ")}
+              </div>
+              <Link href="/sales?range=all" className="text-xs text-amber-700 underline underline-offset-4">
+                정비 내역에서 체크해 올리기 →
+              </Link>
             </div>
           )}
         </div>
@@ -303,6 +335,24 @@ export default async function MarsEvalPage({
         </Item>
       </div>
 
+      {/* ---- 등록 비율 월별 추이 (사장님 선택 2026-09-03) ---- */}
+      <section className="mt-4 rounded-card border border-slate-200 bg-white p-4 shadow-card">
+        <h2 className="font-semibold">등록 비율 월별 추이</h2>
+        <p className="mt-0.5 text-xs text-slate-400">소매 타이어 본수 중 MARS 등록 비율 — 막대에 손을 대면 본수가 뜹니다</p>
+        <div className="mt-3">
+          <ColumnChart
+            data={monthly.map((r) => ({
+              label: `${Number(r.ym.slice(5))}월`,
+              value: Number(r.tot) > 0 ? Math.round((Number(r.reg) / Number(r.tot)) * 100) : 0,
+              hint: `${r.ym} · 등록 ${r.reg}본 / 전체 ${r.tot}본`,
+              hot: r.ym >= `${year}-${String(startMonth).padStart(2, "0")}`,
+            }))}
+            height={150}
+            unit="%"
+          />
+        </div>
+      </section>
+
       <div className="mt-4 space-y-1 text-xs text-slate-400">
         <p>· 성사된 판매만, 정비한 날 기준 · 「등록」 = MARS 전송완료 · 거래처 판매·무상 서비스(해당없음)는 소매 집계에서 제외</p>
         {backfillN > 0 && (
@@ -333,7 +383,7 @@ function Item({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-4">
+    <section className="rounded-card border border-slate-200 bg-white p-4 shadow-card">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="font-semibold">

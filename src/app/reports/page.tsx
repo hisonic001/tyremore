@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, hasPerm } from "@/lib/auth";
 import { ColumnChart, StackedBar, fmtShort, fmtWon } from "./charts";
+import { Section, Stat, DeltaChip } from "./ui";
 import type { Bar, Segment } from "./charts";
 
 export const dynamic = "force-dynamic";
@@ -510,54 +511,5 @@ export default async function ReportsPage({
   );
 }
 
-/** 보조 숫자 한 칸 — 보더 없이 여백으로 (2026-09-03 리프레시) */
-function Stat({ label, value, sub, href }: { label: string; value: string; sub?: string; href?: string }) {
-  const body = (
-    <>
-      <div className="text-xs text-slate-400">{label}</div>
-      <div className="mt-0.5 font-bold">{value}</div>
-      {sub && <div className="mt-0.5 text-[11px] leading-tight text-slate-400">{sub}</div>}
-    </>
-  );
-  return href ? (
-    <Link href={href} className="block active:opacity-70">
-      {body}
-    </Link>
-  ) : (
-    <div>{body}</div>
-  );
-}
 
-/** 증감 칩 — 상승은 브랜드 그린, 하락은 회색 (빨강 경보 아님 — 정보지 사고가 아니다) */
-function DeltaChip({ v, label }: { v: number; label: string }) {
-  const up = v >= 0;
-  return (
-    <span
-      className={`tabular inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${
-        up ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"
-      }`}
-    >
-      {up ? "▲" : "▼"} {Math.abs(v)}%<span className="font-normal opacity-70">{label}</span>
-    </span>
-  );
-}
 
-function Section({
-  title,
-  sub,
-  wide,
-  children,
-}: {
-  title: string;
-  sub?: string;
-  wide?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className={`rounded-card border border-slate-200 bg-white p-4 shadow-card ${wide ? "lg:col-span-2" : ""}`}>
-      <h2 className="font-semibold">{title}</h2>
-      {sub && <p className="mt-0.5 text-xs text-slate-400">{sub}</p>}
-      <div className="mt-3">{children}</div>
-    </section>
-  );
-}
