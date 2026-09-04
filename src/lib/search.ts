@@ -11,6 +11,7 @@
  */
 import { and, eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
+import { looksLikeVin } from "@/lib/vin";
 import { brand, customer, product, vehicle } from "@/db/schema";
 import { normalizePhone, normalizePlate } from "./normalize";
 import { looksLikeCai, parseTireName, type Badge } from "./tire-name";
@@ -150,6 +151,8 @@ export function guessMode(q: string): Mode | null {
   if (!t) return null;
   if (parseSpecQuery(t)) return "product";
   if (looksLikeCai(t)) return "product"; // CAI — 미쉐린 고유번호 5~6자리
+  /* 차대번호 17자리 — 사장님이 등록증을 보고 그대로 치신다 (2026-09-04) */
+  if (looksLikeVin(t)) return "customer";
   if (/^\d{2,3}[가-힣]\s?\d{4}$/.test(t) || /^[가-힣]{2}\d{2,3}[가-힣]\d{4}$/.test(t)) return "customer";
   if (/^\d{4}$/.test(t)) return "customer"; // 고객은 "3456이요" 라고 말한다
   if (/^01\d{1,2}-?\d{3,4}-?\d{4}$/.test(t) || /^\d{9,11}$/.test(t.replace(/\D/g, ""))) return "customer";
@@ -167,6 +170,12 @@ export async function findVehicles(q: string): Promise<VehicleHit[]> {
   const digits = normalizePhone(t);
 
   const conds: SQL[] = [];
+  /**
+   * 🔴 차대번호로도 찾는다 (2026-09-04). 등록증을 보고 그대로 치면 그 차가 나와야 한다.
+   *    사람은 하이픈·공백을 넣어 적으므로 지우고 견준다. 없으면 화면이 「제원 조회」로 안내한다.
+   */
+  const vinKey = t.replace(/[\s-]/g, "").toUpperCase();
+  if (looksLikeVin(t)) conds.push(sql`upper(replace(replace(${vehicle.vin}, ' ', ''), '-', '')) = ${vinKey}`);
   if (isPlate) {
     conds.push(
       plate.length === 4

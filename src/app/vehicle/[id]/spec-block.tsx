@@ -1,5 +1,6 @@
 import Link from "@/lib/link";
 import { BookMarked } from "lucide-react";
+import { partsForGeneration } from "@/lib/parts-fit";
 import { specsForVehicle } from "@/lib/spec";
 
 /**
@@ -13,6 +14,8 @@ import { specsForVehicle } from "@/lib/spec";
 export async function VehicleSpecBlock({ vehicleId }: { vehicleId: number }) {
   const spec = await specsForVehicle(vehicleId);
   if (!spec) return null;
+  /* 🔴 질의는 순차로 (2026-08-11 풀 만석 사고 이후 Promise.all 안 쓴다) */
+  const parts = spec.generationId ? await partsForGeneration(spec.generationId) : [];
 
   const nothingApproved = spec.groups.length === 0;
 
@@ -76,6 +79,28 @@ export async function VehicleSpecBlock({ vehicleId }: { vehicleId: number }) {
           )}
         </>
       )}
+      {parts.length > 0 && (
+        <div className="mt-4 border-t border-slate-100 pt-3">
+          <p className="text-[13px] font-semibold text-slate-700">이 차에 맞는 부품</p>
+          <ul className="mt-1 divide-y divide-slate-100">
+            {parts.slice(0, 12).map((p) => (
+              <li key={p.productId} className="flex items-baseline justify-between gap-3 py-1.5">
+                <span className="min-w-0 flex-1 truncate text-[13px] text-slate-700">
+                  <span className="text-slate-400">{p.category} </span>
+                  {p.name}
+                </span>
+                <span className="tabular shrink-0 text-[12px] text-slate-500">
+                  {p.stock > 0 ? <strong className="text-brand-700">재고 {p.stock}</strong> : "재고 없음"}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {parts.length > 12 && (
+            <p className="mt-1 text-[11px] text-slate-400">외 {parts.length - 12}건</p>
+          )}
+        </div>
+      )}
+
       <p className="mt-3 text-[11px] leading-snug text-slate-400">
         제조사 취급설명서에서 그대로 옮긴 값입니다. 실제 차에 붙은 타이어·휠이 순정과 다를 수 있으니
         <strong> 운전석 문틀 라벨</strong>도 함께 봐 주세요.

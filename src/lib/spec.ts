@@ -251,12 +251,85 @@ export async function rejectSpecs(ids: number[], note?: string): Promise<SpecRes
 /* ------------------------------------------------------------------ */
 
 export interface VehicleSpecBlock {
+  /** 부품 잇기(lib/parts-fit)가 이 번호를 쓴다 */
+  generationId: number;
   label: string;
   variantKey: string;
   manualUrl: string | null;
   /** 승인된 값만. 인치별로 한 벌씩 */
   groups: { groupLabel: string | null; rows: { label: string; shown: string; qualifier: string | null }[] }[];
   waiting: number;
+}
+
+/**
+ * 세대 하나의 제원 — 정비 조회 화면용 (2026-09-04)
+ *
+ * 🔴 `confirmed` 는 **「이 차가 이 세대가 맞다」를 사람이 확인했는가**다.
+ *    차대번호로 「제안」만 된 상태에서는 위험 값(휠너트 토크·엔진오일 용량)의 숫자를
+ *    내보내지 않는다 — 세대를 잘못 짚으면 **다른 차의 토크가 뜬다.**
+ *    승인된 값이라도 「어느 차의 값인지」가 안 정해졌으면 위험한 건 마찬가지다.
+ */
+export async function specsForGeneration(
+  variantKey: string,
+  opts?: { confirmed?: boolean },
+): Promise<VehicleSpecBlock | null> {
+  const [gen] = await db.execute<{ id: number; label: string; manual_url: string | null }>(sql`
+    SELECT id, label, manual_url FROM vehicle_generation WHERE variant_key = ${variantKey}`);
+  if (!gen) return null;
+
+  const rows = await db.execute<{
+    item: string;
+    group_no: number;
+    group_label: string | null;
+    qualifier: Record<string, string> | null;
+    num_min: string | null;
+    num_max: string | null;
+    unit: string | null;
+    text_value: string | null;
+    risk: Risk;
+  }>(sql`
+    SELECT item, group_no, group_label, qualifier, num_min, num_max, unit, text_value, risk
+    FROM vehicle_spec
+    WHERE generation_id = ${gen.id} AND status = '승인'
+    ORDER BY group_no, id
+    LIMIT 300`);
+
+  const [w] = await db.execute<{ n: number }>(sql`
+    SELECT count(*)::int AS n FROM vehicle_spec WHERE generation_id = ${gen.id} AND status = '검수대기'`);
+
+  const groups = new Map<
+    number,
+    { groupLabel: string | null; rows: { label: string; shown: string; qualifier: string | null }[] }
+  >();
+  for (const r of rows) {
+    const def = specItem(r.item);
+    /* 🔴 세대가 아직 확인 안 됐으면 위험 값은 숫자를 만들지 않는다 */
+    const hide = r.risk === "높음" && !opts?.confirmed;
+    const shown = hide
+      ? "차종을 확인하시면 보여드립니다"
+      : r.text_value
+        ? r.text_value
+        : r.num_min !== null && r.unit
+          ? bothUnits(Number(r.num_min), r.num_max === null ? null : Number(r.num_max), r.unit)
+          : null;
+    if (!shown) continue;
+    const g = groups.get(r.group_no) ?? { groupLabel: r.group_label, rows: [] };
+    g.rows.push({
+      label: def?.label ?? r.item,
+      shown,
+      qualifier: r.qualifier ? Object.values(r.qualifier).join(" ") : null,
+    });
+    groups.set(r.group_no, g);
+  }
+
+  return {
+    generationId: Number(gen.id),
+    label: gen.label,
+    variantKey,
+    manualUrl: gen.manual_url,
+    groups: [...groups.values()],
+    waiting: Number(w?.n ?? 0),
+  };
 }
 
 /**
@@ -313,6 +386,7 @@ export async function specsForVehicle(vehicleId: number): Promise<VehicleSpecBlo
   }
 
   return {
+    generationId: Number(gen.id),
     label: gen.label,
     variantKey: gen.variant_key,
     manualUrl: gen.manual_url,

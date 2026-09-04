@@ -1,5 +1,6 @@
 import Link from "@/lib/link";
 import { findProducts, findVehicles, guessMode, tireBrands, type Mode } from "@/lib/search";
+import { looksLikeVin } from "@/lib/vin";
 import type { Season } from "@/lib/tire-attrs";
 import { SearchBox, SearchButton } from "./search-box";
 import { FilterPanel, ModeTabs } from "./search-ui";
@@ -129,7 +130,27 @@ export default async function Home({
                 <VehicleCard key={v.vehicleId} v={v} />
               ))}
             </ul>
-            {vehicles.length === 0 && <Empty text="찾지 못했습니다" />}
+            {vehicles.length === 0 &&
+              /**
+               * ⭐ 차대번호를 쳤는데 우리 손님이 아니면 정비 조회로 안내한다 (2026-09-04).
+               *    등록 안 된 차라도 순정 규격과 맞는 부품은 봐야 한다.
+               */
+              (looksLikeVin(q) ? (
+                <div className="mt-2 rounded-card border border-slate-200 bg-white px-4 py-5 text-center">
+                  <p className="text-[15px] font-semibold text-slate-700">아직 등록 안 된 차입니다</p>
+                  <p className="mt-1 text-[13px] text-slate-500">
+                    차대번호로 순정 규격과 맞는 부품을 볼 수 있습니다.
+                  </p>
+                  <Link
+                    href={`/carinfo?vin=${encodeURIComponent(q)}`}
+                    className="mt-3 inline-flex min-h-11 items-center rounded-control bg-brand-600 px-4 font-semibold text-white"
+                  >
+                    정비 조회로 보기
+                  </Link>
+                </div>
+              ) : (
+                <Empty text="찾지 못했습니다" />
+              ))}
           </>
         ) : (
           <Hint mode="customer" />
