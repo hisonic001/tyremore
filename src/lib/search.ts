@@ -93,7 +93,7 @@ export interface ProductHit {
   itemType: string;
   fitment: string | null;
   partNo: string | null;
-  /** 숨긴 상품(단종·미취급). includeHidden 으로 찾았을 때만 true 가 나온다 */
+  /** 숨긴 상품(단종·미취급). 실재고가 있으면 숨김으로 안 친다 (2026-09-04) */
   isHidden: boolean;
 }
 
@@ -219,10 +219,20 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
    * ⭐ 기본은 「지금 팔 수 있는 것」만 보여준다 (사장님 요청 2026-08-01).
    *   MARS 마스터 10,318건에는 단종품·미취급 브랜드가 섞여 있어 상담에 방해가 된다.
    *   지우지 않고 끄기만 한다 — 나중에 입고할 때 되살리면 기표가·규격이 그대로 있다.
+   *
+   * 🔴 단, **실재고가 있으면 숨김을 무시한다** (사장님 지시 2026-09-04).
+   *    굿이어처럼 브랜드째 「취급 안 함」이어도, 「전체 목록에서 찾기」로 입고한
+   *    순간 파는 물건이다 — 굿이어 245/45R18 1본이 검색에 안 떠서 못 팔 뻔했고,
+   *    「가격 없음」으로 숨긴 미쉐린 225/55R17 도 재고 16본이 같은 함정에 있었다.
    */
+  const hasRealStock = sql`EXISTS (
+    SELECT 1 FROM stock_item s
+    WHERE s.product_id = ${product.id} AND s.status = '재고' AND s.qty > 0
+  )`;
   if (!f.includeHidden) {
-    conds.push(eq(product.isActive, true));
-    conds.push(sql`(${brand.isHandled} IS NULL OR ${brand.isHandled} = true)`);
+    conds.push(sql`((${product.isActive} = true
+      AND (${brand.isHandled} IS NULL OR ${brand.isHandled} = true))
+      OR ${hasRealStock})`);
   }
 
   /**
@@ -365,7 +375,8 @@ export async function findProducts(q: string, f: ProductFilter = {}): Promise<Pr
     return [];
   }
 
-  const isHidden = sql<boolean>`(${product.isActive} = false OR ${brand.isHandled} = false)`;
+  // 재고로 살아난 상품에는 「숨김」 배지를 안 붙인다 — 상담 중에 헷갈린다
+  const isHidden = sql<boolean>`((${product.isActive} = false OR ${brand.isHandled} = false) AND NOT ${hasRealStock})`;
 
   const rows = await db
     .select({
