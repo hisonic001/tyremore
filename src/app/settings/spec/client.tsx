@@ -57,13 +57,16 @@ function GenerationList({ rows }: { rows: SpecGenRow[] }) {
                 <p className="truncate text-[15px] font-semibold text-slate-900">{r.label}</p>
                 <p className="mt-0.5 text-[13px] text-slate-500">
                   우리 손님 차 {r.cars}대
-                  {r.approved > 0 && ` · 확인된 값 ${r.approved}개`}
+                  {r.approved > 0 && ` · 사장님 확인 ${r.approved}개`}
+                  {r.autoOk > 0 && ` · 자동 확인 ${r.autoOk}개`}
                 </p>
               </div>
               {r.waiting > 0 ? (
                 <StatusPill tone="accent">검수 {r.waiting}</StatusPill>
+              ) : r.approved > 0 && r.autoOk === 0 ? (
+                <StatusPill tone="success">사장님 확인</StatusPill>
               ) : (
-                <StatusPill tone="success">확인 끝</StatusPill>
+                <StatusPill tone="neutral">자동 확인</StatusPill>
               )}
               <ChevronRight className="size-4 shrink-0 text-slate-400" />
             </Link>
@@ -180,15 +183,34 @@ function GroupCard({
   onReject: (ids: number[]) => void;
 }) {
   const waiting = rows.filter((r) => r.status === "검수대기");
+  /** 기계가 통과시킨 것 — 사장님이 되돌리거나 직접 확인하실 수 있다 */
+  const auto = rows.filter((r) => r.status === "자동확인");
   /* 한 벌은 원문의 같은 줄에서 나온다 — 줄을 한 번만 보여 준다 */
-  const quotes = [...new Set(rows.map((r) => r.quote).filter(Boolean))];
-  const src = rows.find((r) => r.sourceUrl);
+  const quotes = [...new Set(rows.flatMap((r) => (r.quotes?.length ? r.quotes : [r.quote])).filter(Boolean))];
+  /** 같은 주소는 한 번만 */
+  const allSources = [
+    ...new Map(
+      rows
+        .flatMap((r) => (r.sources?.length ? r.sources : r.sourceUrl ? [{ url: r.sourceUrl, title: r.sourceTitle, fetchedOn: r.fetchedOn }] : []))
+        .map((x) => [x.url, x]),
+    ).values(),
+  ];
 
   return (
     <section className="mt-4 rounded-card border border-slate-200 bg-white p-4">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-[15px] font-bold text-slate-900">{label ?? "제원"}</h3>
-        {waiting.length === 0 && <StatusPill tone="success">확인됨</StatusPill>}
+        {/*
+          🔴 **「사장님 확인」과 「자동 확인」이 절대 같아 보이면 안 된다** (2026-09-05).
+             사장님이 「일하면서 고쳐 나가겠다」고 하셨는데, 구별이 없으면
+             무엇을 봐야 할지 찾을 수가 없다.
+        */}
+        {waiting.length === 0 &&
+          (rows.every((r) => r.status === "승인") ? (
+            <StatusPill tone="success">사장님 확인</StatusPill>
+          ) : (
+            <StatusPill tone="neutral">자동 확인</StatusPill>
+          ))}
       </div>
 
       <dl className="mt-2 divide-y divide-slate-100">
@@ -205,9 +227,17 @@ function GroupCard({
                 </span>
               ) : (
                 <span
-                  className={`text-[15px] font-semibold ${r.status === "승인" ? "text-slate-900" : "text-slate-500"}`}
+                  className={`text-[15px] font-semibold ${
+                    r.status === "승인"
+                      ? "text-slate-900"
+                      : r.status === "자동확인"
+                        ? "text-slate-700"
+                        : "text-slate-500"
+                  }`}
+                  title={r.status === "자동확인" ? (r.autoNote ?? "자동으로 확인한 값입니다") : undefined}
                 >
                   {r.shown ?? "—"}
+                  {r.status === "자동확인" && <span className="ml-1 text-[11px] font-normal text-slate-400">자동</span>}
                 </span>
               )}
             </dd>
@@ -224,16 +254,17 @@ function GroupCard({
           {q}
         </p>
       ))}
-      {src?.sourceUrl && (
-        <p className="mt-1 text-[11px] text-slate-400">
-          <a href={src.sourceUrl} target="_blank" rel="noreferrer noopener" className="underline underline-offset-2">
-            {src.sourceTitle || src.sourceUrl}
+      {/* 🔴 출처는 여럿일 수 있다 — 하나만 보여 주면 「두 곳에서 봤다」가 안 보인다 */}
+      {allSources.map((x) => (
+        <p key={x.url} className="mt-1 text-[11px] text-slate-400">
+          <a href={x.url} target="_blank" rel="noreferrer noopener" className="underline underline-offset-2">
+            {x.title || x.url}
           </a>
-          {src.fetchedOn && ` · ${src.fetchedOn} 에 읽음`}
+          {x.fetchedOn && ` · ${x.fetchedOn} 에 읽음`}
         </p>
-      )}
+      ))}
 
-      {waiting.length > 0 && (
+      {waiting.length > 0 ? (
         <div className="mt-3 flex gap-2">
           <Button size="md" pending={pending} onClick={() => onApprove(waiting.map((r) => r.id))}>
             <Check className="size-4" /> 이 한 벌 맞습니다
@@ -242,6 +273,23 @@ function GroupCard({
             <X className="size-4" /> 아닙니다
           </Button>
         </div>
+      ) : (
+        auto.length > 0 && (
+          /*
+            🔴 자동 확인도 **되돌릴 수 있어야 한다** (2026-09-05).
+               사장님이 「일하면서 검증하며 고쳐 나가겠다」고 하셨다. 틀린 것을 보셨을 때
+               그 자리에서 고칠 수 없으면 그 말이 지켜지지 않는다.
+          */
+          <div className="mt-3 flex items-center gap-2">
+            <Button size="md" variant="secondary" pending={pending} onClick={() => onApprove(auto.map((r) => r.id))}>
+              <Check className="size-4" /> 직접 확인했습니다
+            </Button>
+            <Button size="md" variant="ghost" pending={pending} onClick={() => onReject(auto.map((r) => r.id))}>
+              <X className="size-4" /> 틀렸습니다
+            </Button>
+            <span className="text-[12px] leading-snug text-slate-400">{auto[0].autoNote ?? "자동으로 확인한 값입니다"}</span>
+          </div>
+        )
       )}
     </section>
   );

@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { bothUnits, normalizeUnit, specItem } from "./spec-core";
-import { numbersIn, rankSource, specFilter, type SpecCandidate } from "./spec-verify";
+import { numbersIn, rankSource, specFilter, type SpecCandidate, crossCheckSpec } from "./spec-verify";
 
 /**
  * 🔴 이 시험들은 2026-09-03 에 **실제로 겪은 함정**을 그대로 재현한 것이다.
@@ -248,5 +248,66 @@ describe("항목 정본", () => {
   it("숫자 뽑기", () => {
     assert.deepEqual(numbersIn("11~13 kgf·m"), ["11", "13"]);
     assert.deepEqual(numbersIn("240 kPa (35 psi)"), ["240", "35"]);
+  });
+});
+
+/**
+ * 🔴 **교차검산** (2026-09-05, 사장님 「검수할 게 너무 많다」)
+ *
+ *    정직하게: 우리 값은 출처가 하나씩뿐이라 「두 곳이 같으면 승인」은 0건을 승인한다.
+ *    대신 **서로 다른 값이 같은 사실을 가리킬 때 아귀가 맞는지** 본다.
+ */
+describe("교차검산 — 자동 확인을 받을 자격", () => {
+  const 앞타이어 = { item: "tire_size", textValue: "245/45R19", numMin: null, unit: null, where: "앞" };
+  const 앞휠 = { item: "wheel_size", textValue: "8.5Jx19", numMin: null, unit: null, where: "앞" };
+  const 뒤타이어 = { item: "tire_size", textValue: "275/40R19", numMin: null, unit: null, where: "뒤" };
+  const 뒤휠 = { item: "wheel_size", textValue: "9.5Jx19", numMin: null, unit: null, where: "뒤" };
+
+  it("🔴 타이어 인치와 휠 인치가 맞으면 통과 — 서로 다른 칸에서 읽은 값이 일치한다", () => {
+    const r = crossCheckSpec(앞타이어, [앞타이어, 앞휠, 뒤타이어, 뒤휠]);
+    assert.equal(r.ok, true);
+    assert.match(r.note, /19인치/);
+  });
+
+  it("🔴 타이어는 19인치인데 휠이 18인치면 걸린다 — 둘 중 하나를 잘못 읽었다", () => {
+    const 틀린휠 = { ...앞휠, textValue: "8.5Jx18" };
+    const r = crossCheckSpec(앞타이어, [앞타이어, 틀린휠]);
+    assert.equal(r.ok, false);
+    assert.match(r.note, /19인치인데.*18인치/);
+  });
+
+  it("스태거드는 앞은 앞끼리 견준다 — 뒤 휠(9.5Jx19)과 섞으면 안 된다", () => {
+    const r = crossCheckSpec(뒤타이어, [앞타이어, 앞휠, 뒤타이어, 뒤휠]);
+    assert.equal(r.ok, true);
+  });
+
+  it("🔴 앞뒤 중 한쪽만 있으면 걸린다 — 표를 반만 읽었을 수 있다", () => {
+    const 앞압력 = { item: "tire_pressure", textValue: null, numMin: 240, unit: "kPa", where: "앞" };
+    const r = crossCheckSpec(앞압력, [앞압력]);
+    assert.equal(r.ok, false);
+    assert.match(r.note, /뒤가 없습니다/);
+  });
+
+  it("앞뒤가 다 있으면 통과한다", () => {
+    const 앞압력 = { item: "tire_pressure", textValue: null, numMin: 240, unit: "kPa", where: "앞" };
+    const 뒤압력 = { item: "tire_pressure", textValue: null, numMin: 240, unit: "kPa", where: "뒤" };
+    assert.equal(crossCheckSpec(앞압력, [앞압력, 뒤압력]).ok, true);
+  });
+
+  it("🔴 같은 제조사 이웃과 크게 튀면 걸린다 — 11 인데 이웃 가운데값이 30", () => {
+    const 토크 = { item: "wheel_nut_torque", textValue: null, numMin: 11, unit: "kgf·m", where: null };
+    const r = crossCheckSpec(토크, [토크], { neighborMedian: 30 });
+    assert.equal(r.ok, false);
+    assert.match(r.note, /차이가 납니다/);
+  });
+
+  it("이웃과 비슷하면 통과한다", () => {
+    const 토크 = { item: "wheel_nut_torque", textValue: null, numMin: 12, unit: "kgf·m", where: null };
+    assert.equal(crossCheckSpec(토크, [토크], { neighborMedian: 11 }).ok, true);
+  });
+
+  it("견줄 이웃이 없으면 모양 검사만으로 통과 — 없는 것을 이유로 막지 않는다", () => {
+    const 토크 = { item: "wheel_nut_torque", textValue: null, numMin: 12, unit: "kgf·m", where: null };
+    assert.equal(crossCheckSpec(토크, [토크], { neighborMedian: null }).ok, true);
   });
 });

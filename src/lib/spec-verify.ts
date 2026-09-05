@@ -23,6 +23,8 @@ import {
   looksLikeWheelSize,
   normalizeUnit,
   specItem,
+  tireRimInch,
+  wheelRimInch,
 } from "./spec-core";
 
 export interface SpecCandidate {
@@ -275,4 +277,90 @@ export function rankSource(url: string): { rank: SourceRank; independenceKey: st
   if (/danawa|carisyou|encar|kbchachacha/.test(host))
     return { rank: 4, independenceKey: `media:${host}`, official: false };
   return { rank: 5, independenceKey: "community", official: false };
+}
+
+/* ------------------------------------------------------------------ */
+/* 교차검산 — 자동 확인을 받을 자격이 있는가                              */
+/* ------------------------------------------------------------------ */
+
+/** 한 벌(그룹) 안의 값들 — 서로 아귀가 맞는지 볼 때 쓴다 */
+export interface GroupRow {
+  item: string;
+  textValue: string | null;
+  numMin: number | null;
+  unit: string | null;
+  /** qualifier 의 「위치」 (앞/뒤) */
+  where?: string | null;
+}
+
+export interface CrossResult {
+  /** 자동 확인을 줘도 되는가 */
+  ok: boolean;
+  /** 왜 됐는지 / 왜 안 됐는지 — 화면과 `auto_note` 에 그대로 적는다 */
+  note: string;
+}
+
+/**
+ * ⭐ **교차검산** (2026-09-05, 사장님 「검수할 게 너무 많다」)
+ *
+ * 🔴 정직하게: 지금 우리 값은 **출처가 하나씩뿐**이다(값 592개에 인용 592건).
+ *    그래서 「서로 다른 두 곳이 같은 말을 하면 승인」은 **0건을 승인한다.**
+ *    대신 **우리가 실제로 할 수 있는 검산**을 한다 — 서로 다른 값이 같은 사실을
+ *    가리킬 때 그것들이 아귀가 맞는지 보는 것이다.
+ *
+ *    ① 타이어 규격의 림 인치 == 휠 규격의 인치 (245/45R19 ↔ 8.5Jx19)
+ *       두 값은 표의 다른 칸에서 따로 읽어 온 것이라, 맞으면 둘 다 제대로 읽은 것이다
+ *    ② 앞/뒤가 붙은 값은 **앞도 뒤도 다 있어야** 한다 — 한쪽만 있으면 표를 반만 읽은 것이다
+ *    ③ 이웃과 크게 안 튀는가는 부르는 쪽이 넣어 준다 (`neighborMedian`)
+ *
+ * 🔴 `specFilter` 를 이미 통과한 값에만 쓴다. 이건 그 위에 얹는 두 번째 눈이다.
+ */
+export function crossCheckSpec(
+  row: GroupRow,
+  group: GroupRow[],
+  opts?: { neighborMedian?: number | null },
+): CrossResult {
+  /* ① 타이어 ↔ 휠 인치가 맞나 */
+  if (row.item === "tire_size" || row.item === "wheel_size") {
+    const tire = group.find((r) => r.item === "tire_size" && r.textValue && sameSide(r, row));
+    const wheel = group.find((r) => r.item === "wheel_size" && r.textValue && sameSide(r, row));
+    if (tire?.textValue && wheel?.textValue) {
+      const a = tireRimInch(tire.textValue);
+      const b = wheelRimInch(wheel.textValue);
+      if (a !== null && b !== null) {
+        if (a !== b) return { ok: false, note: `타이어는 ${a}인치인데 휠은 ${b}인치입니다` };
+        return { ok: true, note: `타이어와 휠이 둘 다 ${a}인치로 맞습니다` };
+      }
+    }
+    /* 짝이 없으면 검산할 것이 없다 — 통과시키되 그렇게 적는다 */
+    return { ok: true, note: "모양 검사를 통과했습니다 (맞춰 볼 짝이 없습니다)" };
+  }
+
+  /* ② 앞/뒤가 붙은 값은 짝이 온전해야 한다 */
+  if (row.where) {
+    const mates = group.filter((r) => r.item === row.item && r.where);
+    const hasFront = mates.some((r) => r.where === "앞");
+    const hasRear = mates.some((r) => r.where === "뒤");
+    if (!hasFront || !hasRear) {
+      return { ok: false, note: `앞뒤 중 ${hasFront ? "뒤" : "앞"}가 없습니다 — 표를 반만 읽었을 수 있습니다` };
+    }
+  }
+
+  /* ③ 이웃과 크게 안 튀나 */
+  const med = opts?.neighborMedian;
+  if (row.numMin !== null && med !== null && med !== undefined && med > 0) {
+    const off = Math.abs(row.numMin - med) / med;
+    if (off > 0.3) {
+      return { ok: false, note: `같은 제조사 다른 차들(가운데값 ${med})과 ${Math.round(off * 100)}% 차이가 납니다` };
+    }
+    return { ok: true, note: `같은 제조사 다른 차들과 비슷합니다 (가운데값 ${med})` };
+  }
+
+  return { ok: true, note: "모양·범위·인용 검사를 통과했습니다" };
+}
+
+/** 같은 위치(앞/뒤)끼리 견준다 — 스태거드는 앞은 앞끼리, 뒤는 뒤끼리 맞아야 한다 */
+function sameSide(a: GroupRow, b: GroupRow): boolean {
+  if (!a.where && !b.where) return true;
+  return a.where === b.where;
 }

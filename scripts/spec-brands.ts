@@ -88,25 +88,29 @@ async function main() {
           continue;
         }
         /* 🔴 두 번 돌려도 값이 두 벌 쌓이지 않게 — G80 에서 실제로 겪은 사고다 */
-        const [dup] = await sql<{ id: number }[]>`
+        const dups = await sql<{ id: number }[]>`
           SELECT id FROM vehicle_spec
           WHERE generation_id = ${src.generation_id} AND item = 'oe_tire_brand'
-            AND group_no = ${g.no} AND text_value = ${b.textValue!}
+            AND group_no = ${g.no} AND text_value = ${String(b.textValue ?? "")}
           LIMIT 1`;
-        if (dup) {
+        if (dups[0]) {
           console.log(`   (이미 있음) ${b.textValue} ↔ ${g.label ?? b.groupLabel}`);
           continue;
         }
         console.log(`   ${b.textValue} ↔ ${g.label ?? b.groupLabel} (벌 ${g.no})`);
         if (!write) continue;
 
-        const [row] = await sql<{ id: number }[]>`
+        const brand = String(b.textValue ?? "");
+        const label = g.label ?? b.groupLabel ?? null;
+        const sizeText = String(b.groupLabel ?? "");
+        const inserted = await sql<{ id: number }[]>`
           INSERT INTO vehicle_spec
             (generation_id, group_no, group_label, item, qualifier, text_value, status, risk, created_by)
-          VALUES (${src.generation_id}, ${g.no}, ${g.label ?? b.groupLabel ?? null}, 'oe_tire_brand',
-                  ${sql.json({ 규격: b.groupLabel })}, ${b.textValue}, '검수대기',
+          VALUES (${src.generation_id}, ${g.no}, ${label}, 'oe_tire_brand',
+                  ${sql.json({ 규격: sizeText })}, ${brand}, '검수대기',
                   ${specItem("oe_tire_brand")?.risk ?? "낮음"}, '설명서옮김')
           RETURNING id`;
+        const row = inserted[0];
         await sql`
           INSERT INTO spec_citation (spec_id, source_id, quote, quote_pos)
           VALUES (${row.id}, ${src.id}, ${quote}, ${Math.max(0, src.body_text.indexOf(quote))})

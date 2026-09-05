@@ -41,6 +41,8 @@ export interface SpecGenRow {
   cars: number;
   waiting: number;
   approved: number;
+  /** 기계가 검산해 통과시킨 것 — 🔴 「사장님 확인」과 다르게 보여야 한다 */
+  autoOk: number;
 }
 
 /** 어느 차종에 값이 얼마나 있고 몇 개가 검수를 기다리나 */
@@ -53,11 +55,13 @@ export async function listSpecGenerations(): Promise<SpecGenRow[]> {
     cars: number;
     waiting: number;
     approved: number;
+    auto_ok: number;
   }>(sql`
     SELECT g.variant_key, g.label, m.maker_code, g.manual_url,
            (SELECT count(*)::int FROM vehicle v WHERE v.generation_id = g.id AND v.is_active) AS cars,
            count(*) FILTER (WHERE s.status = '검수대기')::int AS waiting,
-           count(*) FILTER (WHERE s.status = '승인')::int     AS approved
+           count(*) FILTER (WHERE s.status = '승인')::int     AS approved,
+           count(*) FILTER (WHERE s.status = '자동확인')::int  AS auto_ok
     FROM vehicle_generation g
     JOIN vehicle_model m ON m.id = g.model_id
     JOIN vehicle_spec s  ON s.generation_id = g.id
@@ -72,6 +76,7 @@ export async function listSpecGenerations(): Promise<SpecGenRow[]> {
     cars: Number(r.cars),
     waiting: Number(r.waiting),
     approved: Number(r.approved),
+    autoOk: Number(r.auto_ok),
   }));
 }
 
@@ -91,11 +96,17 @@ export interface SpecValueRow {
   groupNo: number;
   groupLabel: string | null;
   status: string;
-  /** 원문에서 이 값이 나온 줄 */
+  /** 원문에서 이 값이 나온 줄 (첫 번째 것 — 옛 화면 호환) */
   quote: string;
+  /** 🔴 인용은 여럿일 수 있다 — 교차검증으로 두 번째 출처가 붙으면 늘어난다 */
+  quotes: string[];
   sourceUrl: string;
   sourceTitle: string | null;
   fetchedOn: string;
+  /** 🔴 출처도 여럿일 수 있다. 하나만 보여 주면 「두 곳에서 봤다」가 안 보인다 */
+  sources: { url: string; title: string | null; fetchedOn: string }[];
+  /** 자동 확인이라면 왜 통과했는지 — 사장님이 「왜 맞다고 됐지」 물으실 때 */
+  autoNote: string | null;
 }
 
 export interface SpecReview {
@@ -116,7 +127,13 @@ function shownValue(
   unit: string | null,
   textValue: string | null,
 ): { shown: string | null; hidden: boolean } {
-  if (risk === "높음" && status !== "승인") return { shown: null, hidden: true };
+  /**
+   * 🔴 위험 「높음」(휠너트 토크·엔진오일 용량)은 확인 전에는 숫자를 안 만든다.
+   *    2026-09-05: 사장님이 「전부 자동으로」 정하셔서 **`자동확인` 도 열린다.**
+   *    대신 화면이 「사장님 확인」과 **다른 배지**로 보여 주고,
+   *    쓰기 전에 한 번 봐 달라는 말을 붙인다 — 값은 열되 출처는 숨기지 않는다.
+   */
+  if (risk === "높음" && status !== "승인" && status !== "자동확인") return { shown: null, hidden: true };
   if (textValue) return { shown: textValue, hidden: false };
   if (numMin === null || !unit) return { shown: null, hidden: false };
   return { shown: bothUnits(Number(numMin), numMax === null ? null : Number(numMax), unit), hidden: false };
@@ -147,13 +164,14 @@ export async function getSpecReview(variantKey: string): Promise<SpecReview | nu
     text_value: string | null;
     status: string;
     risk: Risk;
+    auto_note: string | null;
     quote: string;
     url: string;
     title: string | null;
     fetched_on: string;
   }>(sql`
     SELECT s.id, s.item, s.group_no, s.group_label, s.qualifier,
-           s.num_min, s.num_max, s.unit, s.text_value, s.status, s.risk,
+           s.num_min, s.num_max, s.unit, s.text_value, s.status, s.risk, s.auto_note,
            c.quote, src.url, src.title, to_char(src.fetched_on, 'YYYY-MM-DD') AS fetched_on
     FROM vehicle_spec s
     LEFT JOIN spec_citation c ON c.spec_id = s.id
@@ -163,11 +181,26 @@ export async function getSpecReview(variantKey: string): Promise<SpecReview | nu
     LIMIT 500`);
 
   const groups = new Map<number, { groupNo: number; groupLabel: string | null; rows: SpecValueRow[] }>();
+  /**
+   * 🔴 **값 하나에 인용이 여럿일 수 있다** (2026-09-05).
+   *    지금까지는 값마다 인용이 하나뿐이라 안 드러났지만, 교차검증으로 두 번째 출처가
+   *    붙는 순간 같은 값이 **두 줄로 뜨고** React key 가 겹친다.
+   *    그래서 `s.id` 로 묶고, 출처는 그 값에 딸린 목록으로 모은다.
+   */
+  const seen = new Map<number, SpecValueRow>();
   for (const r of rows) {
+    const already = seen.get(Number(r.id));
+    if (already) {
+      if (r.quote && !already.quotes.includes(r.quote)) already.quotes.push(r.quote);
+      if (r.url && !already.sources.some((x) => x.url === r.url)) {
+        already.sources.push({ url: r.url, title: r.title, fetchedOn: r.fetched_on ?? "" });
+      }
+      continue;
+    }
     const def = specItem(r.item);
     const v = shownValue(r.status, r.risk, r.num_min, r.num_max, r.unit, r.text_value);
     const g = groups.get(r.group_no) ?? { groupNo: r.group_no, groupLabel: r.group_label, rows: [] };
-    g.rows.push({
+    const made: SpecValueRow = {
       id: Number(r.id),
       item: r.item,
       label: def?.label ?? r.item,
@@ -179,10 +212,15 @@ export async function getSpecReview(variantKey: string): Promise<SpecReview | nu
       groupLabel: r.group_label,
       status: r.status,
       quote: r.quote ?? "",
+      quotes: r.quote ? [r.quote] : [],
       sourceUrl: r.url ?? "",
       sourceTitle: r.title,
       fetchedOn: r.fetched_on ?? "",
-    });
+      sources: r.url ? [{ url: r.url, title: r.title, fetchedOn: r.fetched_on ?? "" }] : [],
+      autoNote: r.auto_note ?? null,
+    };
+    g.rows.push(made);
+    seen.set(Number(r.id), made);
     groups.set(r.group_no, g);
   }
 
@@ -224,7 +262,7 @@ export async function approveSpecs(ids: number[]): Promise<SpecResult> {
   const done = await db.execute<{ id: number }>(sql`
     UPDATE vehicle_spec
        SET status = '승인', verified_by = ${g.uid}, verified_at = now(), updated_at = now()
-     WHERE id IN ${sql.raw(`(${clean.join(",")})`)} AND status = '검수대기'
+     WHERE id IN ${sql.raw(`(${clean.join(",")})`)} AND status IN ('검수대기','자동확인')
     RETURNING id`);
   refresh();
   return { ok: true, n: done.length };
