@@ -14,7 +14,13 @@ export const dynamic = "force-dynamic";
  *
  * 돈·별명·차량·규칙은 사장님 전용 — 직원 화면은 기본 정보만.
  */
-export default async function SuppliersPage() {
+export default async function SuppliersPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string }>;
+}) {
+  /* ⭐ 정비 카드 ↗ 이 거래처 이름을 물고 온다 (2026-09-05) — 걸러진 채 열림 */
+  const sp = await searchParams;
   const rows = await listSuppliers();
   const active = rows.filter((r) => r.isActive).length;
   const owner = await hasPerm("finance"); // 한 장(돈·별명·차량) — 돈 관리 스위치
@@ -34,7 +40,7 @@ export default async function SuppliersPage() {
         {rows.length > active && ` · ${rows.length - active}곳 숨김`}
       </p>
 
-      <SupplierManager rows={rows} extras={extras} owner={owner} payerOptions={payerOptions} />
+      <SupplierManager rows={rows} extras={extras} owner={owner} payerOptions={payerOptions} initialQuery={sp.q?.trim() ?? ""} />
 
       <p className="mt-6 text-xs leading-relaxed text-slate-400">
         이름을 고치면 <strong>지난 매입 내역의 거래처 이름도 같이 바뀝니다</strong> — 내역이 옛 이름에

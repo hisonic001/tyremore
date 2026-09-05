@@ -7,6 +7,7 @@ import Link from "@/lib/link";
 import type { SaleRow } from "@/lib/sale-history";
 import { EXCLUSIVE, SPLITTABLE, splitLabel } from "@/lib/payments";
 import { signedStr, showSigned } from "@/lib/signed-input";
+import { SquareArrowOutUpRight } from "lucide-react";
 import { StatusPill } from "@/components/ui/badge";
 import { CollectionPanel } from "./collections";
 import { AddLine, EditableLine } from "./line-edit";
@@ -233,6 +234,23 @@ export function SaleCard({
             <span className="min-w-0 truncate text-[13px] text-slate-500">
               {[s.makerName, s.vehicleModel, s.plateNo].filter(Boolean).join(" ")}
             </span>
+          )}
+          {/* ⭐ 고객·차량 한 장 바로가기 ↗ (사장님 요청 2026-09-05) — 카드 펼침을 막고
+                이동한다 (POS 배지와 같은 검증된 방식). 개인은 차량 한 장(고객 정보 포함),
+                거래처는 거래처 화면(그 이름으로 걸러짐). 둘 다 없으면 칩 없음 */}
+          {(s.supplierName || s.vehicleId !== null) && (
+            <Link
+              href={
+                s.supplierName
+                  ? `/settings/suppliers?q=${encodeURIComponent(s.supplierName)}`
+                  : `/vehicle/${s.vehicleId}`
+              }
+              onClick={(e) => e.stopPropagation()}
+              title={s.supplierName ? "거래처 정보 보기" : "차량·고객 정보 보기"}
+              className="shrink-0 self-center rounded-lg px-1.5 py-1 text-slate-400 active:bg-slate-100 lg:hover:text-slate-600"
+            >
+              <SquareArrowOutUpRight className="size-3.5" />
+            </Link>
           )}
         </div>
 

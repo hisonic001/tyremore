@@ -28,11 +28,14 @@ export function SupplierManager({
   extras,
   owner,
   payerOptions,
+  initialQuery = "",
 }: {
   rows: SupplierRow[];
   extras: SupplierExtras | null;
   owner: boolean;
   payerOptions: string[];
+  /** ⭐ 정비 카드 ↗ 이 거래처 이름을 물고 온다 (2026-09-05) — 처음부터 걸러진 채 열림 */
+  initialQuery?: string;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -43,7 +46,7 @@ export function SupplierManager({
   const [error, setError] = useState<string | null>(null);
   const [showHidden, setShowHidden] = useState(false);
   /** ⭐ 검색 형식 (사장님 요청 2026-08-06) — 거래처가 늘어도 찾을 수 있게 */
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(initialQuery);
 
   const norm = (s: string | null | undefined) => (s ?? "").replace(/\s/g, "").toLowerCase();
   const needle = norm(q);
