@@ -461,11 +461,128 @@ export function parseOilTable(g: Grid): HarvestedSpec[] {
  *    타이어 파서는 타이어 규격처럼 생긴 칸이 있어야 하고,
  *    오일 파서는 `용량`·`사양` 머리글과 아는 항목 이름이 있어야 한다.
  */
+/* ------------------------------------------------------------------ */
+/* ③ 「타이어 에너지 소비효율등급」 표 — 순정 브랜드                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 🔴 국내 타이어 제조사 이름 — 이 목록에 있는 것만 브랜드로 본다.
+ *    표에서 아무 글자나 브랜드로 집으면 「제동력」·「A」 같은 것이 브랜드가 된다.
+ */
+const OE_BRANDS = [
+  "한국", "한국타이어", "Hankook",
+  "금호", "Kumho",
+  "넥센", "Nexen",
+  "미쉐린", "Michelin",
+  "콘티넨탈", "Continental",
+  "브리지스톤", "Bridgestone",
+  "던롭", "Dunlop",
+  "굿이어", "Goodyear",
+  "피렐리", "Pirelli",
+  "요코하마", "Yokohama",
+];
+const BRAND_RE = new RegExp(`(${OE_BRANDS.join("|")})`, "i");
+
+/** 「넥센 (NEXEN)」 → 「넥센 (NEXEN)」 그대로. 「A 콘티넨탈 (Continental)」 → 앞의 잡글자를 뗀다 */
+function brandIn(cell: string): string | null {
+  const m = BRAND_RE.exec(cell);
+  if (!m) return null;
+  const from = m.index;
+  const rest = cell.slice(from).trim();
+  /* 뒤에 규격이 붙어 오면 그 앞까지만 (PDF 가 두 칸을 붙여 놓는 일이 있다) */
+  const cut = /\d{3}\s?\//.exec(rest);
+  return (
+    (cut ? rest.slice(0, cut.index) : rest)
+      .trim()
+      /* 각주 표시 *1 을 뗀다 — 오일 표에서 하는 것과 같다 */
+      .replace(/\s*\*\d+\s*$/, "")
+      .replace(/[|·]+$/, "")
+      .trim() || null
+  );
+}
+
+/** 「235/65 R17 104H」 처럼 하중·속도기호가 붙은 칸에서 규격만 뽑는다 */
+export function tireSizeIn(cell: string): string | null {
+  const m = /(\d{3}\s?\/\s?\d{2}\s?[RZ]\s?\d{2})/.exec(cell.toUpperCase());
+  if (!m) return null;
+  const v = m[1].replace(/\s/g, "");
+  return looksLikeTireSize(v) ? v : null;
+}
+
+/**
+ * ⭐ **순정 타이어 브랜드** (2026-09-05, 사장님 요청)
+ *
+ * 자료실 PDF 「차량정보」 장에 「타이어 에너지 소비효율등급」 표가 있고, 거기에
+ * **제조사와 규격이 짝지어** 있다. 새로 받아 올 것 없이 이미 가진 원문에 들어 있었다.
+ *
+ * 🔴 **같은 줄에 브랜드와 규격이 둘 다 있을 때만 짝으로 본다.**
+ *    PDF 가 브랜드 칸을 세로로 합쳐 놓으면(투싼 TL) 브랜드가 가운데 줄에만 찍히는데,
+ *    위아래 줄까지 그 브랜드로 우기면 **틀린 짝**이 된다.
+ *    같은 줄만 취하면 **모자랄 수는 있어도 틀리지는 않는다.** 틀린 것보다 모자란 게 낫다.
+ *
+ * 🔴 모델명(크로스클라이밋 같은 것)은 이 표에 **없다.** 브랜드와 규격까지다.
+ */
+export function parseTireLabelTable(g: Grid): HarvestedSpec[] {
+  const head = Math.max(1, g.headRows);
+  const width = g.cells[0]?.length ?? 0;
+  if (g.cells.length <= head || width < 2) return [];
+  const bodyRows = g.cells.slice(head);
+
+  /* 브랜드 칸·규격 칸을 **내용으로** 찾는다 — 머리글은 PDF 에서 자주 어긋난다 */
+  let brandCol = -1;
+  let sizeCol = -1;
+  for (let c = 0; c < width; c++) {
+    const cells = bodyRows.map((r) => (r[c] ?? "").trim());
+    if (brandCol < 0 && cells.filter((v) => brandIn(v)).length >= 1) brandCol = c;
+    if (sizeCol < 0 && cells.filter((v) => tireSizeIn(v)).length >= 2) sizeCol = c;
+  }
+  if (brandCol < 0 || sizeCol < 0) return [];
+
+  const out: HarvestedSpec[] = [];
+  for (const row of bodyRows) {
+    const brand = brandIn((row[brandCol] ?? "").trim());
+    /* 브랜드 칸 안에 규격이 같이 붙어 온 경우도 있다 (싼타페 HEV) */
+    const size = tireSizeIn((row[sizeCol] ?? "").trim()) ?? tireSizeIn((row[brandCol] ?? "").trim());
+    if (!brand || !size) continue;
+    out.push({
+      groupNo: 0, // 아래 harvestGrids 에서 같은 규격의 벌 번호로 바꿔 단다
+      groupLabel: size,
+      item: "oe_tire_brand",
+      textValue: brand,
+      quote: rowToText(row),
+      qualifier: { 규격: size },
+    } as HarvestedSpec);
+  }
+  return out;
+}
+
 export function harvestGrids(_title: string, grids: Grid[]): HarvestedSpec[] {
   const out: HarvestedSpec[] = [];
+  const brands: HarvestedSpec[] = [];
   for (const g of grids) {
     out.push(...parseTireWheelTable(g));
     out.push(...parseOilTable(g));
+    brands.push(...parseTireLabelTable(g));
+  }
+
+  /**
+   * 🔴 브랜드를 **규격이 같은 벌**에 붙인다 (2026-09-05).
+   *    붙일 벌을 못 찾으면 **버린다** — 어느 휠의 순정인지 모르는 브랜드는 쓸 데가 없고,
+   *    엉뚱한 벌에 붙이면 사장님이 다른 규격을 순정으로 착각하신다.
+   */
+  /** 「P235/60R18」과 「235/60R18」이 같은 규격이 되게 — 접두사를 떼고 견준다 */
+  const sizeKey = (v: string) => v.replace(/\s/g, "").toUpperCase().replace(/^\(?P\)?|^LT/, "");
+  const groupOfSize = new Map<string, number>();
+  for (const c of out) {
+    if (c.item !== "tire_size" || !c.textValue) continue;
+    groupOfSize.set(sizeKey(c.textValue), c.groupNo);
+  }
+  for (const b of brands) {
+    const key = sizeKey(b.groupLabel ?? "");
+    const no = groupOfSize.get(key);
+    if (no === undefined) continue;
+    const label = out.find((c) => c.groupNo === no)?.groupLabel ?? b.groupLabel;
+    out.push({ ...b, groupNo: no, groupLabel: label });
   }
   /* 같은 항목·같은 묶음·같은 조건이 두 번 나오면 한 번만 */
   const seen = new Set<string>();

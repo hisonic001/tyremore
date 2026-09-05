@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { bodyTextOf, gridToText, parseTable, parseTables, pageTitle, topicBody } from "./spec-html";
-import { harvestGrids, parseOilTable, parseTireWheelTable, readNumCell, unitsInHeader, viscosityIn } from "./spec-manual";
+import { harvestGrids, parseOilTable, parseTireLabelTable, parseTireWheelTable, readNumCell, tireSizeIn, unitsInHeader, viscosityIn } from "./spec-manual";
 import { specFilter } from "./spec-verify";
 
 /**
@@ -425,5 +425,57 @@ describe("앞뒤가 같은 표는 건드리지 않는다", () => {
     for (const c of got.filter((x) => x.item === "tire_size")) {
       assert.equal(c.qualifier?.["위치"], undefined);
     }
+  });
+});
+
+/**
+ * 🔴 **순정 타이어 브랜드** (2026-09-05, 사장님 요청)
+ *    현대 자료실 PDF 「차량정보」 장의 「타이어 에너지 소비효율등급」 표 모양.
+ *    실제 원문(2017 싼타페 DM)에서 그대로 가져온 줄들이다.
+ */
+const BRAND_TABLE = `
+<table><thead><tr><th><p>타이어 제조사</p></th><th><p>사이즈</p></th><th><p>회전저항</p></th><th><p>제동력</p></th></tr></thead><tbody>
+  <tr><td><p>한국(Hankook)</p></td><td><p>P235/60R18</p></td><td><p>3</p></td><td><p>3</p></td></tr>
+  <tr><td><p>금호(Kumho)</p></td><td><p>235/55R19</p></td><td><p>3</p></td><td><p>3</p></td></tr>
+  <tr><td><p>미쉐린(Michelin)*1</p></td><td><p>235/55 R19 101H</p></td><td><p>4</p></td><td><p>4</p></td></tr>
+  <tr><td><p>제동력(G)</p></td><td><p></p></td><td><p></p></td><td><p></p></td></tr>
+</tbody></table>`;
+
+describe("순정 타이어 브랜드 — 이미 가진 원문에 있었다", () => {
+  const got = parseTireLabelTable(parseTable(BRAND_TABLE));
+
+  it("브랜드와 규격을 짝지어 읽는다", () => {
+    assert.equal(got.length, 3, `3짝이어야 하는데 ${got.length}`);
+    assert.equal(got[0].textValue, "한국(Hankook)");
+    /* 🔴 「P」 접두사는 떼고 담는다 — 우리 규격값과 짝지으려면 모양이 같아야 한다 */
+    assert.equal(got[0].groupLabel, "235/60R18");
+  });
+
+  it("각주 표시(*1)를 뗀다", () => {
+    const m = got.find((c) => String(c.textValue).includes("미쉐린"));
+    assert.equal(m?.textValue, "미쉐린(Michelin)");
+  });
+
+  it("하중·속도기호가 붙어도 규격만 뽑는다 — 235/55 R19 101H", () => {
+    assert.equal(tireSizeIn("235/55 R19 101H"), "235/55R19");
+    assert.equal(tireSizeIn("A 콘티넨탈 (Continental) 235/55 R19 101H"), "235/55R19");
+  });
+
+  it("🔴 브랜드가 아닌 글자는 브랜드로 안 센다 — 「제동력(G)」 같은 것", () => {
+    assert.ok(!got.some((c) => String(c.textValue).includes("제동력")));
+  });
+
+  it("🔴 규격이 없는 줄은 버린다 — 짝을 못 지으면 쓸 데가 없다", () => {
+    const one = parseTireLabelTable(
+      parseTable(`<table><thead><tr><th><p>타이어 제조사</p></th><th><p>사이즈</p></th></tr></thead><tbody>
+        <tr><td><p>금호</p></td><td><p></p></td></tr>
+        <tr><td><p></p></td><td><p>235/55R19</p></td></tr>
+        <tr><td><p></p></td><td><p>225/60R17</p></td></tr></tbody></table>`),
+    );
+    assert.equal(one.length, 0, "브랜드만 있고 같은 줄에 규격이 없으면 짝이 아니다");
+  });
+
+  it("타이어 표가 아니면 아무것도 안 낸다", () => {
+    assert.deepEqual(parseTireLabelTable(parseTable(TIRE_TABLE)), []);
   });
 });
