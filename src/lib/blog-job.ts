@@ -16,6 +16,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { blogJob } from "@/db/schema";
 import { getSession, hasPerm } from "./auth";
+import { AGENT_PROTOCOL, OUTDATED_MSG } from "./agent-version";
 
 /** 대리인이 살아 있다고 볼 시간 — 15초마다 찍으므로 60초면 넉넉하다 */
 const ALIVE_SEC = 60;
@@ -34,6 +35,12 @@ export interface BlogJobRow {
 
 export interface AgentStatus {
   alive: boolean;
+  /**
+   * 🔴 대리인이 **옛 코드로 돌고 있나** (2026-09-05).
+   *    대리인은 켜 둔 창에서 계속 도는 프로그램이라 다시 켜기 전까지 옛 코드로 돈다.
+   *    그걸 모르고 새 단추를 누르면 조용히 엉뚱한 일이 일어났다 — 이제 미리 막는다.
+   */
+  outdated: boolean;
   /** 'HH:MM:SS' — 마지막으로 살아 있다고 찍은 시각 */
   lastSeen: string | null;
   version: string | null;
@@ -51,17 +58,24 @@ export async function blogAgentStatus(): Promise<AgentStatus> {
     last_seen: string | null;
     version: string | null;
     host: string | null;
+    protocol: number | null;
   }>(sql`
     SELECT now() - last_seen < ${`${ALIVE_SEC} seconds`}::interval AS alive,
            to_char(last_seen AT TIME ZONE 'Asia/Seoul', 'HH24:MI:SS') AS last_seen,
-           version, host
+           version, host, protocol
     FROM agent_heartbeat
     WHERE name = 'blog'
     ORDER BY last_seen DESC
     LIMIT 1`);
   const r = rows[0];
-  if (!r) return { alive: false, lastSeen: null, version: null, host: null };
-  return { alive: !!r.alive, lastSeen: r.last_seen, version: r.version, host: r.host };
+  if (!r) return { alive: false, outdated: false, lastSeen: null, version: null, host: null };
+  return {
+    alive: !!r.alive,
+    outdated: Number(r.protocol ?? 0) < AGENT_PROTOCOL,
+    lastSeen: r.last_seen,
+    version: r.version,
+    host: r.host,
+  };
 }
 
 /**
@@ -84,6 +98,8 @@ export async function requestBlogJob(
         "매장 PC 가 꺼져 있습니다 — 글은 그 PC 에서 만들어집니다. PC 를 켜신 뒤 다시 눌러 주세요.",
     };
   }
+  /* 🔴 옛 대리인은 새 주문을 조용히 엉뚱하게 처리한다 — 아예 안 받는다 */
+  if (agent.outdated) return { ok: false, error: OUTDATED_MSG };
 
   const [open] = await db
     .select({ id: blogJob.id })

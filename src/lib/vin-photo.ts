@@ -14,6 +14,7 @@ import { db } from "@/db";
 import { blogJob } from "@/db/schema";
 import { getSession } from "./auth";
 import { blogAgentStatus } from "./blog-job";
+import { OUTDATED_MSG } from "./agent-version";
 import type { CleanRead } from "./vin-photo-core";
 
 /** 사진 한 장의 상한 — 화면에서 긴 변 1600px 로 줄여 보낸다. 그래도 넘으면 거절 */
@@ -51,6 +52,11 @@ export async function requestVinScan(
       error: "매장 PC 가 꺼져 있습니다 — 사진은 그 PC 에서 읽습니다. 켜신 뒤 다시 눌러 주세요.",
     };
   }
+  /**
+   * 🔴 옛 대리인은 「차량사진」 주문을 몰라 **조용히 원고 만들기로 흘려보냈다**
+   *    (2026-09-05 실제로 났다 — 사진을 올려도 아무 일도 안 일어났다). 아예 안 받는다.
+   */
+  if (agent.outdated) return { ok: false, error: OUTDATED_MSG };
 
   /* 🔴 순차로 — 동시 질의가 풀을 채운 전례가 있다 */
   const rows = await db.execute<{ id: number }>(sql`
@@ -70,15 +76,36 @@ export async function requestVinScan(
   return { ok: true, scanId };
 }
 
-/** 다 읽었는지 화면이 3초마다 물어본다 */
+/**
+ * 다 읽었는지 화면이 3초마다 물어본다.
+ *
+ * 🔴 **주문이 실패했으면 사진도 실패로 바꾼다** (2026-09-05).
+ *    예전에는 주문만 실패하고 `vin_scan` 은 「대기」로 남아, 화면이 **영원히
+ *    「읽고 있습니다」**를 보여 줬다. 사장님 눈에는 아무 일도 안 일어난 것으로 보였다.
+ */
 export async function getVinScan(scanId: number): Promise<ScanRow | null> {
   const rows = await db.execute<{
     id: number;
     status: string;
     error: string | null;
     result: (CleanRead & { warn: string[]; vinAgreed?: boolean }) | null;
-  }>(sql`SELECT id, status, error, result FROM vin_scan WHERE id = ${scanId}`);
+    job_error: string | null;
+  }>(sql`
+    SELECT s.id, s.status, s.error, s.result,
+           (SELECT j.error FROM blog_job j
+             WHERE j.kind = '차량사진' AND j.status = '실패'
+               AND (j.payload->>'scanId')::bigint = s.id
+             ORDER BY j.id DESC LIMIT 1) AS job_error
+    FROM vin_scan s WHERE s.id = ${scanId}`);
   const r = rows[0];
   if (!r) return null;
+
+  /* 주문은 실패했는데 사진이 「대기」로 굳어 있으면 여기서 끊어 준다 */
+  if (r.status === "대기" && r.job_error) {
+    await db.execute(sql`
+      UPDATE vin_scan SET status='실패', error=${r.job_error}, image=NULL, finished_at=now()
+      WHERE id = ${scanId} AND status = '대기'`);
+    return { id: Number(r.id), status: "실패", error: r.job_error, result: null };
+  }
   return { id: Number(r.id), status: r.status, error: r.error, result: r.result };
 }

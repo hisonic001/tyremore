@@ -82,8 +82,12 @@ export function BlogJobStatus({
   return (
     <div className="flex flex-col items-end gap-2">
       <div className="flex items-center gap-2">
-        <StatusPill tone={agent.alive ? "success" : "neutral"}>
-          {agent.alive ? `매장 PC 켜짐${agent.host ? ` (${agent.host})` : ""}` : "매장 PC 꺼짐"}
+        <StatusPill tone={agent.alive && !agent.outdated ? "success" : agent.outdated ? "warn" : "neutral"}>
+          {!agent.alive
+            ? "매장 PC 꺼짐"
+            : agent.outdated
+              ? "대리인 옛 버전"
+              : `매장 PC 켜짐${agent.host ? ` (${agent.host})` : ""}`}
         </StatusPill>
         {busy ? (
           <Button variant="secondary" pending={pending} onClick={stop}>
@@ -99,6 +103,14 @@ export function BlogJobStatus({
           </Link>
         )}
       </div>
+
+      {agent.alive && agent.outdated && (
+        /* 🔴 옛 대리인은 새 주문을 조용히 엉뚱하게 처리한다 (2026-09-05 실제로 났다) */
+        <Notice tone="warn" className="max-w-xs">
+          매장 PC 의 대리인이 <strong>옛 버전</strong>입니다. 그 PC 에서 대리인 창을 닫고 다시
+          켜 주세요 — 그 전에는 새 기능이 엉뚱하게 돕니다.
+        </Notice>
+      )}
 
       {!agent.alive && (
         <Notice tone="warn" className="max-w-xs">

@@ -39,8 +39,12 @@ export function FoldersUI({ folders, agent }: { folders: FolderRow[]; agent: Age
   return (
     <div className="mt-4">
       <div className="flex items-center justify-between gap-2">
-        <StatusPill tone={agent.alive ? "success" : "neutral"}>
-          {agent.alive ? `매장 PC 켜짐${agent.host ? ` (${agent.host})` : ""}` : "매장 PC 꺼짐"}
+        <StatusPill tone={agent.alive && !agent.outdated ? "success" : agent.outdated ? "warn" : "neutral"}>
+          {!agent.alive
+            ? "매장 PC 꺼짐"
+            : agent.outdated
+              ? "대리인 옛 버전"
+              : `매장 PC 켜짐${agent.host ? ` (${agent.host})` : ""}`}
         </StatusPill>
         <Button variant="secondary" pending={pending} disabled={!agent.alive} onClick={() => scan()}>
           <RefreshCw className="size-4" /> 사진 다시 훑기

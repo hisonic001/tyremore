@@ -22,6 +22,7 @@ import { execFileSync } from "node:child_process";
 import { spawn } from "node:child_process";
 import os from "node:os";
 import postgres from "postgres";
+import { AGENT_PROTOCOL, isKnownJobKind } from "../src/lib/agent-version";
 
 const POLL_MS = 5_000;
 const HEARTBEAT_MS = 15_000;
@@ -44,10 +45,10 @@ function claudeVersion(): string {
 async function beat(version: string) {
   // 🔴 열쇠가 (name, host) — 매장 PC 가 두 대라 서로 덮어쓰면 안 된다
   await sql`
-    INSERT INTO agent_heartbeat (name, host, last_seen, version)
-    VALUES ('blog', ${os.hostname()}, now(), ${version})
+    INSERT INTO agent_heartbeat (name, host, last_seen, version, protocol)
+    VALUES ('blog', ${os.hostname()}, now(), ${version}, ${AGENT_PROTOCOL})
     ON CONFLICT (name, host) DO UPDATE
-      SET last_seen = now(), version = EXCLUDED.version`.catch(() => {});
+      SET last_seen = now(), version = EXCLUDED.version, protocol = EXCLUDED.protocol`.catch(() => {});
 }
 
 async function appendLog(id: number, line: string) {
@@ -95,6 +96,24 @@ async function runOne(job: Claimed): Promise<void> {
    * 단건(폼으로 쓰기 · 「다르게 한 번 더」)이면 그 시공만, 아니면 오늘치 여러 건.
    * 🔴 폼은 명령줄로 안 넘긴다 — 한글이 깨진다. `--job` 을 주고 CLI 가 DB 에서 읽는다.
    */
+  /**
+   * 🔴 **모르는 주문은 절대 흘려보내지 않는다** (2026-09-05, 실제로 크게 데었다).
+   *
+   *    예전에는 갈래에 안 걸리면 마지막 갈래(원고 만들기)로 떨어졌다. 그래서
+   *    사흘 묵은 대리인이 「발행사진」 주문을 받아 **원고 4건을 만들었고**,
+   *    「차량사진」 주문은 원고 만들기로 가서 **아무 일도 안 일어났다.**
+   *    사장님은 왜 그런지 알 길이 없었다. 조용한 실패가 가장 나쁘다.
+   */
+  if (!isKnownJobKind(job.kind)) {
+    const msg = `이 대리인은 「${job.kind}」 주문을 모릅니다 — 대리인 창을 닫고 다시 켜 주세요`;
+    log(`요청 #${job.id} — ${msg}`);
+    await appendLog(job.id, msg);
+    await sql`
+      UPDATE blog_job SET status='실패', error=${msg}, finished_at=now()
+      WHERE id=${job.id} AND status='실행중'`;
+    return;
+  }
+
   const cliArgs =
     job.kind === "스캔"
       ? ["tsx", "scripts/blog-scan.ts", "--agent", "--job", String(job.id)]

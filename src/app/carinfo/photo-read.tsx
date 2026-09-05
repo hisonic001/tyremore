@@ -45,8 +45,11 @@ export function PhotoRead({
    *    탭이 안 보이면 쉰다 (2026-08-07 풀러 마비 사건의 교훈).
    */
   const inflight = useRef(false);
+  /** 얼마나 기다렸나 — 오래 걸리면 사장님께 말해 준다 (조용히 도는 것이 가장 나쁘다) */
+  const [waited, setWaited] = useState(0);
   useEffect(() => {
     if (!busy || scanId === null) return;
+    const tick = setInterval(() => setWaited((n) => n + 3), 3000);
     const t = setInterval(() => {
       if (document.hidden || inflight.current) return;
       inflight.current = true;
@@ -56,7 +59,10 @@ export function PhotoRead({
           inflight.current = false;
         });
     }, 3000);
-    return () => clearInterval(t);
+    return () => {
+      clearInterval(t);
+      clearInterval(tick);
+    };
   }, [busy, scanId]);
 
   /**
@@ -121,8 +127,8 @@ export function PhotoRead({
             차명·형식·연식·차대번호를 읽어 드립니다.
           </p>
         </div>
-        <StatusPill tone={agent.alive ? "success" : "neutral"}>
-          {agent.alive ? "매장 PC 켜짐" : "매장 PC 꺼짐"}
+        <StatusPill tone={agent.alive && !agent.outdated ? "success" : agent.outdated ? "warn" : "neutral"}>
+          {!agent.alive ? "매장 PC 꺼짐" : agent.outdated ? "대리인 옛 버전" : "매장 PC 켜짐"}
         </StatusPill>
       </div>
 
@@ -140,6 +146,16 @@ export function PhotoRead({
           사진은 매장 PC 에서 읽습니다 — 클로드 구독이 그 PC 에 로그인되어 있기 때문입니다.
           그 PC 를 켜 두시면 폰에서 찍어도 됩니다.
           {agent.lastSeen ? ` (마지막 확인 ${agent.lastSeen})` : ""}
+        </Notice>
+      ) : agent.outdated ? (
+        /*
+          🔴 옛 대리인은 이 주문을 몰라 **조용히 원고 만들기로 흘려보냈다** (2026-09-05).
+             사진을 올려도 아무 일도 안 일어났다. 그래서 아예 못 누르게 막고 무엇을
+             하시면 되는지 말한다.
+        */
+        <Notice tone="warn" className="mt-2">
+          매장 PC 의 대리인이 <strong>옛 버전</strong>입니다. 그 PC 에서 대리인 창을 닫고
+          다시 켜 주시면(<span className="font-mono">blog-agent</span>) 이 단추가 열립니다.
         </Notice>
       ) : (
         <div className="mt-2 flex flex-wrap gap-2">
@@ -171,7 +187,9 @@ export function PhotoRead({
 
       {busy && (
         <p className="mt-2 text-[13px] text-slate-500">
-          매장 PC 가 사진을 읽고 있습니다 — 보통 10~20초 걸립니다.
+          {waited < 60
+            ? "매장 PC 가 사진을 읽고 있습니다 — 보통 10~20초 걸립니다."
+            : `${waited}초째 기다리는 중입니다 — 매장 PC 대리인이 멈춰 있을 수 있습니다.`}
         </p>
       )}
 
