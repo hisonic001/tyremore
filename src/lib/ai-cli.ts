@@ -176,6 +176,12 @@ export async function generateJsonViaCli<T>(opts: {
    *    임시 폴더에 `p00.jpg` 로 복사한 뒤 그 폴더를 준다 (blog-photo-worker.ts).
    */
   imageDir?: string;
+  /**
+   * ⭐ 열어 줄 도구 (2026-09-05) — 지금은 제원 검색만 쓴다: `["WebSearch", "WebFetch"]`.
+   * 🔴 **모델에게 값을 말하게 하려고 여는 것이 아니다.** 「어디를 볼지」만 고르게 하고,
+   *    값은 우리가 그 페이지 원문에서 뽑는다. 검색은 예전에 세 번 거짓말했다.
+   */
+  tools?: string[];
 }): Promise<CliResult<T>> {
   const model = opts.model ?? "opus";
   const timeoutMs = opts.timeoutMs ?? 6 * 60_000;
@@ -198,7 +204,9 @@ export async function generateJsonViaCli<T>(opts: {
      * 사진이 있으면 Read 만 열어 준다 (그 임시 폴더만). 없으면 도구 없이 글만 쓴다.
      * 🔴 --add-dir 에는 **임시 폴더**만 준다 — 원본 폴더명에 번호판이 들어 있다.
      */
-    ...(opts.imageDir ? ["--tools", "Read", "--add-dir", opts.imageDir] : ["--tools", ""]),
+    ...(opts.imageDir
+      ? ["--tools", ["Read", ...(opts.tools ?? [])].join(","), "--add-dir", opts.imageDir]
+      : ["--tools", (opts.tools ?? []).join(",")]),
     "--no-session-persistence",
     "--permission-mode",
     "dontAsk",
