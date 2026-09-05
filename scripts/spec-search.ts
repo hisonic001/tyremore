@@ -124,7 +124,16 @@ async function main() {
       process.exitCode = 1;
       return;
     }
-    say(`${gen.label} (${key}) 의 오일 토크를 찾습니다`);
+    /**
+     * 🔴 차 이름·제조사를 뽑아 둔다 (2026-09-05).
+     *    이게 없으면 「Most Honda Civic … 29 ft-lb」를 우리 차 값으로 집어 온다 — 실제로 그랬다.
+     */
+    const [mk] = await sql<{ name_ko: string; maker_code: string }[]>`
+      SELECT m.name_ko, m.maker_code FROM vehicle_generation g
+      JOIN vehicle_model m ON m.id = g.model_id WHERE g.id = ${gen.id}`;
+    const modelName = (mk?.name_ko ?? gen.label).split("(")[0].trim();
+    const makerName = mk?.maker_code ?? "";
+    say(`${gen.label} (${key}) 의 오일 토크를 찾습니다 — 차 이름 「${modelName}」로 남의 차를 거릅니다`);
 
     /* ⓪ 주소를 직접 주셨으면 검색을 건너뛴다 — 지금은 이게 정상 경로다 */
     const given: string[] = [];
@@ -132,6 +141,22 @@ async function main() {
 
     /* ① 모델은 **주소만** 고른다 */
     const { generateJsonViaCli } = await import("../src/lib/ai-cli");
+    /**
+     * 🔴 **스스로 찾는 길은 막아 둔다** (2026-09-05 실측).
+     *    매장 PC 클로드는 `-p`(창 없는) 모드에서 **웹 도구를 아예 실행하지 못한다** —
+     *    `web_search_requests: 0` 인데도 주소를 **지어내서** 답한다. 신뢰 등록·권한 허용을
+     *    둘 다 해 봤지만 카운터는 0 그대로였다. 지어낸 주소를 받아 오는 것보다
+     *    **아예 안 하는 것이 낫다.**
+     */
+    if (!given.length) {
+      const msg =
+        "주소를 직접 주세요 (--url ...). 매장 PC 클로드는 창 없는 모드에서 웹 검색을 못 하고, " +
+        "권한이 막혀도 주소를 지어내서 답합니다 — 그래서 스스로 찾게 두지 않습니다.";
+      say(agent ? `ERROR=${msg}` : `❌ ${msg}`);
+      process.exitCode = 1;
+      return;
+    }
+
     const found = given.length
       ? { data: { urls: given, note: "사장님이 주신 주소" } as Found }
       : await generateJsonViaCli<Found>({
@@ -173,7 +198,8 @@ async function main() {
           continue;
         }
         const text = htmlToText(await res.text());
-        const hits = findTorques(text);
+        /* 🔴 차 이름을 넘긴다 — 남의 차 줄과 일반론을 걸러 내는 열쇠다 */
+        const hits = findTorques(text, { model: modelName, maker: makerName });
         say(`   ${host} — 토크 ${hits.length}개`);
         if (hits.length) sources.push({ host, url, text, hits });
       } catch {

@@ -58,8 +58,38 @@ const SANE: Record<TorqueKind, { min: number; max: number }> = {
  * 🔴 **한 줄 안에 「무엇의 토크인지」와 「숫자·단위」가 같이 있어야** 한다.
  *    멀리 떨어진 숫자를 끌어오면 엉뚱한 부품의 토크가 붙는다.
  */
-export function findTorques(text: string): TorqueHit[] {
+/**
+ * 🔴 **얼버무린 말은 규정값이 아니다** (2026-09-05, 실제로 당했다).
+ *    `engineoiljournal.com` 에서 「typical torque … is 20–30 ft-lb for most passenger vehicles」를
+ *    쏘렌토 값으로 읽어 40.7 N·m 를 만들 뻔했다. `spec-verify` 의 한국어 HEDGE 와 같은 뜻이다.
+ */
+const HEDGE_EN =
+  /\b(typical|typically|most|generally|usually|average|approximately|about|around|roughly|rule of thumb|varies)\b/i;
+const HEDGE_KO = /일반적으로|대체로|대략|보통은|대부분|평균적으로|정도입니다|알려져\s*있/;
+
+/**
+ * 🔴 **다른 차 이야기를 우리 차 값으로 읽으면 안 된다** (2026-09-05, 실제로 당했다).
+ *    같은 페이지에서 「Most **Honda Civic** oil drain plugs are torqued to 29 ft-lb」를
+ *    쏘렌토 값으로 집어 왔다. 줄에 다른 제조사 이름이 있으면 우리 것이 아니다.
+ */
+const MAKERS =
+  /\b(honda|toyota|nissan|mazda|subaru|mitsubishi|ford|chevrolet|chevy|gmc|dodge|jeep|ram|bmw|mercedes|benz|audi|volkswagen|vw|volvo|porsche|lexus|acura|infiniti|tesla|renault|peugeot|citroen|fiat|land rover|jaguar|mini|현대|기아|제네시스|르노|쉐보레|쌍용|혼다|도요타|토요타|닛산|마쓰다|스바루|포드|벤츠|아우디|폭스바겐|볼보|포르쉐|렉서스)\b/i;
+
+export interface FindOpts {
+  /** 우리 차 이름 — 이 낱말이 줄에 있으면 다른 제조사가 같이 있어도 우리 것으로 본다 */
+  model?: string;
+  /** 우리 제조사 — 「kia」·「기아」 */
+  maker?: string;
+}
+
+export function findTorques(text: string, opts: FindOpts = {}): TorqueHit[] {
   const out: TorqueHit[] = [];
+  const mine = [opts.model, opts.maker].filter((v): v is string => !!v && v.length >= 2);
+  /* 차 이름은 그냥 낱말이라 정규식이 필요 없다 — 글자 그대로 찾는다 */
+  const isMine = (line: string) => {
+    const low = line.toLowerCase();
+    return mine.some((m) => low.includes(m.toLowerCase()));
+  };
   const lines = text
     .split(/\n|(?<=[.。])\s+/)
     .map((l) => l.replace(/\s+/g, " ").trim())
@@ -70,6 +100,11 @@ export function findTorques(text: string): TorqueHit[] {
     const isFilter = FILTER_RE.test(line);
     /* 둘 다 걸린 줄은 어느 쪽 값인지 알 수 없다 — 버린다 */
     if (isDrain === isFilter) continue;
+
+    /* 🔴 얼버무린 말은 규정값이 아니다 */
+    if (HEDGE_EN.test(line) || HEDGE_KO.test(line)) continue;
+    /* 🔴 다른 제조사 이야기면 우리 차 값이 아니다 (우리 차 이름이 같이 있으면 예외) */
+    if (MAKERS.test(line) && !isMine(line)) continue;
     const m = NUM_UNIT_RE.exec(line);
     if (!m) continue;
 

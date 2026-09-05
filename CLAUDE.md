@@ -636,7 +636,7 @@ C:\Users\info\OneDrive\문서\통합자동화\   ← 사장님이 새 파일을 
 - [x] ~~자동 백업~~ — ✅ **구성 완료** (2026-08-05). 매장 PC 작업 스케줄러
       「타이어모어 DB 백업」이 매일 13:30 `scripts/backup-db.bat` 실행 (놓치면 PC 켜질 때
       보충). 성공 기록은 `backup_log` → 설정 화면이 이틀 넘으면 경고.
-      로그: `tyremore-dataackupackup.log`.
+      로그: `tyremore-data\backup\backup.log`.
 - [x] ~~API 키 스크린샷 정리~~ — ✅ **삭제 완료** (2026-08-05, 사장님 지시).
       본사 API 키가 찍힌 스크린샷은 더 이상 없다. 정보는 `docs/04` 2장에 정리돼 있다.
 - [x] ~~`hisonic001/MARS-auto-register` 공개 저장소~~ — ✅ **비공개 전환 완료**

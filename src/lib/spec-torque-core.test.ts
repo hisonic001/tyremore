@@ -116,3 +116,36 @@ describe("두 곳이 같은 값을 말하는가", () => {
     assert.equal(r?.conflict, false);
   });
 });
+
+/**
+ * 🔴 **2026-09-05 에 실제로 당한 두 가지.** engineoiljournal.com 에서 쏘렌토 값이라며
+ *    ① 「typical … for most passenger vehicles」(일반론)와
+ *    ② 「Most Honda Civic … 29 ft-lb」(다른 차)를 집어 왔다.
+ *    그대로 뒀으면 40.7 N·m 라는 엉뚱한 토크가 들어갔다.
+ */
+describe("남의 차·일반론을 우리 값으로 읽지 않는다", () => {
+  it("🔴 「typical … most passenger vehicles」는 규정값이 아니다", () => {
+    const got = findTorques("The typical torque for an oil drain plug is 20-30 ft-lb (27-40 Nm) for most passenger vehicles.");
+    assert.deepEqual(got, []);
+  });
+
+  it("🔴 「일반적으로 20~30 N·m」도 아니다 — 검색이 실제로 이렇게 답했다", () => {
+    assert.deepEqual(findTorques("드레인 플러그는 일반적으로 20~30 N·m 정도입니다"), []);
+  });
+
+  it("🔴 다른 제조사 이야기는 우리 차 값이 아니다", () => {
+    const got = findTorques("Most Honda Civic oil drain plugs are torqued to 29 ft-lb", { model: "Sorento", maker: "Kia" });
+    assert.deepEqual(got, []);
+  });
+
+  it("우리 차 이름이 같이 있으면 제조사가 적혀 있어도 읽는다", () => {
+    const got = findTorques("Kia Sorento drain plug torque: 35 Nm", { model: "Sorento", maker: "Kia" });
+    assert.equal(got.length, 1);
+    assert.equal(got[0].nm, 35);
+  });
+
+  it("제조사 이름이 아예 없는 줄은 예전처럼 읽는다", () => {
+    const got = findTorques("Drain plug torque 35 Nm", { model: "Sorento" });
+    assert.equal(got[0].nm, 35);
+  });
+});
