@@ -12,7 +12,8 @@ import { House, Plus, Settings, Wallet, Wrench } from "lucide-react";
  *   /sale 은 하단 결제 바가 있어 기존 HomeButton(FAB)이 그 화면 전용으로 남는다.
  */
 const TABS = [
-  { href: "/", label: "홈", Icon: House, match: (p: string) => p === "/" || p.startsWith("/product") || p.startsWith("/stock") },
+  // 정비 조회(/carinfo)는 홈 소속 (2026-09-05) — 탭 5칸은 늘리지 않는다
+  { href: "/", label: "홈", Icon: House, match: (p: string) => p === "/" || p.startsWith("/product") || p.startsWith("/stock") || p.startsWith("/carinfo") },
   {
     href: "/sales",
     label: "정비 내역",

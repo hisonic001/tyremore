@@ -11,6 +11,7 @@ import {
   BookMarked,
   BookOpen,
   Boxes,
+  Car,
   ChevronRight,
   ClipboardList,
   Megaphone,
@@ -54,6 +55,7 @@ const ICONS: Record<string, ReactNode> = {
   "/stock": <Boxes className="size-5" />,
   "/settings/suppliers": <Truck className="size-5" />,
   "/settings/services": <Wrench className="size-5" />,
+  "/carinfo": <Car className="size-5" />,
   "/settings/spec": <BookMarked className="size-5" />,
   "/receivables": <BookOpen className="size-5" />,
   "/settings/shop": <Store className="size-5" />,
@@ -79,6 +81,10 @@ export default async function SettingsPage() {
 
   /* ⭐ 정비사도 MARS 평가 리포트를 볼 수 있게 켜 놨으면 여기로 들어간다 (2026-08-10) */
   const techMarsLink = session?.role === "tech" && (await marsReportTechAllowed());
+  /* ⭐ 제원 검수 대기 수 (2026-09-05) — 승인 전엔 앱 어디에도 숫자가 안 열린다는 걸 보이게 */
+  const [sw] = await db.execute<{ n: number }>(sql`
+    SELECT count(*)::int n FROM vehicle_spec WHERE status = '검수대기'`);
+  const specWaiting = Number(sw?.n ?? 0);
   /* ⭐ 권한 스위치 (2026-09-02) — 메뉴는 그 계정이 열 수 있는 것만 보인다 */
   const can = {
     finance: await hasPerm("finance"),
@@ -143,12 +149,22 @@ export default async function SettingsPage() {
      *    제조사 취급설명서에서 옮겨 온 값을 원문과 나란히 놓고 확인하는 화면.
      *    확인 전에는 휠너트 토크 같은 위험 값의 숫자가 앱 어디에도 안 나온다.
      */
+    /* ⭐ 정비 조회 (2026-09-05, /carinfo 도입 3단계) — 등록 안 된 차·전화 문의 대응.
+       조회 화면은 로그인만 보므로 메뉴도 모두에게 보인다 */
+    {
+      href: "/carinfo",
+      title: "정비 조회",
+      desc: "차대번호·사진으로 차종 제원 조회 — 등록 안 된 차도",
+    },
     ...(can.master
       ? [
           {
             href: "/settings/spec",
             title: "차종별 순정 제원",
-            desc: "공기압 · 휠너트 토크 · 오일 규격 — 설명서 원문과 나란히 확인",
+            desc:
+              specWaiting > 0
+                ? `검수 대기 ${specWaiting}개 — 확인해야 앱에 숫자가 열립니다`
+                : "공기압 · 휠너트 토크 · 오일 규격 — 설명서 원문과 나란히 확인",
           },
         ]
       : []),

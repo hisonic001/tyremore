@@ -1,5 +1,6 @@
 import Link from "@/lib/link";
 import { hasPerm } from "@/lib/auth";
+import { vehicleHitById } from "@/lib/search";
 import { SaleForm } from "./client";
 import { requirePerm } from "@/lib/auth";
 
@@ -9,8 +10,17 @@ export const dynamic = "force-dynamic";
  * 판매 등록 — 종이 「차량 점검 및 주문 보고서」의 작업 내역·견적 칸을 대신한다.
  * 저장하면 재고가 빠지고 MARS 입력 대기열에 올라간다.
  */
-export default async function SalePage() {
+export default async function SalePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ vehicle?: string }>;
+}) {
   await requirePerm("sale");
+  /* ⭐ 차량 상세의 「판매 등록」이 차량을 물고 온다 (2026-09-05, /carinfo 도입 3단계) —
+     지금까지는 여기서 같은 차를 다시 검색해야 했다 */
+  const sp = await searchParams;
+  const vid = sp.vehicle ? Number(sp.vehicle) : NaN;
+  const initialVehicle = Number.isFinite(vid) ? await vehicleHitById(vid) : null;
   return (
     <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6 lg:max-w-6xl">
       <div className="flex items-center justify-between">
@@ -25,7 +35,7 @@ export default async function SalePage() {
       <p className="mt-1 text-sm text-slate-500">
         저장하면 재고가 빠지고 정비 내역에 남습니다. MARS 는 정비 내역에서 골라 올립니다.
       </p>
-      <SaleForm owner={await hasPerm("cost")} />
+      <SaleForm owner={await hasPerm("cost")} initialVehicle={initialVehicle} />
     </main>
   );
 }

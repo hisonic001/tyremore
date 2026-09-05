@@ -217,6 +217,35 @@ export async function findVehicles(q: string): Promise<VehicleHit[]> {
     .limit(40);
 }
 
+/**
+ * ⭐ 차량 id 하나로 VehicleHit 을 만든다 (2026-09-05, /carinfo 도입 3단계) —
+ *    차량 상세의 「판매 등록」이 차량을 물고 가게 (`/sale?vehicle=`).
+ *    findVehicles 와 같은 모양을 내보낸다 — 화면 부품이 둘을 구분하지 않는다.
+ */
+export async function vehicleHitById(vehicleId: number): Promise<VehicleHit | null> {
+  const rows = await db
+    .select({
+      vehicleId: vehicle.id,
+      plateNo: vehicle.plateNo,
+      makerName: sql<string | null>`COALESCE((SELECT name_ko FROM vehicle_maker m WHERE m.code = ${vehicle.makerCode}), ${vehicle.makerName})`,
+      model: vehicle.model,
+      year: vehicle.year,
+      mileage: vehicle.mileage,
+      vin: vehicle.vin,
+      lastFittedSize: vehicle.lastFittedSize,
+      customerId: customer.id,
+      customerName: customer.name,
+      phone: customer.phone,
+      memo: customer.memo,
+      familyGroupId: customer.familyGroupId,
+    })
+    .from(vehicle)
+    .innerJoin(customer, eq(vehicle.customerId, customer.id))
+    .where(and(eq(vehicle.id, vehicleId), eq(vehicle.isActive, true)))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 export async function findProducts(q: string, f: ProductFilter = {}): Promise<ProductHit[]> {
   const t = q.trim();
   const conds: SQL[] = [];

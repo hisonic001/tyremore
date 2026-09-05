@@ -82,7 +82,8 @@ export default async function VehiclePage({ params }: { params: Promise<{ id: st
             정비 이력 {Number(row.sale_count)}건
           </Link>
           <Link
-            href="/sale"
+            // ⭐ 차량을 물고 간다 (2026-09-05) — 판매 등록에서 같은 차를 다시 검색하지 않는다
+            href={`/sale?vehicle=${row.vehicle_id}`}
             className="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white"
           >
             판매 등록

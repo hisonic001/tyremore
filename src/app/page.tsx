@@ -102,6 +102,13 @@ export default async function Home({
           >
             매입
           </Link>
+          {/* ⭐ 정비 조회 (2026-09-05, /carinfo 도입 3단계) — 등록 안 된 차·전화 문의 대응 */}
+          <Link
+            href="/carinfo"
+            className="rounded-control px-2.5 py-2 text-sm font-medium text-slate-600 active:bg-slate-200 lg:hover:bg-slate-100"
+          >
+            정비 조회
+          </Link>
         </nav>
       </header>
 
