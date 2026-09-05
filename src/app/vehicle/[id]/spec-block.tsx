@@ -1,7 +1,11 @@
 import Link from "@/lib/link";
 import { BookMarked } from "lucide-react";
+import { sql } from "drizzle-orm";
+import { db } from "@/db";
 import { partsForGeneration } from "@/lib/parts-fit";
-import { specsForVehicle } from "@/lib/spec";
+import { listSpecGenerations, specsForVehicle } from "@/lib/spec";
+import { guessGenerationByVin } from "@/lib/vin-learn";
+import { GenConfirm } from "./gen-confirm";
 
 /**
  * 이 차의 순정 제원 (D-04 3차 개정, 2026-09-03)
@@ -13,7 +17,31 @@ import { specsForVehicle } from "@/lib/spec";
  */
 export async function VehicleSpecBlock({ vehicleId }: { vehicleId: number }) {
   const spec = await specsForVehicle(vehicleId);
-  if (!spec) return null;
+  if (!spec) {
+    /**
+     * ⭐ 세대 미상이면 조용히 사라지는 대신 **확인을 유도한다** (2026-09-05, 도입 2단계).
+     *    확인할수록 제원 보이는 차가 늘어난다. 질의는 순차.
+     */
+    const [v] = await db.execute<{ model: string | null; vin: string | null }>(sql`
+      SELECT model, vin FROM vehicle WHERE id = ${vehicleId}`);
+    if (!v) return null;
+    const guess = v.vin ? await guessGenerationByVin(v.vin) : null;
+    const gens = await listSpecGenerations();
+    return (
+      <section className="mt-5 rounded-card border border-slate-200 bg-white p-4">
+        <h2 className="flex items-center gap-1.5 text-[15px] font-bold text-slate-900">
+          <BookMarked className="size-4 text-slate-400" /> 순정 제원
+        </h2>
+        <GenConfirm
+          vehicleId={vehicleId}
+          model={v.model}
+          vin={v.vin}
+          suggestion={guess ? { variantKey: guess.variantKey, label: guess.label, support: guess.support } : null}
+          gens={gens.map((g) => ({ variantKey: g.variantKey, label: g.label }))}
+        />
+      </section>
+    );
+  }
   /* 🔴 질의는 순차로 (2026-08-11 풀 만석 사고 이후 Promise.all 안 쓴다) */
   const parts = spec.generationId ? await partsForGeneration(spec.generationId) : [];
 

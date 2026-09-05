@@ -333,6 +333,32 @@ export async function specsForGeneration(
 }
 
 /**
+ * ⭐ 차량의 세대 확정 (2026-09-05, /carinfo 도입 2단계 — 세대 미상이면 제원이 안 보인다)
+ *
+ *   차량 상세에서 사장님이 세대를 골라 확정하면 그 차에 제원·부품이 붙기 시작한다.
+ * 🔴 이 차 한 대에만 적는다 — 「쏘렌토」라는 글자 전체에 세대를 학습시키지 않는다
+ *    (같은 글자의 다른 세대 차가 잘못 물든다). 괄호코드 학습은 seed 스크립트 몫.
+ */
+export async function confirmVehicleGeneration(
+  vehicleId: number,
+  variantKey: string,
+): Promise<{ ok: true; label: string } | { ok: false; error: string }> {
+  if (!(await hasPerm("sale_edit"))) return { ok: false, error: "권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
+  const [gen] = await db.execute<{ id: number; label: string }>(sql`
+    SELECT id, label FROM vehicle_generation WHERE variant_key = ${variantKey}`);
+  if (!gen) return { ok: false, error: "그 세대를 찾을 수 없습니다" };
+  const done = await db.execute<{ id: number }>(sql`
+    UPDATE vehicle SET generation_id = ${Number(gen.id)} WHERE id = ${vehicleId} RETURNING id`);
+  if (done.length === 0) return { ok: false, error: "차량을 찾을 수 없습니다" };
+  try {
+    revalidatePath(`/vehicle/${vehicleId}`);
+  } catch {
+    /* 요청 밖 */
+  }
+  return { ok: true, label: gen.label };
+}
+
+/**
  * 그 차의 제원 — 🔴 **승인된 값만** 내보낸다.
  *    세대를 모르는 차(그냥 「쏘렌토」)는 null 이다. 비슷한 차의 값을 빌려 오지 않는다.
  */
