@@ -2,27 +2,43 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ChevronRight, ExternalLink, ShieldAlert, X } from "lucide-react";
+import { Check, ChevronRight, ExternalLink, X } from "lucide-react";
 import Link from "@/lib/link";
 import { Button } from "@/components/ui/button";
 import { StatusPill } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty";
 import { Notice } from "@/components/ui/notice";
 import { useConfirm } from "@/components/ui/confirm";
-import { approveSpecs, rejectSpecs, type SpecGenRow, type SpecReview, type SpecValueRow } from "@/lib/spec";
+import { approveSpecs, rejectSpecs, type SpecGenRow, type SpecReview } from "@/lib/spec";
+import { SpecSheetView } from "@/components/spec/sheet";
+import { buildSpecSheet } from "@/lib/spec-sheet-core";
+import type { FitPart } from "@/lib/parts-fit";
 
 /**
  * 제원 검수 — 목록 → 한 차종 → 값과 원문을 나란히 (2026-09-03)
  *
- * 🔴 **원문을 접어 두지 않는다.** 검수의 전부가 「이 값이 저 줄에서 나왔나」를 보는 것이다.
- *    원문을 눌러야 보이게 하면 아무도 안 누르고, 그러면 검수가 찍기가 된다.
+ * 🔴 **검수 대기가 있으면 원문을 펼쳐 둔다.** 검수의 전부가 「이 값이 저 줄에서 나왔나」를
+ *    보는 것이라, 원문을 눌러야 보이게 하면 아무도 안 누르고 검수가 찍기가 된다.
+ *    2026-09-05 에 **자동확인만 있는 부분은 접도록** 바꿨다 — 값 602건 중 576건이 자동확인이라
+ *    다 펼쳐 두면 화면이 원문으로 덮여 사장님이 「한눈에 안 들어온다」고 하셨다.
  *
- * 🔴 **한 벌씩 승인한다.** 18인치 한 벌·20인치 한 벌이 각각 원문의 한 줄에서 나왔으므로,
- *    그 줄을 보고 그 벌을 통째로 누르는 것이 실제로 사장님이 하시는 판단과 같다.
- *    값을 하나씩 누르게 하면 24번을 눌러야 해서 결국 안 하시게 된다.
+ * 🔴 **주제 단위로 승인한다** (2026-09-05). 예전에는 「벌」 단위였는데,
+ *    벌은 타이어 규격 단위라서 엔진오일·냉각수가 엉뚱한 벌 카드에 섞여 들어갔다.
+ *    (`parseTireWheelTable` 과 `parseOilTable` 이 각자 1,2,3… 을 매겨 `group_no` 가 겹친다.)
+ *    값을 하나씩 누르게 하면 24번을 눌러야 해서 결국 안 하시게 된다 — 묶는 것은 그대로다.
  */
-export function SpecReviewer({ rows, review }: { rows: SpecGenRow[]; review: SpecReview | null }) {
-  if (review) return <OneGeneration review={review} />;
+export function SpecReviewer({
+  rows,
+  review,
+  parts,
+  engine,
+}: {
+  rows: SpecGenRow[];
+  review: SpecReview | null;
+  parts: FitPart[];
+  engine: string | null;
+}) {
+  if (review) return <OneGeneration review={review} parts={parts} engine={engine} />;
   return <GenerationList rows={rows} />;
 }
 
@@ -79,7 +95,7 @@ function GenerationList({ rows }: { rows: SpecGenRow[] }) {
 
 /* ------------------------------------------------------------------ */
 
-function OneGeneration({ review }: { review: SpecReview }) {
+function OneGeneration({ review, parts, engine }: { review: SpecReview; parts: FitPart[]; engine: string | null }) {
   const router = useRouter();
   const [ask, confirmDialog] = useConfirm();
   const [pending, start] = useTransition();
@@ -89,6 +105,21 @@ function OneGeneration({ review }: { review: SpecReview }) {
   const waiting = useMemo(
     () => review.groups.flatMap((g) => g.rows).filter((r) => r.status === "검수대기"),
     [review],
+  );
+
+  /* 🔴 묶는 규칙은 순수 모듈 한 곳에만 둔다 — 화면 세 곳이 같은 묶음을 내야 한다 */
+  const sheet = useMemo(
+    () =>
+      buildSpecSheet({
+        label: review.label,
+        variantKey: review.variantKey,
+        manualUrl: review.manualUrl,
+        cars: review.cars,
+        rows: review.groups.flatMap((g) => g.rows),
+        parts,
+        engine,
+      }),
+    [review, parts, engine],
   );
 
   const run = (fn: () => Promise<{ ok: true; n: number } | { ok: false; error: string }>) =>
@@ -153,144 +184,39 @@ function OneGeneration({ review }: { review: SpecReview }) {
         <Notice tone="success">이 차종은 확인이 끝났습니다.</Notice>
       )}
 
-      {review.groups.map((g) => (
-        <GroupCard
-          key={g.groupNo}
-          label={g.groupLabel}
-          rows={g.rows}
-          pending={pending}
-          onApprove={(ids) => run(() => approveSpecs(ids))}
-          onReject={(ids) => run(() => rejectSpecs(ids))}
-        />
-      ))}
+      <SpecSheetView
+        sheet={sheet}
+        onEngine={(e) =>
+          `/settings/spec?gen=${encodeURIComponent(review.variantKey)}${e ? `&engine=${encodeURIComponent(e)}` : ""}`
+        }
+        actions={({ waitingIds, autoIds }) =>
+          waitingIds.length > 0 ? (
+            <div className="flex gap-2">
+              <Button size="md" pending={pending} onClick={() => run(() => approveSpecs(waitingIds))}>
+                <Check className="size-4" /> 이 부분 맞습니다
+              </Button>
+              <Button size="md" variant="secondary" pending={pending} onClick={() => run(() => rejectSpecs(waitingIds))}>
+                <X className="size-4" /> 아닙니다
+              </Button>
+            </div>
+          ) : autoIds.length > 0 ? (
+            /*
+              🔴 자동 확인도 **되돌릴 수 있어야 한다** (2026-09-05).
+                 사장님이 「일하면서 검증하며 고쳐 나가겠다」고 하셨다. 틀린 것을 보셨을 때
+                 그 자리에서 고칠 수 없으면 그 말이 지켜지지 않는다.
+            */
+            <div className="flex items-center gap-2">
+              <Button size="md" variant="secondary" pending={pending} onClick={() => run(() => approveSpecs(autoIds))}>
+                <Check className="size-4" /> 직접 확인했습니다
+              </Button>
+              <Button size="md" variant="ghost" pending={pending} onClick={() => run(() => rejectSpecs(autoIds))}>
+                <X className="size-4" /> 틀렸습니다
+              </Button>
+            </div>
+          ) : null
+        }
+      />
     </>
   );
 }
 
-/* ------------------------------------------------------------------ */
-
-function GroupCard({
-  label,
-  rows,
-  pending,
-  onApprove,
-  onReject,
-}: {
-  label: string | null;
-  rows: SpecValueRow[];
-  pending: boolean;
-  onApprove: (ids: number[]) => void;
-  onReject: (ids: number[]) => void;
-}) {
-  const waiting = rows.filter((r) => r.status === "검수대기");
-  /** 기계가 통과시킨 것 — 사장님이 되돌리거나 직접 확인하실 수 있다 */
-  const auto = rows.filter((r) => r.status === "자동확인");
-  /* 한 벌은 원문의 같은 줄에서 나온다 — 줄을 한 번만 보여 준다 */
-  const quotes = [...new Set(rows.flatMap((r) => (r.quotes?.length ? r.quotes : [r.quote])).filter(Boolean))];
-  /** 같은 주소는 한 번만 */
-  const allSources = [
-    ...new Map(
-      rows
-        .flatMap((r) => (r.sources?.length ? r.sources : r.sourceUrl ? [{ url: r.sourceUrl, title: r.sourceTitle, fetchedOn: r.fetchedOn }] : []))
-        .map((x) => [x.url, x]),
-    ).values(),
-  ];
-
-  return (
-    <section className="mt-4 rounded-card border border-slate-200 bg-white p-4">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-[15px] font-bold text-slate-900">{label ?? "제원"}</h3>
-        {/*
-          🔴 **「사장님 확인」과 「자동 확인」이 절대 같아 보이면 안 된다** (2026-09-05).
-             사장님이 「일하면서 고쳐 나가겠다」고 하셨는데, 구별이 없으면
-             무엇을 봐야 할지 찾을 수가 없다.
-        */}
-        {waiting.length === 0 &&
-          (rows.every((r) => r.status === "승인") ? (
-            <StatusPill tone="success">사장님 확인</StatusPill>
-          ) : (
-            <StatusPill tone="neutral">자동 확인</StatusPill>
-          ))}
-      </div>
-
-      <dl className="mt-2 divide-y divide-slate-100">
-        {rows.map((r) => (
-          <div key={r.id} className="flex items-baseline justify-between gap-3 py-2">
-            <dt className="shrink-0 text-[13px] text-slate-500">
-              {r.label}
-              {r.qualifier && <span className="ml-1 text-slate-400">{r.qualifier}</span>}
-            </dt>
-            <dd className="min-w-0 text-right">
-              {r.hidden ? (
-                <span className="inline-flex items-center gap-1 text-[13px] font-semibold text-amber-700">
-                  <ShieldAlert className="size-3.5" /> 확인 전에는 숫자를 보여드리지 않습니다
-                </span>
-              ) : (
-                <span
-                  className={`text-[15px] font-semibold ${
-                    r.status === "승인"
-                      ? "text-slate-900"
-                      : r.status === "자동확인"
-                        ? "text-slate-700"
-                        : "text-slate-500"
-                  }`}
-                  title={r.status === "자동확인" ? (r.autoNote ?? "자동으로 확인한 값입니다") : undefined}
-                >
-                  {r.shown ?? "—"}
-                  {r.status === "자동확인" && <span className="ml-1 text-[11px] font-normal text-slate-400">자동</span>}
-                </span>
-              )}
-            </dd>
-          </div>
-        ))}
-      </dl>
-
-      {/* 🔴 원문 — 검수의 전부다. 접지 않는다 */}
-      {quotes.map((q) => (
-        <p
-          key={q}
-          className="mt-2 overflow-x-auto whitespace-pre rounded-xl bg-slate-50 px-3 py-2 font-mono text-[12px] leading-relaxed text-slate-600"
-        >
-          {q}
-        </p>
-      ))}
-      {/* 🔴 출처는 여럿일 수 있다 — 하나만 보여 주면 「두 곳에서 봤다」가 안 보인다 */}
-      {allSources.map((x) => (
-        <p key={x.url} className="mt-1 text-[11px] text-slate-400">
-          <a href={x.url} target="_blank" rel="noreferrer noopener" className="underline underline-offset-2">
-            {x.title || x.url}
-          </a>
-          {x.fetchedOn && ` · ${x.fetchedOn} 에 읽음`}
-        </p>
-      ))}
-
-      {waiting.length > 0 ? (
-        <div className="mt-3 flex gap-2">
-          <Button size="md" pending={pending} onClick={() => onApprove(waiting.map((r) => r.id))}>
-            <Check className="size-4" /> 이 한 벌 맞습니다
-          </Button>
-          <Button size="md" variant="secondary" pending={pending} onClick={() => onReject(waiting.map((r) => r.id))}>
-            <X className="size-4" /> 아닙니다
-          </Button>
-        </div>
-      ) : (
-        auto.length > 0 && (
-          /*
-            🔴 자동 확인도 **되돌릴 수 있어야 한다** (2026-09-05).
-               사장님이 「일하면서 검증하며 고쳐 나가겠다」고 하셨다. 틀린 것을 보셨을 때
-               그 자리에서 고칠 수 없으면 그 말이 지켜지지 않는다.
-          */
-          <div className="mt-3 flex items-center gap-2">
-            <Button size="md" variant="secondary" pending={pending} onClick={() => onApprove(auto.map((r) => r.id))}>
-              <Check className="size-4" /> 직접 확인했습니다
-            </Button>
-            <Button size="md" variant="ghost" pending={pending} onClick={() => onReject(auto.map((r) => r.id))}>
-              <X className="size-4" /> 틀렸습니다
-            </Button>
-            <span className="text-[12px] leading-snug text-slate-400">{auto[0].autoNote ?? "자동으로 확인한 값입니다"}</span>
-          </div>
-        )
-      )}
-    </section>
-  );
-}

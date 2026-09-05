@@ -3,6 +3,8 @@ import { BookMarked } from "lucide-react";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { partsForGeneration } from "@/lib/parts-fit";
+import { SpecSheetView } from "@/components/spec/sheet";
+import { buildSpecSheet } from "@/lib/spec-sheet-core";
 import { listSpecGenerations, specsForVehicle } from "@/lib/spec";
 import { guessGenerationByVin } from "@/lib/vin-learn";
 import { GenConfirm } from "./gen-confirm";
@@ -47,6 +49,27 @@ export async function VehicleSpecBlock({ vehicleId }: { vehicleId: number }) {
 
   const nothingApproved = spec.groups.length === 0;
 
+  const sheet = buildSpecSheet({
+    label: spec.label,
+    variantKey: spec.variantKey,
+    manualUrl: spec.manualUrl,
+    rows: spec.groups.flatMap((g) =>
+      g.rows.map((r) => ({
+        id: null,
+        item: r.item,
+        label: r.label,
+        shown: r.shown,
+        hidden: false,
+        locked: r.locked,
+        qualifier: r.qualifier,
+        groupNo: g.groupNo,
+        groupLabel: g.groupLabel,
+        status: "승인" as const,
+      })),
+    ),
+    parts,
+  });
+
   return (
     <section className="mt-5 rounded-card border border-slate-200 bg-white p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -66,7 +89,7 @@ export async function VehicleSpecBlock({ vehicleId }: { vehicleId: number }) {
         )}
       </div>
 
-      {nothingApproved ? (
+      {nothingApproved && parts.length === 0 ? (
         <p className="mt-2 text-[13px] text-slate-500">
           {spec.waiting > 0 ? (
             <>
@@ -81,22 +104,8 @@ export async function VehicleSpecBlock({ vehicleId }: { vehicleId: number }) {
         </p>
       ) : (
         <>
-          {spec.groups.map((g, i) => (
-            <div key={g.groupLabel ?? i} className="mt-3">
-              {g.groupLabel && <p className="text-[13px] font-semibold text-slate-700">{g.groupLabel}</p>}
-              <dl className="mt-1 divide-y divide-slate-100">
-                {g.rows.map((r, j) => (
-                  <div key={`${r.label}-${r.qualifier ?? ""}-${j}`} className="flex items-baseline justify-between gap-3 py-1.5">
-                    <dt className="shrink-0 text-[13px] text-slate-500">
-                      {r.label}
-                      {r.qualifier && <span className="ml-1 text-slate-400">{r.qualifier}</span>}
-                    </dt>
-                    <dd className="tabular text-right text-[15px] font-semibold text-slate-900">{r.shown}</dd>
-                  </div>
-                ))}
-              </dl>
-            </div>
-          ))}
+          {/* 🔴 검수 화면과 **같은 부품**으로 그린다 — 셋이 갈라지면 어느 게 맞는지 모른다 */}
+          <SpecSheetView sheet={sheet} />
           {spec.waiting > 0 && (
             <p className="mt-2 text-[12px] text-slate-400">
               확인을 기다리는 값이 {spec.waiting}개 더 있습니다 —{" "}
@@ -106,27 +115,6 @@ export async function VehicleSpecBlock({ vehicleId }: { vehicleId: number }) {
             </p>
           )}
         </>
-      )}
-      {parts.length > 0 && (
-        <div className="mt-4 border-t border-slate-100 pt-3">
-          <p className="text-[13px] font-semibold text-slate-700">이 차에 맞는 부품</p>
-          <ul className="mt-1 divide-y divide-slate-100">
-            {parts.slice(0, 12).map((p) => (
-              <li key={p.productId} className="flex items-baseline justify-between gap-3 py-1.5">
-                <span className="min-w-0 flex-1 truncate text-[13px] text-slate-700">
-                  <span className="text-slate-400">{p.category} </span>
-                  {p.name}
-                </span>
-                <span className="tabular shrink-0 text-[12px] text-slate-500">
-                  {p.stock > 0 ? <strong className="text-brand-700">재고 {p.stock}</strong> : "재고 없음"}
-                </span>
-              </li>
-            ))}
-          </ul>
-          {parts.length > 12 && (
-            <p className="mt-1 text-[11px] text-slate-400">외 {parts.length - 12}건</p>
-          )}
-        </div>
       )}
 
       <p className="mt-3 text-[11px] leading-snug text-slate-400">

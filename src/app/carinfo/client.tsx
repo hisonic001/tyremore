@@ -2,12 +2,14 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ExternalLink, PackageSearch, Search, ShieldAlert } from "lucide-react";
+import { Check, ExternalLink, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusPill } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty";
 import { Notice } from "@/components/ui/notice";
 import type { FitPart } from "@/lib/parts-fit";
+import { SpecSheetView } from "@/components/spec/sheet";
+import { buildSpecSheet } from "@/lib/spec-sheet-core";
 import type { VehicleSpecBlock } from "@/lib/spec";
 import type { VinInfo } from "@/lib/vin";
 import type { VinGuess } from "@/lib/vin-learn";
@@ -178,11 +180,8 @@ export function CarLookup({
         />
       )}
 
-      {/* ── 순정 규격 ── */}
-      {spec && <SpecCard spec={spec} confirmed={confirmed} />}
-
-      {/* ── 이 차에 맞는 부품 ── */}
-      {spec && <PartsCard parts={parts} />}
+      {/* ── 순정 규격 · 이 차에 맞는 부품 ── */}
+      {spec && <SpecCard spec={spec} parts={parts} confirmed={confirmed} />}
     </>
   );
 }
@@ -196,17 +195,46 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
+/**
+ * 순정 규격 + 이 차에 맞는 부품 — 검수 화면과 **같은 부품**으로 그린다 (2026-09-05).
+ * 🔴 예전에는 여기만 따로 그렸고, 그러다 「차종을 확인하시면…」이라는 **문장을**
+ *    `startsWith` 로 알아보고 값을 가리고 있었다. 문장을 고치면 안전장치가 조용히 풀리는
+ *    구조였다 — 이제 `locked` 를 보고 가린다.
+ */
 function SpecCard({
   spec,
+  parts,
   confirmed,
 }: {
-  spec: VehicleSpecBlock & { generationId: number };
+  spec: VehicleSpecBlock;
+  parts: FitPart[];
   confirmed: boolean;
 }) {
+  const sheet = buildSpecSheet({
+    label: spec.label,
+    variantKey: spec.variantKey,
+    manualUrl: spec.manualUrl,
+    rows: spec.groups.flatMap((g) =>
+      g.rows.map((r) => ({
+        id: null,
+        item: r.item,
+        label: r.label,
+        shown: r.shown,
+        hidden: false,
+        locked: r.locked,
+        qualifier: r.qualifier,
+        groupNo: g.groupNo,
+        groupLabel: g.groupLabel,
+        status: "승인" as const,
+      })),
+    ),
+    parts,
+  });
+
   return (
-    <section className="mt-4 rounded-card border border-slate-200 bg-white p-4">
+    <section className="mt-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-[15px] font-bold text-slate-900">순정 규격</h2>
+        <h2 className="text-[15px] font-bold text-slate-900">순정 규격 · 부품</h2>
         {spec.manualUrl && (
           <a
             href={spec.manualUrl}
@@ -219,97 +247,20 @@ function SpecCard({
         )}
       </div>
 
-      {spec.groups.length === 0 ? (
+      {spec.groups.length === 0 && parts.length === 0 ? (
         <p className="mt-2 text-[13px] text-slate-500">
           {spec.waiting > 0
             ? `설명서에서 받아 온 값 ${spec.waiting}개가 아직 검수 전입니다 — 설정 → 차종별 순정 제원에서 확인하시면 열립니다.`
             : "이 차종은 아직 제원을 못 받아 왔습니다."}
         </p>
       ) : (
-        spec.groups.map((g, i) => (
-          <div key={g.groupLabel ?? i} className="mt-3">
-            {g.groupLabel && <p className="text-[13px] font-semibold text-slate-700">{g.groupLabel}</p>}
-            <dl className="mt-1 divide-y divide-slate-100">
-              {g.rows.map((r, j) => (
-                <div key={`${r.label}-${j}`} className="flex items-baseline justify-between gap-3 py-1.5">
-                  <dt className="shrink-0 text-[13px] text-slate-500">
-                    {r.label}
-                    {r.qualifier && <span className="ml-1 text-slate-400">{r.qualifier}</span>}
-                  </dt>
-                  <dd
-                    className={`tabular text-right text-[15px] font-semibold ${
-                      r.shown.startsWith("차종을 확인") ? "text-amber-700" : "text-slate-900"
-                    }`}
-                  >
-                    {r.shown.startsWith("차종을 확인") ? (
-                      <span className="inline-flex items-center gap-1 text-[13px]">
-                        <ShieldAlert className="size-3.5" /> {r.shown}
-                      </span>
-                    ) : (
-                      r.shown
-                    )}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          </div>
-        ))
+        <SpecSheetView sheet={sheet} />
       )}
 
-      <p className="mt-3 text-[11px] text-slate-400">
-        와이퍼 규격 — <strong>자료 없음</strong> (취급설명서에 안 실립니다)
-        {!confirmed && " · 차종을 확인하시면 가려진 값이 열립니다"}
-      </p>
-    </section>
-  );
-}
-
-function PartsCard({ parts }: { parts: FitPart[] }) {
-  const byCat = new Map<string, FitPart[]>();
-  for (const p of parts) {
-    const k = p.category ?? "기타";
-    byCat.set(k, [...(byCat.get(k) ?? []), p]);
-  }
-  return (
-    <section className="mt-4 rounded-card border border-slate-200 bg-white p-4">
-      <h2 className="flex items-center gap-1.5 text-[15px] font-bold text-slate-900">
-        <PackageSearch className="size-4 text-slate-400" /> 이 차에 맞는 부품
-      </h2>
-      {parts.length === 0 ? (
-        <p className="mt-2 text-[13px] text-slate-500">
-          우리 상품 목록에 이 차종이 적힌 부품이 없습니다. (적용 차종 글자에 차종 코드가 있는 것만 보여줍니다)
-        </p>
-      ) : (
-        [...byCat.entries()].map(([cat, list]) => (
-          <div key={cat} className="mt-3">
-            <p className="text-[13px] font-semibold text-slate-700">{cat}</p>
-            <ul className="mt-1 divide-y divide-slate-100">
-              {list.map((p) => (
-                <li key={p.productId} className="py-2">
-                  <div className="flex items-baseline justify-between gap-3">
-                    <span className="min-w-0 flex-1 truncate text-[14px] text-slate-900">{p.name}</span>
-                    <span className="tabular shrink-0 text-[13px] text-slate-500">
-                      {p.stock > 0 ? (
-                        <strong className="text-brand-700">재고 {p.stock}</strong>
-                      ) : (
-                        <span className="text-slate-400">재고 없음</span>
-                      )}
-                      {p.listPrice ? ` · ${p.listPrice.toLocaleString()}원` : ""}
-                    </span>
-                  </div>
-                  <p className="mt-0.5 text-[11px] leading-snug text-slate-400">
-                    {p.partNo && <span className="tabular mr-1 text-slate-500">{p.partNo}</span>}
-                    {p.why}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ))
-      )}
       <p className="mt-3 text-[11px] leading-snug text-slate-400">
         회색 글자는 <strong>왜 이 부품이 걸렸는지</strong> 상품의 적용 차종에서 그대로 옮긴 것입니다 —
         눈으로 한 번 확인하고 쓰십시오. 틀린 품번은 없는 것보다 나쁩니다.
+        {!confirmed && " 차종을 확인하시면 가려진 값이 열립니다."}
       </p>
     </section>
   );

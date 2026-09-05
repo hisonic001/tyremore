@@ -3,6 +3,7 @@ import { hasPerm } from "@/lib/auth";
 import { Notice } from "@/components/ui/notice";
 import { PageHeader, PageShell } from "@/components/ui/page";
 import { getSpecReview, listSpecGenerations } from "@/lib/spec";
+import { partsForGeneration } from "@/lib/parts-fit";
 import { SpecReviewer } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +25,7 @@ export const dynamic = "force-dynamic";
 export default async function SpecSettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ gen?: string }>;
+  searchParams: Promise<{ gen?: string; engine?: string }>;
 }) {
   const sp = await searchParams;
   const can = await hasPerm("master");
@@ -39,15 +40,17 @@ export default async function SpecSettingsPage({
       {!can ? (
         <Notice tone="warn">제원 검수는 사장님 계정에서만 할 수 있습니다.</Notice>
       ) : (
-        <Body gen={sp.gen} />
+        <Body gen={sp.gen} engine={sp.engine ?? null} />
       )}
     </PageShell>
   );
 }
 
-async function Body({ gen }: { gen?: string }) {
+async function Body({ gen, engine }: { gen?: string; engine: string | null }) {
+  /* 🔴 질의는 하나씩 — Promise.all 로 묶으면 풀이 만석이 된다 (2026-08-11 사고) */
   const rows = await listSpecGenerations();
   const review = gen ? await getSpecReview(gen) : null;
+  const parts = review ? await partsForGeneration(review.generationId) : [];
   if (gen && !review) {
     return (
       <Notice tone="error">
@@ -58,5 +61,5 @@ async function Body({ gen }: { gen?: string }) {
       </Notice>
     );
   }
-  return <SpecReviewer rows={rows} review={review} />;
+  return <SpecReviewer rows={rows} review={review} parts={parts} engine={engine} />;
 }

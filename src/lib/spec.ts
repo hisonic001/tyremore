@@ -115,6 +115,8 @@ export interface SpecReview {
   manualUrl: string | null;
   note: string | null;
   cars: number;
+  /** 🔴 부품을 붙이려면 세대 번호가 필요한데 지금까지 안 보내고 있었다 */
+  generationId: number;
   groups: { groupNo: number; groupLabel: string | null; rows: SpecValueRow[] }[];
 }
 
@@ -230,6 +232,7 @@ export async function getSpecReview(variantKey: string): Promise<SpecReview | nu
     manualUrl: gen.manual_url,
     note: gen.note,
     cars: Number(gen.cars),
+    generationId: Number(gen.id),
     groups: [...groups.values()],
   };
 }
@@ -288,6 +291,11 @@ export async function rejectSpecs(ids: number[], note?: string): Promise<SpecRes
 /* 차량 화면에서 쓰기                                                   */
 /* ------------------------------------------------------------------ */
 
+/**
+ * 차량·정비 조회 화면이 쓰는 얇은 모양.
+ * 🔴 `item`·`groupNo` 를 같이 싣는다 — 이게 없으면 화면이 주제별로 못 묶어
+ *    검수 화면과 **다르게 그려진다.** 셋이 같은 부품을 쓰게 하려고 넓혔다 (2026-09-05).
+ */
 export interface VehicleSpecBlock {
   /** 부품 잇기(lib/parts-fit)가 이 번호를 쓴다 */
   generationId: number;
@@ -295,7 +303,19 @@ export interface VehicleSpecBlock {
   variantKey: string;
   manualUrl: string | null;
   /** 승인된 값만. 인치별로 한 벌씩 */
-  groups: { groupLabel: string | null; rows: { label: string; shown: string; qualifier: string | null }[] }[];
+  groups: {
+    groupNo: number;
+    groupLabel: string | null;
+    rows: {
+      item: string;
+      label: string;
+      /** 🔴 잠긴 값은 null 이다 — 「차종을 확인하시면…」 같은 글자를 값 자리에 넣지 않는다 */
+      shown: string | null;
+      /** 세대가 아직 확인 안 돼 숫자를 안 만든 값 */
+      locked: boolean;
+      qualifier: string | null;
+    }[];
+  }[];
   waiting: number;
 }
 
@@ -335,26 +355,30 @@ export async function specsForGeneration(
   const [w] = await db.execute<{ n: number }>(sql`
     SELECT count(*)::int AS n FROM vehicle_spec WHERE generation_id = ${gen.id} AND status = '검수대기'`);
 
-  const groups = new Map<
-    number,
-    { groupLabel: string | null; rows: { label: string; shown: string; qualifier: string | null }[] }
-  >();
+  const groups = new Map<number, VehicleSpecBlock["groups"][number]>();
   for (const r of rows) {
     const def = specItem(r.item);
-    /* 🔴 세대가 아직 확인 안 됐으면 위험 값은 숫자를 만들지 않는다 */
-    const hide = r.risk === "높음" && !opts?.confirmed;
-    const shown = hide
-      ? "차종을 확인하시면 보여드립니다"
+    /**
+     * 🔴 세대가 아직 확인 안 됐으면 위험 값은 숫자를 만들지 않는다.
+     *    2026-09-05: 예전에는 값 자리에 「차종을 확인하시면 보여드립니다」라는 **글자**를 넣었고
+     *    화면이 그 문장을 `startsWith` 로 알아봤다. 문장을 고치면 안전장치가 조용히 풀리는
+     *    구조라 `locked` 로 바꿨다.
+     */
+    const locked = r.risk === "높음" && !opts?.confirmed;
+    const shown = locked
+      ? null
       : r.text_value
         ? r.text_value
         : r.num_min !== null && r.unit
           ? bothUnits(Number(r.num_min), r.num_max === null ? null : Number(r.num_max), r.unit)
           : null;
-    if (!shown) continue;
-    const g = groups.get(r.group_no) ?? { groupLabel: r.group_label, rows: [] };
+    if (!locked && !shown) continue;
+    const g = groups.get(r.group_no) ?? { groupNo: r.group_no, groupLabel: r.group_label, rows: [] };
     g.rows.push({
+      item: r.item,
       label: def?.label ?? r.item,
       shown,
+      locked,
       qualifier: r.qualifier ? Object.values(r.qualifier).join(" ") : null,
     });
     groups.set(r.group_no, g);
@@ -431,7 +455,7 @@ export async function specsForVehicle(vehicleId: number): Promise<VehicleSpecBlo
   const [w] = await db.execute<{ n: number }>(sql`
     SELECT count(*)::int AS n FROM vehicle_spec WHERE generation_id = ${gen.id} AND status = '검수대기'`);
 
-  const groups = new Map<number, { groupLabel: string | null; rows: { label: string; shown: string; qualifier: string | null }[] }>();
+  const groups = new Map<number, VehicleSpecBlock["groups"][number]>();
   for (const r of rows) {
     const def = specItem(r.item);
     const shown = r.text_value
@@ -440,10 +464,13 @@ export async function specsForVehicle(vehicleId: number): Promise<VehicleSpecBlo
         ? bothUnits(Number(r.num_min), r.num_max === null ? null : Number(r.num_max), r.unit)
         : null;
     if (!shown) continue;
-    const g = groups.get(r.group_no) ?? { groupLabel: r.group_label, rows: [] };
+    const g = groups.get(r.group_no) ?? { groupNo: r.group_no, groupLabel: r.group_label, rows: [] };
     g.rows.push({
+      item: r.item,
       label: def?.label ?? r.item,
       shown,
+      /* 이 차는 세대가 확정된 차다 — 잠글 것이 없다 */
+      locked: false,
       qualifier: r.qualifier ? Object.values(r.qualifier).join(" ") : null,
     });
     groups.set(r.group_no, g);
