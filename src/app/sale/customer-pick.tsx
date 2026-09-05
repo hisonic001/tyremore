@@ -21,6 +21,7 @@ import { createCustomerAndVehicle, createSupplierVehicle } from "@/lib/sale";
 import { isMarsMaker, makerSuggestions, MARS_MAKER_LIST_ID, MarsMakerDatalist } from "@/lib/mars-makers";
 import { listSuppliers } from "@/lib/supplier";
 import { BODY_TYPES, FUEL_TYPES, type NewCustomerInput } from "@/lib/sale-types";
+import { PhotoAssist, type PhotoInfo } from "./photo-assist";
 
 /** 이름 없는 손님을 담는 자리표시 거래처 — 동명 손님을 여기로 묶지 않는다 (2026-08-21) */
 const PLACEHOLDER_SUPPLIERS = ["고객", "관광객"];
@@ -35,6 +36,7 @@ export function CustomerPick({
   newDraft = null,
   onNewDraft,
   allowNew = true,
+  onMileage,
 }: {
   vehicle: VehicleHit | null;
   onPick: (v: VehicleHit | null) => void;
@@ -47,6 +49,8 @@ export function CustomerPick({
   onNewDraft?: (d: NewCustomerDraft | null) => void;
   /** 끄면 「등록 안 된 손님입니다」(새 고객 만들기)가 안 나온다 — 대상 바꾸기용 */
   allowNew?: boolean;
+  /** ⭐ 계기판 사진에서 읽은 주행거리를 판매 등록의 주행거리 칸에 (2026-09-05) */
+  onMileage?: (km: number) => void;
 }) {
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<VehicleHit[]>([]);
@@ -60,6 +64,15 @@ export function CustomerPick({
    */
   const [mode, setMode] = useState<"customer" | "supplier">("customer");
   const [sq, setSq] = useState("");
+  /* ⭐ 사진으로 찾기·등록 (사장님 제안 2026-09-05) — 읽은 값을 모아 두고 조회·프리필에 쓴다 */
+  const [photoOpen, setPhotoOpen] = useState(false);
+  const [photo, setPhoto] = useState<PhotoInfo | null>(null);
+  const handlePhotoInfo = (info: PhotoInfo) => {
+    setPhoto((p) => ({ ...p, ...info }));
+    // 번호판을 읽으면 검색창에 넣는다 — 기존 검색이 그대로 돌아 결과를 보여 준다
+    if (info.plateNo) setQ(info.plateNo);
+    if (info.odoKm) onMileage?.(info.odoKm);
+  };
   const [supplierList, setSupplierList] = useState<
     { id: number; name: string; phone: string | null; memo: string | null }[] | null
   >(null);
@@ -124,6 +137,51 @@ export function CustomerPick({
       if (timer.current) clearTimeout(timer.current);
     };
   }, [q]);
+
+  /* ⭐ 번호판 사진과 정확히 맞는 차가 딱 하나면 바로 잡는다 (2026-09-05) — 한 번 더 누를 일이 없다 */
+  useEffect(() => {
+    if (!photo?.plateNo || vehicle) return;
+    const norm = (s: string) => s.replace(/\s/g, "");
+    const p = norm(photo.plateNo);
+    const exact = hits.filter((h) => {
+      const hp = norm(h.plateNo);
+      return hp === p || hp.endsWith(p) || p.endsWith(hp);
+    });
+    if (exact.length === 1) {
+      onPick(exact[0]);
+      setQ("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hits]);
+
+  /** ⭐ 「등록 안 된 손님입니다」 — 사진에서 읽은 것이 있으면 신규 폼에 미리 채워 연다 (2026-09-05) */
+  const openNew = () => {
+    if (photo && !newDraft && onNewDraft) {
+      onNewDraft({
+        f: {
+          name: photo.ownerName ?? "",
+          phone: "",
+          address: "속초",
+          consentPrivacy: false,
+          consentMarketing: false,
+          michelinMember: false,
+          signed: false,
+          plateNo: photo.plateNo ?? (/\d/.test(q) ? q : ""),
+          // 제조사는 차대번호에서 (MARS 목록 이름과 같은 한글) — 아니면 비워 둔다
+          makerName: photo.makerName && isMarsMaker(photo.makerName) ? photo.makerName : "",
+          // 사장님이 5년간 쳐 오신 「쏘렌토(MQ4)」 꼴 — 괄호코드가 세대 열쇠가 된다
+          model: photo.carName ? `${photo.carName}${photo.modelCode ? `(${photo.modelCode})` : ""}` : "",
+          year: photo.year ? String(photo.year) : "",
+          fuelType: "",
+          bodyType: "",
+          mileage: photo.odoKm ? String(photo.odoKm) : "",
+          vin: photo.vin ?? "",
+        },
+        choices: { privacy: null, marketing: null },
+      });
+    }
+    setManual(true);
+  };
 
   if (supplier) {
     return (
@@ -296,6 +354,24 @@ export function CustomerPick({
             placeholder="차량번호·전화번호·이름"
             className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-3 text-lg outline-none focus:border-slate-900"
           />
+          {/* ⭐ 사진으로 찾기·등록 (사장님 제안 2026-09-05) — 과하지 않게 접힌 단추 하나 */}
+          {allowNew && (
+            <button
+              type="button"
+              onClick={() => setPhotoOpen((v) => !v)}
+              className="mt-1.5 text-sm text-slate-500 underline underline-offset-4"
+            >
+              📷 사진으로 찾기·등록 {photoOpen ? "접기" : ""}
+            </button>
+          )}
+          {allowNew && photoOpen && <PhotoAssist onInfo={handlePhotoInfo} />}
+          {/* 번호판을 읽었는데 등록된 차가 없으면 다음 걸음을 말해 준다 */}
+          {photo?.plateNo && q.trim() !== "" && hits.length === 0 && (
+            <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              「{photo.plateNo}」로 등록된 차가 없습니다 — 아래 <strong>등록 안 된 손님입니다</strong>를
+              누르면 사진에서 읽은 정보가 미리 채워집니다.
+            </p>
+          )}
           <ul className="mt-2 space-y-1">
             {hits.map((h) => (
               <li key={h.vehicleId}>
@@ -321,7 +397,7 @@ export function CustomerPick({
           {allowNew && (
             <button
               type="button"
-              onClick={() => setManual(true)}
+              onClick={openNew}
               className="mt-2 w-full py-2 text-sm text-slate-500 underline underline-offset-4"
             >
               등록 안 된 손님입니다

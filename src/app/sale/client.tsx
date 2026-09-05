@@ -38,12 +38,19 @@ interface Row extends SaleLine {
  */
 const PAYMENTS = [...SPLITTABLE, ...EXCLUSIVE] as readonly string[];
 
-export function SaleForm({ owner = false }: { owner?: boolean }) {
+export function SaleForm({
+  owner = false,
+  initialVehicle = null,
+}: {
+  owner?: boolean;
+  /** ⭐ 차량 상세에서 물고 온 차 (2026-09-05) — `/sale?vehicle=` */
+  initialVehicle?: VehicleHit | null;
+}) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [ask, confirmDialog] = useConfirm(); // 배치3 — 브라우저 confirm() 대체 시트
 
-  const [vehicle, setVehicle] = useState<VehicleHit | null>(null);
+  const [vehicle, setVehicle] = useState<VehicleHit | null>(initialVehicle);
   /** ⭐ 거래처 판매 (사장님 요청 2026-08-05) — MARS 에 등록하지 않는다 */
   const [supplierSale, setSupplierSale] = useState<string | null>(null);
   const [walkIn, setWalkIn] = useState({ name: "", phone: "", plateNo: "" });
@@ -467,6 +474,8 @@ export function SaleForm({ owner = false }: { owner?: boolean }) {
         onSupplier={setSupplierSale}
         newDraft={newCust}
         onNewDraft={setNewCust}
+        // ⭐ 계기판 사진에서 읽은 주행거리 (2026-09-05) — 판매의 주행거리 칸으로
+        onMileage={(km) => setMileage(String(km))}
       />
 
       {/* ⭐ 예약 배너 (2026-09-01) — 이 차·이 손님에게 걸린 예약이 있으면 바로 알려 준다 */}

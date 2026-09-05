@@ -18,19 +18,36 @@ import { config } from "dotenv";
 config({ path: ".env.local" });
 
 /** 🔴 인자는 ASCII 만 (한글 키를 쓰면 CLI 가 깨진다) — ai-cli.ts 의 규칙 그대로 */
+const BASE_PROPS = {
+  vin: { type: "string", description: "17-character VIN exactly as printed, or empty" },
+  carName: { type: "string", description: "model name in Korean as printed (e.g. 쏘렌토), or empty" },
+  modelCode: { type: "string", description: "type/model code as printed (e.g. MQ4, CN7), or empty" },
+  year: { type: "integer", description: "model year printed on the document, or 0" },
+  tireFront: { type: "string", description: "front tire size exactly as printed (e.g. 235/55R19), or empty" },
+  tireRear: { type: "string", description: "rear tire size, or empty" },
+  psiFront: { type: "number", description: "front tire pressure as printed, with its unit kept in psiUnit" },
+  psiRear: { type: "number", description: "rear tire pressure, or 0" },
+  unread: { type: "array", items: { type: "string" }, description: "fields you could not read" },
+};
 const SCHEMA = {
   type: "object",
+  properties: { ...BASE_PROPS, source: { type: "string", enum: ["등록증", "차량카드", "기타"] } },
+  required: ["source", "unread"],
+  additionalProperties: false,
+};
+
+/**
+ * ⭐ 판매등록 모드 (2026-09-05, 사장님 「사진 세 장」) — 번호판·계기판 사진도 오고,
+ *    **차량번호가 조회 열쇠**라 읽어야 한다. 주소·전화는 여전히 금지.
+ */
+const SALE_SCHEMA = {
+  type: "object",
   properties: {
-    vin: { type: "string", description: "17-character VIN exactly as printed, or empty" },
-    carName: { type: "string", description: "model name in Korean as printed (e.g. 쏘렌토), or empty" },
-    modelCode: { type: "string", description: "type/model code as printed (e.g. MQ4, CN7), or empty" },
-    year: { type: "integer", description: "model year printed on the document, or 0" },
-    tireFront: { type: "string", description: "front tire size exactly as printed (e.g. 235/55R19), or empty" },
-    tireRear: { type: "string", description: "rear tire size, or empty" },
-    psiFront: { type: "number", description: "front tire pressure as printed, with its unit kept in psiUnit" },
-    psiRear: { type: "number", description: "rear tire pressure, or 0" },
-    source: { type: "string", enum: ["등록증", "차량카드", "기타"] },
-    unread: { type: "array", items: { type: "string" }, description: "fields you could not read" },
+    ...BASE_PROPS,
+    plateNo: { type: "string", description: "Korean license plate exactly as printed (e.g. 12가3456), or empty" },
+    odoKm: { type: "integer", description: "odometer reading in km if the photo is a dashboard, or 0" },
+    ownerName: { type: "string", description: "owner name ONLY if the photo is a vehicle registration doc, or empty" },
+    source: { type: "string", enum: ["등록증", "차량카드", "번호판", "계기판", "기타"] },
   },
   required: ["source", "unread"],
   additionalProperties: false,
@@ -54,6 +71,24 @@ const SYSTEM = `당신은 자동차 서류·라벨을 읽는 사람입니다.
    차대번호에 I·O·Q 는 쓰이지 않습니다 — 그렇게 보이면 1·0 입니다.
 4. 공기압은 적힌 숫자를 그대로 주세요 (psi 든 kPa 든 바꾸지 마세요).`;
 
+const SALE_SYSTEM = `당신은 타이어 매장의 차량 접수를 돕는 사람입니다.
+사진 한 장을 보고 그것이 무엇인지(차량 번호판 / 계기판 / B필러 차량카드 / 자동차등록증)
+판단한 뒤, 거기 **적혀 있는 글자만** 그대로 옮겨 적습니다.
+
+■ 사진 종류별로 읽을 것
+· 번호판 사진 → plateNo (예: 12가3456, 서울12가3456), source="번호판"
+· 계기판 사진 → odoKm (주행 누적거리 km 숫자만. trip A/B 가 아니라 총 주행거리), source="계기판"
+· B필러 차량카드 → 차대번호·차명·형식·연식·타이어 규격·공기압, source="차량카드"
+· 자동차등록증 → 위 항목들 + 차량번호(plateNo) + 소유자 성명(ownerName), source="등록증"
+
+■ 반드시 지킬 것
+1. 🔴 **안 보이면 비우세요. 절대 지어내지 마세요.** 흐릿하면 비우고 unread 에 적으세요.
+   틀린 값은 없는 것보다 나쁩니다 — 틀린 번호판은 엉뚱한 손님을 불러옵니다.
+2. 🔴 **주소·전화번호는 읽지도 적지도 마세요.** 소유자 이름은 등록증일 때만,
+   ownerName 칸에만 적으세요.
+3. 글자를 고치지 마세요. 차대번호에 I·O·Q 는 쓰이지 않습니다 — 1·0 입니다.
+4. 공기압은 적힌 숫자 그대로 (psi 든 kPa 든 바꾸지 마세요).`;
+
 interface Raw {
   vin?: string;
   carName?: string;
@@ -65,7 +100,13 @@ interface Raw {
   psiRear?: number;
   source?: string;
   unread?: string[];
+  /* 판매등록 모드 전용 */
+  plateNo?: string;
+  odoKm?: number;
+  ownerName?: string;
 }
+
+type Mode = "제원" | "판매등록";
 
 /**
  * 🔴 **차대번호만 한 번 더 읽어 맞춰 본다** (2026-09-05, 실제로 틀린 것을 보고 넣었다).
@@ -91,7 +132,7 @@ const VIN_SCHEMA = {
 };
 
 /** 사진 한 장을 읽어 온다. 임시 폴더만 열어 주고 끝나면 지운다 */
-async function readPhoto(buf: Buffer, ext: string, onLog: (s: string) => void) {
+async function readPhoto(buf: Buffer, ext: string, onLog: (s: string) => void, mode: Mode = "제원") {
   const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
   const path = await import("node:path");
   const os = await import("node:os");
@@ -103,9 +144,9 @@ async function readPhoto(buf: Buffer, ext: string, onLog: (s: string) => void) {
   try {
     /* 라벨 한 장 읽기라 무겁게 갈 이유가 없다 */
     const first = await generateJsonViaCli<Raw>({
-      system: SYSTEM,
+      system: mode === "판매등록" ? SALE_SYSTEM : SYSTEM,
       user: `사진 ${name} 을 Read 로 열어 보고, 적혀 있는 차량 정보를 옮겨 적어 주세요.`,
-      schema: SCHEMA,
+      schema: mode === "판매등록" ? SALE_SCHEMA : SCHEMA,
       model: "sonnet",
       effort: "low",
       timeoutMs: 120_000,
@@ -156,6 +197,8 @@ async function main() {
 
   const file = val("--file");
   const jobId = val("--job") ? Number(val("--job")) : null;
+  /* 손시험용 모드 — 앱 주문은 payload 의 mode 를 쓴다 */
+  const cliMode: Mode = val("--mode") === "판매등록" ? "판매등록" : "제원";
 
   /* ── 손으로 시험하는 길: 파일 하나를 그대로 읽어 본다 ── */
   if (file) {
@@ -165,14 +208,14 @@ async function main() {
     const buf = await readFile(file);
     let r: Awaited<ReturnType<typeof readPhoto>>;
     try {
-      r = await readPhoto(buf, path.extname(file).toLowerCase() || ".jpg", say);
+      r = await readPhoto(buf, path.extname(file).toLowerCase() || ".jpg", say, cliMode);
     } catch (e) {
       say(`❌ ${e instanceof Error ? e.message : String(e)}`);
       process.exitCode = 1;
       return;
     }
     say(`\n── 모델이 읽은 것(날것) ──\n${JSON.stringify(r.data, null, 2)}`);
-    const clean = cleanRead(r.data);
+    const clean = cleanRead(r.data, new Date(), cliMode);
     say(`\n── 검사를 통과한 것 ──\n${JSON.stringify(clean, null, 2)}`);
     const warn = crossCheck(clean, r.vinAgreed);
     if (warn.length) say(`\n⚠️ ${warn.join("\n⚠️ ")}`);
@@ -194,15 +237,18 @@ async function main() {
     const [job] = await sql<{ payload: unknown }[]>`
       SELECT payload FROM blog_job WHERE id = ${jobId}`;
     /* 🔴 글자로 한 겹 싸여 오는 경우도 받아 낸다 — 예전에 그렇게 들어간 줄이 있다 */
-    let payload = job?.payload as { scanId?: number } | string | null;
+    let payload = job?.payload as { scanId?: number; mode?: string } | string | null;
     if (typeof payload === "string") {
       try {
-        payload = JSON.parse(payload) as { scanId?: number };
+        payload = JSON.parse(payload) as { scanId?: number; mode?: string };
       } catch {
         payload = null;
       }
     }
-    scanId = Number((payload as { scanId?: number } | null)?.scanId ?? 0) || null;
+    const p = payload as { scanId?: number; mode?: string } | null;
+    scanId = Number(p?.scanId ?? 0) || null;
+    /* ⭐ 읽기 용도 (2026-09-05) — 판매등록 주문이면 번호판·계기판·소유자 이름까지 읽는다 */
+    const jobMode: Mode = p?.mode === "판매등록" ? "판매등록" : "제원";
     if (!scanId) {
       say(agent ? "ERROR=어느 사진인지 알 수 없습니다" : "❌ 어느 사진인지 알 수 없습니다");
       process.exitCode = 1;
@@ -229,7 +275,7 @@ async function main() {
     const { cleanRead, crossCheck } = await import("../src/lib/vin-photo-core");
     let r: Awaited<ReturnType<typeof readPhoto>>;
     try {
-      r = await readPhoto(buf, ext, say);
+      r = await readPhoto(buf, ext, say, jobMode);
     } catch (e) {
       /* 🔴 실패해도 사진은 지운다 — 창고에 남기지 않는다 */
       const msg = e instanceof Error ? e.message : String(e);
@@ -240,7 +286,7 @@ async function main() {
       process.exitCode = 1;
       return;
     }
-    const clean = cleanRead(r.data);
+    const clean = cleanRead(r.data, new Date(), jobMode);
     const warn = crossCheck(clean, r.vinAgreed);
     const result = { ...clean, warn, vinAgreed: r.vinAgreed };
 
@@ -253,7 +299,7 @@ async function main() {
       SET status='완료', result=${sql.json(result)}, image=NULL, error=NULL, finished_at=now()
       WHERE id=${scanId}`;
 
-    const got = [clean.vin && "차대번호", clean.carName && "차명", clean.modelCode && "형식", clean.year && "연식", clean.tireFront && "타이어"]
+    const got = [clean.plateNo && "차량번호", clean.odoKm && "주행거리", clean.vin && "차대번호", clean.carName && "차명", clean.modelCode && "형식", clean.year && "연식", clean.tireFront && "타이어"]
       .filter(Boolean)
       .join("·");
     say(`읽었습니다 — ${got || "읽어낸 것이 없습니다"}${clean.dropped.length ? ` (버린 값 ${clean.dropped.length}개)` : ""}`);

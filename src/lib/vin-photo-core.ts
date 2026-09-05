@@ -27,7 +27,20 @@ export interface RawRead {
   psiRear?: unknown;
   source?: unknown;
   unread?: unknown;
+  /* ⭐ 판매등록 모드 전용 (2026-09-05, 사장님 「사진 세 장」 흐름) */
+  plateNo?: unknown;
+  odoKm?: unknown;
+  ownerName?: unknown;
 }
+
+/**
+ * ⭐ 읽기 용도 (2026-09-05) — 무엇을 읽어도 되는가가 용도에 따라 다르다.
+ *   · '제원'(기본, /carinfo): 차량번호·이름은 **읽지 않는다** (개인정보 2차 방어)
+ *   · '판매등록'(/sale 사진 찾기): **차량번호가 조회 열쇠**라 읽어야 하고,
+ *     계기판 주행거리·등록증 소유자 이름까지 받는다 (주소·전화는 여전히 금지).
+ *     사진은 어느 모드든 읽고 나면 즉시 지워진다.
+ */
+export type ScanMode = "제원" | "판매등록";
 
 /** 검사를 통과한 것만 담긴다. 못 믿을 값은 null 이다 */
 export interface CleanRead {
@@ -39,12 +52,16 @@ export interface CleanRead {
   tireRear: string | null;
   psiFront: number | null;
   psiRear: number | null;
-  /** 등록증 · 차량카드 · 기타 */
+  /** 등록증 · 차량카드 · 번호판 · 계기판 · 기타 */
   source: string | null;
   /** 모델이 「못 읽었다」고 한 것들 */
   unread: string[];
   /** 우리가 버린 값과 그 이유 — 화면에 그대로 보여 준다 */
   dropped: string[];
+  /* ⭐ 판매등록 모드에서만 채워진다 — 제원 모드에서는 항상 null */
+  plateNo: string | null;
+  odoKm: number | null;
+  ownerName: string | null;
 }
 
 const str = (v: unknown): string | null => {
@@ -95,15 +112,58 @@ function cleanPsi(v: unknown): number | null {
   return r >= 20 && r <= 80 ? r : null;
 }
 
-const SOURCES = ["등록증", "차량카드", "기타"];
+const SOURCES = ["등록증", "차량카드", "번호판", "계기판", "기타"];
+
+/** 차량번호판 전체 모양 — 「12가3456」·「서울12가3456」·「123가4567」 */
+const FULL_PLATE_RE = /^([가-힣]{2})?\d{2,3}[가-힣]\d{4}$/;
+
+/** 판매등록 모드의 차량번호 — 모양이 안 맞으면 버린다 (틀린 번호로 엉뚱한 차를 찾으면 안 된다) */
+function cleanPlate(v: unknown): string | null {
+  const s = str(v);
+  if (!s) return null;
+  const up = s.replace(/\s/g, "");
+  return FULL_PLATE_RE.test(up) ? up : null;
+}
+
+/** 계기판 주행거리 — 상식 범위(0 ~ 150만 km)만 통과 */
+function cleanOdo(v: unknown): number | null {
+  const n = num(v);
+  if (n === null) return null;
+  const r = Math.round(n);
+  return r >= 0 && r <= 1_500_000 ? r : null;
+}
+
+/** 등록증 소유자 이름 — 한글 2~5자만. 주소·전화가 섞이면 버린다 */
+function cleanOwner(v: unknown): string | null {
+  const s = str(v);
+  if (!s) return null;
+  const t = s.replace(/\s/g, "");
+  if (!/^[가-힣]{2,5}$/.test(t)) return null;
+  return t;
+}
 
 /**
  * 읽어 온 것을 검사해 **믿을 만한 것만** 남긴다.
  * 버린 값은 `dropped` 에 이유와 함께 남겨 화면이 사장님께 보여 준다 —
  * 조용히 사라지면 사장님이 「왜 안 나오지」 하게 된다.
  */
-export function cleanRead(raw: RawRead, today = new Date()): CleanRead {
+export function cleanRead(raw: RawRead, today = new Date(), mode: ScanMode = "제원"): CleanRead {
   const dropped: string[] = [];
+
+  /* ── ⭐ 판매등록 모드 전용 칸 (2026-09-05) — 제원 모드에서는 받지 않는다 ── */
+  let plateNo: string | null = null;
+  let odoKm: number | null = null;
+  let ownerName: string | null = null;
+  if (mode === "판매등록") {
+    plateNo = cleanPlate(raw.plateNo);
+    if (str(raw.plateNo) && !plateNo) dropped.push(`차량번호 「${str(raw.plateNo)}」 — 번호판 모양이 아니라 버렸습니다`);
+    odoKm = cleanOdo(raw.odoKm);
+    if (num(raw.odoKm) !== null && num(raw.odoKm) !== 0 && odoKm === null)
+      dropped.push(`주행거리 ${num(raw.odoKm)} — 있을 수 없는 값이라 버렸습니다`);
+    ownerName = cleanOwner(raw.ownerName);
+    // 소유자 이름은 등록증에서만 믿는다 — 차량카드·번호판 사진에 이름이 있을 리 없다
+    if (ownerName && str(raw.source) !== "등록증") ownerName = null;
+  }
 
   /* ── 차대번호: 모양이 안 맞으면 버린다. I·O·Q 는 1·0 오독이다 ── */
   let vin: string | null = null;
@@ -152,7 +212,7 @@ export function cleanRead(raw: RawRead, today = new Date()): CleanRead {
     ? raw.unread.filter((s): s is string => typeof s === "string" && s.trim().length > 0).slice(0, 8)
     : [];
 
-  return { vin, carName, modelCode, year, tireFront, tireRear, psiFront, psiRear, source, unread, dropped };
+  return { vin, carName, modelCode, year, tireFront, tireRear, psiFront, psiRear, source, unread, dropped, plateNo, odoKm, ownerName };
 }
 
 /**

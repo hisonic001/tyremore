@@ -33,6 +33,8 @@ export interface ScanRow {
  */
 export async function requestVinScan(
   dataUrl: string,
+  /** ⭐ 읽기 용도 (2026-09-05) — '판매등록'이면 번호판·계기판·등록증 소유자 이름까지 읽는다 */
+  mode: "제원" | "판매등록" = "제원",
 ): Promise<{ ok: true; scanId: number } | { ok: false; error: string }> {
   /* `/carinfo` 화면 자체가 로그인만 보므로 여기도 같게 한다 — 화면은 열리는데 단추만 막히면 안 된다 */
   const session = await getSession();
@@ -71,7 +73,7 @@ export async function requestVinScan(
    *    `"{\"scanId\":1}"` 로 들어갔고, 매장 PC 가 못 읽었다.
    *    `blog-job.ts` 가 쓰는 이 방식이 정본이다.
    */
-  await db.insert(blogJob).values({ kind: "차량사진", payload: { scanId }, requestedBy: session.uid ?? null });
+  await db.insert(blogJob).values({ kind: "차량사진", payload: { scanId, mode }, requestedBy: session.uid ?? null });
 
   return { ok: true, scanId };
 }
