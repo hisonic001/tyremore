@@ -91,6 +91,19 @@ export interface DayCollection {
   memo: string | null;
 }
 
+/**
+ * ⭐ 재등장 카드 (사장님 지시 2026-09-05 — "둘 다 카드로 다시 재등장하는 게 시안성이
+ *    좋다. 대신 배지로 시공완료·수금완료 같은 것을 추가해서").
+ *    시공한 날·수금한 날에 원래 판매의 영수증 카드가 배지를 달고 다시 뜬다.
+ * 🔴 그날 매출 합계(amount)·본수(qty)에는 절대 안 들어간다 — 돈은 한 번만 센다.
+ */
+export interface DayEcho {
+  sale: SaleRow;
+  kind: "시공" | "수금";
+  /** 배지 뒷글 — 「09-03 예약분」 · 「+100,000원 · 09-03 정비분」(그날 받은 금액) */
+  note: string;
+}
+
 export interface SaleDay {
   date: string;
   qty: number;
@@ -99,9 +112,13 @@ export interface SaleDay {
   /**
    * ⭐ 그날 받은 외상 수금 (2026-09-03) — 🔴 amount(매출 합계)에는 절대 안 더한다.
    *    같은 돈이 판 날과 받은 날에 두 번 잡히면 안 된다 — 별도 표기 전용.
+   *    2026-09-05 부터 화면 표시는 재등장 카드(echoes)가 맡고, 이 배열은
+   *    날짜 헤더의 「외상 수금 +X원」 합계(collectedSum) 재료로 남는다.
    */
   collections: DayCollection[];
   collectedSum: number;
+  /** ⭐ 재등장 카드 (2026-09-05) — 시공한 날·수금한 날의 배지 단 카드 */
+  echoes: DayEcho[];
 }
 
 export interface SaleHistory {
@@ -190,6 +207,62 @@ export async function saleHistory(opts: {
     WHERE q.status <> '취소' ${conds}
   `);
   const ids = idRows.map((r) => Number(r.id));
+  /** 기간 안 판매만 날짜 그룹의 「그날 판 것」으로 — 재등장용으로 덧붙인 id 는 카드 목록에 안 섞는다 */
+  const periodIds = new Set(ids);
+
+  /* ⭐ 재등장 카드 재료 (사장님 지시 2026-09-05) — 시공한 날·수금한 날.
+     기간 필터는 그 「두 번째 날」 기준으로 건다. 예약중 필터에선 생략. */
+  let fulfillEchoes: { id: number; fd: string; wd: string }[] = [];
+  let colls: {
+    id: number; quote_id: number; quote_no: string; amount: number; method: string;
+    paid_on: string; memo: string | null; who: string; plate_no: string | null; work_date: string;
+  }[] = [];
+  if (!opts.reserved) {
+    fulfillEchoes = (
+      await db.execute<{ id: number; fd: string; wd: string }>(sql`
+        SELECT q.id, to_char(q.fulfilled_on, 'YYYY-MM-DD') fd,
+               to_char(COALESCE(q.work_date, q.created_at::date), 'MM-DD') wd
+        FROM quote q
+        WHERE q.status = '성사' AND q.reservation_status = '시공완료' AND q.fulfilled_on IS NOT NULL
+          -- 예약한 그날 바로 시공했으면 카드가 이미 그날에 있다 — 재등장 없음
+          AND q.fulfilled_on <> COALESCE(q.work_date, q.created_at::date)
+          ${m ? sql`AND to_char(q.fulfilled_on, 'YYYY-MM') = ${m}` : sql``}
+          ${from ? sql`AND q.fulfilled_on >= ${from}::date` : sql``}
+          ${to ? sql`AND q.fulfilled_on <= ${to}::date` : sql``}
+          ${opts.customerId ? sql`AND q.customer_id = ${opts.customerId}` : sql``}
+          ${opts.vehicleId ? sql`AND q.vehicle_id = ${opts.vehicleId}` : sql``}
+          ${opts.supplierName ? sql`AND q.supplier_name = ${opts.supplierName}` : sql``}
+        ORDER BY q.fulfilled_on DESC, q.id DESC LIMIT 60
+      `)
+    ).map((r) => ({ id: Number(r.id), fd: r.fd, wd: r.wd }));
+    /* 외상 수금 (받은 날 기준) — 2026-09-03 부터 있던 질의를 앞으로 당겼다:
+       재등장 카드를 만들려면 이 판매들의 상세(SaleRow)가 필요해서다 */
+    colls = [
+      ...(await db.execute<(typeof colls)[number]>(sql`
+        SELECT rp.id, q.id quote_id, q.quote_no, rp.amount, rp.method,
+               to_char(rp.paid_on, 'YYYY-MM-DD') paid_on, rp.memo,
+               COALESCE(q.supplier_name, c.name, '손님') who, v.plate_no,
+               to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM-DD') work_date
+        FROM receivable_payment rp
+        JOIN quote q ON q.id = rp.quote_id
+        LEFT JOIN customer c ON c.id = q.customer_id
+        LEFT JOIN vehicle v ON v.id = q.vehicle_id
+        WHERE q.status = '성사' AND q.payment_method = '외상'
+          ${m ? sql`AND to_char(rp.paid_on, 'YYYY-MM') = ${m}` : sql``}
+          ${from ? sql`AND rp.paid_on >= ${from}::date` : sql``}
+          ${to ? sql`AND rp.paid_on <= ${to}::date` : sql``}
+          ${opts.customerId ? sql`AND q.customer_id = ${opts.customerId}` : sql``}
+          ${opts.vehicleId ? sql`AND q.vehicle_id = ${opts.vehicleId}` : sql``}
+          ${opts.supplierName ? sql`AND q.supplier_name = ${opts.supplierName}` : sql``}
+        ORDER BY rp.paid_on DESC, rp.id DESC
+        LIMIT 300
+      `)),
+    ];
+    // 재등장할 판매의 상세도 함께 가져온다 — 카드 240건 컷과 별개, 각각 위 LIMIT 이 상한
+    for (const e of fulfillEchoes) if (!periodIds.has(e.id)) ids.push(e.id);
+    const collIds = [...new Set(colls.map((r) => Number(r.quote_id)))].slice(0, 60);
+    for (const qid of collIds) if (!periodIds.has(qid) && !ids.includes(qid)) ids.push(qid);
+  }
 
   const rows = await db.execute<{
     quote_id: number;
@@ -389,8 +462,10 @@ export async function saleHistory(opts: {
   const dayMap = new Map<string, SaleDay>();
   const dayOf = (date: string) =>
     dayMap.get(date) ??
-    dayMap.set(date, { date, qty: 0, amount: 0, sales: [], collections: [], collectedSum: 0 }).get(date)!;
+    dayMap.set(date, { date, qty: 0, amount: 0, sales: [], collections: [], collectedSum: 0, echoes: [] }).get(date)!;
   for (const s of map.values()) {
+    // 재등장용으로만 가져온 판매(기간 밖)는 그날 카드 목록에 안 넣는다
+    if (!periodIds.has(s.quoteId)) continue;
     const d = dayOf(s.workDate);
     d.sales.push(s);
     if (s.status !== "취소") {
@@ -403,53 +478,47 @@ export async function saleHistory(opts: {
    * ⭐ 외상 수금을 「받은 날」 그룹에 싣는다 (사장님 요청 2026-09-03).
    * 🔴 매출 합계(d.amount·totalAmount)에는 절대 안 더한다 — 판 날에 이미 세었다.
    *    수금 정본은 receivable_payment 그대로(외상 장부와 같은 표), 새 판정 없음.
-   *    수금만 있고 판매가 없는 날도 그룹이 생긴다. 예약중 필터에선 생략.
+   *    수금만 있고 판매가 없는 날도 그룹이 생긴다. 예약중 필터에선 생략(질의 자체를 위에서 안 함).
    */
-  if (!opts.reserved) {
-    const colls = await db.execute<{
-      id: number;
-      quote_id: number;
-      quote_no: string;
-      amount: number;
-      method: string;
-      paid_on: string;
-      memo: string | null;
-      who: string;
-      plate_no: string | null;
-      work_date: string;
-    }>(sql`
-      SELECT rp.id, q.id quote_id, q.quote_no, rp.amount, rp.method,
-             to_char(rp.paid_on, 'YYYY-MM-DD') paid_on, rp.memo,
-             COALESCE(q.supplier_name, c.name, '손님') who, v.plate_no,
-             to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM-DD') work_date
-      FROM receivable_payment rp
-      JOIN quote q ON q.id = rp.quote_id
-      LEFT JOIN customer c ON c.id = q.customer_id
-      LEFT JOIN vehicle v ON v.id = q.vehicle_id
-      WHERE q.status = '성사' AND q.payment_method = '외상'
-        ${m ? sql`AND to_char(rp.paid_on, 'YYYY-MM') = ${m}` : sql``}
-        ${from ? sql`AND rp.paid_on >= ${from}::date` : sql``}
-        ${to ? sql`AND rp.paid_on <= ${to}::date` : sql``}
-        ${opts.customerId ? sql`AND q.customer_id = ${opts.customerId}` : sql``}
-        ${opts.vehicleId ? sql`AND q.vehicle_id = ${opts.vehicleId}` : sql``}
-        ${opts.supplierName ? sql`AND q.supplier_name = ${opts.supplierName}` : sql``}
-      ORDER BY rp.paid_on DESC, rp.id DESC
-      LIMIT 300
-    `);
+  for (const r of colls) {
+    const d = dayOf(r.paid_on);
+    d.collections.push({
+      id: Number(r.id),
+      quoteId: Number(r.quote_id),
+      quoteNo: r.quote_no,
+      amount: Number(r.amount),
+      method: r.method,
+      who: r.who,
+      plateNo: r.plate_no,
+      workDate: r.work_date,
+      memo: r.memo,
+    });
+    d.collectedSum += Number(r.amount);
+  }
+
+  /* ⭐ 재등장 카드 조립 (2026-09-05) — 시공한 날·수금한 날에 원래 카드가 배지를 달고 다시 뜬다 */
+  for (const e of fulfillEchoes) {
+    const s = map.get(e.id);
+    if (!s) continue;
+    dayOf(e.fd).echoes.push({ sale: s, kind: "시공", note: `${e.wd} 예약분` });
+  }
+  {
+    // 같은 날 같은 판매의 수금 여러 건(나눠 받기)은 카드 하나에 금액 합산
+    const byDayQuote = new Map<string, { qid: number; day: string; sum: number; wd: string }>();
     for (const r of colls) {
-      const d = dayOf(r.paid_on);
-      d.collections.push({
-        id: Number(r.id),
-        quoteId: Number(r.quote_id),
-        quoteNo: r.quote_no,
-        amount: Number(r.amount),
-        method: r.method,
-        who: r.who,
-        plateNo: r.plate_no,
-        workDate: r.work_date,
-        memo: r.memo,
+      const k = `${r.paid_on}|${r.quote_id}`;
+      const cur = byDayQuote.get(k) ?? { qid: Number(r.quote_id), day: r.paid_on, sum: 0, wd: r.work_date.slice(5) };
+      cur.sum += Number(r.amount);
+      byDayQuote.set(k, cur);
+    }
+    for (const e of byDayQuote.values()) {
+      const s = map.get(e.qid);
+      if (!s) continue; // 수금 300건 중 재등장 상한(60판매)을 넘긴 것 — 헤더 합계에는 이미 들어 있다
+      dayOf(e.day).echoes.push({
+        sale: s,
+        kind: "수금",
+        note: `+${e.sum.toLocaleString("ko-KR")}원 · ${e.wd} 정비분`,
       });
-      d.collectedSum += Number(r.amount);
     }
   }
 

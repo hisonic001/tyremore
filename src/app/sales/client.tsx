@@ -26,6 +26,7 @@ const PAYS = [...SPLITTABLE, ...EXCLUSIVE] as readonly string[];
 export function SaleCard({
   sale: s,
   select,
+  echo,
   owner = false,
   canCollect = false,
   canReassign = false,
@@ -33,6 +34,11 @@ export function SaleCard({
   sale: SaleRow;
   /** ⭐ MARS 올리기 선택 모드 (사장님 지시 2026-08-09) — 있으면 카드가 체크박스가 된다 */
   select?: { eligible: boolean; checked: boolean; toggle: () => void; reason?: string | null };
+  /**
+   * ⭐ 재등장 카드 (사장님 지시 2026-09-05) — 시공한 날·수금한 날에 원래 카드가
+   *    이 배지를 달고 다시 뜬다. 그날 매출 합계에는 안 들어간 카드라는 표시이기도 하다.
+   */
+  echo?: { kind: "시공" | "수금"; note: string };
   /** ⭐ 매입가·마진 표시 (2026-09-02 — cost 스위치. 전엔 owner 하나가 세 용도를 겸직) */
   owner?: boolean;
   /** 외상 수금 UI (receivable_view 스위치) */
@@ -202,6 +208,14 @@ export function SaleCard({
         onClick={() => (select ? select.eligible && select.toggle() : setOpen(!open))}
         className="w-full rounded-card p-3 text-left transition-colors active:bg-slate-50 lg:hover:bg-slate-50"
       >
+        {/* ── 재등장 배지 (2026-09-05) — 시공한 날·수금한 날의 카드임을 맨 위에서 알린다 ── */}
+        {echo && (
+          <div className="mb-2">
+            <StatusPill tone={echo.kind === "수금" ? "success" : "reserve"}>
+              {echo.kind === "수금" ? "💰 외상 수금" : "🔧 시공 완료"} {echo.note}
+            </StatusPill>
+          </div>
+        )}
         {/* ── 머리: 누구 · 무슨 차 ── */}
         <div className="flex items-baseline gap-2">
           {select && select.eligible && (
