@@ -23,6 +23,8 @@ import { parseVin } from "@/lib/vin";
  */
 export interface PhotoInfo {
   plateNo?: string;
+  /** 한글이 오독으로 버려졌을 때 살린 숫자 끝 4자리 — 되찾기 검색용 */
+  plateTail?: string;
   vin?: string;
   carName?: string;
   modelCode?: string;
@@ -57,6 +59,10 @@ function digest(r: NonNullable<ScanResult>): { info: PhotoInfo; line: string; ex
   if (r.plateNo) {
     info.plateNo = r.plateNo;
     parts.push(`차량번호 ${r.plateNo}`);
+  } else if (r.plateTail) {
+    // 한글은 오독으로 버렸지만 숫자는 살렸다 — 끝 4자리로 되찾는다 (2026-09-06)
+    info.plateTail = r.plateTail;
+    parts.push(`차량번호 끝 4자리 ${r.plateTail}`);
   }
   if (r.vin) {
     info.vin = r.vin;
