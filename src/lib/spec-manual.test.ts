@@ -22,6 +22,29 @@ const TIRE_TABLE = `
   <tr><td><p>255/45 R20</p></td><td><p>8.5Jx20</p></td></tr>
 </tbody></table>`;
 
+/**
+ * 🔴 **스태거드 — 앞뒤 규격이 다른 차** (G80 RG3 모양, 2026-09-05 사장님 지적)
+ *
+ * 지금까지 시험 표는 전부 앞뒤 같은 규격이라 **이 결함이 한 번도 재현되지 않았다.**
+ * 실제 DB 에서는 19인치 앞 245/45R19 와 뒤 275/40R19 가 **별개 두 벌**로 들어가
+ * 화면에 「19인치 옵션이 두 개」로 보이고 있었다.
+ */
+const STAGGERED_TABLE = `
+<table data-cols="5"><thead>
+  <tr><th><p>구분</p></th><th><p>타이어 형식</p></th><th><p>휠</p></th>
+      <th><p>추천 공기압 [kpa(psi)]</p></th>
+      <th><p>휠 너트 체결 토크(kgf·m)</p></th></tr>
+</thead><tbody>
+  <tr><td><p>전륜</p></td><td><p>245/45R19</p></td><td><p>8.5Jx19</p></td>
+      <td><p>250(36)</p></td><td rowspan="2"><p>14~16</p></td></tr>
+  <tr><td><p>후륜</p></td><td><p>275/40R19</p></td><td><p>9.5Jx19</p></td>
+      <td><p>250(36)</p></td></tr>
+  <tr><td><p>전륜</p></td><td><p>245/40R20</p></td><td><p>8.5Jx20</p></td>
+      <td><p>250(36)</p></td><td rowspan="2"><p>14~16</p></td></tr>
+  <tr><td><p>후륜</p></td><td><p>275/35R20</p></td><td><p>9.5Jx20</p></td>
+      <td><p>250(36)</p></td></tr>
+</tbody></table>`;
+
 /** t01118.html 「추천 오일 및 용량」 모양 */
 const OIL_TABLE = `
 <table><thead><tr><th colspan="3"><p>종류</p></th><th><p>용량(L)</p></th><th><p>추천 사양</p></th></tr></thead><tbody>
@@ -337,5 +360,70 @@ describe("페이지 다루기", () => {
     const got = harvestGrids("타이어 및 휠", parseTables(topicBody(PAGE)));
     assert.ok(got.length >= 10);
     for (const c of got) assert.equal(specFilter(c, body, { bodyType: "SUV" }), null, c.item);
+  });
+});
+
+/**
+ * 🔴 스태거드는 **한 벌**이다 (2026-09-05).
+ *    앞 245/45R19 와 뒤 275/40R19 는 「19인치 한 벌」이지 「옵션 두 개」가 아니다.
+ *    이걸 두 벌로 두면 사장님이 화면에서 무엇을 끼워야 할지 알 수 없다.
+ */
+describe("스태거드 — 앞뒤 규격이 다른 차", () => {
+  const got = parseTireWheelTable(parseTable(STAGGERED_TABLE));
+
+  it("🔴 19인치 앞뒤가 한 벌로 묶인다 — 벌은 인치 수만큼만 생긴다", () => {
+    const groups = new Set(got.map((c) => c.groupNo));
+    assert.equal(groups.size, 2, `19인치·20인치 두 벌이어야 하는데 ${groups.size}벌`);
+  });
+
+  it("🔴 타이어 규격에도 앞/뒤가 붙는다 — 예전에는 공기압에만 붙어 짝을 잃었다", () => {
+    const sizes = got.filter((c) => c.item === "tire_size");
+    assert.equal(sizes.length, 4);
+    const front = sizes.find((c) => c.textValue === "245/45R19");
+    const rear = sizes.find((c) => c.textValue === "275/40R19");
+    assert.equal(front?.qualifier?.["위치"], "앞");
+    assert.equal(rear?.qualifier?.["위치"], "뒤");
+    assert.equal(front?.groupNo, rear?.groupNo, "앞뒤가 같은 벌이어야 한다");
+  });
+
+  it("휠 규격에도 앞/뒤가 붙는다 — 앞 8.5J · 뒤 9.5J 로 서로 다르다", () => {
+    const wheels = got.filter((c) => c.item === "wheel_size");
+    const f = wheels.find((c) => c.textValue === "8.5Jx19");
+    const r = wheels.find((c) => c.textValue === "9.5Jx19");
+    assert.equal(f?.qualifier?.["위치"], "앞");
+    assert.equal(r?.qualifier?.["위치"], "뒤");
+    assert.equal(f?.groupNo, r?.groupNo);
+  });
+
+  it("벌 이름이 앞뒤를 함께 보여 준다", () => {
+    const label = got.find((c) => c.textValue === "245/45R19")?.groupLabel ?? "";
+    assert.match(label, /19인치/);
+    assert.match(label, /245\/45R19/);
+    assert.match(label, /275\/40R19/);
+  });
+
+  it("토크는 두 벌 모두에 붙는다 — 합쳐진 칸을 폈기 때문이다", () => {
+    const t = got.filter((c) => c.item === "wheel_nut_torque");
+    assert.ok(t.length >= 2, `벌마다 토크가 있어야 하는데 ${t.length}개`);
+    assert.equal(t[0].numMin, 14);
+    assert.equal(t[0].numMax, 16);
+  });
+});
+
+/**
+ * 🔴 **앞뒤가 같은 표는 예전 그대로여야 한다.** 스태거드 고치다가
+ *    「18인치 한 벌 / 20인치 한 벌」을 한 벌로 뭉개면 더 큰 사고다.
+ */
+describe("앞뒤가 같은 표는 건드리지 않는다", () => {
+  it("18인치·20인치는 여전히 두 벌", () => {
+    const got = parseTireWheelTable(parseTable(TIRE_TABLE));
+    assert.equal(new Set(got.map((c) => c.groupNo)).size, 2);
+  });
+
+  it("규격에 위치가 안 붙는다 — 앞뒤가 같으니 붙일 이유가 없다", () => {
+    const got = parseTireWheelTable(parseTable(TIRE_TABLE));
+    for (const c of got.filter((x) => x.item === "tire_size")) {
+      assert.equal(c.qualifier?.["위치"], undefined);
+    }
   });
 });

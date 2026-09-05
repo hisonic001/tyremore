@@ -13,7 +13,7 @@
  * 여기서 만든 인용문(`quote`)은 `spec_source.body_text` 안에 **글자 그대로** 있어야 하며,
  * `specFilter` 가 그걸 기계로 대조한다.
  */
-import { looksLikeTireSize, looksLikeViscosity, looksLikeWheelSize, normalizeUnit } from "./spec-core";
+import { looksLikeTireSize, looksLikeViscosity, looksLikeWheelSize, normalizeUnit, tireRimInch } from "./spec-core";
 import { type Grid, rowToText } from "./spec-html";
 import type { SpecCandidate } from "./spec-verify";
 
@@ -213,27 +213,84 @@ export function parseTireWheelTable(g: Grid): HarvestedSpec[] {
    */
   if (cols.length < 2) return [];
 
+  /**
+   * 🔴 **스태거드 — 앞뒤 규격이 다른 차** (2026-09-05, 사장님 지적으로 드러났다)
+   *
+   * G80(RG3) 표는 이렇게 생겼다:
+   *     전륜 | 245/45R19 | 8.5Jx19 | 250 | 11~13
+   *     후륜 | 275/40R19 | 9.5Jx19 | 250 |
+   * 지금까지는 **행마다 groupNo++** 했기 때문에 이 두 줄이 「인치가 다른 두 벌」로 들어갔고,
+   * 화면에서는 「19인치 옵션이 두 개」로 보였다.
+   *
+   * 고침: **행 머리에 전륜/후륜이 적힌 표**를 알아보고, 그런 표에서는
+   * **림 인치가 같은 줄들을 한 벌로 묶는다.** 앞/뒤는 `qualifier.위치` 로 구분한다.
+   *
+   * 🔴 행 머리에 앞/뒤가 **없으면 예전 그대로** 줄마다 한 벌이다 —
+   *    진짜로 「18인치 한 벌 / 20인치 한 벌」인 표를 망치면 안 된다.
+   */
+  const ROW_POS = /^(전륜|후륜|앞바퀴|뒷바퀴|앞|뒤|전|후)$/;
+  const rowWhereOf = (row: string[]): string | null => {
+    for (let c = 0; c < sizeCol; c++) {
+      const v = (row[c] ?? "").trim().replace(/\s/g, "");
+      if (!ROW_POS.test(v)) continue;
+      return /전|앞/.test(v) ? "앞" : "뒤";
+    }
+    return null;
+  };
+  const sizeRows = bodyRows.filter((r) => looksLikeTireSize((r[sizeCol] ?? "").trim()));
+  const wheres = sizeRows.map(rowWhereOf);
+  /* 앞도 있고 뒤도 있어야 스태거드 표다 — 한쪽만 있으면 예전대로 간다 */
+  const staggered = wheres.includes("앞") && wheres.includes("뒤");
+
   const out: HarvestedSpec[] = [];
   let groupNo = 0;
+  /** 스태거드 표에서 「몇 인치가 몇 번 벌인지」 */
+  const groupOfRim = new Map<number, number>();
+  /** 벌마다 앞·뒤 규격을 모아 이름을 짓는다 */
+  const labelParts = new Map<number, { 앞?: string; 뒤?: string; any: string }>();
+
   for (const row of bodyRows) {
     const size = (row[sizeCol] ?? "").trim();
     if (!looksLikeTireSize(size)) continue;
-    groupNo++;
+    const rowWhere = staggered ? rowWhereOf(row) : null;
+    const rim = tireRimInch(size);
+
+    if (staggered && rim !== null) {
+      /* 같은 인치면 같은 벌 — 앞줄과 뒷줄이 한 벌이 된다 */
+      const had = groupOfRim.get(rim);
+      if (had === undefined) {
+        groupNo++;
+        groupOfRim.set(rim, groupNo);
+      }
+      groupNo = groupOfRim.get(rim)!;
+      const lp = labelParts.get(groupNo) ?? { any: size };
+      if (rowWhere === "앞") lp["앞"] = size;
+      else if (rowWhere === "뒤") lp["뒤"] = size;
+      lp.any = lp.any || size;
+      labelParts.set(groupNo, lp);
+    } else {
+      groupNo++;
+      labelParts.set(groupNo, { any: size });
+    }
     const quote = rowToText(row);
     for (const c of cols) {
       const raw = (row[c.i] ?? "").trim();
       if (!raw) continue;
       const base = { groupNo, groupLabel: size, quote, item: c.item } as HarvestedSpec;
+      /* 🔴 스태거드면 규격에도 앞/뒤를 붙인다 — 예전에는 공기압에만 붙어서 짝을 잃었다 */
+      const rowQual = rowWhere ? { 위치: rowWhere } : undefined;
       if (c.item === "tire_size") {
-        out.push({ ...base, textValue: size });
+        out.push({ ...base, textValue: size, qualifier: rowQual });
       } else if (c.item === "wheel_size") {
-        if (looksLikeWheelSize(raw)) out.push({ ...base, textValue: raw });
+        if (looksLikeWheelSize(raw)) out.push({ ...base, textValue: raw, qualifier: rowQual });
       } else {
         const n = readNumCell(raw);
         /* 🔴 단위를 못 읽으면 값을 버린다. 단위 없는 숫자는 위험하기만 하다 */
         if (!n || !c.unit) continue;
         const qual: Record<string, string> = {};
+        /* 열 머리에 앞/뒤가 있으면 그것이 우선 — 없으면 행 머리를 쓴다 */
         if (c.where) qual["위치"] = c.where;
+        else if (rowWhere) qual["위치"] = rowWhere;
         /* 같은 앞/뒤가 두 벌 있으면(왜건·밴) 어느 쪽인지 이름을 붙여 준다 */
         if (c.group) qual["구분"] = c.group;
         out.push({
@@ -246,6 +303,22 @@ export function parseTireWheelTable(g: Grid): HarvestedSpec[] {
           qualifier: Object.keys(qual).length ? qual : undefined,
         });
       }
+    }
+  }
+
+  /**
+   * 벌 이름을 다시 짓는다 — 스태거드면 「19인치 (앞 245/45R19 · 뒤 275/40R19)」로.
+   * 사장님이 화면에서 **한 벌인지 두 벌인지 한눈에** 아셔야 한다.
+   */
+  if (staggered) {
+    for (const spec of out) {
+      const lp = labelParts.get(spec.groupNo);
+      if (!lp) continue;
+      const rim = tireRimInch(lp.앞 ?? lp.뒤 ?? lp.any);
+      spec.groupLabel =
+        lp.앞 && lp.뒤 && lp.앞 !== lp.뒤
+          ? `${rim ?? ""}인치 (앞 ${lp.앞} · 뒤 ${lp.뒤})`
+          : (lp.앞 ?? lp.뒤 ?? lp.any);
     }
   }
   return out;

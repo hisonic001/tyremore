@@ -41,6 +41,21 @@ export const SPEC_ITEMS: SpecItemDef[] = [
     hint: "235/60R18",
   },
   { key: "wheel_size", label: "휠 규격", numeric: false, units: [], risk: "낮음", hint: "7.5Jx18" },
+  /**
+   * ⭐ 순정으로 끼워 나오는 타이어 **브랜드** (2026-09-05, 사장님 요청)
+   *
+   * 🔴 **모델명(크로스클라이밋 같은 것)은 여기 안 온다.** 출처인 자동차 「차량정보」 장의
+   *    타이어 에너지소비효율 표에는 **제조사와 규격까지만** 적혀 있다.
+   *    한 규격에 공급사가 여럿일 수 있어 여러 줄이 붙는다 — 그게 정상이다.
+   */
+  {
+    key: "oe_tire_brand",
+    label: "순정 타이어 브랜드",
+    numeric: false,
+    units: [],
+    risk: "낮음",
+    hint: "넥센 (NEXEN)",
+  },
   {
     key: "tire_pressure",
     label: "표준 공기압",
@@ -103,6 +118,36 @@ export const SPEC_ITEMS: SpecItemDef[] = [
     risk: "높음",
     range: { L: { min: 2, max: 20 } },
     hint: "6.1 L (필터 포함)",
+  },
+  /**
+   * ⭐ 오일 갈 때 쓰는 두 토크 (2026-09-05, 사장님 요청)
+   *
+   * 🔴 **취급설명서에는 없다.** 받아 둔 설명서 43건에 「드레인」이 0건이었다 —
+   *    운전자용 책이라 정비 토크를 안 싣는다. 정비지침서·제조사 자료 쪽 값이라
+   *    인터넷에서 **서로 다른 두 곳이 같은 값을 말할 때만** 받아 온다 (spec-search.ts).
+   *
+   * 🔴 범위는 **자릿수 사고를 잡을 만큼 좁고, 진짜 값을 막지 않을 만큼 넓게.**
+   *    국산 승용 드레인은 대개 35~45 N·m, 카트리지 필터캡은 25 N·m 안팎이다.
+   *    너무 좁게 잡으면 진짜 값이 걸리고, 너무 넓으면 10배 오기를 못 잡는다.
+   */
+  {
+    key: "oil_filter_torque",
+    label: "오일필터 체결 토크",
+    numeric: true,
+    units: ["N·m", "kgf·m"],
+    risk: "높음",
+    range: { "N·m": { min: 8, max: 45 }, "kgf·m": { min: 0.8, max: 4.6 } },
+    hint: "25 N·m",
+  },
+  {
+    key: "oil_drain_plug_torque",
+    label: "드레인 플러그 체결 토크",
+    numeric: true,
+    /** 🔴 과하게 조이면 오일팬 나사산이 나간다 — 알루미늄 오일팬은 특히 */
+    units: ["N·m", "kgf·m"],
+    risk: "높음",
+    range: { "N·m": { min: 15, max: 70 }, "kgf·m": { min: 1.5, max: 7.2 } },
+    hint: "35~45 N·m",
   },
   {
     key: "coolant_qty",
@@ -255,6 +300,25 @@ export function looksLikeTireSize(v: string): boolean {
   const aspect = Number(m[2]);
   const rim = Number(/[RZ](\d{2})/.exec(s)?.[1] ?? 0);
   return width >= 125 && width <= 385 && aspect >= 25 && aspect <= 90 && rim >= 12 && rim <= 24;
+}
+
+/**
+ * ⭐ 타이어 규격에서 **림 인치**만 뽑는다 (2026-09-05, 스태거드 때문에 생겼다)
+ *
+ * 🔴 앞뒤 규격이 다른 차(G80 245/45R19 앞 · 275/40R19 뒤)를 **한 벌로 묶는 열쇠**다.
+ *    폭은 다르지만 인치는 같다 — 그게 「같은 휠 한 벌」이라는 뜻이다.
+ */
+export function tireRimInch(v: string): number | null {
+  if (!looksLikeTireSize(v)) return null;
+  const m = /[RZ](\d{2})/.exec(v.replace(/\s/g, "").toUpperCase());
+  return m ? Number(m[1]) : null;
+}
+
+/** 휠 규격에서 인치만 — 타이어 인치와 맞는지 견주는 데 쓴다 (교차검산) */
+export function wheelRimInch(v: string): number | null {
+  if (!looksLikeWheelSize(v)) return null;
+  const m = /[xX×]\s?(\d{2})/.exec(v.replace(/\s/g, ""));
+  return m ? Number(m[1]) : null;
 }
 
 export function looksLikeWheelSize(v: string): boolean {
