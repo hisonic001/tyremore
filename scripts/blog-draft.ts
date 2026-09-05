@@ -18,6 +18,27 @@
 import { config } from "dotenv";
 config({ path: ".env.local" });
 
+/** 왜 못 쓰는지 판매를 한 번 더 읽어 그대로 말해 준다 */
+async function whyNotUsable(quoteId: number): Promise<string> {
+  try {
+    const postgres = (await import("postgres")).default;
+    const sql = postgres(process.env.DATABASE_URL!, { max: 1, prepare: false });
+    try {
+      const [q] = await sql<{ status: string; quote_no: string }[]>`
+        SELECT status, quote_no FROM quote WHERE id = ${quoteId}`;
+      if (!q) return `판매 ${quoteId} 를 찾지 못했습니다`;
+      if (q.status !== "성사") {
+        return `판매 ${q.quote_no} 는 아직 「성사」가 아닙니다 (지금 「${q.status}」) — 성사로 바꾼 뒤 다시 눌러 주세요`;
+      }
+      return `판매 ${q.quote_no} 에 품목이 하나도 없습니다 — 앱에서 품목을 넣은 뒤 다시 눌러 주세요`;
+    } finally {
+      await sql.end();
+    }
+  } catch {
+    return `판매 ${quoteId} 를 글감으로 못 씁니다`;
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const flag = (k: string) => args.includes(k);
@@ -93,7 +114,13 @@ async function main() {
   if (quoteId) {
     const [f] = await factsForDay("", { quoteId });
     if (!f) {
-      const msg = `quote ${quoteId} 를 글감으로 못 씁니다 (성사·타이어 포함·거래처 아님 조건)`;
+      /**
+       * 🔴 **조건을 나열하지 않는다** (2026-09-05, 사장님 제보).
+       *    예전 문구는 「성사·타이어 포함·거래처 아님 조건」이라 세 개를 늘어놓기만 해서,
+       *    엔진오일 건이 거래처 때문에 막힌 것을 **타이어 문제로 오해**하시게 만들었다.
+       *    이제 남은 조건은 「성사」 하나뿐이니, 무엇이 문제인지 그대로 말한다.
+       */
+      const msg = await whyNotUsable(quoteId);
       say(agent ? `ERROR=${msg}` : `❌ ${msg}`);
       process.exitCode = agent ? 1 : 0;
       return;

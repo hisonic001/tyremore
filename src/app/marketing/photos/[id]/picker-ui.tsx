@@ -27,10 +27,12 @@ interface SaleSummary {
   car: string;
   mileage: number | null;
   tires: string;
+  /** 거래처(렌트카·정비소) 건이면 그 이름 — 🔴 화면에만 쓴다. 글에는 안 나간다 */
+  supplier: string | null;
 }
 
 export function PickerUI({
-  folder, photos, sale, sales, drafts, agent,
+  folder, photos, sale, sales, drafts, agent, withSupplier,
 }: {
   folder: FolderRow;
   photos: PhotoRow[];
@@ -39,6 +41,8 @@ export function PickerUI({
   /** 이 폴더로 만든 원고 — 만들고 나서 어디로 갔는지 여기서 바로 보이게 */
   drafts: { id: number; title: string; status: string; hasNote: boolean }[];
   agent: AgentStatus;
+  /** 「거래처 건도 보기」가 켜져 있나 */
+  withSupplier: boolean;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -145,6 +149,16 @@ export function PickerUI({
               {sale.tires}
               {sale.mileage ? ` · ${sale.mileage.toLocaleString("ko-KR")}km` : ""} · {sale.workDate}
             </p>
+            {/*
+              🔴 겁주는 경고가 아니라 **사실 안내**다 (2026-09-05).
+                 AI 에 보내는 재료는 차량·시공·작업·시기·매장 다섯 줄뿐이고,
+                 거래처 이름은 「쓰면 안 되는 말」 목록에만 들어간다 — 실제로 안 나간다.
+            */}
+            {sale.supplier && (
+              <p className="mt-1 text-[13px] leading-snug text-slate-500">
+                거래처 건입니다 — <strong>글에는 거래처 이름이 나가지 않습니다.</strong>
+              </p>
+            )}
           </div>
           {/* 🔴 번호판으로 자동으로 이은 것이 틀릴 수 있다 — 바꿀 길을 늘 열어 둔다 */}
           <button
@@ -174,6 +188,9 @@ export function PickerUI({
                   className="w-full rounded-control bg-white px-3 py-2 text-left text-[13px] leading-snug active:bg-slate-100"
                 >
                   <span className="font-medium">{s.car}</span>
+                  {s.isSupplier && (
+                    <span className="ml-1 rounded bg-slate-100 px-1 text-[11px] text-slate-500">거래처</span>
+                  )}
                   <span className="text-slate-500">
                     {" "}
                     · {s.tires} {s.qty}본 · {s.workDate}
@@ -182,6 +199,13 @@ export function PickerUI({
               </li>
             ))}
           </ul>
+          {/* 🔴 기본은 꺼둔다 — 최근 60일 거래처 성사가 122건이라 켜면 손님 건이 덮인다 */}
+          <Link
+            href={`/marketing/photos/${folder.id}${withSupplier ? "" : "?거래처=1"}`}
+            className="mt-2 inline-block text-[13px] font-medium text-slate-500 underline underline-offset-2"
+          >
+            {withSupplier ? "거래처 건 숨기기" : "거래처(렌트카·정비소) 건도 보기"}
+          </Link>
         </section>
       )}
 

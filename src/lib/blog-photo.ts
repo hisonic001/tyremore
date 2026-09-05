@@ -257,15 +257,16 @@ export async function autoLinkFolders(): Promise<number> {
 /** 폴더 화면이 쓰는 것 — 이어진 판매의 시공 요약 */
 export async function folderSaleSummary(
   quoteId: number,
-): Promise<{ quoteNo: string; workDate: string; car: string; mileage: number | null; tires: string } | null> {
+): Promise<{ quoteNo: string; workDate: string; car: string; mileage: number | null; tires: string; supplier: string | null } | null> {
   const rows = await db.execute<{
     quote_no: string;
     work_date: string;
     car: string | null;
     mileage: number | string | null;
     tires: string | null;
+    supplier_name: string | null;
   }>(sql`
-    SELECT q.quote_no, q.work_date::text AS work_date,
+    SELECT q.quote_no, q.work_date::text AS work_date, q.supplier_name,
            NULLIF(TRIM(CONCAT_WS(' ', COALESCE(mk.name_ko, v.maker_name), v.model,
                     CASE WHEN v.year IS NULL THEN NULL ELSE v.year || '년식' END)), '') AS car,
            COALESCE(q.mileage, v.mileage) AS mileage,
@@ -275,7 +276,7 @@ export async function folderSaleSummary(
     LEFT JOIN vehicle_maker mk ON mk.code = v.maker_code
     LEFT JOIN quote_item qi ON qi.quote_id = q.id AND qi.line_type = 'tire'
     WHERE q.id = ${quoteId}
-    GROUP BY q.quote_no, q.work_date, mk.name_ko, v.maker_name, v.model, v.year, q.mileage, v.mileage`);
+    GROUP BY q.quote_no, q.work_date, q.supplier_name, mk.name_ko, v.maker_name, v.model, v.year, q.mileage, v.mileage`);
   const r = rows[0];
   if (!r) return null;
   return {
@@ -284,5 +285,7 @@ export async function folderSaleSummary(
     car: r.car ?? "차종 미상",
     mileage: r.mileage === null ? null : Number(r.mileage) || null,
     tires: r.tires ?? "",
+    /** 🔴 화면에 「거래처 건」이라고 알려 주기 위한 것. **글에는 안 나간다** */
+    supplier: r.supplier_name,
   };
 }

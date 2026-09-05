@@ -9,10 +9,18 @@ import { PickerUI } from "./picker-ui";
 export const dynamic = "force-dynamic";
 
 /** 폴더 하나 — 사진 고르기 + 작업 후기 + 원고 만들기 (C단계, 2026-09-02) */
-export default async function FolderPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function FolderPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ 거래처?: string }>;
+}) {
   if (!(await hasPerm("marketing"))) redirect("/settings");
   const { id } = await params;
   const folderId = Number(id);
+  /** 「거래처 건도 보기」 — 기본은 꺼짐. 최근 60일 거래처가 122건이라 켜면 목록이 덮인다 */
+  const withSupplier = (await searchParams).거래처 === "1";
 
   // 🔴 순차로 (Promise.all 금지 — 2026-08-11 풀러 마비 사건)
   const folder = await getFolder(folderId);
@@ -24,14 +32,22 @@ export default async function FolderPage({ params }: { params: Promise<{ id: str
    *    번호판으로 자동으로 이은 것이 **틀렸을 때 바꿀 길이 없었다.**
    *    (`3.4` 처럼 이름에 번호판이 없는 폴더도 실제로 있다.)
    */
-  const sales = await recentSalesForBlog(60, 40);
+  const sales = await recentSalesForBlog(60, 40, withSupplier);
   const drafts = await folderDrafts(folderId);
   const agent = await blogAgentStatus();
 
   return (
     <PageShell>
       <PageHeader title={folder.label} back={{ href: "/marketing/photos", label: "사진 폴더" }} />
-      <PickerUI folder={folder} photos={photos} sale={sale} sales={sales} drafts={drafts} agent={agent} />
+      <PickerUI
+        folder={folder}
+        photos={photos}
+        sale={sale}
+        sales={sales}
+        drafts={drafts}
+        agent={agent}
+        withSupplier={withSupplier}
+      />
     </PageShell>
   );
 }

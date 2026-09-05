@@ -55,6 +55,8 @@ interface CandRow {
   year: number | string | null;
   customer_name: string | null;
   mars_memo: string | null;
+  /** 거래처명 — 재료가 아니라 「쓰면 안 되는 말」로만 쓴다 */
+  supplier_name: string | null;
   line_type: string | null;
   description: string | null;
   qty: number | string | null;
@@ -67,6 +69,17 @@ interface CandRow {
  * 어느 날의 성사 판매를 블로그 사실로 바꾼다.
  * 거래처 판매·서비스(무상)·타이어 없는 건은 뺀다 — 글감이 안 된다.
  */
+/**
+ * 🔴 **사장님이 직접 고르신 건에는 거래처·무상·0원 조건을 걸지 않는다** (2026-09-05).
+ *
+ * 거래처(렌트카·정비소) 건이라고, 무상이라고, 금액이 0원이라고 글감이 아닌 것이 아니다.
+ * K8 엔진오일 건(quote 3595)이 `supplier_name = 'AJ렌트카'` 하나 때문에
+ * **사진까지 다 고른 마지막 단계에서** 튕겼다. 그런데 오류 문구는 「성사·타이어 포함·
+ * 거래처 아님」이라 어디에 걸렸는지 알 수 없었다.
+ *
+ * 이 조건들은 원래 **자동으로 고를 때** 쓰라고 둔 것인데, 자동 고르기는 없앴다(09-05).
+ * 고르신 건에 남는 것은 `status = '성사'` 하나뿐이다 — 안 한 일을 글로 쓸 수는 없다.
+ */
 export async function factsForDay(day: string, opts?: { quoteId?: number }): Promise<DraftFacts[]> {
   const rows = await db.execute<CandRow>(sql`
     SELECT q.id AS quote_id, q.quote_no, q.work_date::text AS work_date, q.mileage,
@@ -74,6 +87,7 @@ export async function factsForDay(day: string, opts?: { quoteId?: number }): Pro
            COALESCE(mk.name_ko, v.maker_name) AS maker,
            c.name AS customer_name, q.mars_memo,
            qi.line_type, qi.description, qi.qty,
+           q.supplier_name,
            p.width, p.aspect_ratio AS aspect, p.rim_inch AS rim
     FROM quote q
     LEFT JOIN vehicle       v  ON v.id = q.vehicle_id
@@ -82,10 +96,14 @@ export async function factsForDay(day: string, opts?: { quoteId?: number }): Pro
     LEFT JOIN quote_item    qi ON qi.quote_id = q.id
     LEFT JOIN product       p  ON p.id = qi.product_id
     WHERE q.status = '성사'
-      AND q.supplier_name IS NULL
-      AND COALESCE(q.payment_method, '') <> '서비스'
-      AND q.total_amount > 0
-      AND ${opts?.quoteId ? sql`q.id = ${opts.quoteId}` : sql`q.work_date = ${day}::date`}
+      ${
+        opts?.quoteId
+          ? sql`AND q.id = ${opts.quoteId}`
+          : sql`AND q.supplier_name IS NULL
+                AND COALESCE(q.payment_method, '') <> '서비스'
+                AND q.total_amount > 0
+                AND q.work_date = ${day}::date`
+      }
     ORDER BY q.id, qi.id
   `);
 
@@ -107,7 +125,16 @@ export async function factsForDay(day: string, opts?: { quoteId?: number }): Pro
         tires: [],
         services: [],
         season: seasonPhrase(r.work_date),
-        redact: [r.customer_name, r.mars_memo].filter((s): s is string => !!s && s.trim().length >= 2),
+        /**
+         * 🔴 「쓰면 안 되는 말」 — 이 말들이 원고에 나오면 `privacyFilter` 가 되돌린다.
+         *    **거래처 이름을 따로 넣는다** (사장님 지시 2026-09-05 — 「렌트카라고 안 나왔으면」).
+         *    고객명이 사람 이름이고 거래처만 회사인 건이 있어, 고객명만으로는 못 막는다.
+         *    🔴 이 말들은 **모델에 보내는 재료가 아니다.** `factsText()` 가 보내는 것은
+         *       차량·시공·작업·시기·매장 다섯 줄뿐이다.
+         */
+        redact: [r.customer_name, r.mars_memo, r.supplier_name].filter(
+          (s): s is string => !!s && s.trim().length >= 2,
+        ),
       };
       map.set(id, f);
     }
@@ -165,9 +192,21 @@ export interface BlogCandidate {
   tires: string;
   qty: number;
   hasDraft: boolean;
+  /** 거래처(렌트카·정비소) 건인가 — 화면이 배지로 알려 준다. 글에는 이름이 안 나간다 */
+  isSupplier: boolean;
 }
 
-export async function recentSalesForBlog(days = 30, limit = 40): Promise<BlogCandidate[]> {
+/**
+ * 🔴 거래처(렌트카·정비소) 건은 **기본으로 안 보여 준다** (2026-09-05).
+ *    최근 60일 거래처 성사 건이 122건이라, 목록에 부으면 사장님 손님 건이 덮인다.
+ *    다만 사장님이 그 건으로 글을 쓰실 수도 있어 `includeSupplier` 로 열 수 있게 둔다
+ *    (화면의 「거래처 건도 보기」 칸).
+ */
+export async function recentSalesForBlog(
+  days = 30,
+  limit = 40,
+  includeSupplier = false,
+): Promise<BlogCandidate[]> {
   const rows = await db.execute<{
     quote_id: number;
     quote_no: string;
@@ -177,6 +216,7 @@ export async function recentSalesForBlog(days = 30, limit = 40): Promise<BlogCan
     tires: string | null;
     qty: number | string | null;
     has_draft: boolean;
+    supplier_name: string | null;
   }>(sql`
     SELECT q.id AS quote_id, q.quote_no, q.work_date::text AS work_date,
            NULLIF(TRIM(CONCAT_WS(' ', COALESCE(mk.name_ko, v.maker_name), v.model,
@@ -184,7 +224,8 @@ export async function recentSalesForBlog(days = 30, limit = 40): Promise<BlogCan
            COALESCE(q.mileage, v.mileage) AS mileage,
            STRING_AGG(DISTINCT qi.description, ', ') AS tires,
            SUM(qi.qty)::int AS qty,
-           EXISTS (SELECT 1 FROM blog_draft b WHERE b.quote_id = q.id AND b.status <> '버림') AS has_draft
+           EXISTS (SELECT 1 FROM blog_draft b WHERE b.quote_id = q.id AND b.status <> '버림') AS has_draft,
+           q.supplier_name
     FROM quote q
     LEFT JOIN vehicle       v  ON v.id = q.vehicle_id
     LEFT JOIN vehicle_maker mk ON mk.code = v.maker_code
@@ -192,11 +233,12 @@ export async function recentSalesForBlog(days = 30, limit = 40): Promise<BlogCan
     --    블로그 「경정비 서비스」 카테고리가 전화로 가장 빨리 이어진다.
     JOIN quote_item qi ON qi.quote_id = q.id AND qi.line_type IN ('tire', 'service')
     WHERE q.status = '성사'
-      AND q.supplier_name IS NULL
       AND COALESCE(q.payment_method, '') <> '서비스'
       AND q.total_amount > 0
+      ${includeSupplier ? sql`` : sql`AND q.supplier_name IS NULL`}
       AND q.work_date >= (now() AT TIME ZONE 'Asia/Seoul')::date - make_interval(days => ${days})
-    GROUP BY q.id, q.quote_no, q.work_date, mk.name_ko, v.maker_name, v.model, v.year, q.mileage, v.mileage
+    GROUP BY q.id, q.quote_no, q.work_date, mk.name_ko, v.maker_name, v.model, v.year, q.mileage, v.mileage,
+             q.supplier_name
     ORDER BY has_draft ASC, q.work_date DESC, q.id DESC
     LIMIT ${limit}`);
 
@@ -209,6 +251,7 @@ export async function recentSalesForBlog(days = 30, limit = 40): Promise<BlogCan
     tires: r.tires ?? "",
     qty: Number(r.qty ?? 0),
     hasDraft: !!r.has_draft,
+    isSupplier: !!r.supplier_name,
   }));
 }
 
