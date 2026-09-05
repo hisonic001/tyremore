@@ -15,6 +15,8 @@
  */
 
 import { useEffect, useRef, useState, useTransition } from "react";
+import { SquareArrowOutUpRight } from "lucide-react";
+import Link from "@/lib/link";
 import type { VehicleHit } from "@/lib/search";
 import { searchVehicles } from "@/lib/search-actions";
 import { createCustomerAndVehicle, createSupplierVehicle } from "@/lib/sale";
@@ -208,6 +210,23 @@ export function CustomerPick({
             )}
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
+            {/* ⭐ 거래처 정보 바로가기 ↗ (사장님 요청 2026-09-05 — 정비 카드와 같은 문법) */}
+            <Link
+              href={`/settings/suppliers?q=${encodeURIComponent(supplier)}`}
+              title="거래처 정보 보기"
+              className="flex items-center gap-1 text-xs text-violet-600 underline underline-offset-2"
+            >
+              거래처 정보 <SquareArrowOutUpRight className="size-3" />
+            </Link>
+            {vehicle && (
+              <Link
+                href={`/vehicle/${vehicle.vehicleId}`}
+                title="차량 정보 보기"
+                className="flex items-center gap-1 text-xs text-violet-600 underline underline-offset-2"
+              >
+                차량 정보 <SquareArrowOutUpRight className="size-3" />
+              </Link>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -248,9 +267,19 @@ export function CustomerPick({
               {[vehicle.makerName, vehicle.model, vehicle.phone].filter(Boolean).join(" · ")}
             </div>
           </div>
-          <button type="button" onClick={() => onPick(null)} className="shrink-0 text-sm text-slate-500 underline">
-            바꾸기
-          </button>
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            {/* ⭐ 차량·고객 한 장 바로가기 ↗ (사장님 요청 2026-09-05 — 정비 카드와 같은 문법) */}
+            <Link
+              href={`/vehicle/${vehicle.vehicleId}`}
+              title="차량·고객 정보 보기"
+              className="flex items-center gap-1 text-xs text-slate-500 underline underline-offset-2"
+            >
+              차량·고객 정보 <SquareArrowOutUpRight className="size-3" />
+            </Link>
+            <button type="button" onClick={() => onPick(null)} className="text-sm text-slate-500 underline">
+              바꾸기
+            </button>
+          </div>
         </div>
         {/* 동명 거래처가 있는데 개인 손님으로 두는 중 — 한 번에 묶을 수 있게 */}
         {matchedSupplier && (
