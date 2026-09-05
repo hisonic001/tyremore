@@ -139,54 +139,16 @@ export async function factsForDay(day: string, opts?: { quoteId?: number }): Pro
 }
 
 /**
- * 하루치에서 블로그감 고르기 — 4본 교체 우선, 같은 차종은 하루에 하나, 이미 초안 있는 건 제외.
- */
-export async function pickCandidates(day: string, limit: number): Promise<DraftFacts[]> {
-  const all = await factsForDay(day);
-  if (all.length === 0) return [];
-  const done = await db
-    .select({ quoteId: blogDraft.quoteId })
-    .from(blogDraft)
-    .where(sql`${blogDraft.quoteId} IN (${sql.join(all.map((f) => sql`${f.quoteId}`), sql`, `)})`);
-  const skip = new Set(done.map((d) => d.quoteId));
-  const qty = (f: DraftFacts) => f.tires.reduce((s, t) => s + t.qty, 0);
-  const seenModel = new Set<string>();
-  const out: DraftFacts[] = [];
-  for (const f of all.filter((f) => !skip.has(f.quoteId)).sort((a, b) => qty(b) - qty(a))) {
-    const key = `${f.maker ?? ""} ${f.model ?? ""}`.trim() || `#${f.quoteId}`;
-    if (seenModel.has(key)) continue;
-    seenModel.add(key);
-    out.push(f);
-    if (out.length >= limit) break;
-  }
-  return out;
-}
-
-/**
- * ⭐ 아직 글로 안 쓴 시공이 있는 **가장 최근 날짜** (2026-09-02)
+ * 🔴 **자동으로 글감을 고르던 부분은 없앴다** (사장님 지시 2026-09-05).
  *
- * 사장님은 보통 아침에 버튼을 누르신다 — 그런데 그때 「오늘」은 아직 시공이 없어
- * 늘 「글감이 없습니다」가 뜬다. 자동화의 목적은 **밀린 것을 비우는 것**이므로,
- * 오늘이 비어 있으면 최근 14일 안에서 가장 최근에 밀린 날을 찾아 그날로 만든다.
- * (WHERE 조건은 factsForDay 와 같아야 한다 — 여기서 찾고 저기서 못 쓰면 헛돈다)
+ * 여기에는 `pickCandidates()`(그날 시공에서 4본 교체 우선으로 N건 고르기)와
+ * `recentPendingDay()`(오늘이 비면 밀린 최근 날짜로 거슬러 가기)가 있었다.
+ * 사장님은 **쓸 작업을 직접 고르고 그때그때 1~2건**만 만들기를 원하신다.
+ * 프로그램이 대신 고르면 안 쓸 글이 만들어지고, 고른 이유를 사장님이 알 수 없다.
+ *
+ * 지금 글감을 고르는 것은 사장님이다 — `recentSalesForBlog()`(아래)가 목록을 보여 주고,
+ * 사진 폴더 화면이 폴더를 보여 준다. **다시 자동으로 고르게 만들지 말 것.**
  */
-export async function recentPendingDay(upto: string, backDays = 14): Promise<string | null> {
-  const rows = await db.execute<{ day: string }>(sql`
-    SELECT q.work_date::text AS day
-    FROM quote q
-    JOIN quote_item qi ON qi.quote_id = q.id
-    WHERE q.status = '성사'
-      AND q.supplier_name IS NULL
-      AND COALESCE(q.payment_method, '') <> '서비스'
-      AND q.total_amount > 0
-      AND qi.line_type = 'tire'
-      AND q.work_date IS NOT NULL
-      AND q.work_date <= ${upto}::date
-      AND q.work_date >  ${upto}::date - make_interval(days => ${backDays})
-      AND NOT EXISTS (SELECT 1 FROM blog_draft b WHERE b.quote_id = q.id)
-    GROUP BY 1 ORDER BY 1 DESC LIMIT 1`);
-  return rows[0]?.day ?? null;
-}
 
 /**
  * ⭐ 「작업 후기 쓰기」 화면이 고르는 최근 시공 목록 (B단계, 2026-09-02)
@@ -654,40 +616,6 @@ export async function generateTopicDraft(opts: {
 
 /** KST 오늘 (YYYY-MM-DD) */
 export const kstToday = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
-
-/**
- * CLI·매장 PC 대리인이 부르는 하루치 실행.
- * 후보를 고르고 순서대로 만든다. 하나가 실패해도 다음으로 간다.
- */
-export async function runNightly(
-  opts: { day?: string; limit?: number; dry?: boolean; onLog?: (line: string) => void } = {},
-) {
-  let day = opts.day ?? kstToday();
-  const log = opts.onLog ?? (() => {});
-  let picked = await pickCandidates(day, opts.limit ?? 3);
-
-  /* 날짜를 지정하지 않았는데 오늘이 비었으면, 밀려 있는 가장 최근 날로 옮겨 간다 */
-  if (picked.length === 0 && !opts.day) {
-    const back = await recentPendingDay(day);
-    if (back && back !== day) {
-      log(`오늘(${day})은 시공이 없어 ${back} 것으로 만듭니다`);
-      day = back;
-      picked = await pickCandidates(day, opts.limit ?? 3);
-    }
-  }
-  const results: { quoteNo: string; facts: string; result: Awaited<ReturnType<typeof generateDraft>> | null }[] = [];
-  if (opts.dry) return { day, results: picked.map((f) => ({ quoteNo: f.quoteNo, facts: factsText(f), result: null })) };
-  log(`글감 ${picked.length}건을 골랐습니다 (${day})`);
-  const titles = await recentBlogTitles();
-  let i = 0;
-  for (const f of picked) {
-    i += 1;
-    log(`[${i}/${picked.length}] ${f.maker ?? ""} ${f.model ?? ""} — ${f.quoteNo}`.replace(/\s+/g, " ").trim());
-    const result = await generateDraft(f, { titles, onLog: opts.onLog });
-    results.push({ quoteNo: f.quoteNo, facts: factsText(f), result });
-  }
-  return { day, results };
-}
 
 /* ------------------------------------------------------------------ */
 /* 화면용 조회                                                          */

@@ -6,7 +6,7 @@ import { blogAgentStatus, latestBlogJob } from "@/lib/blog-job";
 import { StatusPill } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty";
 import { PageHeader, PageShell } from "@/components/ui/page";
-import { MakeTodayButton } from "./make-today";
+import { BlogJobStatus } from "./job-status";
 
 export const dynamic = "force-dynamic";
 
@@ -24,10 +24,11 @@ export default async function BlogDraftList() {
       <PageHeader
         title="블로그 초안"
         back={{ href: "/marketing", label: "마케팅" }}
-        action={<MakeTodayButton agent={agent} job={job} />}
+        action={<BlogJobStatus agent={agent} job={job} />}
       />
       <p className="text-[13px] leading-snug text-slate-500">
-        「오늘 원고 만들기」를 누르면 <strong>매장 PC</strong>가 그날 시공에서 2건을 골라 원고를 만듭니다(1~3분).
+        원고는 <strong>사장님이 고른 시공으로만</strong> 만듭니다 — 「원고 만들기」를 눌러 사진 폴더나
+        시공을 고르세요. 만드는 것은 <strong>매장 PC</strong>가 합니다(1~3분).
         초안을 열어 <strong>한마디</strong>를 쓰면 복사가 됩니다 — 네이버 블로그 앱에 붙여넣고 사진을 골라 올리세요.
       </p>
 
@@ -35,7 +36,7 @@ export default async function BlogDraftList() {
         <EmptyState
           emoji="✍️"
           title="아직 초안이 없습니다"
-          hint="오늘 타이어 시공이 있었다면 위의 「오늘 원고 만들기」로 지금 만들 수 있습니다. 매장 PC 가 켜져 있어야 합니다."
+          hint="위의 「원고 만들기」를 눌러 쓸 작업을 고르세요. 사진 폴더에서 고르는 쪽을 권합니다. 매장 PC 가 켜져 있어야 합니다."
         />
       ) : (
         <ul className="mt-3 space-y-2">

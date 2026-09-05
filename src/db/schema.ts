@@ -1563,6 +1563,12 @@ export const blogFolder = pgTable(
     /** 폴더가 사라짐 — 지우지 않고 감춘다 (삭제는 하지 않는다는 관례) */
     isGone: boolean("is_gone").notNull().default(false),
     scannedAt: timestamp("scanned_at", { withTimezone: true }),
+    /**
+     * 🔴 블로그에 올렸다는 표시 (2026-09-05). **폴더 이름은 프로그램이 안 고친다** —
+     *    이름의 `(미업로드)` 는 사장님 대기열 표시로 그대로 두고, 올렸다는 사실만 여기 적는다.
+     *    예전에는 화면이 이름만 보고 「아직 안 올림」을 붙여, 다 올리셔도 계속 그렇게 떴다.
+     */
+    postedAt: timestamp("posted_at", { withTimezone: true }),
     createdAt,
   },
   (t) => [index("idx_blog_folder_pending").on(t.isPending, t.folderMtime)],

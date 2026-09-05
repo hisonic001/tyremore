@@ -20,16 +20,16 @@ async function guard(): Promise<string | null> {
 }
 
 /**
- * 「오늘 원고 만들기」 — 주문만 남긴다. 실제로 만드는 것은 매장 PC 대리인이다.
- * 🔴 여기(Vercel)에서 직접 만들지 않는다 — 클로드 **구독**은 그 PC 에만 로그인되어 있다.
+ * 🔴 「오늘 원고 만들기」는 없앴다 (사장님 지시 2026-09-05).
+ *
+ * 예전에는 이 자리에서 `requestBlogJob("초안", { limit: 2 })` 로 주문을 넣으면
+ * 매장 PC 가 **그날 시공에서 2건을 스스로 골라** 원고를 만들었다.
+ * 사장님은 **쓸 작업을 직접 고르고 그때그때 1~2건 만들기**를 원하신다.
+ * 그래서 원고는 아래 두 길로만 만든다 — `writeWithPhotos`(사진 폴더에서 고름) ·
+ * `writeWithForm`(시공에서 고름) · `generateTopicDraft`(정보성 글).
+ *
+ * **프로그램이 대신 고르는 길은 다시 만들지 말 것.**
  */
-export async function makeTodayDrafts(): Promise<R & { jobId?: number; existing?: boolean }> {
-  const g = await guard();
-  if (g) return { ok: false, error: g };
-  const r = await requestBlogJob("초안", { limit: 2 });
-  if (!r.ok) return r;
-  return { ok: true, jobId: r.jobId, existing: r.existing };
-}
 
 /**
  * ⭐ 「작업 후기 쓰고 원고 만들기」 (B단계, 2026-09-02)

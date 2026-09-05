@@ -9,6 +9,7 @@
  *    (브라우저가 알아서 게으르게 받고 캐시한다).
  */
 import { sql } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { hasPerm } from "./auth";
 import { requestBlogJob } from "./blog-job";
@@ -23,6 +24,10 @@ export interface FolderRow {
   thumbCount: number;
   mtime: string | null;
   quoteId: number | null;
+  /** 블로그에 올렸는가 — 🔴 폴더 이름이 아니라 이 값을 본다 (2026-09-05) */
+  postedAt: string | null;
+  /** 이 폴더로 만든 원고 수 */
+  draftCount: number;
 }
 
 /** 폴더 목록 — 「(미업로드)」가 위, 그다음 최근 순 */
@@ -37,14 +42,18 @@ export async function listFolders(): Promise<FolderRow[]> {
     thumb_count: number;
     mtime: string | null;
     quote_id: number | null;
+    posted_at: string | null;
+    draft_count: number;
   }>(sql`
     SELECT f.id, f.label, f.is_pending, f.photo_count, f.video_count, f.offline_count,
            (SELECT count(*)::int FROM blog_photo p WHERE p.folder_id = f.id AND p.thumb IS NOT NULL) AS thumb_count,
            to_char(f.folder_mtime AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') AS mtime,
-           f.quote_id
+           f.quote_id,
+           to_char(f.posted_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') AS posted_at,
+           (SELECT count(*)::int FROM blog_draft d WHERE d.folder_id = f.id AND d.status <> '버림') AS draft_count
     FROM blog_folder f
     WHERE f.is_gone = false
-    ORDER BY f.is_pending DESC, f.folder_mtime DESC NULLS LAST
+    ORDER BY (f.posted_at IS NULL) DESC, f.is_pending DESC, f.folder_mtime DESC NULLS LAST
     LIMIT 60`);
   return rows.map((r) => ({
     id: Number(r.id),
@@ -56,6 +65,8 @@ export async function listFolders(): Promise<FolderRow[]> {
     thumbCount: Number(r.thumb_count),
     mtime: r.mtime,
     quoteId: r.quote_id === null ? null : Number(r.quote_id),
+    postedAt: r.posted_at,
+    draftCount: Number(r.draft_count),
   }));
 }
 
@@ -166,6 +177,52 @@ export async function requestScan(
 
   const r = await requestBlogJob("스캔", { ...(folderName ? { folderName } : {}), hydrate });
   return r.ok ? { ok: true, jobId: r.jobId } : r;
+}
+
+/**
+ * ⭐ 「블로그에 올렸음」 — 폴더 쪽에서 누르는 확인 (2026-09-05, 사장님 요청)
+ *
+ * 🔴 **폴더 이름은 건드리지 않는다.** 이름 앞의 `(미업로드)` 는 사장님이 손으로 붙이고
+ *    떼시는 대기열 표시다. 프로그램은 `posted_at` 만 적는다.
+ *
+ * 이 폴더로 만든 원고도 같이 「발행」으로 옮긴다 — 두 화면이 다른 말을 하면 안 된다.
+ */
+export async function markFolderPosted(
+  folderId: number,
+  posted: boolean,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!(await hasPerm("marketing"))) return { ok: false, error: "마케팅 권한이 없습니다" };
+
+  /* 🔴 순차로 — 동시 질의가 풀을 채운 전례가 있다 */
+  await db.execute(sql`
+    UPDATE blog_folder SET posted_at = ${posted ? sql`now()` : sql`NULL`} WHERE id = ${folderId}`);
+  await db.execute(sql`
+    UPDATE blog_draft
+    SET status = ${posted ? "발행" : "초안"},
+        published_at = ${posted ? sql`now()` : sql`NULL`},
+        updated_at = now()
+    WHERE folder_id = ${folderId} AND status <> '버림'`);
+
+  revalidatePath("/marketing/photos");
+  revalidatePath("/marketing/blog");
+  revalidatePath("/");
+  return { ok: true };
+}
+
+/** 이 폴더로 만든 원고들 — 폴더 화면에서 바로 열어 복사하시게 */
+export async function folderDrafts(
+  folderId: number,
+): Promise<{ id: number; title: string; status: string; hasNote: boolean }[]> {
+  const rows = await db.execute<{ id: number; titles: string[]; status: string; owner_note: string | null }>(sql`
+    SELECT id, titles, status, owner_note FROM blog_draft
+    WHERE folder_id = ${folderId} AND status <> '버림'
+    ORDER BY id DESC`);
+  return rows.map((r) => ({
+    id: Number(r.id),
+    title: r.titles?.[0] ?? "(제목 없음)",
+    status: r.status,
+    hasNote: !!r.owner_note?.trim(),
+  }));
 }
 
 /** 폴더에 판매 건을 이어 둔다 — 다음 방문 때 다시 안 묻는다 */

@@ -1,12 +1,13 @@
 /**
  * 블로그 초안 — 매장 PC 에서 돌린다 (docs/17)
  *
- *   npm run blog-draft -- --dry              오늘 후보와 지시문에 들어갈 사실만 (모델 안 부름)
- *   npm run blog-draft -- --limit 1          초안 1건만 — 처음 시험할 때
- *   npm run blog-draft                       오늘 최대 3건
- *   npm run blog-draft -- --day 2026-08-28   다른 날짜
  *   npm run blog-draft -- --quote 1234       특정 판매 한 건 (quote.id)
+ *   npm run blog-draft -- --job 42           앱에서 고르신 주문 (대리인이 쓰는 길)
  *   npm run blog-draft -- --api              구독 대신 API 키로 (기본은 구독)
+ *
+ * 🔴 **어느 시공으로 쓸지는 반드시 지정해야 한다** (사장님 지시 2026-09-05).
+ *    예전에는 인자 없이 돌리면 그날 시공에서 스스로 골라 3건을 만들었다. 그 길은 없앴다 —
+ *    사장님이 쓸 작업을 직접 고르신다.
  *
  * ⭐ 기본이 **구독**이다 (AI_PROVIDER=cli). 이 PC 에 로그인된 클로드를 그대로 쓰므로
  *    요금이 따로 나가지 않는다. `--api` 를 붙이면 ANTHROPIC_API_KEY 로 부른다.
@@ -33,7 +34,7 @@ async function main() {
   const onLog = (line: string) => console.log(line);
 
   // dotenv 를 먼저 읽어야 db 가 DATABASE_URL 을 본다 — 그래서 동적 import
-  const { runNightly, factsForDay, generateDraft, factsText } = await import("../src/lib/blog-draft");
+  const { factsForDay, generateDraft, factsText } = await import("../src/lib/blog-draft");
 
   if (!flag("--dry")) {
     say(`부르는 길: ${process.env.AI_PROVIDER === "cli" ? "구독 (매장 PC 클로드)" : "API 키"}`);
@@ -149,31 +150,10 @@ async function main() {
     return;
   }
 
-  const day = val("--day");
-  const limit = val("--limit") ? Number(val("--limit")) : 3;
-  const { day: usedDay, results } = await runNightly({ day, limit, dry: flag("--dry"), onLog });
-  if (results.length === 0) {
-    const msg = `${usedDay}: 글감이 없습니다 (성사된 타이어 시공 중 거래처·무상 제외, 이미 초안 있는 건 제외)`;
-    say(agent ? `ERROR=${msg}` : msg);
-    if (agent) process.exitCode = 1;
-    return;
-  }
-  let made = 0;
-  for (const r of results) {
-    say(`── ${r.quoteNo}\n${r.facts}`);
-    if (r.result === null) say("   (dry — 만들지 않음)");
-    else if (r.result.ok) {
-      say(`   ✅ 초안 #${r.result.id} — ${r.result.titles[0]}${r.result.warn ? `\n   ⚠️ ${r.result.warn}` : ""}`);
-      if (agent) say(`DRAFT_ID=${r.result.id}`);
-      made += 1;
-    } else {
-      say(`   ❌ ${r.result.error}`);
-      if (agent) say(`ERROR=${r.result.error}`);
-    }
-    say("");
-  }
-  // 한 건도 못 만들었으면 대리인에게 실패로 알린다
-  if (agent && !flag("--dry") && made === 0) process.exitCode = 1;
+  /* 여기까지 왔다는 것은 --quote 도 --job 도 없다는 뜻이다 */
+  const msg = "어느 시공으로 쓸지 알려 주세요 (--quote 1234 또는 --job 42). 프로그램이 대신 고르지 않습니다.";
+  say(agent ? `ERROR=${msg}` : `❌ ${msg}`);
+  process.exitCode = 1;
 }
 
 main()

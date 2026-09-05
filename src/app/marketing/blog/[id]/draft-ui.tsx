@@ -2,13 +2,14 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
 import { TextareaField } from "@/components/ui/field";
 import { Notice } from "@/components/ui/notice";
 // 🔴 클라이언트는 core 만 — blog-draft.ts 는 DB 를 물고 있다
 import { OWNER_SLOT, composeForCopy } from "@/lib/blog-draft-core";
+import { composeForGemini } from "@/lib/blog-gemini";
 import { preparePublishImages, regenerateDraft, saveOwnerNote, setDraftStatus } from "@/lib/blog-draft-actions";
 
 const MIN_NOTE = 15;
@@ -51,6 +52,7 @@ export function DraftEditor({ draft, photos }: { draft: Draft; photos: PhotoInfo
   const [note, setNote] = useState(draft.ownerNote ?? "");
   const [saved, setSaved] = useState(draft.ownerNote ?? "");
   const [copied, setCopied] = useState(false);
+  const [copiedAi, setCopiedAi] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
@@ -111,6 +113,30 @@ export function DraftEditor({ draft, photos }: { draft: Draft; photos: PhotoInfo
       if (!r.ok) return setMsg(r.error);
       setMsg("매장 PC 에 요청했습니다 — 잠시 뒤 화면을 새로 고치면 큰 사진으로 바뀝니다.");
       router.refresh();
+    });
+
+  /**
+   * ⭐ 「제미나이용 복사」 (2026-09-05, 사장님 요청) — **지시문 + 글 전체를 한 번에.**
+   *
+   * 🔴 여기서는 `{{사장님_한마디}}` 를 **그대로 둔 채** 보낸다. 지시문이 그 줄을 지키라고
+   *    했고, 사장님 육성은 제미나이가 손댈 것이 아니다. 그래서 「한마디」가 아직 없어도
+   *    이 단추는 눌린다 — 다듬는 것이 먼저이고 한마디는 마지막에 쓰셔도 된다.
+   */
+  const copyForAi = () =>
+    start(async () => {
+      setMsg(null);
+      const text = composeForGemini({
+        titles: [draft.titles[titleIdx], ...draft.titles.filter((_, i) => i !== titleIdx)],
+        body: draft.body,
+        tags: draft.tags,
+      });
+      try {
+        await navigator.clipboard.writeText(text);
+        setCopiedAi(true);
+        setTimeout(() => setCopiedAi(false), 2500);
+      } catch {
+        setMsg("복사가 막혔습니다 — 본문을 길게 눌러 직접 복사해 주세요");
+      }
     });
 
   const mark = async (status: "발행" | "버림") => {
@@ -283,10 +309,18 @@ export function DraftEditor({ draft, photos }: { draft: Draft; photos: PhotoInfo
 
       {/* 복사는 늘 보이게 — 폰에서 스크롤 끝까지 안 가도 된다 */}
       <div className="fixed inset-x-0 bottom-14 z-30 border-t border-slate-200 bg-white/95 p-3 backdrop-blur lg:bottom-0">
-        <div className="mx-auto max-w-2xl">
+        <div className="mx-auto flex max-w-2xl flex-col gap-2">
           <Button size="lg" pending={pending} disabled={!noteOk} onClick={copy}>
             {copied ? <Check className="size-5" /> : <Copy className="size-5" />}
             {copied ? "복사했습니다 — 블로그 앱에 붙여넣으세요" : "제목+본문+태그 복사"}
+          </Button>
+          {/*
+            🔴 「한마디」가 없어도 눌립니다 — 다듬는 것이 먼저이고 한마디는 마지막에 쓰셔도 된다.
+               제미나이에 보낼 때는 {{사장님_한마디}} 자리를 그대로 두고 보낸다.
+          */}
+          <Button variant="secondary" pending={pending} onClick={copyForAi}>
+            {copiedAi ? <Check className="size-4" /> : <Sparkles className="size-4" />}
+            {copiedAi ? "복사했습니다 — 제미나이에 붙여넣으세요" : "제미나이용 복사 (지시문+글)"}
           </Button>
         </div>
       </div>

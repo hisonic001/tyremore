@@ -2,13 +2,14 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { CloudOff, Film } from "lucide-react";
+import { CheckCircle2, CloudOff, Film, PenLine } from "lucide-react";
+import Link from "@/lib/link";
 import { StatusPill } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/notice";
 import { FormFields } from "../../form-fields";
 import { writeWithPhotos } from "@/lib/blog-draft-actions";
-import { linkFolderToQuote, type FolderRow, type PhotoRow } from "@/lib/blog-photo";
+import { linkFolderToQuote, markFolderPosted, type FolderRow, type PhotoRow } from "@/lib/blog-photo";
 import { EMPTY_FORM, formHasMaterial, type BlogForm } from "@/lib/blog-form";
 import type { AgentStatus } from "@/lib/blog-job";
 import type { BlogCandidate } from "@/lib/blog-draft";
@@ -29,12 +30,14 @@ interface SaleSummary {
 }
 
 export function PickerUI({
-  folder, photos, sale, sales, agent,
+  folder, photos, sale, sales, drafts, agent,
 }: {
   folder: FolderRow;
   photos: PhotoRow[];
   sale: SaleSummary | null;
   sales: BlogCandidate[];
+  /** 이 폴더로 만든 원고 — 만들고 나서 어디로 갔는지 여기서 바로 보이게 */
+  drafts: { id: number; title: string; status: string; hasNote: boolean }[];
   agent: AgentStatus;
 }) {
   const router = useRouter();
@@ -43,6 +46,8 @@ export function PickerUI({
   const [picked, setPicked] = useState<number[]>(() => photos.filter((p) => !p.isVideo && p.hasThumb).map((p) => p.id));
   const [f, setF] = useState<BlogForm>(EMPTY_FORM);
   const [msg, setMsg] = useState<{ tone: "success" | "error" | "info"; text: string } | null>(null);
+  /** 시공을 이미 이었어도 바꿀 수 있어야 한다 — 자동으로 이은 것이 틀릴 수 있다 */
+  const [changing, setChanging] = useState(false);
 
   const usable = photos.filter((p) => !p.isVideo);
   const toAi = picked.slice(0, AI_MAX);
@@ -55,6 +60,26 @@ export function PickerUI({
     start(async () => {
       const r = await linkFolderToQuote(folder.id, quoteId);
       if (!r.ok) return setMsg({ tone: "error", text: r.error });
+      setChanging(false);
+      router.refresh();
+    });
+  }
+
+  /**
+   * 🔴 「블로그에 올렸음」 — 폴더 이름은 건드리지 않는다 (2026-09-05).
+   *    이름 앞의 「(미업로드)」는 사장님이 손으로 붙이고 떼시는 표시다.
+   *    프로그램은 올렸다는 사실만 적고, 목록의 「아직 안 올림」은 그 값을 본다.
+   */
+  function togglePosted() {
+    start(async () => {
+      setMsg(null);
+      const next = !folder.postedAt;
+      const r = await markFolderPosted(folder.id, next);
+      if (!r.ok) return setMsg({ tone: "error", text: r.error });
+      setMsg({
+        tone: "success",
+        text: next ? "올림으로 표시했습니다 — 폴더 목록에서 내려갑니다." : "올림 표시를 지웠습니다.",
+      });
       router.refresh();
     });
   }
@@ -71,20 +96,74 @@ export function PickerUI({
 
   return (
     <div className="mt-3">
-      {/* ---- 어느 시공인지 ---- */}
-      {sale ? (
-        <div className="rounded-card bg-slate-50 p-3">
-          <p className="font-semibold leading-snug">{sale.car}</p>
-          <p className="text-[13px] leading-snug text-slate-500">
-            {sale.tires}
-            {sale.mileage ? ` · ${sale.mileage.toLocaleString("ko-KR")}km` : ""} · {sale.workDate}
+      {/* ---- 올렸는지 ---- */}
+      <div className="mb-3 flex items-center justify-between gap-2 rounded-card border border-slate-200 bg-white p-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold leading-snug">
+            {folder.postedAt ? "블로그에 올리셨습니다" : "아직 블로그에 안 올렸습니다"}
           </p>
+          <p className="mt-0.5 text-[13px] leading-snug text-slate-500">
+            {folder.postedAt
+              ? `${folder.postedAt} 에 올림으로 표시했습니다. 폴더 이름은 그대로 둡니다.`
+              : "올리신 뒤 이 단추를 눌러 주세요. 폴더 이름은 프로그램이 건드리지 않습니다."}
+          </p>
+        </div>
+        <Button variant={folder.postedAt ? "ghost" : "secondary"} pending={pending} onClick={togglePosted}>
+          {folder.postedAt ? "취소" : <><CheckCircle2 className="size-4" /> 블로그에 올렸음</>}
+        </Button>
+      </div>
+
+      {/* ---- 이 폴더로 만든 원고 ---- */}
+      {drafts.length > 0 && (
+        <section className="mb-3 rounded-card border border-slate-200 bg-white p-3">
+          <p className="text-sm font-semibold">이 폴더로 만든 원고 {drafts.length}건</p>
+          <ul className="mt-1.5 space-y-1">
+            {drafts.map((d) => (
+              <li key={d.id}>
+                <Link
+                  href={`/marketing/blog/${d.id}`}
+                  className="flex items-center gap-2 rounded-control px-2 py-1.5 text-[13px] leading-snug active:bg-slate-50 lg:hover:bg-slate-50"
+                >
+                  <PenLine className="size-4 shrink-0 text-slate-400" />
+                  <span className="min-w-0 flex-1 truncate">{d.title}</span>
+                  <StatusPill tone={d.status === "발행" ? "success" : d.hasNote ? "info" : "accent"}>
+                    {d.status === "발행" ? "올림" : d.hasNote ? "복사 가능" : "한마디 필요"}
+                  </StatusPill>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* ---- 어느 시공인지 ---- */}
+      {sale && !changing ? (
+        <div className="flex items-start justify-between gap-2 rounded-card bg-slate-50 p-3">
+          <div className="min-w-0">
+            <p className="font-semibold leading-snug">{sale.car}</p>
+            <p className="text-[13px] leading-snug text-slate-500">
+              {sale.tires}
+              {sale.mileage ? ` · ${sale.mileage.toLocaleString("ko-KR")}km` : ""} · {sale.workDate}
+            </p>
+          </div>
+          {/* 🔴 번호판으로 자동으로 이은 것이 틀릴 수 있다 — 바꿀 길을 늘 열어 둔다 */}
+          <button
+            type="button"
+            onClick={() => setChanging(true)}
+            className="shrink-0 text-[13px] font-medium text-slate-500 underline underline-offset-2"
+          >
+            다른 시공으로
+          </button>
         </div>
       ) : (
         <section className="rounded-card border border-amber-200 bg-amber-50 p-3">
-          <p className="text-sm font-semibold text-amber-900">어느 시공인지 골라 주세요</p>
+          <p className="text-sm font-semibold text-amber-900">
+            {changing ? "어느 시공으로 바꿀까요?" : "어느 시공인지 골라 주세요"}
+          </p>
           <p className="mt-0.5 text-[13px] leading-snug text-amber-800">
-            폴더 이름에서 차량을 못 찾았습니다. 한 번만 고르시면 다음부터 안 묻습니다.
+            {changing
+              ? "잘못 이어졌으면 여기서 바꾸세요. 원고에 들어갈 차종·주행거리·타이어가 이 시공에서 나옵니다."
+              : "폴더 이름에서 차량을 못 찾았습니다. 한 번만 고르시면 다음부터 안 묻습니다."}
           </p>
           <ul className="mt-2 max-h-64 space-y-1 overflow-y-auto">
             {sales.map((s) => (

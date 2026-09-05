@@ -56,7 +56,7 @@ export default async function MarketingHome() {
       href: "/marketing/blog",
       Icon: PenLine,
       title: "원고 목록",
-      desc: "만들어진 원고를 보고 복사합니다. 시공 기록만으로 빠르게 만들 수도 있습니다.",
+      desc: "만들어진 원고를 보고 복사합니다.",
       badge: pending > 0 ? `${pending}개 대기` : null,
     },
     {

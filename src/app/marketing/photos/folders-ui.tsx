@@ -29,7 +29,12 @@ export function FoldersUI({ folders, agent }: { folders: FolderRow[]; agent: Age
       setTimeout(() => router.refresh(), 8000);
     });
 
-  const pendingFolders = folders.filter((f) => f.isPending);
+  /**
+   * 🔴 「아직 안 올림」은 **폴더 이름이 아니라 올림 표시**로 본다 (2026-09-05, 사장님 지적).
+   *    예전에는 이름 앞의 `(미업로드)` 만 봐서, 블로그에 다 올리셔도 계속 안 올림으로 떴다.
+   *    이름은 사장님의 대기열 표시라 프로그램이 건드리지 않는다.
+   */
+  const pendingFolders = folders.filter((f) => f.isPending && !f.postedAt);
 
   return (
     <div className="mt-4">
@@ -46,8 +51,8 @@ export function FoldersUI({ folders, agent }: { folders: FolderRow[]; agent: Age
 
       {pendingFolders.length > 0 && (
         <p className="mt-3 rounded-card bg-amber-50 px-3 py-2 text-[13px] leading-snug text-amber-900">
-          아직 안 올리신 것이 <strong>{pendingFolders.length}건</strong> 있습니다 — 폴더 이름 앞에
-          「(미업로드)」가 붙은 것들입니다.
+          아직 안 올리신 것이 <strong>{pendingFolders.length}건</strong> 있습니다. 블로그에 올리신 뒤
+          폴더를 열어 <strong>「블로그에 올렸음」</strong>을 눌러 주시면 여기서 사라집니다.
         </p>
       )}
 
@@ -64,8 +69,17 @@ export function FoldersUI({ folders, agent }: { folders: FolderRow[]; agent: Age
               <span className="min-w-0 flex-1">
                 <span className="flex flex-wrap items-center gap-1.5">
                   <span className="font-semibold leading-snug">{f.label}</span>
-                  {f.isPending && <StatusPill tone="accent">아직 안 올림</StatusPill>}
-                  {f.quoteId && <StatusPill tone="info">시공 연결됨</StatusPill>}
+                  {f.postedAt ? (
+                    <StatusPill tone="success">올림 {f.postedAt}</StatusPill>
+                  ) : (
+                    f.isPending && <StatusPill tone="accent">아직 안 올림</StatusPill>
+                  )}
+                  {f.quoteId ? (
+                    <StatusPill tone="info">시공 연결됨</StatusPill>
+                  ) : (
+                    <StatusPill tone="warn">시공 연결 안 됨</StatusPill>
+                  )}
+                  {f.draftCount > 0 && <StatusPill tone="neutral">원고 {f.draftCount}</StatusPill>}
                 </span>
                 <span className="mt-0.5 block text-[13px] leading-snug text-slate-500">
                   사진 {f.photoCount}장

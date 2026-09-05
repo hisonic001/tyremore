@@ -2,19 +2,25 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "@/lib/link";
 import { StatusPill } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/notice";
-import { makeTodayDrafts } from "@/lib/blog-draft-actions";
 import { cancelBlogJob, getBlogJob, type AgentStatus, type BlogJobRow } from "@/lib/blog-job";
 
 /**
- * 「오늘 원고 만들기」 — 버튼은 **주문만** 남기고, 글은 매장 PC 가 만든다.
+ * 원고 만들기 진행 상황 — 매장 PC 가 켜졌는지, 지금 뭘 만들고 있는지.
+ *
+ * 🔴 **여기서는 원고를 주문하지 않는다** (사장님 지시 2026-09-05).
+ *    예전에는 「오늘 원고 만들기」 단추가 그날 시공에서 **2건을 프로그램이 골라** 만들었다.
+ *    사장님은 **쓸 작업을 직접 고르고 싶어 하신다** — 그래서 고르는 화면
+ *    (사진으로 원고 만들기 · 사진 없이 후기만으로)으로만 들어가게 한다.
+ *    자동으로 고르는 길은 없앴다. 다시 만들지 말 것.
  *
  * 🔴 진행 로그를 보여준다 (MARS 화면과 반대 결정). MARS 는 70분짜리라 숨겼지만
  *    원고는 1~3분이고, 그 사이 화면이 멈춘 것처럼 보이면 버튼을 또 누르시게 된다.
  */
-export function MakeTodayButton({
+export function BlogJobStatus({
   agent,
   job: initialJob,
 }: {
@@ -57,19 +63,6 @@ export function MakeTodayButton({
     return () => clearInterval(t);
   }, [busy, jobId, router]);
 
-  function order() {
-    start(async () => {
-      setMsg(null);
-      const r = await makeTodayDrafts();
-      if (!r.ok) {
-        setMsg({ tone: "error", text: r.error });
-        return;
-      }
-      if (r.existing) setMsg({ tone: "info", text: "이미 만드는 중입니다 — 곧 끝납니다." });
-      setJob(r.jobId ? await getBlogJob(r.jobId) : null);
-    });
-  }
-
   function stop() {
     const id = job?.id;
     if (id === undefined) return;
@@ -97,9 +90,13 @@ export function MakeTodayButton({
             중단
           </Button>
         ) : (
-          <Button variant="secondary" pending={pending} onClick={order}>
-            오늘 원고 만들기
-          </Button>
+          /* 🔴 여기서 바로 만들지 않는다 — 어느 시공으로 쓸지는 사장님이 고르신다 */
+          <Link
+            href="/marketing/photos"
+            className="rounded-control border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 active:bg-slate-50 lg:hover:bg-slate-50"
+          >
+            원고 만들기
+          </Link>
         )}
       </div>
 

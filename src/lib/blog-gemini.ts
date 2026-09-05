@@ -1,40 +1,20 @@
-# 18. 제미나이로 블로그 초안 검수·다듬기 (2026-09-05)
-
-앱이 만든 초안을 **제미나이에 붙여넣어 문장을 다듬고, 제목과 「오늘 정리」까지 손보는** 프롬프트다.
-사장님이 정하신 방식: 앱에서 지금처럼 초안을 만든 다음 → 제미나이에 붙여넣어 revise → 네이버에 올림.
-
-🔴 **앱의 검사기(`styleFilter`·`titleFilter`·`subheads`, `src/lib/blog-style.ts`)는
-제미나이가 고친 글에는 안 걸린다.** 그래서 검사기의 실제 값을 프롬프트에 그대로 적어 넣었다 —
-제목 32자 · 앞 12자 낱말 목록 · 소제목 6~24자 · 평균 줄 45자 · 상투구 10개 ·
-「오늘 정리」 단독 줄. **`blog-style.ts` 를 고치면 이 문서도 같이 고쳐야 한다.**
-
-🔴 지시문은 영어, 결과는 한국어다(사장님 지시 — 토큰 절약·반응 품질). 다만 「오늘 정리」·
-`{{사장님_한마디}}`·금지 상투구 같은 **한국어 낱말은 그 글자 그대로 판정되는 것이라 남겨 두었다.**
-
-🔴 **정본은 `src/lib/blog-gemini.ts` 의 `GEMINI_PROMPT` 다.** 이 문서의 지시문과 코드가
-같은지 `src/lib/blog-gemini.test.ts` 가 지킨다 — 한쪽만 고치면 시험이 깨진다.
-
-## ① 쓰는 순서
-
-1. 앱 초안 화면 맨 아래 **「제미나이용 복사 (지시문+글)」** 를 누릅니다 —
-   **지시문과 글이 한 번에** 복사됩니다 (2026-09-05 추가).
-2. 제미나이에 그대로 붙여넣습니다. (손으로 하실 때는 아래 프롬프트를 먼저 붙이고 글을 잇습니다.)
-3. 제미나이가 낸 ① 제목 3개 ② 본문 ③ 해시태그를 네이버 글쓰기에 씁니다.
-4. 사진은 지금처럼 앱 「사진 순서」에서 끌어다 넣습니다 (본문의 `[사진 A-00 - …]` 자리).
-
-🔴 **붙여넣기 전에 한 번만 보세요** — 차량번호·손님 이름·전화번호가 글에 없는지.
-제미나이는 바깥 회사 서비스라 넣은 글이 나갑니다. (앱이 만든 본문에는 원래 안 들어갑니다.)
-
----
-
-## ② 프롬프트 (이대로 복사해서 쓰세요)
-
-🔴 **지시문은 영어, 결과는 한국어**입니다 (사장님 지시 2026-09-05 — 토큰 절약·반응 품질).
-다만 **한국어 낱말은 일부러 그대로 두었습니다.** 「오늘 정리」·`{{사장님_한마디}}`·금지 상투구
-같은 것은 **그 글자 그대로** 판정되는 것이라, 영어로 옮기면 규칙 자체가 깨집니다.
-
-```
-You are a Korean copy editor for a Naver blog.
+/**
+ * 제미나이로 원고를 다듬을 때 쓰는 지시문 — **정본은 이 파일이다** (2026-09-05)
+ *
+ * 사장님이 앱 초안을 제미나이에 붙여넣어 문장을 다듬고, 제목과 「오늘 정리」까지 손보신다.
+ * 화면의 「제미나이용 복사」 단추가 **이 지시문 + 글 전체**를 한 번에 복사한다.
+ *
+ * 🔴 **앱의 검사기(styleFilter·titleFilter·subheads)는 제미나이가 고친 글에는 안 걸린다.**
+ *    그래서 검사기의 실제 값(제목 32자 · 앞 12자 낱말 · 소제목 6~24자 · 평균 줄 45자 ·
+ *    상투구 10개 · 「오늘 정리」 단독 줄)을 여기에 그대로 적어 두었다.
+ *    `blog-style.ts` 를 고치면 **여기와 docs/18 도 같이 고쳐야 한다** (시험이 어긋남을 잡는다).
+ *
+ * 🔴 지시는 영어, 결과는 한국어다 (사장님 지시 — 토큰 절약·반응 품질). 다만 「오늘 정리」·
+ *    `{{사장님_한마디}}`·금지 상투구 같은 **한국어 낱말은 그 글자 그대로 판정되는 것이라 남긴다.**
+ *
+ * 🔴 이 파일은 순수하다 — `@/db` 도 `node:fs` 도 들이지 않는다 (시험에서 그대로 쓴다).
+ */
+export const GEMINI_PROMPT = `You are a Korean copy editor for a Naver blog.
 
 The text below is a blog post by the owner of 「타이어모어 속초점」, a tire shop in
 Sokcho, Gangwon Province, Korea, about work he did himself.
@@ -140,46 +120,24 @@ Subheadings are plain lines with no symbol of any kind.
 ④ What you changed and why — 5 lines maximum
 ⑤ Up to 2 questions for the shop owner, if anything was too thin to fix properly
 
-======== THE POST TO EDIT STARTS BELOW ========
+======== THE POST TO EDIT STARTS BELOW ========`;
 
-(paste the post copied from the app here)
-```
+/** 본문에 그대로 남겨야 하는 자리 — 지시문이 이것들을 건드리지 말라고 못 박는다 */
+export interface GeminiDraft {
+  titles: string[];
+  body: string;
+  tags: string[];
+}
 
----
-
-## ③ 결과가 마음에 안 들 때 — 이어서 보낼 한 줄
-
-| 상황 | 이어서 보낼 한 줄 (영어) |
-|---|---|
-| 너무 많이 바꿨다 | `You drifted too far from the original. Keep the content and the sentence structure as they are; fix only awkward words and endings. Output in Korean.` |
-| 밋밋해졌다 | `The writing went flat. Keep every fact, but rewrite so the reader can picture that day, in short sentences of about 20 characters. Output in Korean.` |
-| 제목이 여전히 길다 | `Give me three new titles. Each must be 32 Korean characters or fewer, and 속초 or a job name must appear within the first 12 characters. Put the character count in parentheses after each.` |
-| 없는 내용을 지어냈다 | `Some content is not in the original. First list which sentences are not in the original, then give the post again with those removed. Output in Korean.` |
-| 짧다 | `Make it longer by expanding facts that are already in the post. Do not add any fact that is not already there. Output in Korean.` |
-| 자리표시자를 건드렸다 | `You changed or dropped the bracketed placeholder lines. Restore every [사진 …], [영상 …], {{사장님_한마디}} and the ※ line exactly as in the original, in their original positions.` |
-
----
-
-## ④ 제미나이가 돌려준 글, 이 여섯 개만 눈으로 보세요
-
-앱의 검사기는 **제미나이가 고친 글에는 안 걸립니다.** 그래서 사장님이 대신 봐 주셔야 합니다.
-
-1. **제목이 32자를 넘지 않는가** — 넘으면 폰에서 뒤가 잘립니다
-2. **「오늘 정리」가 그 다섯 글자만 있는 한 줄인가** — 앞뒤에 뭐가 붙으면 안 됩니다
-3. **`[사진 A-00 - …]` 줄 개수가 그대로인가** — 하나라도 사라지면 사진 자리가 어긋납니다
-4. **`#`, `|`, `-`, `*` 같은 기호가 없는가** — 네이버는 그대로 글자로 찍습니다
-5. **주행거리·규격 숫자가 원래 그대로인가** — 한 자리라도 달라지면 안 됩니다
-6. **차량번호·이름·전화번호가 들어가지 않았는가**
-
----
-
----
-
-## 왜 지금 초안들은 손볼 것이 많은가 (2026-09-05 실측)
-
-초안 11건을 전부 재 본 결과 — 제목 41~54자(11/11이 32자 초과), 「오늘 정리」 0/11,
-「많이 물어보시는 질문」 7/11, 본문 916~1,581자.
-**11건 전부 9월 4일 양식 개정 전에 만들어진 글**이라 그렇다.
-개정 뒤에 만드는 초안은 앱이 이미 새 규칙으로 내므로, 그때는 제미나이가 문장만 다듬으면 된다.
-
-관련: `17-네이버-마케팅.md` · `src/lib/blog-style.ts`
+/**
+ * 「제미나이용 복사」가 만드는 글 — **지시문 + 제목 후보 + 본문 + 해시태그**를 한 덩이로.
+ *
+ * 🔴 본문은 `{{사장님_한마디}}` 를 **그대로 둔 채** 보낸다. 지시문이 그 줄을 지키라고 했고,
+ *    사장님 육성은 제미나이가 손댈 것이 아니다. (네이버에 붙일 때 쓰는 `composeForCopy` 는
+ *    그 자리를 실제 한마디로 바꾸지만, 여기서는 바꾸지 않는다.)
+ */
+export function composeForGemini(d: GeminiDraft): string {
+  const titles = d.titles.map((t, i) => `${i + 1}. ${t}`).join("\n");
+  const tags = d.tags.map((t) => `#${t.replace(/^#/, "").replace(/\s+/g, "")}`).join(" ");
+  return [GEMINI_PROMPT, "", "[제목 후보]", titles, "", "[본문]", d.body.trim(), "", "[해시태그]", tags, ""].join("\n");
+}

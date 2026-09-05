@@ -100,11 +100,14 @@ async function runOne(job: Claimed): Promise<void> {
       ? ["tsx", "scripts/blog-scan.ts", "--agent", "--job", String(job.id)]
       : job.kind === "발행사진"
         ? ["tsx", "scripts/blog-publish-images.ts", "--agent", "--job", String(job.id)]
-        : quoteId
-          ? ["tsx", "scripts/blog-draft.ts", "--agent", "--job", String(job.id)].concat(
-              p.variant ? ["--variant", String(p.variant)] : [],
-            )
-          : ["tsx", "scripts/blog-draft.ts", "--agent", "--limit", String(limit)];
+        : /**
+           * 🔴 초안은 **반드시 주문서(--job)를 거친다** (사장님 지시 2026-09-05).
+           *    예전에는 quoteId 가 없으면 `--limit` 로 넘겨 그날 시공에서 스스로 골랐다.
+           *    그 길은 없앴다 — 어느 시공으로 쓸지는 사장님이 화면에서 고르신다.
+           */
+          ["tsx", "scripts/blog-draft.ts", "--agent", "--job", String(job.id)].concat(
+            p.variant ? ["--variant", String(p.variant)] : [],
+          );
 
   const scan = job.kind === "스캔";
   /** 초안을 만들지 않는 주문 — 끝났으면 그걸로 완료다 (DRAFT_ID 를 기다리면 안 된다) */
