@@ -60,6 +60,8 @@ export interface CleanRead {
   dropped: string[];
   /* ⭐ 판매등록 모드에서만 채워진다 — 제원 모드에서는 항상 null */
   plateNo: string | null;
+  /** 한글이 오독으로 버려졌을 때 살린 숫자 끝 4자리 — 되찾기 검색용 (2026-09-06) */
+  plateTail: string | null;
   odoKm: number | null;
   ownerName: string | null;
 }
@@ -114,15 +116,49 @@ function cleanPsi(v: unknown): number | null {
 
 const SOURCES = ["등록증", "차량카드", "번호판", "계기판", "기타"];
 
-/** 차량번호판 전체 모양 — 「12가3456」·「서울12가3456」·「123가4567」 */
-const FULL_PLATE_RE = /^([가-힣]{2})?\d{2,3}[가-힣]\d{4}$/;
+/** 차량번호판 전체 모양 — 「12가3456」·「서울12가3456」·「123가4567」. 한글 자리 「?」 허용 */
+const FULL_PLATE_RE = /^([가-힣]{2})?\d{2,3}([가-힣?])(\d{4})$/;
 
-/** 판매등록 모드의 차량번호 — 모양이 안 맞으면 버린다 (틀린 번호로 엉뚱한 차를 찾으면 안 된다) */
-function cleanPlate(v: unknown): string | null {
-  const s = str(v);
-  if (!s) return null;
-  const up = s.replace(/\s/g, "");
-  return FULL_PLATE_RE.test(up) ? up : null;
+/**
+ * ⭐ 번호판 가운데 한글의 **법정 목록** (사장님 제보 2026-09-06 — "중간의 한국어를
+ *    잘 못 읽는 것 같음"). 자가용 32자 + 영업 아바사자·배 + 렌터카 하허호.
+ *    이 밖의 글자가 오면 오독이다 — 버려야 끝 4자리 되찾기가 대신 나선다.
+ * 🔴 scripts/vin-photo.ts 의 읽기 지침(SALE_SYSTEM)과 한 벌 — 글자를 더하면 같이.
+ */
+export const PLATE_MID_CHARS =
+  "가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호";
+
+/**
+ * ⭐ 판매등록 모드의 차량번호 정리 — 모양이 안 맞으면 버린다 (틀린 번호로 엉뚱한
+ *    차를 찾으면 안 된다). 한글 자리는 「?」도 받는다 (2026-09-05 — 모델이 한글만
+ *    확신 못 할 때 숫자까지 통째로 비우던 것을 고침: 숫자는 살려 되찾기가 나선다).
+ * 🔴 export 인 이유: 매장 PC 대리인이 옛/딴 코드로 돌아 깨진 값을 적어 놔도
+ *    앱(getVinScan)이 이 정본으로 **한 번 더 걸러** 화면까지는 못 오게 한다.
+ */
+export function cleanPlate(v: unknown): { plate: string | null; tail: string | null; reason: string | null } {
+  /* 딴 코드가 {plate: "..."} 객체를 통째로 넣은 사고가 실제로 있었다 (2026-09-05 스캔 14) */
+  const inner = v && typeof v === "object" && "plate" in v ? (v as { plate?: unknown }).plate : v;
+  const s = str(inner);
+  if (!s) return { plate: null, tail: null, reason: null };
+  const up = s.replace(/\s/g, "").replace(/[*？]/g, "?");
+  const m = up.match(FULL_PLATE_RE);
+  if (!m) return { plate: null, tail: null, reason: `차량번호 「${s}」 — 번호판 모양이 아니라 버렸습니다` };
+  if (m[2] === "?") {
+    return {
+      plate: null,
+      tail: m[3],
+      reason: `차량번호 「${up}」 — 가운데 한글을 확신하지 못해 숫자 끝 4자리로 찾습니다`,
+    };
+  }
+  if (!PLATE_MID_CHARS.includes(m[2])) {
+    /* 🔴 한글은 오독이라도 숫자는 믿을 만하다 — 끝 4자리를 살려 되찾기가 대신 나선다 */
+    return {
+      plate: null,
+      tail: m[3],
+      reason: `차량번호 「${up}」 — 가운데 「${m[2]}」는 번호판에 안 쓰이는 글자라 버렸습니다 (한글 오독 — 끝 4자리로 찾습니다)`,
+    };
+  }
+  return { plate: up, tail: null, reason: null };
 }
 
 /** 계기판 주행거리 — 상식 범위(0 ~ 150만 km)만 통과 */
@@ -152,11 +188,14 @@ export function cleanRead(raw: RawRead, today = new Date(), mode: ScanMode = "�
 
   /* ── ⭐ 판매등록 모드 전용 칸 (2026-09-05) — 제원 모드에서는 받지 않는다 ── */
   let plateNo: string | null = null;
+  let plateTail: string | null = null;
   let odoKm: number | null = null;
   let ownerName: string | null = null;
   if (mode === "판매등록") {
-    plateNo = cleanPlate(raw.plateNo);
-    if (str(raw.plateNo) && !plateNo) dropped.push(`차량번호 「${str(raw.plateNo)}」 — 번호판 모양이 아니라 버렸습니다`);
+    const p = cleanPlate(raw.plateNo);
+    plateNo = p.plate;
+    plateTail = p.tail;
+    if (p.reason) dropped.push(p.reason);
     odoKm = cleanOdo(raw.odoKm);
     if (num(raw.odoKm) !== null && num(raw.odoKm) !== 0 && odoKm === null)
       dropped.push(`주행거리 ${num(raw.odoKm)} — 있을 수 없는 값이라 버렸습니다`);
@@ -212,7 +251,7 @@ export function cleanRead(raw: RawRead, today = new Date(), mode: ScanMode = "�
     ? raw.unread.filter((s): s is string => typeof s === "string" && s.trim().length > 0).slice(0, 8)
     : [];
 
-  return { vin, carName, modelCode, year, tireFront, tireRear, psiFront, psiRear, source, unread, dropped, plateNo, odoKm, ownerName };
+  return { vin, carName, modelCode, year, tireFront, tireRear, psiFront, psiRear, source, unread, dropped, plateNo, plateTail, odoKm, ownerName };
 }
 
 /**

@@ -69,10 +69,21 @@ export function CustomerPick({
   /* ⭐ 사진으로 찾기·등록 (사장님 제안 2026-09-05) — 읽은 값을 모아 두고 조회·프리필에 쓴다 */
   const [photoOpen, setPhotoOpen] = useState(false);
   const [photo, setPhoto] = useState<PhotoInfo | null>(null);
+  /** 검색이 실제로 끝난 검색어 — 「0건」 판단은 이걸로 (빈 hits 초기값과 구분) */
+  const [searchedQ, setSearchedQ] = useState("");
+  /** ⭐ 끝 4자리 되찾기 (사장님 제보 2026-09-06 — 번호판 가운데 한글 오독) — 한 번만 */
+  const [fellBack, setFellBack] = useState(false);
   const handlePhotoInfo = (info: PhotoInfo) => {
     setPhoto((p) => ({ ...p, ...info }));
     // 번호판을 읽으면 검색창에 넣는다 — 기존 검색이 그대로 돌아 결과를 보여 준다
-    if (info.plateNo) setQ(info.plateNo);
+    if (info.plateNo) {
+      setFellBack(false);
+      setQ(info.plateNo);
+    } else if (info.plateTail) {
+      // 한글은 오독으로 버려졌고 숫자만 살았다 — 바로 끝 4자리로 찾는다 (2026-09-06)
+      setFellBack(true);
+      setQ(info.plateTail);
+    }
     if (info.odoKm) onMileage?.(info.odoKm);
   };
   const [supplierList, setSupplierList] = useState<
@@ -134,11 +145,31 @@ export function CustomerPick({
       setHits([]);
       return;
     }
-    timer.current = setTimeout(() => void searchVehicles(q).then((r) => setHits(r.slice(0, 6))), 250);
+    timer.current = setTimeout(
+      () =>
+        void searchVehicles(q).then((r) => {
+          setHits(r.slice(0, 6));
+          setSearchedQ(q);
+        }),
+      250,
+    );
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
   }, [q]);
+
+  /* ⭐ 끝 4자리 되찾기 (2026-09-06) — 사진 번호판 그대로는 0건일 때, 한글이 오독됐을 수
+     있으니 숫자 끝 4자리로 한 번 다시 찾는다 (기존 검색이 뒤 4자리를 지원).
+     자동 선택(정확 일치 1대)은 조건이 안 맞아 안 일어난다 — 사장님이 눈으로 고른다. */
+  useEffect(() => {
+    if (!photo?.plateNo || fellBack || vehicle) return;
+    if (searchedQ !== photo.plateNo || hits.length > 0) return;
+    const tail = photo.plateNo.match(/(\d{4})$/)?.[1];
+    if (!tail) return;
+    setFellBack(true);
+    setQ(tail);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchedQ, hits]);
 
   /* ⭐ 번호판 사진과 정확히 맞는 차가 딱 하나면 바로 잡는다 (2026-09-05) — 한 번 더 누를 일이 없다 */
   useEffect(() => {
@@ -394,11 +425,18 @@ export function CustomerPick({
             </button>
           )}
           {allowNew && photoOpen && <PhotoAssist onInfo={handlePhotoInfo} />}
-          {/* 번호판을 읽었는데 등록된 차가 없으면 다음 걸음을 말해 준다 */}
-          {photo?.plateNo && q.trim() !== "" && hits.length === 0 && (
+          {/* ⭐ 끝 4자리로 되찾은 상태 — 한글 오독일 수 있으니 눈으로 골라 달라고 말한다 (2026-09-06) */}
+          {(photo?.plateNo || photo?.plateTail) && fellBack && hits.length > 0 && (
+            <p className="mt-2 rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-800">
+              번호판 가운데 한글이 확실치 않아 <strong>숫자 끝 4자리로 찾았습니다</strong> —
+              목록에서 그 차를 골라 주세요.
+            </p>
+          )}
+          {/* 번호판을 읽었는데 (되찾기까지 해도) 등록된 차가 없으면 다음 걸음을 말해 준다 */}
+          {(photo?.plateNo || photo?.plateTail) && q.trim() !== "" && searchedQ === q && hits.length === 0 && (
             <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              「{photo.plateNo}」로 등록된 차가 없습니다 — 아래 <strong>등록 안 된 손님입니다</strong>를
-              누르면 사진에서 읽은 정보가 미리 채워집니다.
+              「{photo.plateNo ?? `끝 4자리 ${photo.plateTail}`}」로 등록된 차가 없습니다 — 아래{" "}
+              <strong>등록 안 된 손님입니다</strong>를 누르면 사진에서 읽은 정보가 미리 채워집니다.
             </p>
           )}
           <ul className="mt-2 space-y-1">
@@ -791,16 +829,42 @@ function SupplierVehiclePick({ supplier, onPick }: { supplier: string; onPick: (
   /* ⭐ 거래처 차량도 사진으로 (사장님 요청 2026-09-06) — 개인 흐름과 같은 PhotoAssist */
   const [photoOpen, setPhotoOpen] = useState(false);
   const [photo, setPhoto] = useState<PhotoInfo | null>(null);
+  const [searchedVq, setSearchedVq] = useState("");
+  const [fellBack, setFellBack] = useState(false);
   const handlePhotoInfo = (info: PhotoInfo) => {
     setPhoto((p) => ({ ...p, ...info }));
-    if (info.plateNo) setVq(info.plateNo); // 검색이 돌아 차고·기존 차량 후보가 뜬다
+    if (info.plateNo) {
+      setFellBack(false);
+      setVq(info.plateNo); // 검색이 돌아 차고·기존 차량 후보가 뜬다
+    } else if (info.plateTail) {
+      setFellBack(true);
+      setVq(info.plateTail); // 한글 오독 — 숫자 끝 4자리로 바로 찾는다
+    }
   };
+
+  /* ⭐ 끝 4자리 되찾기 (2026-09-06) — 개인 흐름과 같은 규칙: 한글 오독 대비 */
+  useEffect(() => {
+    if (!photo?.plateNo || fellBack) return;
+    if (searchedVq !== photo.plateNo || vhits.length > 0) return;
+    const tail = photo.plateNo.match(/(\d{4})$/)?.[1];
+    if (!tail) return;
+    setFellBack(true);
+    setVq(tail);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchedVq, vhits]);
 
   useEffect(() => {
     if (!focused && !vq.trim()) return;
     if (vt.current) clearTimeout(vt.current);
     // 검색어가 없으면 거래처 이름으로 — 차고·동명 고객의 차량들이 후보로 뜬다
-    vt.current = setTimeout(() => void searchVehicles(vq.trim() || supplier).then((r) => setVhits(r.slice(0, 6))), 250);
+    vt.current = setTimeout(
+      () =>
+        void searchVehicles(vq.trim() || supplier).then((r) => {
+          setVhits(r.slice(0, 6));
+          setSearchedVq(vq.trim());
+        }),
+      250,
+    );
     return () => {
       if (vt.current) clearTimeout(vt.current);
     };
@@ -839,6 +903,11 @@ function SupplierVehiclePick({ supplier, onPick }: { supplier: string; onPick: (
             📷 사진으로 달기 {photoOpen ? "접기" : ""}
           </button>
           {photoOpen && <PhotoAssist onInfo={handlePhotoInfo} />}
+          {(photo?.plateNo || photo?.plateTail) && fellBack && vhits.length > 0 && (
+            <p className="mt-1 rounded-lg bg-sky-50 px-3 py-1.5 text-xs text-sky-800">
+              번호판 한글이 확실치 않아 숫자 끝 4자리로 찾았습니다 — 목록에서 골라 주세요.
+            </p>
+          )}
           {(focused || vq.trim()) && (
             <ul className="mt-1 space-y-1" onMouseDown={(e) => e.preventDefault()}>
               {vhits.map((h) => (
