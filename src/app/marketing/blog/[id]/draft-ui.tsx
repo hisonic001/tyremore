@@ -9,7 +9,7 @@ import { TextareaField } from "@/components/ui/field";
 import { Notice } from "@/components/ui/notice";
 // 🔴 클라이언트는 core 만 — blog-draft.ts 는 DB 를 물고 있다
 import { OWNER_SLOT, composeForCopy } from "@/lib/blog-draft-core";
-import { regenerateDraft, saveOwnerNote, setDraftStatus } from "@/lib/blog-draft-actions";
+import { preparePublishImages, regenerateDraft, saveOwnerNote, setDraftStatus } from "@/lib/blog-draft-actions";
 
 const MIN_NOTE = 15;
 
@@ -34,7 +34,17 @@ interface Draft {
  * 🔴 한마디가 15자 미만이면 복사 버튼이 안 켜진다. AI 글의 균일한 결을 깨는 유일한 장치라
  *    (SEO 전문가 리뷰) 편의로 풀지 않는다.
  */
-export function DraftEditor({ draft }: { draft: Draft }) {
+/** 사진 화질 관련 — 화면이 「끌어도 되는지」를 정확히 말하기 위해 필요한 것들 */
+interface PhotoInfo {
+  /** 발행용(1280px)이 준비된 사진 id */
+  ready: number[];
+  /** 이 폴더의 영상 — 끌 수 없다. 네이버 「동영상」 단추로만 올라간다 */
+  videos: { fileName: string; mb: number }[];
+  /** 사진 폴더 이름 — 매장 PC 에서 원본을 직접 끌고 싶으실 때 */
+  folder: string | null;
+}
+
+export function DraftEditor({ draft, photos }: { draft: Draft; photos: PhotoInfo }) {
   const router = useRouter();
   const [ask, confirmDialog] = useConfirm();
   const [titleIdx, setTitleIdx] = useState(0);
@@ -84,6 +94,22 @@ export function DraftEditor({ draft }: { draft: Draft }) {
       const r = await regenerateDraft(draft.id);
       if (!r.ok) return setMsg(r.error);
       setMsg("매장 PC 에 요청했습니다 — 1~3분 뒤 목록 맨 위에 새 원고가 생깁니다.");
+      router.refresh();
+    });
+
+  /**
+   * 🔴 사진 화질 (2026-09-05). 준비된 사진만 「끌어도 되는」 사진이다.
+   *    준비 안 된 것을 준비된 척 보이면, 사장님이 160px 을 그대로 블로그에 올리시게 된다.
+   */
+  const readySet = useMemo(() => new Set(photos.ready), [photos.ready]);
+  const readyCount = draft.photoPlan?.filter((p) => readySet.has(p.photoId)).length ?? 0;
+  const allReady = !!draft.photoPlan?.length && readyCount === draft.photoPlan.length;
+
+  const prepPhotos = () =>
+    start(async () => {
+      const r = await preparePublishImages(draft.id);
+      if (!r.ok) return setMsg(r.error);
+      setMsg("매장 PC 에 요청했습니다 — 잠시 뒤 화면을 새로 고치면 큰 사진으로 바뀝니다.");
       router.refresh();
     });
 
@@ -150,24 +176,86 @@ export function DraftEditor({ draft }: { draft: Draft }) {
             사진 순서 — {draft.photoPlan.length}장
           </h2>
           <p className="mt-1 text-[13px] leading-snug text-slate-500">
-            본문의 <strong>[사진 A-00 - …]</strong> 자리에 이 순서대로 넣으시면 됩니다. 사진 폴더 안
-            <strong> _블로그</strong> 폴더에 같은 이름으로 복사해 뒀습니다 — 폰의 OneDrive 앱에서도 보입니다.
+            본문의 <strong>[사진 A-00 - …]</strong> 자리에 이 순서대로 넣으시면 됩니다.
           </p>
+
+          {/*
+            🔴 화질 안내가 이 화면의 핵심이다 (2026-09-05).
+               브라우저는 끌 때 화면에 보이는 크기가 아니라 **그림 파일 자체**를 넘긴다.
+               그래서 준비 전에는 목록용 160px 이 그대로 블로그에 올라간다 —
+               사장님이 지적하신 그 화질이다. 어느 쪽인지 반드시 말해 준다.
+          */}
+          {allReady ? (
+            <p className="mt-1 text-[13px] font-medium leading-snug text-brand-700">
+              끌어다 놓으시면 됩니다 — 블로그용 큰 사진(가로 1280)입니다.
+            </p>
+          ) : (
+            <div className="mt-2 rounded-control bg-amber-50 p-2.5">
+              <p className="text-[13px] leading-snug text-amber-900">
+                지금 이 사진들은 <strong>목록용 작은 그림(가로 160)</strong>입니다. 이대로 끌어다 붙이면
+                블로그에도 그 화질로 올라갑니다.
+                {readyCount > 0 && ` (${readyCount}장만 준비돼 있습니다)`}
+              </p>
+              <Button
+                className="mt-2"
+                variant="secondary"
+                pending={pending}
+                onClick={prepPhotos}
+              >
+                사진 고화질로 준비
+              </Button>
+            </div>
+          )}
+
           <ul className="mt-2 grid grid-cols-3 gap-1.5 lg:grid-cols-6">
-            {draft.photoPlan.map((p) => (
-              <li key={p.slot} className="text-center">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={`/api/blog-photo/${p.photoId}/thumb`}
-                  alt={p.caption}
-                  loading="lazy"
-                  className="aspect-square w-full rounded-control object-cover"
-                />
-                <span className="mt-0.5 block font-mono text-[10px] text-slate-400">{p.slot}</span>
-                <span className="block text-[11px] leading-tight text-slate-500">{p.caption}</span>
-              </li>
-            ))}
+            {draft.photoPlan.map((p) => {
+              const big = readySet.has(p.photoId);
+              return (
+                <li key={p.slot} className="text-center">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    /* 🔴 준비됐으면 **큰 사진을 건다.** 화면엔 작게 보여도 끌면 1280px 이 넘어간다 */
+                    src={`/api/blog-photo/${p.photoId}/${big ? "publish" : "thumb"}`}
+                    alt={p.caption}
+                    loading="lazy"
+                    className={`aspect-square w-full rounded-control object-cover ${
+                      big ? "" : "opacity-70"
+                    }`}
+                  />
+                  <span className="mt-0.5 block font-mono text-[10px] text-slate-400">{p.slot}</span>
+                  <span className="block text-[11px] leading-tight text-slate-500">{p.caption}</span>
+                </li>
+              );
+            })}
           </ul>
+
+          {/*
+            🔴 영상은 사진과 길이 아주 다르다 (사장님 질문 2026-09-05).
+               네이버는 영상을 **자기 「동영상」 단추로만** 받는다 — 웹에서 끌어다 붙이는 길이
+               아예 없다. 그래서 끌 수 있는 그림처럼 보이게 만들지 않는다.
+               어느 영상을 쓸지도 고르지 않는다 — 안을 못 보면서 고르는 척하면 안 된다.
+          */}
+          {photos.videos.length > 0 && (
+            <div className="mt-3 rounded-control border border-slate-200 p-2.5">
+              <p className="text-[13px] font-medium text-slate-700">🎬 영상 {photos.videos.length}개</p>
+              <p className="mt-0.5 text-[13px] leading-snug text-slate-500">
+                이건 <strong>끌어다 놓지 마세요.</strong> 네이버 글쓰기의 <strong>「동영상」</strong> 단추로
+                <strong> _블로그</strong> 폴더의 <strong>V-</strong> 파일을 올려 주세요. 어느 것을 쓸지는
+                사장님이 보고 고르시면 됩니다.
+              </p>
+              <p className="mt-1 font-mono text-[11px] text-slate-400">
+                {photos.videos.map((v, i) => `V-${String(i).padStart(2, "0")} (${v.mb}MB)`).join(" · ")}
+              </p>
+            </div>
+          )}
+
+          {photos.folder && (
+            <p className="mt-2 text-[12px] leading-snug text-slate-400">
+              원본 그대로 올리시려면 매장 PC 의 사진 폴더 안{" "}
+              <span className="font-mono text-slate-500">{photos.folder}\_블로그</span> 에서 바로 끄셔도
+              됩니다. (네이버가 어차피 966px 로 줄이므로 화질 차이는 거의 없습니다.)
+            </p>
+          )}
         </section>
       )}
 

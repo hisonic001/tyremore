@@ -98,28 +98,39 @@ async function runOne(job: Claimed): Promise<void> {
   const cliArgs =
     job.kind === "스캔"
       ? ["tsx", "scripts/blog-scan.ts", "--agent", "--job", String(job.id)]
-      : quoteId
-        ? ["tsx", "scripts/blog-draft.ts", "--agent", "--job", String(job.id)].concat(
-            p.variant ? ["--variant", String(p.variant)] : [],
-          )
-        : ["tsx", "scripts/blog-draft.ts", "--agent", "--limit", String(limit)];
+      : job.kind === "발행사진"
+        ? ["tsx", "scripts/blog-publish-images.ts", "--agent", "--job", String(job.id)]
+        : quoteId
+          ? ["tsx", "scripts/blog-draft.ts", "--agent", "--job", String(job.id)].concat(
+              p.variant ? ["--variant", String(p.variant)] : [],
+            )
+          : ["tsx", "scripts/blog-draft.ts", "--agent", "--limit", String(limit)];
 
   const scan = job.kind === "스캔";
-  log(`요청 #${job.id} (${job.kind}${scan ? "" : quoteId ? `, 판매 ${quoteId}` : `, 최대 ${limit}건`}) 시작`);
+  /** 초안을 만들지 않는 주문 — 끝났으면 그걸로 완료다 (DRAFT_ID 를 기다리면 안 된다) */
+  const noDraft = scan || job.kind === "발행사진";
+  log(`요청 #${job.id} (${job.kind}${noDraft ? "" : quoteId ? `, 판매 ${quoteId}` : `, 최대 ${limit}건`}) 시작`);
   await appendLog(
     job.id,
     scan
       ? "사진 폴더를 훑습니다"
-      : quoteId
-        ? "같은 시공으로 다시 만듭니다"
-        : `원고 만들기를 시작합니다 (최대 ${limit}건)`,
+      : job.kind === "발행사진"
+        ? "블로그에 끌어다 놓을 큰 사진을 만듭니다"
+        : quoteId
+          ? "같은 시공으로 다시 만듭니다"
+          : `원고 만들기를 시작합니다 (최대 ${limit}건)`,
   );
 
   /**
    * 원고 하나에 1~3분. 스캔은 사진 400장 썸네일을 굽는 첫 회가 오래 걸린다(20분).
+   * 발행용 사진은 12장이라 몇십 초면 끝나지만, 구름에서 받아야 하면 늘어난다.
    * 넉넉히 잡되 굳으면 반드시 끊는다.
    */
-  const timeoutMs = scan ? 20 * 60_000 : (quoteId ? 1 : limit) * 5 * 60_000 + 2 * 60_000;
+  const timeoutMs = scan
+    ? 20 * 60_000
+    : job.kind === "발행사진"
+      ? 10 * 60_000
+      : (quoteId ? 1 : limit) * 5 * 60_000 + 2 * 60_000;
 
   const draftIds: number[] = [];
   let errorMsg = "";
@@ -188,12 +199,12 @@ async function runOne(job: Claimed): Promise<void> {
     });
   });
 
-  /** 스캔은 초안을 안 만든다 — 끝났으면 완료다 */
-  if (exit === 0 && (scan || draftIds.length > 0)) {
+  /** 스캔·발행사진은 초안을 안 만든다 — 끝났으면 완료다 */
+  if (exit === 0 && (noDraft || draftIds.length > 0)) {
     await sql`
       UPDATE blog_job SET status='완료', finished_at=now(), draft_ids=${sql.json(draftIds)}
       WHERE id=${job.id} AND status='실행중'`;
-    log(`요청 #${job.id} 완료${scan ? " — 폴더 훑기" : ` — 초안 ${draftIds.length}건`}`);
+    log(`요청 #${job.id} 완료${noDraft ? ` — ${job.kind}` : ` — 초안 ${draftIds.length}건`}`);
   } else {
     const msg =
       errorMsg ||

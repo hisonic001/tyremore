@@ -379,6 +379,19 @@ export async function generateDraft(
   const photoFiles = opts?.photos?.files ?? [];
   if (photoFiles.length) opts?.onLog?.(`사진 ${photoFiles.length}장을 보여 줍니다`);
 
+  /**
+   * ⭐ 영상이 있는가 (2026-09-05). **있을 때만** 본문에 영상 자리를 만들게 한다 —
+   * 못 찍은 날 원고에 빈 `[영상 …]` 이 남으면 사장님이 지우셔야 한다.
+   * 🔴 영상 자체는 모델에게 안 보낸다. 나는 영상 안을 못 보고, 크기도 수십 MB 다.
+   */
+  let videoCount = 0;
+  if (opts?.folderId) {
+    const vr = await db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM blog_photo WHERE folder_id = ${opts.folderId} AND is_video = true`);
+    videoCount = Number(vr[0]?.n ?? 0);
+    if (videoCount) opts?.onLog?.(`영상 ${videoCount}개가 있어 본문에 영상 자리를 둡니다`);
+  }
+
   const baseUser = [
     "아래 내용으로 블로그 글 초안을 써 주세요.",
     "",
@@ -399,6 +412,16 @@ export async function generateDraft(
           "🔴 주어진 사실이 이게 전부입니다. 손님이 무슨 말을 했는지, 무엇을 발견했는지는",
           "   적혀 있지 않으니 지어내지 마세요. 없으면 그 대목은 통째로 빼고 짧게 쓰는 편이 낫습니다.",
         ]),
+    ...(videoCount
+      ? [
+          "",
+          "[영상]",
+          `이 작업에는 짧은 영상 ${videoCount}개가 있습니다 (사장님이 직접 올리십니다).`,
+          "🔴 소제목 한 곳 아래에 「[영상 - 작업 장면]」을 한 줄로 딱 하나만 넣으세요.",
+          "   작업이 실제로 돌아가는 대목(조이기·회전·주입)이 자연스럽습니다.",
+          "   영상 내용을 본 것처럼 설명하지는 마세요 — 무엇이 찍혔는지 저는 모릅니다.",
+        ]
+      : []),
     ...(photoFiles.length
       ? [
           "",
@@ -516,8 +539,14 @@ export async function generateDraft(
 
     /** 사장님이 벤츠 GLS 폴더에 손수 하시던 방식 그대로 — `_블로그\A-00 ….jpg` */
     if (plan.length && opts?.folderId) {
-      const { makeOrderedCopies } = await import("./blog-photo-worker");
+      const { makeOrderedCopies, uploadPublishImages } = await import("./blog-photo-worker");
       await makeOrderedCopies(opts.folderId, plan, opts.onLog).catch(() => null);
+      /**
+       * 🔴 화면에서 **끌어다 네이버에 붙일** 사진을 여기서 굽는다 (2026-09-05).
+       *    지금 이 순간이 유일하게 좋은 자리다 — 사진이 이미 로컬에 내려와 있고,
+       *    어느 사진을 쓸지(plan)도 막 정해졌다. Vercel 쪽에서는 이 폴더가 안 보인다.
+       */
+      await uploadPublishImages(opts.folderId, plan, opts.onLog).catch(() => null);
     }
 
     return { ok: true, id: row.id, titles: data.titles, warn };

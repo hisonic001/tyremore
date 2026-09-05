@@ -1516,7 +1516,7 @@ export const blogJob = pgTable(
     finishedAt: timestamp("finished_at", { withTimezone: true }),
   },
   (t) => [
-    check("blog_job_kind", sql`${t.kind} IN ('초안','스캔','정리')`),
+    check("blog_job_kind", sql`${t.kind} IN ('초안','스캔','정리','제원','발행사진')`),
     check("blog_job_status", sql`${t.status} IN ('대기','실행중','완료','실패')`),
     index("idx_blog_job_open").on(t.status),
   ],
@@ -1583,6 +1583,12 @@ export const blogPhoto = pgTable(
     takenAt: timestamp("taken_at", { withTimezone: true }),
     /** 160px JPEG q55 를 base64 로 — 장당 13KB 안팎. 화면 데이터엔 안 싣는다 */
     thumb: text("thumb"),
+    /**
+     * 발행용 1280px JPEG q82 를 base64 로 — 장당 200~370KB (2026-09-05).
+     * 🔴 **끌어다 놓기용**이다. 미리보기(160px)를 끌면 그 화질 그대로 블로그에 올라간다.
+     *    글에 든 사진만 굽고, 올렸거나 버린 뒤에는 지운다 — 창고가 불면 안 된다.
+     */
+    publish: text("publish"),
     createdAt,
   },
   (t) => [

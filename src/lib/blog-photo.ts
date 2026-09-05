@@ -101,6 +101,46 @@ export async function getThumb(photoId: number): Promise<string | null> {
 }
 
 /**
+ * 발행용 사진 한 장 (1280px) — 끌어다 놓기용. 라우트가 부른다.
+ * 🔴 없으면 **null 을 낸다.** 미리보기로 몰래 갈아치우면 「고화질인 줄 알았는데 아닌」
+ *    최악이 된다 — 사장님이 그걸 그대로 블로그에 올리시게 된다.
+ */
+export async function getPublish(photoId: number): Promise<{ b64: string; fileName: string } | null> {
+  const rows = await db.execute<{ publish: string | null; file_name: string }>(sql`
+    SELECT publish, file_name FROM blog_photo WHERE id = ${photoId}`);
+  const r = rows[0];
+  return r?.publish ? { b64: r.publish, fileName: r.file_name } : null;
+}
+
+/** 이 글에 든 사진 중 발행용이 준비된 것 (화면이 「끌어도 됩니다」를 언제 보일지 정한다) */
+export async function publishReady(photoIds: number[]): Promise<number[]> {
+  if (photoIds.length === 0) return [];
+  const rows = await db.execute<{ id: number }>(sql`
+    SELECT id FROM blog_photo
+    WHERE id = ANY(${photoIds}::bigint[]) AND publish IS NOT NULL`);
+  return rows.map((r) => Number(r.id));
+}
+
+/** 폴더 이름 — 화면이 「_블로그 폴더에서 원본을 끄셔도 됩니다」 안내에 쓴다 */
+export async function folderName(folderId: number): Promise<string | null> {
+  const rows = await db.execute<{ name: string }>(sql`
+    SELECT name FROM blog_folder WHERE id = ${folderId}`);
+  return rows[0]?.name ?? null;
+}
+
+/** 이 폴더의 영상들 — 화면이 「이건 끌지 마시고 동영상 단추로」 안내에 쓴다 */
+export async function folderVideos(folderId: number): Promise<{ fileName: string; mb: number }[]> {
+  const rows = await db.execute<{ file_name: string; byte_size: number }>(sql`
+    SELECT file_name, byte_size FROM blog_photo
+    WHERE folder_id = ${folderId} AND is_video = true
+    ORDER BY file_name`);
+  return rows.map((r) => ({
+    fileName: r.file_name,
+    mb: Math.round((Number(r.byte_size) / 1024 / 1024) * 10) / 10,
+  }));
+}
+
+/**
  * 「사진 다시 훑기」 — 폴더를 지정하면 그 폴더만, `hydrate` 면 구름에 있는 것도 내려받는다.
  * 🔴 전체 + hydrate 는 1.3GB 를 받는 일이라 화면에서 못 하게 한다.
  */

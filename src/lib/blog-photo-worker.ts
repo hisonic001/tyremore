@@ -12,7 +12,8 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { blogWorkDir } from "./blog-samples";
-import { copyFileName } from "./blog-folder-core";
+import { copyFileName, isVideo } from "./blog-folder-core";
+import { PUBLISH_PX, PUBLISH_Q, makeJpeg } from "./blog-scan";
 
 /** 🔴 사장님 결정 (2026-09-02) — 고른 것 중 앞 12장까지만 AI 가 본다 */
 export const AI_MAX_PHOTOS = 12;
@@ -144,6 +145,88 @@ export async function makeOrderedCopies(
       /* 못 읽으면 건너뛴다 */
     }
   }
-  log(`사진 ${made}장을 「_블로그」 폴더에 순서대로 복사했습니다`);
+
+  /**
+   * 🔴 **영상도 같이 넣는다** (2026-09-05, 사장님 질문에서).
+   *
+   * 영상은 사진과 길이 다르다 — 네이버는 영상을 자기 「동영상」 단추로만 받는다.
+   * 웹 화면에서 끌어다 붙이는 길이 **아예 없다.** 그러니 프로그램이 할 수 있는 일은
+   * **사장님 손이 닿는 자리에 순서대로 놓아 드리는 것**뿐이다.
+   *
+   * 어느 영상을 쓸지는 고르지 않는다 — 나는 영상 안을 못 본다. 밸런서인지 토크렌치인지
+   * 모르면서 고르는 척하면 안 된다. 찍은 순서대로 V-00, V-01 … 로 놓고 사장님이 고르신다.
+   */
+  const vids = [...byId.values()].filter(isVideo).sort((a, b) => a.localeCompare(b));
+  let vmade = 0;
+  for (const [i, file] of vids.entries()) {
+    const ext = path.extname(file).toLowerCase() || ".mp4";
+    const dest = path.join(outDir, copyFileName(`V-${String(i).padStart(2, "0")}`, "작업 영상", ext));
+    try {
+      await copyFile(path.join(srcDir, file), dest);
+      vmade += 1;
+    } catch {
+      /* 구름에만 있으면 건너뛴다 — 영상은 크다 */
+    }
+  }
+
+  log(`사진 ${made}장${vmade ? ` · 영상 ${vmade}개` : ""}를 「_블로그」 폴더에 순서대로 복사했습니다`);
   return made > 0 ? outDir : null;
+}
+
+/**
+ * ⭐ **발행용 사진**을 구워 창고에 올린다 — 끌어다 놓기용 (2026-09-05)
+ *
+ * 🔴 왜 필요한가: 화면 「사진 순서」의 그림은 **목록용 160px 미리보기**다. 브라우저는 끌 때
+ *    화면에 보이는 크기가 아니라 그림 파일 자체를 넘기므로, 그걸 끌면 160px 이 그대로
+ *    블로그에 올라간다. 사장님이 「화질이 너무 안 좋다」고 하신 것이 이것이다.
+ *
+ * 🔴 마침 좋은 자리다: 원고를 만들 때 `preparePhotosForAi()` 가 구름 사진까지 이미
+ *    로컬로 받아 놨다. 그래서 여기서 굽는 데 **추가로 내려받을 것이 없다.**
+ *
+ * 🔴 글에 든 사진만 굽는다. 폴더 사진을 전부 구우면 451장 = 130MB 이고, 대부분 안 쓴다.
+ */
+export async function uploadPublishImages(
+  folderId: number,
+  plan: { photoId: number; slot: string; caption: string }[],
+  onLog?: (s: string) => void,
+): Promise<number> {
+  const { readFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const log = onLog ?? (() => {});
+  if (plan.length === 0) return 0;
+
+  const rows = await db.execute<{ id: number; file_name: string; folder_name: string; has_publish: boolean }>(sql`
+    SELECT p.id, p.file_name, f.name AS folder_name, (p.publish IS NOT NULL) AS has_publish
+    FROM blog_photo p JOIN blog_folder f ON f.id = p.folder_id
+    WHERE p.folder_id = ${folderId} AND p.is_video = false`);
+  const byId = new Map(rows.map((r) => [Number(r.id), r]));
+  const folderName = rows[0]?.folder_name;
+  if (!folderName) return 0;
+
+  const srcDir = path.join(blogWorkDir(), folderName);
+  let made = 0;
+  let skipped = 0;
+
+  /** 🔴 한 장씩 순차로 — Promise.all 금지. 동시 질의가 풀을 채워 전면 마비된 전례가 있다 */
+  for (const p of plan) {
+    const r = byId.get(Number(p.photoId));
+    if (!r || r.has_publish) continue; // 이미 있으면 다시 안 굽는다
+    let b64: string | null = null;
+    try {
+      const buf = await readFile(path.join(srcDir, r.file_name));
+      b64 = await makeJpeg(buf, PUBLISH_PX, PUBLISH_Q);
+    } catch {
+      b64 = null;
+    }
+    if (!b64) {
+      skipped += 1;
+      continue;
+    }
+    await db.execute(sql`UPDATE blog_photo SET publish = ${b64} WHERE id = ${r.id}`);
+    made += 1;
+  }
+
+  if (made) log(`발행용 사진 ${made}장을 만들었습니다 (${PUBLISH_PX}px)`);
+  if (skipped) log(`  ⚠️ 못 만든 사진 ${skipped}장 — 구름에만 있거나 파일이 없습니다`);
+  return made;
 }

@@ -4,7 +4,7 @@
  * 블로그 초안 화면의 서버 액션 (마케팅 1단계, 2026-08-29)
  * 전부 사장님 전용 — 정비사 계정은 거절한다.
  */
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { blogDraft, blogFolder } from "@/db/schema";
@@ -119,11 +119,42 @@ export async function saveOwnerNote(id: number, note: string): Promise<R> {
 export async function setDraftStatus(id: number, status: "초안" | "발행" | "버림"): Promise<R> {
   const g = await guard();
   if (g) return { ok: false, error: g };
+  const d = await getDraft(id);
   await db
     .update(blogDraft)
     .set({ status, publishedAt: status === "발행" ? new Date() : null, updatedAt: new Date() })
     .where(eq(blogDraft.id, id));
+
+  /**
+   * 🔴 다 올렸거나 버렸으면 **발행용 사진(1280px)을 지운다** (2026-09-05).
+   *    한 건에 3MB 라 놔두면 1년에 수백 MB 가 쌓인다. 올린 뒤엔 쓸 일이 없고,
+   *    다시 필요하면 화면의 「사진 고화질로 준비」로 언제든 다시 만든다.
+   */
+  if (d?.folderId && status !== "초안") {
+    await db.execute(sql`
+      UPDATE blog_photo SET publish = NULL
+      WHERE folder_id = ${d.folderId} AND publish IS NOT NULL`);
+  }
+
   revalidatePath("/marketing/blog");
   revalidatePath("/");
   return { ok: true };
+}
+
+/**
+ * ⭐ 「사진 고화질로 준비」 (2026-09-05)
+ *
+ * 화면의 사진을 끌어다 네이버에 붙이면 목록용 160px 이 그대로 올라간다. 그래서 발행용
+ * 1280px 한 벌을 따로 굽는다. 🔴 굽는 일은 늘 **매장 PC 몫**이다 — Vercel 은 사장님
+ * 사진 폴더를 볼 수 없다. 그래서 여기서는 주문만 남긴다.
+ */
+export async function preparePublishImages(id: number): Promise<R & { jobId?: number }> {
+  const g = await guard();
+  if (g) return { ok: false, error: g };
+  const d = await getDraft(id);
+  if (!d?.folderId) return { ok: false, error: "이 글에는 사진 폴더가 이어져 있지 않습니다" };
+  if (!d.photoPlan) return { ok: false, error: "이 글에는 사진 계획이 없습니다" };
+  const r = await requestBlogJob("발행사진", { draftId: id });
+  if (!r.ok) return r;
+  return { ok: true, jobId: r.jobId };
 }
