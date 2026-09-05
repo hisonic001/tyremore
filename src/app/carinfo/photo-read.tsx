@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { Camera, Check } from "lucide-react";
+import { Camera, Check, ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/notice";
 import { StatusPill } from "@/components/ui/badge";
@@ -30,7 +30,13 @@ export function PhotoRead({
   const [scanId, setScanId] = useState<number | null>(null);
   const [scan, setScan] = useState<ScanRow | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
+  /**
+   * 🔴 **칸을 둘로 나눈다** (2026-09-05, 사장님 제보 — 「찍기는 되는데 고르기가 안 됨」).
+   *    `capture="environment"` 를 붙이면 폰이 **카메라만 열고 갤러리를 막는다.**
+   *    한 칸에 둘 다 담을 수 없어, 찍는 칸과 고르는 칸을 따로 둔다.
+   */
+  const camRef = useRef<HTMLInputElement>(null);
+  const galRef = useRef<HTMLInputElement>(null);
 
   const busy = scanId !== null && (scan === null || scan.status === "대기" || scan.status === "실행중");
 
@@ -96,7 +102,9 @@ export function PhotoRead({
       } catch (e) {
         setMsg(e instanceof Error ? e.message : "사진을 보내지 못했습니다");
       } finally {
-        if (fileRef.current) fileRef.current.value = "";
+        /* 같은 사진을 다시 고르실 수 있게 비운다 */
+        if (camRef.current) camRef.current.value = "";
+        if (galRef.current) galRef.current.value = "";
       }
     });
   }
@@ -134,18 +142,29 @@ export function PhotoRead({
           {agent.lastSeen ? ` (마지막 확인 ${agent.lastSeen})` : ""}
         </Notice>
       ) : (
-        <div className="mt-2">
+        <div className="mt-2 flex flex-wrap gap-2">
+          {/* 찍는 칸 — capture 가 붙어야 폰에서 카메라가 바로 열린다 */}
           <input
-            ref={fileRef}
+            ref={camRef}
             type="file"
             accept="image/*"
             capture="environment"
             onChange={(e) => pick(e.target.files?.[0] ?? null)}
             className="hidden"
-            id="vin-photo-input"
           />
-          <Button variant="secondary" pending={pending} onClick={() => fileRef.current?.click()}>
-            <Camera className="size-4" /> 사진 찍기 · 고르기
+          {/* 고르는 칸 — 🔴 capture 를 붙이면 갤러리가 안 열린다. 절대 붙이지 말 것 */}
+          <input
+            ref={galRef}
+            type="file"
+            accept="image/*"
+            onChange={(e) => pick(e.target.files?.[0] ?? null)}
+            className="hidden"
+          />
+          <Button variant="secondary" pending={pending} onClick={() => camRef.current?.click()}>
+            <Camera className="size-4" /> 사진 찍기
+          </Button>
+          <Button variant="secondary" pending={pending} onClick={() => galRef.current?.click()}>
+            <ImageIcon className="size-4" /> 앨범에서 고르기
           </Button>
         </div>
       )}
