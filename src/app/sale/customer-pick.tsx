@@ -788,6 +788,13 @@ function SupplierVehiclePick({ supplier, onPick }: { supplier: string; onPick: (
   const [err, setErr] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const vt = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /* ⭐ 거래처 차량도 사진으로 (사장님 요청 2026-09-06) — 개인 흐름과 같은 PhotoAssist */
+  const [photoOpen, setPhotoOpen] = useState(false);
+  const [photo, setPhoto] = useState<PhotoInfo | null>(null);
+  const handlePhotoInfo = (info: PhotoInfo) => {
+    setPhoto((p) => ({ ...p, ...info }));
+    if (info.plateNo) setVq(info.plateNo); // 검색이 돌아 차고·기존 차량 후보가 뜬다
+  };
 
   useEffect(() => {
     if (!focused && !vq.trim()) return;
@@ -823,6 +830,15 @@ function SupplierVehiclePick({ supplier, onPick }: { supplier: string; onPick: (
             placeholder="차량번호로 달기 (선택) — 예: 156허9093"
             className="w-full rounded-lg border border-violet-300 bg-white px-3 py-2 text-sm"
           />
+          {/* ⭐ 사진으로 달기 (2026-09-06) — 번호판·차량카드·계기판을 앨범에서 한꺼번에 */}
+          <button
+            type="button"
+            onClick={() => setPhotoOpen((v) => !v)}
+            className="mt-1 text-xs text-violet-600 underline underline-offset-4"
+          >
+            📷 사진으로 달기 {photoOpen ? "접기" : ""}
+          </button>
+          {photoOpen && <PhotoAssist onInfo={handlePhotoInfo} />}
           {(focused || vq.trim()) && (
             <ul className="mt-1 space-y-1" onMouseDown={(e) => e.preventDefault()}>
               {vhits.map((h) => (
@@ -844,7 +860,15 @@ function SupplierVehiclePick({ supplier, onPick }: { supplier: string; onPick: (
                   type="button"
                   onClick={() => {
                     setAdding(true);
-                    setForm((f) => ({ ...f, plateNo: vq.trim() }));
+                    // 사진에서 읽은 값이 있으면 미리 채운다 (2026-09-06) — 저장 전 전부 수정 가능
+                    setForm((f) => ({
+                      plateNo: photo?.plateNo ?? vq.trim() ?? f.plateNo,
+                      makerName: photo?.makerName ?? f.makerName,
+                      model: photo?.carName
+                        ? `${photo.carName}${photo.modelCode ? `(${photo.modelCode})` : ""}`
+                        : f.model,
+                      mileage: photo?.odoKm ? String(photo.odoKm) : f.mileage,
+                    }));
                   }}
                   className="w-full rounded-lg border border-dashed border-violet-400 px-3 py-1.5 text-sm font-medium text-violet-700 active:bg-violet-100"
                 >

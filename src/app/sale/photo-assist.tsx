@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { Camera, ImageIcon } from "lucide-react";
+import { ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/notice";
-import { getVinScan, requestVinScan, type ScanRow } from "@/lib/vin-photo";
+import { getVinScan, requestVinScan } from "@/lib/vin-photo";
 import { parseVin } from "@/lib/vin";
 
 /**
@@ -13,9 +13,10 @@ import { parseVin } from "@/lib/vin";
  *   "차량번호 사진 + B필러 사진(혹은 차량등록증) + 주행거리, 세 장의 사진으로
  *    고객 조회와 새로운 고객 등록이 바로 가능하게."
  *
- *   사진을 한 장씩 올리면 매장 PC 대리인이 읽는다(/carinfo 의 사진 읽기와 같은
- *   파이프라인, mode='판매등록' — 번호판·계기판·등록증 소유자 이름까지).
- *   읽은 값은 부모(CustomerPick)로 올려 보내고, 부모가 조회·프리필을 맡는다.
+ * ⭐ 2026-09-06 업그레이드 (사장님 — "한 장씩 순서대로 찍는 것은 불편함"):
+ *    찍기 버튼을 빼고 **앨범에서 여러 장(3~4장)을 한꺼번에** 고른다.
+ *    사진 한 장 = 스캔 한 건은 그대로다(대리인이 사진 종류를 스스로 판단) —
+ *    여러 장은 스캔 여러 건을 줄 세울 뿐이라 매장 PC 대리인 변경이 없다.
  *
  * 🔴 읽은 값은 자동 확정이 아니다 — 번호판은 검색창에 들어가 결과를 보여 주고,
  *    신규 등록 값은 폼에 미리 채워질 뿐 저장 전에 전부 고칠 수 있다.
@@ -32,171 +33,198 @@ export interface PhotoInfo {
   makerName?: string;
 }
 
+/** 한 번에 받는 사진 상한 — 번호판·차량카드(등록증)·계기판이면 3장, 여유 1장 */
+const MAX_PHOTOS = 4;
+
+interface PhotoJob {
+  key: number;
+  name: string;
+  scanId: number | null;
+  /** 보내는중 → 읽는중 → 완료 | 실패 */
+  phase: "보내는중" | "읽는중" | "완료" | "실패";
+  /** 완료: 읽은 것 요약 · 실패: 이유 */
+  note: string;
+  /** 믿기 어려워 버린 값·경고 — 숨기지 않는다 */
+  extra: string[];
+}
+
+type ScanResult = NonNullable<Awaited<ReturnType<typeof getVinScan>>>["result"];
+
+/** 읽은 결과에서 쓸 값과 화면 요약 줄을 만든다 */
+function digest(r: NonNullable<ScanResult>): { info: PhotoInfo; line: string; extra: string[] } {
+  const info: PhotoInfo = {};
+  const parts: string[] = [];
+  if (r.plateNo) {
+    info.plateNo = r.plateNo;
+    parts.push(`차량번호 ${r.plateNo}`);
+  }
+  if (r.vin) {
+    info.vin = r.vin;
+    parts.push(`차대번호 ${r.vin}`);
+    const v = parseVin(r.vin);
+    if (v.maker) info.makerName = v.maker.split(" ")[0];
+    if (v.year && !r.year) info.year = v.year;
+  }
+  if (r.carName) {
+    info.carName = r.carName;
+    parts.push(`차명 ${r.carName}${r.modelCode ? `(${r.modelCode})` : ""}`);
+  }
+  if (r.modelCode) info.modelCode = r.modelCode;
+  if (r.year) {
+    info.year = r.year;
+    parts.push(`연식 ${r.year}년`);
+  }
+  if (r.ownerName) {
+    info.ownerName = r.ownerName;
+    parts.push(`소유자 ${r.ownerName}`);
+  }
+  if (r.odoKm) {
+    info.odoKm = r.odoKm;
+    parts.push(`주행거리 ${r.odoKm.toLocaleString("ko-KR")}km`);
+  }
+  const extra = [
+    ...r.warn.map((w) => `⚠️ ${w}`),
+    ...(r.dropped.length ? [`버린 값: ${r.dropped.join(" · ")}`] : []),
+  ];
+  return { info, line: parts.join(" · ") || "읽어낸 것이 없습니다 — 더 가까이서 다시 찍어 보세요", extra };
+}
+
+/** 보내기 전에 긴 변 1600px 로 줄인다 — photo-read 와 같은 규칙 */
+async function shrink(file: File): Promise<string> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((res, rej) => {
+      const i = new Image();
+      i.onload = () => res(i);
+      i.onerror = () => rej(new Error("사진을 열지 못했습니다"));
+      i.src = url;
+    });
+    const max = 1600;
+    const scale = Math.min(1, max / Math.max(img.width, img.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(img.width * scale);
+    c.height = Math.round(img.height * scale);
+    const ctx = c.getContext("2d");
+    if (!ctx) throw new Error("사진을 줄이지 못했습니다");
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", 0.85);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 export function PhotoAssist({ onInfo }: { onInfo: (p: PhotoInfo) => void }) {
   const [pending, start] = useTransition();
-  const [scanId, setScanId] = useState<number | null>(null);
-  const [scan, setScan] = useState<ScanRow | null>(null);
+  const [jobs, setJobs] = useState<PhotoJob[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
-  /** 이 판에서 지금까지 읽은 것들 — 사장님이 뭐가 들어갔는지 본다 */
-  const [gotLines, setGotLines] = useState<string[]>([]);
-  // 🔴 카메라 칸(capture)과 갤러리 칸을 나눈다 — photo-read 와 같은 이유 (한 칸이면 갤러리가 막힌다)
-  const camRef = useRef<HTMLInputElement>(null);
+  // 🔴 capture 를 붙이면 갤러리가 안 열린다 — 절대 붙이지 말 것 (photo-read 교훈)
   const galRef = useRef<HTMLInputElement>(null);
+  const keySeq = useRef(0);
 
-  const busy = scanId !== null && (scan === null || scan.status === "대기" || scan.status === "실행중");
+  const busy = jobs.some((j) => j.phase === "보내는중" || j.phase === "읽는중");
 
-  // 🔴 3초 폴링 — 앞선 확인이 끝나기 전에는 다음 것을 안 쏘고, 탭이 안 보이면 쉰다 (풀러 마비 교훈)
+  /**
+   * 🔴 3초마다 확인하되 **한 틱 안에서 순차로** — 동시 질의가 풀을 채운 전례
+   *    (2026-08-07). 탭이 안 보이면 쉬고, 앞선 확인이 끝나기 전엔 다음 틱을 안 쏜다.
+   */
   const inflight = useRef(false);
   useEffect(() => {
-    if (!busy || scanId === null) return;
+    if (!jobs.some((j) => j.phase === "읽는중")) return;
     const t = setInterval(() => {
       if (document.hidden || inflight.current) return;
       inflight.current = true;
-      void getVinScan(scanId)
-        .then((next) => next && setScan(next))
-        .finally(() => {
-          inflight.current = false;
-        });
+      void (async () => {
+        for (const j of jobs) {
+          if (j.phase !== "읽는중" || j.scanId === null) continue;
+          const scan = await getVinScan(j.scanId).catch(() => null);
+          if (!scan) continue;
+          if (scan.status === "완료" && scan.result) {
+            const d = digest(scan.result);
+            setJobs((prev) => prev.map((x) => (x.key === j.key ? { ...x, phase: "완료", note: d.line, extra: d.extra } : x)));
+            if (Object.keys(d.info).length > 0) onInfo(d.info);
+          } else if (scan.status === "실패") {
+            setJobs((prev) =>
+              prev.map((x) => (x.key === j.key ? { ...x, phase: "실패", note: scan.error ?? "사진을 읽지 못했습니다" } : x)),
+            );
+          }
+        }
+      })().finally(() => {
+        inflight.current = false;
+      });
     }, 3000);
     return () => clearInterval(t);
-  }, [busy, scanId]);
-
-  // 완료되면 읽은 것을 부모로 올려 보낸다 — 한 번만
-  const reported = useRef<number | null>(null);
-  useEffect(() => {
-    if (!scan || scan.status !== "완료" || !scan.result || reported.current === scan.id) return;
-    reported.current = scan.id;
-    const r = scan.result;
-    const info: PhotoInfo = {};
-    const lines: string[] = [];
-    if (r.plateNo) {
-      info.plateNo = r.plateNo;
-      lines.push(`차량번호 ${r.plateNo}`);
-    }
-    if (r.vin) {
-      info.vin = r.vin;
-      lines.push(`차대번호 ${r.vin}`);
-      const v = parseVin(r.vin);
-      if (v.maker) info.makerName = v.maker.split(" ")[0];
-      if (v.year && !r.year) info.year = v.year;
-    }
-    if (r.carName) {
-      info.carName = r.carName;
-      lines.push(`차명 ${r.carName}${r.modelCode ? `(${r.modelCode})` : ""}`);
-    }
-    if (r.modelCode) info.modelCode = r.modelCode;
-    if (r.year) {
-      info.year = r.year;
-      lines.push(`연식 ${r.year}년`);
-    }
-    if (r.ownerName) {
-      info.ownerName = r.ownerName;
-      lines.push(`소유자 ${r.ownerName}`);
-    }
-    if (r.odoKm) {
-      info.odoKm = r.odoKm;
-      lines.push(`주행거리 ${r.odoKm.toLocaleString("ko-KR")}km`);
-    }
-    if (lines.length === 0) lines.push("이 사진에서는 읽어낸 것이 없습니다 — 더 가까이서 다시 찍어 보세요");
-    setGotLines((prev) => [...prev, lines.join(" · ")]);
-    if (Object.keys(info).length > 0) onInfo(info);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scan]);
+  }, [jobs.map((j) => `${j.key}:${j.phase}`).join(",")]);
 
-  /** 보내기 전에 긴 변 1600px 로 줄인다 — photo-read 와 같은 규칙 */
-  async function shrink(file: File): Promise<string> {
-    const url = URL.createObjectURL(file);
-    try {
-      const img = await new Promise<HTMLImageElement>((res, rej) => {
-        const i = new Image();
-        i.onload = () => res(i);
-        i.onerror = () => rej(new Error("사진을 열지 못했습니다"));
-        i.src = url;
-      });
-      const max = 1600;
-      const scale = Math.min(1, max / Math.max(img.width, img.height));
-      const c = document.createElement("canvas");
-      c.width = Math.round(img.width * scale);
-      c.height = Math.round(img.height * scale);
-      const ctx = c.getContext("2d");
-      if (!ctx) throw new Error("사진을 줄이지 못했습니다");
-      ctx.drawImage(img, 0, 0, c.width, c.height);
-      return c.toDataURL("image/jpeg", 0.85);
-    } finally {
-      URL.revokeObjectURL(url);
-    }
-  }
-
-  function pick(file: File | null) {
-    if (!file) return;
+  function pick(list: FileList | null) {
+    if (!list || list.length === 0) return;
+    const files = [...list].slice(0, MAX_PHOTOS);
+    if (list.length > MAX_PHOTOS) setMsg(`한 번에 ${MAX_PHOTOS}장까지 — 앞 ${MAX_PHOTOS}장만 읽습니다`);
+    else setMsg(null);
     start(async () => {
-      setMsg(null);
-      setScan(null);
-      setScanId(null);
-      try {
-        const dataUrl = await shrink(file);
-        const r = await requestVinScan(dataUrl, "판매등록");
-        if (!r.ok) return setMsg(r.error);
-        setScanId(r.scanId);
-      } catch (e) {
-        setMsg(e instanceof Error ? e.message : "사진을 보내지 못했습니다");
-      } finally {
-        if (camRef.current) camRef.current.value = "";
-        if (galRef.current) galRef.current.value = "";
+      for (const file of files) {
+        const key = ++keySeq.current;
+        const name = `사진 ${key}`;
+        setJobs((prev) => [...prev, { key, name, scanId: null, phase: "보내는중", note: "", extra: [] }]);
+        try {
+          const dataUrl = await shrink(file);
+          const r = await requestVinScan(dataUrl, "판매등록");
+          if (!r.ok) {
+            /* 매장 PC 꺼짐 등 — 남은 줄을 더 보내 봐야 같은 이유로 실패한다. 여기서 멈춘다 */
+            setJobs((prev) => prev.filter((x) => x.key !== key));
+            setMsg(r.error);
+            return;
+          }
+          setJobs((prev) => prev.map((x) => (x.key === key ? { ...x, scanId: r.scanId, phase: "읽는중" } : x)));
+        } catch (e) {
+          setJobs((prev) =>
+            prev.map((x) => (x.key === key ? { ...x, phase: "실패", note: e instanceof Error ? e.message : "사진을 보내지 못했습니다" } : x)),
+          );
+        }
       }
+      if (galRef.current) galRef.current.value = "";
     });
   }
-
-  const read = scan?.status === "완료" ? scan.result : null;
 
   return (
     <div className="mt-2 rounded-control border border-slate-200 bg-slate-50 p-3">
       <p className="text-[13px] leading-snug text-slate-600">
-        <strong>차량번호판</strong> → <strong>B필러 카드(또는 등록증)</strong> → <strong>계기판</strong> 순서로
-        한 장씩 찍으면, 등록된 차는 바로 찾고 새 차는 정보가 미리 채워집니다.
+        <strong>차량번호판 · B필러 카드(또는 등록증) · 계기판</strong>을 미리 찍어 두고,
+        앨범에서 <strong>한꺼번에 골라</strong> 올리세요 — 등록된 차는 바로 찾고, 새 차는 정보가 미리 채워집니다.
       </p>
       <p className="mt-1 text-[12px] leading-snug text-slate-400">
-        사진은 매장 PC 가 읽고 나면 바로 지웁니다. 등록증은 차량 정보 칸 위주로 찍어 주세요 — 주소·전화는 읽지 않습니다.
+        사진은 매장 PC 가 읽고 나면 바로 지웁니다. 등록증은 차량 정보 칸 위주로 — 주소·전화는 읽지 않습니다.
       </p>
 
-      <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={(e) => pick(e.target.files?.[0] ?? null)} className="hidden" />
-      {/* 🔴 capture 를 붙이면 갤러리가 안 열린다 — 절대 붙이지 말 것 (photo-read 교훈) */}
-      <input ref={galRef} type="file" accept="image/*" onChange={(e) => pick(e.target.files?.[0] ?? null)} className="hidden" />
-      <div className="mt-2 flex flex-wrap gap-2">
-        <Button variant="secondary" pending={pending || busy} onClick={() => camRef.current?.click()}>
-          <Camera className="size-4" /> 사진 찍기
-        </Button>
+      <input ref={galRef} type="file" accept="image/*" multiple onChange={(e) => pick(e.target.files)} className="hidden" />
+      <div className="mt-2">
         <Button variant="secondary" pending={pending || busy} onClick={() => galRef.current?.click()}>
-          <ImageIcon className="size-4" /> 앨범에서 고르기
+          <ImageIcon className="size-4" /> 앨범에서 사진 고르기 (한 번에 {MAX_PHOTOS}장까지)
         </Button>
       </div>
 
-      {busy && <p className="mt-2 text-[13px] text-slate-500">매장 PC 가 사진을 읽고 있습니다 — 보통 10~20초 걸립니다.</p>}
       {msg && (
         <Notice tone="error" className="mt-2">
           {msg}
         </Notice>
       )}
-      {scan?.status === "실패" && (
-        <Notice tone="error" className="mt-2">
-          {scan.error ?? "사진을 읽지 못했습니다"}
-        </Notice>
-      )}
 
-      {gotLines.length > 0 && (
-        <ul className="mt-2 space-y-0.5 text-[13px] text-slate-700">
-          {gotLines.map((l, i) => (
-            <li key={i}>✓ {l}</li>
+      {jobs.length > 0 && (
+        <ul className="mt-2 space-y-1 text-[13px]">
+          {jobs.map((j) => (
+            <li key={j.key} className={j.phase === "실패" ? "text-red-700" : "text-slate-700"}>
+              {j.phase === "보내는중" && `${j.name} — 보내는 중…`}
+              {j.phase === "읽는중" && `${j.name} — 매장 PC 가 읽는 중… (보통 10~20초)`}
+              {j.phase === "완료" && `✓ ${j.note}`}
+              {j.phase === "실패" && `✗ ${j.name} — ${j.note}`}
+              {j.extra.map((x, i) => (
+                <p key={i} className="text-[12px] leading-snug text-amber-700">
+                  {x}
+                </p>
+              ))}
+            </li>
           ))}
         </ul>
-      )}
-      {read && read.warn.length > 0 && (
-        <Notice tone="warn" className="mt-2">
-          {read.warn.join(" · ")}
-        </Notice>
-      )}
-      {read && read.dropped.length > 0 && (
-        <p className="mt-1 text-[12px] leading-snug text-amber-700">믿기 어려워 버린 값: {read.dropped.join(" · ")}</p>
       )}
     </div>
   );
