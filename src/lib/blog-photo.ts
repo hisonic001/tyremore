@@ -112,12 +112,18 @@ export async function getPublish(photoId: number): Promise<{ b64: string; fileNa
   return r?.publish ? { b64: r.publish, fileName: r.file_name } : null;
 }
 
-/** 이 글에 든 사진 중 발행용이 준비된 것 (화면이 「끌어도 됩니다」를 언제 보일지 정한다) */
-export async function publishReady(photoIds: number[]): Promise<number[]> {
-  if (photoIds.length === 0) return [];
+/**
+ * 이 폴더에서 발행용이 준비된 사진 (화면이 「끌어도 됩니다」를 언제 보일지 정한다)
+ *
+ * 🔴 **배열을 질의에 넘기지 않는다** (2026-09-05, 실제로 터뜨렸다).
+ *    `id = ANY(${'${ids}'}::bigint[])` 로 썼더니 drizzle 이 배열을 `($1,$2,…)` 목록으로 펼쳐
+ *    `cannot cast type record to bigint[]` 로 화면 전체가 죽었다.
+ *    폴더 하나로 받아 오고 **고르는 일은 화면에서** 한다 — 어차피 한 폴더는 많아야 73장이다.
+ */
+export async function publishReady(folderId: number): Promise<number[]> {
   const rows = await db.execute<{ id: number }>(sql`
     SELECT id FROM blog_photo
-    WHERE id = ANY(${photoIds}::bigint[]) AND publish IS NOT NULL`);
+    WHERE folder_id = ${folderId} AND publish IS NOT NULL`);
   return rows.map((r) => Number(r.id));
 }
 

@@ -19,7 +19,7 @@ export default async function BlogDraftPage({ params }: { params: Promise<{ id: 
    * 🔴 질의는 순차로 — 풀러가 동시 질의에 약하다.
    */
   const plan = (d.photoPlan ?? null) as { photoId: number; slot: string; caption: string }[] | null;
-  const ready = plan ? await publishReady(plan.map((p) => p.photoId)) : [];
+  const ready = d.folderId ? await publishReady(d.folderId) : [];
   const videos = d.folderId ? await folderVideos(d.folderId) : [];
   const folder = d.folderId ? await folderName(d.folderId) : null;
 
