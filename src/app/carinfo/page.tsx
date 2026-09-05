@@ -8,6 +8,7 @@ import { looksLikeVin, parseVin } from "@/lib/vin";
 import { CarLookup } from "./client";
 import { specsForGeneration } from "@/lib/spec";
 import { partsForGeneration } from "@/lib/parts-fit";
+import { blogAgentStatus } from "@/lib/blog-job";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +47,8 @@ export default async function CarInfoPage({
   const gens = await listSpecGenerations();
   const spec = variantKey ? await specsForGeneration(variantKey, { confirmed }) : null;
   const parts = spec?.generationId ? await partsForGeneration(spec.generationId) : [];
+  /* 🔴 사진은 매장 PC 가 읽는다 — 꺼져 있으면 누르기 전에 알려 준다 */
+  const agent = await blogAgentStatus();
 
   return (
     <PageShell width="md">
@@ -66,6 +69,7 @@ export default async function CarInfoPage({
         spec={spec}
         parts={parts}
         gens={gens.map((g) => ({ variantKey: g.variantKey, label: g.label }))}
+        agent={agent}
       />
 
       <p className="mt-6 text-[11px] leading-snug text-slate-400">

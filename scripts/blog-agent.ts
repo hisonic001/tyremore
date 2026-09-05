@@ -100,6 +100,8 @@ async function runOne(job: Claimed): Promise<void> {
       ? ["tsx", "scripts/blog-scan.ts", "--agent", "--job", String(job.id)]
       : job.kind === "발행사진"
         ? ["tsx", "scripts/blog-publish-images.ts", "--agent", "--job", String(job.id)]
+      : job.kind === "차량사진"
+        ? ["tsx", "scripts/vin-photo.ts", "--agent", "--job", String(job.id)]
         : /**
            * 🔴 초안은 **반드시 주문서(--job)를 거친다** (사장님 지시 2026-09-05).
            *    예전에는 quoteId 가 없으면 `--limit` 로 넘겨 그날 시공에서 스스로 골랐다.
@@ -111,7 +113,7 @@ async function runOne(job: Claimed): Promise<void> {
 
   const scan = job.kind === "스캔";
   /** 초안을 만들지 않는 주문 — 끝났으면 그걸로 완료다 (DRAFT_ID 를 기다리면 안 된다) */
-  const noDraft = scan || job.kind === "발행사진";
+  const noDraft = scan || job.kind === "발행사진" || job.kind === "차량사진";
   log(`요청 #${job.id} (${job.kind}${noDraft ? "" : quoteId ? `, 판매 ${quoteId}` : `, 최대 ${limit}건`}) 시작`);
   await appendLog(
     job.id,
@@ -119,6 +121,8 @@ async function runOne(job: Claimed): Promise<void> {
       ? "사진 폴더를 훑습니다"
       : job.kind === "발행사진"
         ? "블로그에 끌어다 놓을 큰 사진을 만듭니다"
+      : job.kind === "차량사진"
+        ? "사진에서 차량 정보를 읽습니다"
         : quoteId
           ? "같은 시공으로 다시 만듭니다"
           : `원고 만들기를 시작합니다 (최대 ${limit}건)`,
@@ -133,6 +137,8 @@ async function runOne(job: Claimed): Promise<void> {
     ? 20 * 60_000
     : job.kind === "발행사진"
       ? 10 * 60_000
+    : job.kind === "차량사진"
+      ? 4 * 60_000
       : (quoteId ? 1 : limit) * 5 * 60_000 + 2 * 60_000;
 
   const draftIds: number[] = [];

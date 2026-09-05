@@ -11,6 +11,8 @@ import type { FitPart } from "@/lib/parts-fit";
 import type { VehicleSpecBlock } from "@/lib/spec";
 import type { VinInfo } from "@/lib/vin";
 import type { VinGuess } from "@/lib/vin-learn";
+import type { AgentStatus } from "@/lib/blog-job";
+import { PhotoRead } from "./photo-read";
 
 /**
  * 정비 조회 — 차대번호를 넣고, 차종을 확인하고, 규격과 부품을 본다 (2026-09-04)
@@ -27,6 +29,7 @@ export function CarLookup({
   spec,
   parts,
   gens,
+  agent,
 }: {
   vinText: string;
   vin: VinInfo | null;
@@ -35,6 +38,7 @@ export function CarLookup({
   spec: VehicleSpecBlock | null;
   parts: FitPart[];
   gens: { variantKey: string; label: string }[];
+  agent: AgentStatus;
 }) {
   const router = useRouter();
   const [q, setQ] = useState(vinText);
@@ -69,6 +73,20 @@ export function CarLookup({
           <Search className="size-4" /> 조회
         </Button>
       </div>
+
+      {/*
+        ⭐ 사진으로 읽기 (2026-09-05) — 17자리를 손으로 치지 않아도 된다.
+        🔴 읽은 값은 **자동으로 안 들어간다.** 사장님이 「이 차대번호로 조회」를 누르셔야 간다.
+      */}
+      <PhotoRead
+        agent={agent}
+        onVin={(v) => {
+          setQ(v);
+          const p = new URLSearchParams();
+          p.set("vin", v);
+          router.push(`/carinfo?${p.toString()}`);
+        }}
+      />
 
       {vin && (
         <>
