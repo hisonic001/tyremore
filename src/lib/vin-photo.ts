@@ -15,7 +15,7 @@ import { blogJob } from "@/db/schema";
 import { getSession } from "./auth";
 import { blogAgentStatus } from "./blog-job";
 import { OUTDATED_MSG } from "./agent-version";
-import type { CleanRead } from "./vin-photo-core";
+import { cleanPlate, type CleanRead } from "./vin-photo-core";
 
 /** 사진 한 장의 상한 — 화면에서 긴 변 1600px 로 줄여 보낸다. 그래도 넘으면 거절 */
 const MAX_BYTES = 4 * 1024 * 1024;
@@ -108,6 +108,21 @@ export async function getVinScan(scanId: number): Promise<ScanRow | null> {
       UPDATE vin_scan SET status='실패', error=${r.job_error}, image=NULL, finished_at=now()
       WHERE id = ${scanId} AND status = '대기'`);
     return { id: Number(r.id), status: "실패", error: r.job_error, result: null };
+  }
+
+  /**
+   * 🔴 결과를 **정본으로 한 번 더 거른다** (2026-09-05, 스캔 14 사고).
+   *    매장 PC 대리인이 옛/딴 코드로 돌면 번호판 칸에 `{plate:"23너9549"}` 객체를
+   *    통째로 적는 일이 실제로 났다 — 화면에는 [object Object] 가 들어가 검색이
+   *    조용히 망가진다. 대리인이 어떤 상태든 앱은 깨진 값을 안 쓴다.
+   */
+  if (r.result) {
+    const raw = r.result as CleanRead & { warn: string[]; vinAgreed?: boolean };
+    const p = cleanPlate(raw.plateNo);
+    raw.plateNo = p.plate;
+    raw.plateTail = typeof raw.plateTail === "string" ? raw.plateTail : p.tail;
+    raw.dropped = Array.isArray(raw.dropped) ? raw.dropped : [];
+    if (p.reason && !raw.dropped.includes(p.reason)) raw.dropped.push(p.reason);
   }
   return { id: Number(r.id), status: r.status, error: r.error, result: r.result };
 }

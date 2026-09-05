@@ -44,7 +44,7 @@ const SALE_SCHEMA = {
   type: "object",
   properties: {
     ...BASE_PROPS,
-    plateNo: { type: "string", description: "Korean license plate exactly as printed (e.g. 12가3456), or empty" },
+    plateNo: { type: "string", description: "Korean license plate exactly as printed (e.g. 12가3456); use ? for an uncertain middle Korean letter (e.g. 23?9549); empty if digits are unreadable" },
     odoKm: { type: "integer", description: "odometer reading in km if the photo is a dashboard, or 0" },
     ownerName: { type: "string", description: "owner name ONLY if the photo is a vehicle registration doc, or empty" },
     source: { type: "string", enum: ["등록증", "차량카드", "번호판", "계기판", "기타"] },
@@ -88,7 +88,8 @@ const SALE_SYSTEM = `당신은 타이어 매장의 차량 접수를 돕는 사�
    가 나 다 라 마 / 거 너 더 러 머 버 서 어 저 / 고 노 도 로 모 보 소 오 조 /
    구 누 두 루 무 부 수 우 주 / (영업) 아 바 사 자 배 / (렌터카) 하 허 호
    어/여, 오/우, 하/허/호, 버/바 를 **한 획씩** 특히 조심해서 보세요.
-   가운데 글자가 확실하지 않으면 plateNo 를 통째로 비우고 unread 에 적으세요.
+   숫자는 확실한데 **가운데 한글만 확신이 없으면 그 자리에 ? 를 넣으세요** (예: 23?9549)
+   — 숫자가 살아 있으면 끝 4자리로 차를 찾을 수 있습니다. 숫자까지 흐리면 통째로 비우세요.
 3. 🔴 **주소·전화번호는 읽지도 적지도 마세요.** 소유자 이름은 등록증일 때만,
    ownerName 칸에만 적으세요.
 4. 글자를 고치지 마세요. 차대번호에 I·O·Q 는 쓰이지 않습니다 — 1·0 입니다.

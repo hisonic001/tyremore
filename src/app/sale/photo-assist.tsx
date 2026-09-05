@@ -95,7 +95,11 @@ function digest(r: NonNullable<ScanResult>): { info: PhotoInfo; line: string; ex
   return { info, line: parts.join(" · ") || "읽어낸 것이 없습니다 — 더 가까이서 다시 찍어 보세요", extra };
 }
 
-/** 보내기 전에 긴 변 1600px 로 줄인다 — photo-read 와 같은 규칙 */
+/**
+ * 보내기 전에 긴 변 2000px 로 줄인다 (2026-09-05 — 1600px 에서 키움).
+ * 🔴 번호판 사진은 차 전체가 찍혀 번호판 영역이 작다 — 1600px 로 줄이면 가운데
+ *    한글이 뭉개져 오독이 잦았다. 2000px jpeg 는 그래도 4MB 상한에 한참 못 미친다.
+ */
 async function shrink(file: File): Promise<string> {
   const url = URL.createObjectURL(file);
   try {
@@ -105,7 +109,7 @@ async function shrink(file: File): Promise<string> {
       i.onerror = () => rej(new Error("사진을 열지 못했습니다"));
       i.src = url;
     });
-    const max = 1600;
+    const max = 2000;
     const scale = Math.min(1, max / Math.max(img.width, img.height));
     const c = document.createElement("canvas");
     c.width = Math.round(img.width * scale);

@@ -116,8 +116,8 @@ function cleanPsi(v: unknown): number | null {
 
 const SOURCES = ["등록증", "차량카드", "번호판", "계기판", "기타"];
 
-/** 차량번호판 전체 모양 — 「12가3456」·「서울12가3456」·「123가4567」 */
-const FULL_PLATE_RE = /^([가-힣]{2})?\d{2,3}([가-힣])(\d{4})$/;
+/** 차량번호판 전체 모양 — 「12가3456」·「서울12가3456」·「123가4567」. 한글 자리 「?」 허용 */
+const FULL_PLATE_RE = /^([가-힣]{2})?\d{2,3}([가-힣?])(\d{4})$/;
 
 /**
  * ⭐ 번호판 가운데 한글의 **법정 목록** (사장님 제보 2026-09-06 — "중간의 한국어를
@@ -128,13 +128,28 @@ const FULL_PLATE_RE = /^([가-힣]{2})?\d{2,3}([가-힣])(\d{4})$/;
 export const PLATE_MID_CHARS =
   "가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호";
 
-/** 판매등록 모드의 차량번호 — 모양이 안 맞으면 버린다 (틀린 번호로 엉뚱한 차를 찾으면 안 된다) */
-function cleanPlate(v: unknown): { plate: string | null; tail: string | null; reason: string | null } {
-  const s = str(v);
+/**
+ * ⭐ 판매등록 모드의 차량번호 정리 — 모양이 안 맞으면 버린다 (틀린 번호로 엉뚱한
+ *    차를 찾으면 안 된다). 한글 자리는 「?」도 받는다 (2026-09-05 — 모델이 한글만
+ *    확신 못 할 때 숫자까지 통째로 비우던 것을 고침: 숫자는 살려 되찾기가 나선다).
+ * 🔴 export 인 이유: 매장 PC 대리인이 옛/딴 코드로 돌아 깨진 값을 적어 놔도
+ *    앱(getVinScan)이 이 정본으로 **한 번 더 걸러** 화면까지는 못 오게 한다.
+ */
+export function cleanPlate(v: unknown): { plate: string | null; tail: string | null; reason: string | null } {
+  /* 딴 코드가 {plate: "..."} 객체를 통째로 넣은 사고가 실제로 있었다 (2026-09-05 스캔 14) */
+  const inner = v && typeof v === "object" && "plate" in v ? (v as { plate?: unknown }).plate : v;
+  const s = str(inner);
   if (!s) return { plate: null, tail: null, reason: null };
-  const up = s.replace(/\s/g, "");
+  const up = s.replace(/\s/g, "").replace(/[*？]/g, "?");
   const m = up.match(FULL_PLATE_RE);
   if (!m) return { plate: null, tail: null, reason: `차량번호 「${s}」 — 번호판 모양이 아니라 버렸습니다` };
+  if (m[2] === "?") {
+    return {
+      plate: null,
+      tail: m[3],
+      reason: `차량번호 「${up}」 — 가운데 한글을 확신하지 못해 숫자 끝 4자리로 찾습니다`,
+    };
+  }
   if (!PLATE_MID_CHARS.includes(m[2])) {
     /* 🔴 한글은 오독이라도 숫자는 믿을 만하다 — 끝 4자리를 살려 되찾기가 대신 나선다 */
     return {
