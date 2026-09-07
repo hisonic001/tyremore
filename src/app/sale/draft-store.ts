@@ -1,14 +1,13 @@
 "use client";
 
 /**
- * ⭐ 판매 등록 임시 저장 (사장님 요청 2026-08-19)
+ * ⭐ 판매 등록 임시 저장 — 타입 정본 + 옛 localStorage 이사 (2026-09-07 개편)
  *
- * > "판매등록 도중에 임시저장이 가능한 기능. 홈화면에서 타이어 검색 후 타이어 담기
- * >  기능처럼. 판매등록하던 내용들도 임시저장 버튼을 따로 만들어서 옆쪽에 따로 저장"
- *
- * 손님이 겹칠 때 쓰던 판을 접어 두고 다른 손님을 먼저 등록하는 용도다.
- * 담아둔 타이어(compare-store)와 같은 방식 — 브라우저(localStorage)에 남긴다.
- * 상담 중 임시 메모라 서버에 둘 이유가 없고, 판매 확정을 누르는 순간 DB 로 승격된다.
+ * 처음(2026-08-19)에는 localStorage(기기별)였는데, 사장님 요청으로 **서버 보관**
+ * 으로 옮겼다 — "임시저장된 내용은 다른 계정들에서도 공유가 가능해서 같이 볼 수
+ * 있어야 함." 저장·목록·삭제는 이제 lib/sale-draft.ts(서버 액션, sale_draft 표)가
+ * 정본이고, 이 파일에는 **상태 타입**과 옛 기기에 남은 것을 서버로 올리는
+ * **일회성 이사**만 남는다.
  */
 
 const KEY = "tyremore.saledraft.v1";
@@ -28,50 +27,31 @@ export interface SaleDraftState {
   wheels: string[];
   /** 신규 손님 폼의 중간 입력 (2026-08-19) — 반쯤 쓰다 접어도 그대로 돌아온다 */
   newCustomer?: unknown | null;
+  /** ⭐ 2026-09-07 보강 — 접히지 않아 복원 때 유실되던 두 칸 */
+  payDates?: Record<string, string>;
+  reserve?: boolean;
 }
 
-export interface SaleDraft {
-  id: string;
-  /** '14:02' — 접어둔 시각 */
-  savedAt: string;
-  /** '32가1234 김철수 · 2줄 · 384,000원' */
-  label: string;
-  state: SaleDraftState;
-}
-
-function read(): SaleDraft[] {
+/** 옛 localStorage 에 남은 접어둔 판매 — 서버로 이사 보낼 때 한 번 읽는다 */
+export function readLegacyDrafts(): { label: string; state: SaleDraftState }[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(KEY);
-    return raw ? (JSON.parse(raw) as SaleDraft[]) : [];
+    if (!raw) return [];
+    const items = JSON.parse(raw) as { label?: string; state?: SaleDraftState }[];
+    return items
+      .filter((d) => d && d.state)
+      .map((d) => ({ label: d.label ?? "접어둔 판매", state: d.state! }));
   } catch {
     return [];
   }
 }
 
-function write(items: SaleDraft[]) {
+/** 이사 성공 후 옛 창고를 비운다 — 두 번 올라가면 카드가 겹친다 */
+export function clearLegacyDrafts(): void {
   try {
-    window.localStorage.setItem(KEY, JSON.stringify(items));
+    window.localStorage.removeItem(KEY);
   } catch {
-    /* 저장 공간이 없어도 화면은 계속 동작해야 한다 */
+    /* 못 지워도 다음에 다시 시도될 뿐 — 서버 쪽은 이사 전 개수로 판단하지 않는다 */
   }
-}
-
-export function listSaleDrafts(): SaleDraft[] {
-  return read();
-}
-
-export function saveSaleDraft(label: string, state: SaleDraftState): SaleDraft {
-  const d: SaleDraft = {
-    id: `d${Date.now()}`,
-    savedAt: new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }),
-    label,
-    state,
-  };
-  write([d, ...read()].slice(0, 20)); // 폭주 방지 — 20건이면 충분하다
-  return d;
-}
-
-export function removeSaleDraft(id: string): void {
-  write(read().filter((d) => d.id !== id));
 }

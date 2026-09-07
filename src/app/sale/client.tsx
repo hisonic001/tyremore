@@ -11,7 +11,8 @@ import { findServices, saveSale, type SaleLine } from "@/lib/sale";
 import { EXCLUSIVE, SPLITTABLE } from "@/lib/payments";
 /** ⭐ 고객·거래처 선택기는 공용으로 뺐다 (2026-08-17) — 정비 내역의 「대상 바꾸기」도 쓴다 */
 import { CustomerPick, type NewCustomerDraft } from "./customer-pick";
-import { listSaleDrafts, removeSaleDraft, saveSaleDraft, type SaleDraft, type SaleDraftState } from "./draft-store";
+import { clearLegacyDrafts, readLegacyDrafts, type SaleDraftState } from "./draft-store";
+import { listSaleDrafts, removeSaleDraft, saveSaleDraft, type ServerSaleDraft } from "@/lib/sale-draft";
 import { useConfirm } from "@/components/ui/confirm";
 import { AmountBox } from "@/components/ui/amount-box";
 
@@ -217,12 +218,27 @@ export function SaleForm({
    * ⭐ 임시 저장 (사장님 요청 2026-08-19) — 손님이 겹칠 때 쓰던 판을 접어 두고
    *    다른 손님을 먼저 등록한다. 담아둔 타이어와 같은 localStorage 방식.
    */
-  const [drafts, setDrafts] = useState<SaleDraft[]>([]);
+  const [drafts, setDrafts] = useState<ServerSaleDraft[]>([]);
+  /**
+   * ⭐ 지금 펼쳐서 작업 중인 임시저장 카드 (사장님 확정 2026-09-07).
+   *    펼쳐도 카드는 남고, 다시 접으면 이 id 의 카드가 **갱신**되며,
+   *    판매완료가 성공하는 그 순간에만 지워진다.
+   */
+  const [activeDraftId, setActiveDraftId] = useState<number | null>(null);
   /** 신규 손님 폼의 중간 입력 — 폼 내부 상태를 여기로 흘려받아 임시 저장에 함께 접는다 */
   const [newCust, setNewCust] = useState<NewCustomerDraft | null>(null);
   /** CustomerPick 을 통째로 다시 그리게 하는 열쇠 — 접기/펼치기 때 내부 상태(검색어·폼)를 리셋 */
   const [formEpoch, setFormEpoch] = useState(0);
-  useEffect(() => setDrafts(listSaleDrafts()), []);
+  useEffect(() => {
+    /* ⭐ 서버 보관으로 이사 (2026-09-07) — 이 기기 localStorage 에 남은 옛 접어둔
+       판매를 한 번 서버로 올리고 비운다. 그 뒤 공유 목록을 불러온다 */
+    void (async () => {
+      const legacy = readLegacyDrafts();
+      for (const d of legacy) await saveSaleDraft(d.label, d.state).catch(() => null);
+      if (legacy.length > 0) clearLegacyDrafts();
+      setDrafts(await listSaleDrafts().catch(() => []));
+    })();
+  }, []);
 
   // ⭐ 차량·손님이 정해지면 예약 걸린 건이 있는지 물어본다 (2026-09-01)
   useEffect(() => {
@@ -249,6 +265,7 @@ export function SaleForm({
     setWheels([]);
     setWorkDate(today);
     setNewCust(null);
+    setActiveDraftId(null);
     setFormEpoch((e) => e + 1);
   };
 
@@ -261,26 +278,37 @@ export function SaleForm({
           ? `신규 ${newCust.f.name || newCust.f.plateNo} (등록 중)`
           : walkIn.name || walkIn.plateNo || "손님 미지정";
     const label = `${who} · ${rows.length}줄 · ${won(total)}원`;
-    saveSaleDraft(label, {
-      vehicle,
-      supplierSale,
-      walkIn,
-      mileage,
-      rows,
-      payMethods,
-      payAmounts,
-      combo,
-      memo,
-      workDate,
-      wheels,
-      newCustomer: newCust,
-    });
+    const draftId = activeDraftId; // resetForm 이 지우기 전에 붙잡는다
+    void (async () => {
+      /* ⭐ 펼쳐 둔 카드가 있으면 그 카드를 갱신 — "지워지지 않고 업데이트만" (사장님 확정) */
+      await saveSaleDraft(
+        label,
+        {
+          vehicle,
+          supplierSale,
+          walkIn,
+          mileage,
+          rows,
+          payMethods,
+          payAmounts,
+          combo,
+          memo,
+          workDate,
+          wheels,
+          newCustomer: newCust,
+          // ⭐ 2026-09-07 보강 — 접히지 않아 유실되던 두 칸
+          payDates,
+          reserve,
+        },
+        draftId,
+      ).catch(() => null);
+      setDrafts(await listSaleDrafts().catch(() => []));
+    })();
     resetForm();
-    setDrafts(listSaleDrafts());
   };
 
-  const restoreDraft = (d: SaleDraft) => {
-    const st = d.state as SaleDraftState;
+  const restoreDraft = (d: ServerSaleDraft) => {
+    const st = d.state;
     setVehicle((st.vehicle as VehicleHit | null) ?? null);
     setSupplierSale(st.supplierSale ?? null);
     setWalkIn(st.walkIn ?? { name: "", phone: "", plateNo: "" });
@@ -288,14 +316,17 @@ export function SaleForm({
     setRows((st.rows as Row[]) ?? []);
     setPayMethods(st.payMethods?.length ? st.payMethods : ["카드"]);
     setPayAmounts(st.payAmounts ?? {});
+    setPayDates(st.payDates ?? {});
+    setReserve(!!st.reserve);
     setCombo(!!st.combo);
     setMemo(st.memo ?? "");
     setWorkDate(st.workDate || today);
     setWheels(st.wheels ?? []);
     setNewCust((st.newCustomer as NewCustomerDraft | null) ?? null);
     setFormEpoch((e) => e + 1); // CustomerPick 을 다시 그려 신규 폼이 접힌 그대로 열리게
-    removeSaleDraft(d.id); // 펼치면 목록에서 빠진다 — 그대로 두면 이중 등록의 씨앗
-    setDrafts(listSaleDrafts());
+    /* ⭐ 펼쳐도 카드는 남는다 (사장님 확정 2026-09-07) — 지워지는 건 x 또는 판매완료뿐.
+       대신 id 를 기억해, 다시 접으면 이 카드가 갱신되고 판매완료 때 지워진다 */
+    setActiveDraftId(d.id);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -318,6 +349,8 @@ export function SaleForm({
                     <div className="truncate text-sm font-semibold">{d.label.split(" · ")[0]}</div>
                     <div className="tabular text-xs text-slate-500">
                       {d.label.split(" · ").slice(1).join(" · ")} · {d.savedAt}
+                      {/* 공유 목록이라 누가 접어뒀는지 보인다 (2026-09-07) */}
+                      {d.byName && <span className="text-slate-400"> · {d.byName}</span>}
                     </div>
                   </div>
                   <button
@@ -326,21 +359,28 @@ export function SaleForm({
                     onClick={async () => {
                       if (!(await ask({ title: "임시 저장을 지울까요?", body: d.label, tone: "danger", confirmLabel: "지우기" })))
                         return;
-                      removeSaleDraft(d.id);
-                      setDrafts(listSaleDrafts());
+                      await removeSaleDraft(d.id).catch(() => null);
+                      if (activeDraftId === d.id) setActiveDraftId(null);
+                      setDrafts(await listSaleDrafts().catch(() => []));
                     }}
                     className="shrink-0 px-1 text-slate-300 active:text-slate-600"
                   >
                     ✕
                   </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => restoreDraft(d)}
-                  className="mt-1.5 w-full rounded-lg bg-amber-600 py-2 text-sm font-semibold text-white active:bg-amber-700"
-                >
-                  펼치기
-                </button>
+                {activeDraftId === d.id ? (
+                  <p className="mt-1.5 rounded-lg bg-amber-100 py-2 text-center text-sm font-semibold text-amber-800">
+                    지금 펼쳐서 작업 중 — 판매완료하면 지워집니다
+                  </p>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => restoreDraft(d)}
+                    className="mt-1.5 w-full rounded-lg bg-amber-600 py-2 text-sm font-semibold text-white active:bg-amber-700"
+                  >
+                    펼치기
+                  </button>
+                )}
               </li>
             ))}
           </ul>
@@ -398,6 +438,16 @@ export function SaleForm({
       if (!res.ok) {
         setError(res.error);
         return;
+      }
+      /* ⭐ 판매완료 성공 — 펼쳐서 작업하던 임시저장 카드는 여기서만 자동으로 지워진다
+         (사장님 확정 2026-09-07) */
+      if (activeDraftId !== null) {
+        const gone = activeDraftId;
+        setActiveDraftId(null);
+        void removeSaleDraft(gone)
+          .then(() => listSaleDrafts())
+          .then((r) => setDrafts(r))
+          .catch(() => null);
       }
       setDone({ quoteNo: res.quoteNo, shortages: res.shortages, reserved: reserve });
       setRows([]);

@@ -1787,3 +1787,22 @@ export const specCitation = pgTable(
   },
   (t) => [uniqueIndex("uq_spec_citation").on(t.specId, t.sourceId)],
 );
+
+/**
+ * ⭐ 판매 임시저장 — 서버 보관 (사장님 요청 2026-09-07)
+ *
+ *   "임시저장된 내용은 다른 계정들에서도 공유가 가능해서 같이 볼 수 있어야 함."
+ *   계정 필터 없이 매장이 한 표를 같이 본다. 수명: x(확인 후) 또는
+ *   펼쳐서 판매완료 성공 시에만 삭제, 펼치고 다시 접으면 같은 줄 UPDATE.
+ *   state 는 판매 폼 상태 통째(SaleDraftState — sale/draft-store.ts 가 정본).
+ */
+export const saleDraft = pgTable("sale_draft", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  /** 카드 한 줄 요약 — 「32가1234 김철수 · 2줄 · 384,000원」 */
+  label: text("label").notNull(),
+  state: jsonb("state").$type<Record<string, unknown>>().notNull(),
+  createdBy: bigint("created_by", { mode: "number" }),
+  createdAt,
+  updatedAt,
+});
+
