@@ -9,11 +9,12 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { addCollection, removeCollection } from "@/lib/receivable";
-import { SPLITTABLE } from "@/lib/payments";
+import { COLLECT_METHODS } from "@/lib/payments";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
 /** 수금 수단 = 분할에 섞을 수 있는 수단과 같다 — 정본은 lib/payments.ts (2026-08-29) */
-const METHODS: readonly string[] = SPLITTABLE;
+// 「개인계좌」 포함 (2026-09-07) — 통장 밖 수령도 수단으로 남긴다
+const METHODS: readonly string[] = COLLECT_METHODS;
 
 /** 🔴 owner: 2회차 수리 E1(2026-08-28) — 수금 넣기·지우기는 사장님 전용.
  *  직원에게는 「얼마 받았고 얼마 남았나」만 보인다 (그건 매장에서 알아야 한다). */

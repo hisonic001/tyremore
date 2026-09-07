@@ -106,6 +106,15 @@ export default async function FinancePage({
     GROUP BY source LIMIT 5
   `);
   const bank = sums.find((s) => s.source === "통장");
+  /* ⭐ 통장 밖 수령 (사장님 제보 2026-09-07 — 강원수산 수금을 개인계좌로 받았는데
+     돈관리에 안 보였다). 개인계좌 수금은 법인 통장 자료에 없어 위 합계에 못 들어간다 —
+     따로 세어 「들어온 돈」 옆에 보여 준다. 수금 정본 receivable_payment 그대로. */
+  const [asideIn] = await db.execute<{ s: string; n: number }>(sql`
+    SELECT COALESCE(SUM(rp.amount), 0)::bigint s, count(*)::int n
+    FROM receivable_payment rp JOIN quote q ON q.id = rp.quote_id
+    WHERE q.status = '성사' AND rp.method = '개인계좌'
+      AND rp.paid_on >= ${start}::date AND rp.paid_on < ${nextStart}::date
+  `);
   const card = sums.find((s) => s.source === "법인카드");
 
   // ② 계좌·카드별 이번 달 + 통장 마지막 잔액 — ⭐ 배치2: 「내역」 보기일 때만 질의
@@ -383,6 +392,11 @@ export default async function FinancePage({
           <div className="rounded-2xl border border-slate-200 bg-white p-3 text-center">
             <p className="text-xs text-slate-500">통장에 들어온 돈 (계좌끼리 제외)</p>
             <p className="tabular mt-1 font-bold text-emerald-700">{won(Number(bank?.in_sum ?? 0))}원</p>
+            {Number(asideIn?.s ?? 0) > 0 && (
+              <p className="tabular mt-0.5 text-[11px] text-emerald-700">
+                + 개인계좌 수금 {won(Number(asideIn.s))}원 <span className="text-slate-400">(통장 밖)</span>
+              </p>
+            )}
           </div>
           <div className="rounded-2xl border border-slate-200 bg-white p-3 text-center">
             <p className="text-xs text-slate-500">통장에서 나간 돈</p>

@@ -18,7 +18,7 @@ import { db } from "@/db";
 import { quote, receivablePayment } from "@/db/schema";
 import { hasPerm } from "./auth";
 import { PERM_DENIED } from "./perm-keys";
-import { SPLITTABLE } from "./payments";
+import { COLLECT_METHODS } from "./payments";
 import { planSettlement } from "./receivable-plan";
 
 function refresh() {
@@ -31,8 +31,8 @@ function refresh() {
   }
 }
 
-/** 수금 수단 — 정본은 lib/payments.ts (2026-08-29 간편결제 추가) */
-const METHODS: readonly string[] = SPLITTABLE;
+/** 수금 수단 — 정본은 lib/payments.ts (2026-09-07 「개인계좌」 추가 — 통장 밖 수령) */
+const METHODS: readonly string[] = COLLECT_METHODS;
 
 /**
  * ⭐ 돈 관리는 사장님 전용 (2회차 수리 E1, 사장님 결정 2026-08-28)
