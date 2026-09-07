@@ -173,16 +173,33 @@ export function CustomerPick({
 
   /* ⭐ 번호판 사진과 정확히 맞는 차가 딱 하나면 바로 잡는다 (2026-09-05) — 한 번 더 누를 일이 없다 */
   useEffect(() => {
-    if (!photo?.plateNo || vehicle) return;
+    if (vehicle) return;
     const norm = (s: string) => s.replace(/\s/g, "");
-    const p = norm(photo.plateNo);
-    const exact = hits.filter((h) => {
-      const hp = norm(h.plateNo);
-      return hp === p || hp.endsWith(p) || p.endsWith(hp);
-    });
-    if (exact.length === 1) {
-      onPick(exact[0]);
-      setQ("");
+    if (photo?.plateNo) {
+      const p = norm(photo.plateNo);
+      const exact = hits.filter((h) => {
+        const hp = norm(h.plateNo);
+        return hp === p || hp.endsWith(p) || p.endsWith(hp);
+      });
+      if (exact.length === 1) {
+        onPick(exact[0]);
+        setQ("");
+      }
+      return;
+    }
+    /**
+     * ⭐ 한글만 못 읽은 번호(23?9549)도 — **숫자 여섯일곱 자리가 전부 맞는** 등록 차가
+     *    딱 1대면 그 차다 (사장님 제보 2026-09-07: 특이 글꼴 번호판의 한글은 모델이
+     *    계속 못 읽는다 — 실측 23누9549 를 너/? 로 읽음). 숫자는 믿을 만하니
+     *    자동으로 잡는다. 2대 이상이면 목록에서 고른다 (기존 안내 그대로).
+     */
+    if (photo?.plateMask && fellBack && hits.length > 0) {
+      const re = new RegExp("^(?:[가-힣]{2})?" + photo.plateMask.replace(/^([가-힣]{2})?/, "").replace("?", "[가-힣]") + "$");
+      const m = hits.filter((h) => re.test(norm(h.plateNo)));
+      if (m.length === 1) {
+        onPick(m[0]);
+        setQ("");
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hits]);
@@ -199,7 +216,8 @@ export function CustomerPick({
           consentMarketing: false,
           michelinMember: false,
           signed: false,
-          plateNo: photo.plateNo ?? (/\d/.test(q) ? q : ""),
+          // 한글만 못 읽었으면 「23?9549」 그대로 채운다 — 사장님이 ? 한 글자만 고치면 된다
+          plateNo: photo.plateNo ?? photo.plateMask ?? (/\d/.test(q) ? q : ""),
           // 제조사는 차대번호에서 (MARS 목록 이름과 같은 한글) — 아니면 비워 둔다
           makerName: photo.makerName && isMarsMaker(photo.makerName) ? photo.makerName : "",
           // 사장님이 5년간 쳐 오신 「쏘렌토(MQ4)」 꼴 — 괄호코드가 세대 열쇠가 된다

@@ -62,6 +62,11 @@ export interface CleanRead {
   plateNo: string | null;
   /** 한글이 오독으로 버려졌을 때 살린 숫자 끝 4자리 — 되찾기 검색용 (2026-09-06) */
   plateTail: string | null;
+  /**
+   * 한글만 모를 때의 전체 꼴 — 「23?9549」 (2026-09-07). 숫자 여섯일곱 자리가 다
+   * 맞는 등록 차가 딱 1대면 화면이 자동으로 잡는다 (숫자는 믿을 만하다).
+   */
+  plateMask: string | null;
   odoKm: number | null;
   ownerName: string | null;
 }
@@ -135,30 +140,37 @@ export const PLATE_MID_CHARS =
  * 🔴 export 인 이유: 매장 PC 대리인이 옛/딴 코드로 돌아 깨진 값을 적어 놔도
  *    앱(getVinScan)이 이 정본으로 **한 번 더 걸러** 화면까지는 못 오게 한다.
  */
-export function cleanPlate(v: unknown): { plate: string | null; tail: string | null; reason: string | null } {
+export function cleanPlate(v: unknown): {
+  plate: string | null;
+  tail: string | null;
+  mask: string | null;
+  reason: string | null;
+} {
   /* 딴 코드가 {plate: "..."} 객체를 통째로 넣은 사고가 실제로 있었다 (2026-09-05 스캔 14) */
   const inner = v && typeof v === "object" && "plate" in v ? (v as { plate?: unknown }).plate : v;
   const s = str(inner);
-  if (!s) return { plate: null, tail: null, reason: null };
+  if (!s) return { plate: null, tail: null, mask: null, reason: null };
   const up = s.replace(/\s/g, "").replace(/[*？]/g, "?");
   const m = up.match(FULL_PLATE_RE);
-  if (!m) return { plate: null, tail: null, reason: `차량번호 「${s}」 — 번호판 모양이 아니라 버렸습니다` };
+  if (!m) return { plate: null, tail: null, mask: null, reason: `차량번호 「${s}」 — 번호판 모양이 아니라 버렸습니다` };
   if (m[2] === "?") {
     return {
       plate: null,
       tail: m[3],
-      reason: `차량번호 「${up}」 — 가운데 한글을 확신하지 못해 숫자 끝 4자리로 찾습니다`,
+      mask: up,
+      reason: `차량번호 「${up}」 — 가운데 한글을 확신하지 못해 숫자로 찾습니다`,
     };
   }
   if (!PLATE_MID_CHARS.includes(m[2])) {
-    /* 🔴 한글은 오독이라도 숫자는 믿을 만하다 — 끝 4자리를 살려 되찾기가 대신 나선다 */
+    /* 🔴 한글은 오독이라도 숫자는 믿을 만하다 — 숫자 꼴(mask)을 살려 되찾기가 대신 나선다 */
     return {
       plate: null,
       tail: m[3],
-      reason: `차량번호 「${up}」 — 가운데 「${m[2]}」는 번호판에 안 쓰이는 글자라 버렸습니다 (한글 오독 — 끝 4자리로 찾습니다)`,
+      mask: up.replace(m[2], "?"),
+      reason: `차량번호 「${up}」 — 가운데 「${m[2]}」는 번호판에 안 쓰이는 글자라 버렸습니다 (한글 오독 — 숫자로 찾습니다)`,
     };
   }
-  return { plate: up, tail: null, reason: null };
+  return { plate: up, tail: null, mask: null, reason: null };
 }
 
 /** 계기판 주행거리 — 상식 범위(0 ~ 150만 km)만 통과 */
@@ -189,12 +201,14 @@ export function cleanRead(raw: RawRead, today = new Date(), mode: ScanMode = "�
   /* ── ⭐ 판매등록 모드 전용 칸 (2026-09-05) — 제원 모드에서는 받지 않는다 ── */
   let plateNo: string | null = null;
   let plateTail: string | null = null;
+  let plateMask: string | null = null;
   let odoKm: number | null = null;
   let ownerName: string | null = null;
   if (mode === "판매등록") {
     const p = cleanPlate(raw.plateNo);
     plateNo = p.plate;
     plateTail = p.tail;
+    plateMask = p.mask;
     if (p.reason) dropped.push(p.reason);
     odoKm = cleanOdo(raw.odoKm);
     if (num(raw.odoKm) !== null && num(raw.odoKm) !== 0 && odoKm === null)
@@ -251,7 +265,7 @@ export function cleanRead(raw: RawRead, today = new Date(), mode: ScanMode = "�
     ? raw.unread.filter((s): s is string => typeof s === "string" && s.trim().length > 0).slice(0, 8)
     : [];
 
-  return { vin, carName, modelCode, year, tireFront, tireRear, psiFront, psiRear, source, unread, dropped, plateNo, plateTail, odoKm, ownerName };
+  return { vin, carName, modelCode, year, tireFront, tireRear, psiFront, psiRear, source, unread, dropped, plateNo, plateTail, plateMask, odoKm, ownerName };
 }
 
 /**

@@ -25,6 +25,8 @@ export interface PhotoInfo {
   plateNo?: string;
   /** 한글이 오독으로 버려졌을 때 살린 숫자 끝 4자리 — 되찾기 검색용 */
   plateTail?: string;
+  /** 한글만 모를 때의 전체 꼴 「23?9549」 — 숫자가 다 맞는 등록 차 1대면 자동 선택 */
+  plateMask?: string;
   vin?: string;
   carName?: string;
   modelCode?: string;
@@ -60,9 +62,10 @@ function digest(r: NonNullable<ScanResult>): { info: PhotoInfo; line: string; ex
     info.plateNo = r.plateNo;
     parts.push(`차량번호 ${r.plateNo}`);
   } else if (r.plateTail) {
-    // 한글은 오독으로 버렸지만 숫자는 살렸다 — 끝 4자리로 되찾는다 (2026-09-06)
+    // 한글은 오독으로 버렸지만 숫자는 살렸다 — 숫자로 되찾는다 (2026-09-06)
     info.plateTail = r.plateTail;
-    parts.push(`차량번호 끝 4자리 ${r.plateTail}`);
+    if (r.plateMask) info.plateMask = r.plateMask;
+    parts.push(`차량번호 ${r.plateMask ?? `끝 4자리 ${r.plateTail}`} (한글 못 읽음)`);
   }
   if (r.vin) {
     info.vin = r.vin;

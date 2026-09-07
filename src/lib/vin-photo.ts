@@ -123,6 +123,19 @@ export async function getVinScan(scanId: number): Promise<ScanRow | null> {
     raw.plateTail = typeof raw.plateTail === "string" ? raw.plateTail : p.tail;
     raw.dropped = Array.isArray(raw.dropped) ? raw.dropped : [];
     if (p.reason && !raw.dropped.includes(p.reason)) raw.dropped.push(p.reason);
+    let mask = typeof raw.plateMask === "string" ? raw.plateMask : p.mask;
+    /* 매장 PC 대리인이 mask 없는 판이어도 — 버린 사유 문구에 「23?9549」 꼴이 남는다.
+       또 pull 을 시키지 않고 여기서 복원한다 (2026-09-07) */
+    if (!mask && raw.plateTail) {
+      for (const d of raw.dropped) {
+        const m = d.match(/「((?:[가-힣]{2})?\d{2,3}\?\d{4})」/);
+        if (m) {
+          mask = m[1];
+          break;
+        }
+      }
+    }
+    raw.plateMask = mask;
   }
   return { id: Number(r.id), status: r.status, error: r.error, result: r.result };
 }
