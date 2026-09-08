@@ -57,6 +57,20 @@ function GenerationList({ rows }: { rows: SpecGenRow[] }) {
   }
   return (
     <>
+      {/* 🔴 하루 한 차종 — 무엇부터 할지 고르시게 하면 사흘 만에 멈춘다 (2026-09-08) */}
+      <Link
+        href="/settings/spec/fill"
+        className="mt-3 flex items-center gap-3 rounded-card border border-brand-200 bg-brand-50 px-4 py-3 active:bg-brand-100 lg:hover:bg-brand-100"
+      >
+        <div className="min-w-0 flex-1">
+          <p className="text-[15px] font-semibold text-brand-800">오늘 채울 차종</p>
+          <p className="mt-0.5 text-[13px] text-brand-700">
+            보신 대로 치시면 표기는 저희가 맞춥니다 — 하루 한 차종이면 됩니다
+          </p>
+        </div>
+        <ChevronRight className="size-4 shrink-0 text-brand-600" />
+      </Link>
+
       {waiting > 0 && (
         <p className="mt-3 text-sm text-slate-600">
           검수를 기다리는 값 <strong className="text-slate-900">{waiting}개</strong>

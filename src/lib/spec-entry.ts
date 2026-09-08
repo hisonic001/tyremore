@@ -312,3 +312,137 @@ export async function findOeTires(q: { size?: string | null; text?: string | nul
   }
   return out;
 }
+
+/* ────────────────────────────────────────────────────────────────────
+ * 「오늘 채울 차종」 (2026-09-08)
+ *
+ * 🔴 사장님이 **고르실 필요가 없어야** 한다. 149세대를 놓고 「어디부터 하지」를
+ *    매일 고민하시게 만들면 하루 한 차종은 사흘 만에 멈춘다.
+ *    손님 차가 많고 빈칸이 많은 차종을 하나 골라 「오늘 것」으로 내민다.
+ * ──────────────────────────────────────────────────────────────────── */
+
+export interface FillTarget {
+  variantKey: string;
+  label: string;
+  cars: number;
+  /** 채워진 항목 수 / 전체 항목 수 */
+  filled: number;
+  total: number;
+  bodyType: string | null;
+}
+
+/**
+ * 오늘 채울 차종 후보. 첫 줄이 「오늘 것」이고 나머지는 바꾸실 때 고르는 목록이다.
+ * 🔴 다 채워진 차종은 안 내놓는다.
+ */
+export async function fillTargets(limit = 12): Promise<FillTarget[]> {
+  const { SPEC_ITEMS } = await import("@/lib/spec-core");
+  const total = SPEC_ITEMS.length;
+  const rows = await db.execute<{
+    variant_key: string;
+    label: string;
+    body_type: string | null;
+    cars: number;
+    filled: number;
+  }>(sql`
+    SELECT g.variant_key, g.label, g.body_type,
+           (SELECT count(*)::int FROM vehicle v WHERE v.generation_id = g.id AND v.is_active) AS cars,
+           (SELECT count(DISTINCT s.item)::int FROM vehicle_spec s
+             WHERE s.generation_id = g.id AND s.status <> '거절') AS filled
+    FROM vehicle_generation g
+    WHERE g.proj_code IS NOT NULL AND length(btrim(g.proj_code)) > 1
+    ORDER BY cars DESC
+    LIMIT 200`);
+
+  return rows
+    .map((r) => ({
+      variantKey: r.variant_key,
+      label: r.label,
+      cars: Number(r.cars),
+      filled: Number(r.filled),
+      total,
+      bodyType: r.body_type,
+    }))
+    .filter((r) => r.filled < r.total)
+    /* 손님 차가 많을수록 · 빈칸이 많을수록 앞으로 */
+    .sort((a, b) => b.cars * (b.total - b.filled) - a.cars * (a.total - a.filled))
+    .slice(0, limit);
+}
+
+/** 채우기 화면이 쓸 것 — 지금 값과 빈칸을 한꺼번에 */
+export interface FillSheet {
+  variantKey: string;
+  label: string;
+  cars: number;
+  bodyType: string | null;
+  bodyGuess: string | null;
+  rows: {
+    item: string;
+    label: string;
+    hint: string | null;
+    numeric: boolean;
+    units: string[];
+    choices: readonly string[] | null;
+    /** 위치를 나눠 넣는 항목 (와이퍼·공기압) */
+    positions: readonly string[] | null;
+    /** 지금 들어 있는 값 — 있으면 화면이 「지금 값」으로 보여 준다 */
+    now: { display: string; qualifier: string | null; status: string }[];
+  }[];
+}
+
+export async function getFillSheet(variantKey: string): Promise<FillSheet | null> {
+  const { SPEC_ITEMS, SPEC_CHOICES, WIPER_POSITIONS, bothUnits } = await import("@/lib/spec-core");
+  const [gen] = await db.execute<{ id: number; label: string; body_type: string | null; cars: number }>(sql`
+    SELECT g.id, g.label, g.body_type,
+           (SELECT count(*)::int FROM vehicle v WHERE v.generation_id = g.id AND v.is_active) AS cars
+    FROM vehicle_generation g WHERE g.variant_key = ${variantKey}`);
+  if (!gen) return null;
+
+  const now = await db.execute<{
+    item: string;
+    text_value: string | null;
+    num_min: string | null;
+    num_max: string | null;
+    unit: string | null;
+    q: string | null;
+    status: string;
+  }>(sql`
+    SELECT item, text_value, num_min::text AS num_min, num_max::text AS num_max, unit,
+           qualifier->>'위치' AS q, status
+    FROM vehicle_spec
+    WHERE generation_id = ${gen.id} AND status <> '거절'
+    ORDER BY item, id`);
+
+  const byItem = new Map<string, FillSheet["rows"][number]["now"]>();
+  for (const r of now) {
+    const display = r.text_value
+      ? r.text_value
+      : r.num_min !== null && r.unit
+        ? bothUnits(Number(r.num_min), r.num_max === null ? null : Number(r.num_max), r.unit,
+                    r.item === "tire_pressure" ? "psi" : undefined)
+        : "";
+    if (!display) continue;
+    byItem.set(r.item, [...(byItem.get(r.item) ?? []), { display, qualifier: r.q, status: r.status }]);
+  }
+
+  const guess = gen.body_type ? null : (await suggestBodyType(variantKey)).guess;
+
+  return {
+    variantKey,
+    label: gen.label,
+    cars: Number(gen.cars),
+    bodyType: gen.body_type,
+    bodyGuess: guess,
+    rows: SPEC_ITEMS.map((d) => ({
+      item: d.key,
+      label: d.label,
+      hint: d.hint ?? null,
+      numeric: d.numeric,
+      units: d.units,
+      choices: SPEC_CHOICES[d.key] ?? null,
+      positions:
+        d.key === "wiper_size" ? WIPER_POSITIONS : d.key === "tire_pressure" ? (["앞", "뒤"] as const) : null,
+      now: byItem.get(d.key) ?? [],
+    })),
+  };
+}
