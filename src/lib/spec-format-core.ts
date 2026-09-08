@@ -133,16 +133,32 @@ function tireSize(s: string): string | Canonical {
   return made;
 }
 
-/** `7.5j x 18` · `8.5J×20` · `7.5J18` → `7.5Jx18` */
+/**
+ * `7.5j x 18` · `8.5J×20` · `7.5J18` → `7.5Jx18`
+ *
+ * 🔴 **인치만 있어도 받는다** (2026-09-08). 다나와 같은 제원 쪽은 휠을 「17 인치」로만 적고
+ *    J 폭을 아예 안 싣는다. J 가 있어야만 받으면 **거기서 오는 값을 통째로 못 넣는다.**
+ *    인치만이라도 있으면 타이어 인치와 아귀가 맞는지 볼 수 있어 쓸모가 있다.
+ *    정본은 `17인치` — J 를 지어내지 않는다.
+ */
 function wheelSize(s: string): string | Canonical {
   const up = s.toUpperCase().replace(/\s+/g, "");
   const m = /^(\d{1,2}(?:\.\d)?)J[X×*-]?(\d{2}(?:\.\d)?)$/.exec(up);
-  if (!m) return fail("휠 규격은 「7.5Jx18」처럼 넣어 주세요 (J 가 있어야 합니다)");
-  const width = Number(m[1]);
-  const inch = Number(m[2]);
-  if (width < 4 || width > 14) return fail("휠 폭이 상식 밖입니다 (4~14J)");
-  if (inch < 12 || inch > 24) return fail("휠 인치가 상식 밖입니다 (12~24)");
-  return `${m[1]}Jx${m[2]}`;
+  if (m) {
+    const width = Number(m[1]);
+    const inch = Number(m[2]);
+    if (width < 4 || width > 14) return fail("휠 폭이 상식 밖입니다 (4~14J)");
+    if (inch < 12 || inch > 24) return fail("휠 인치가 상식 밖입니다 (12~24)");
+    return `${m[1]}Jx${m[2]}`;
+  }
+  /* J 폭 없이 인치만 — 「17 인치」·「17인치」·「17"」 */
+  const only = /^(\d{2})(?:\.\d)?(?:인치|INCH|"|″)?$/.exec(up);
+  if (only) {
+    const inch = Number(only[1]);
+    if (inch < 12 || inch > 24) return fail("휠 인치가 상식 밖입니다 (12~24)");
+    return `${inch}인치`;
+  }
+  return fail("휠 규격은 「7.5Jx18」이나 「18인치」처럼 넣어 주세요");
 }
 
 /** `0w20` · `0W20` · `0 w 20` → `0W-20` */

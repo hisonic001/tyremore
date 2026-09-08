@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { StatusPill } from "@/components/ui/badge";
 import { Notice } from "@/components/ui/notice";
 import { canonical } from "@/lib/spec-format-core";
+import { parseSpecPaste, type PastedSpec } from "@/lib/spec-paste-core";
 import {
   findOeTires,
   saveSpecByOwner,
@@ -52,6 +53,7 @@ export function FillUI({ sheet, targets }: { sheet: FillSheet; targets: FillTarg
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [clashes, setClashes] = useState<{ item: string; label: string; 지금: string; 넣으신것: string }[]>([]);
+  const [pasted, setPasted] = useState<PastedSpec | null>(null);
 
   /* 무엇이 어떻게 저장될지 — 서버를 안 다녀오고 여기서 바로 본다 */
   const checked = useMemo(() => {
@@ -94,6 +96,46 @@ export function FillUI({ sheet, targets }: { sheet: FillSheet; targets: FillTarg
       if (r.rejected.length) {
         setErr(r.rejected.map((x) => `${x.label}: ${x.why}`).join(" · "));
       }
+    });
+
+  /**
+   * 🔴 **붙여넣은 것은 트림마다 따로 넣는다** (2026-09-08).
+   *    제원 쪽은 「한 차종에 값 하나」가 아니라 세부모델(트림)마다 다른 표다.
+   */
+  const savePasted = (p: PastedSpec) =>
+    start(async () => {
+      setErr(null);
+      setMsg(null);
+      if (body && body !== sheet.bodyType) await setGenerationBodyType(sheet.variantKey, body);
+      const lines: SpecEntryLine[] = [];
+      p.trims.forEach((trim, i) => {
+        for (const it of p.items) {
+          const v = it.values[i];
+          if (!v) continue;
+          lines.push({ item: it.item, raw: v, qualifier: it.qualifier, trim });
+        }
+      });
+      if (lines.length === 0) {
+        setErr("넣을 값이 없습니다");
+        return;
+      }
+      const r = await saveSpecByOwner({
+        variantKey: sheet.variantKey,
+        origin: "인터넷",
+        originNote: originNote || "제원 쪽에서 붙여넣음",
+        lines,
+      });
+      if (r.error) {
+        setErr(r.error);
+        return;
+      }
+      setClashes(r.clashes);
+      if (r.saved > 0) {
+        setMsg(`${r.saved}개를 넣었습니다 (세부모델 ${p.trims.length}가지)`);
+        setPasted(null);
+        router.refresh();
+      }
+      if (r.rejected.length) setErr(r.rejected.map((x) => `${x.label}: ${x.why}`).join(" · "));
     });
 
   return (
@@ -198,6 +240,14 @@ export function FillUI({ sheet, targets }: { sheet: FillSheet; targets: FillTarg
           </div>
         </div>
       )}
+
+      {/* ── 제원 쪽 통째로 붙여넣기 ── */}
+      <PasteBox
+        pasted={pasted}
+        onParse={setPasted}
+        onSave={savePasted}
+        pending={pending}
+      />
 
       {/* ── 순정 타이어 고르기 ── */}
       <OeTirePicker
@@ -410,6 +460,117 @@ function OeTirePicker({ onPick }: { onPick: (t: OeTireChoice) => void }) {
             ))}
           </ul>
         ))}
+    </div>
+  );
+}
+
+/**
+ * 제원 쪽을 **통째로 붙여넣는** 칸 (2026-09-08, 사장님 지시)
+ *
+ * 「그랜저 ig 제원이 이런식인데 현재의 폼으로는 해결이 안됨.」
+ *
+ * 🔴 제원은 **세부모델(트림)마다 다르다.** 모던은 17인치·225/55, 익스클루시브는 18인치·245/45.
+ *    한 칸씩 치시게 하면 트림 셋이면 세 배를 치셔야 한다.
+ * 🔴 **읽은 것을 먼저 보여 드리고** 넣습니다. 조용히 넣으면 잘못 읽은 것을 못 보신다.
+ */
+function PasteBox({
+  pasted,
+  onParse,
+  onSave,
+  pending,
+}: {
+  pasted: PastedSpec | null;
+  onParse: (p: PastedSpec | null) => void;
+  onSave: (p: PastedSpec) => void;
+  pending: boolean;
+}) {
+  const [text, setText] = useState("");
+  const [failed, setFailed] = useState(false);
+
+  const read = () => {
+    const got = parseSpecPaste(text);
+    setFailed(got === null);
+    onParse(got);
+  };
+
+  return (
+    <div className="mt-3 rounded-card border border-slate-200 bg-white p-4">
+      <p className="text-xs font-semibold text-slate-500">제원 쪽을 통째로 붙여넣기</p>
+      <p className="mt-1 text-[11px] leading-snug text-slate-400">
+        다나와·카이즈유 같은 제원 쪽을 <b>전체 선택해서 복사</b>해 붙이시면, 세부모델별로 읽어 드립니다.
+      </p>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={4}
+        placeholder="여기에 붙여넣으세요"
+        className="mt-2 w-full rounded-control border border-slate-300 px-3 py-2 text-sm"
+      />
+      <div className="mt-2 flex gap-2">
+        <Button size="md" variant="secondary" onClick={read} disabled={text.trim().length < 20}>
+          읽기
+        </Button>
+        {pasted && (
+          <Button size="md" pending={pending} onClick={() => onSave(pasted)}>
+            <Check className="size-4" /> 이대로 넣기
+          </Button>
+        )}
+      </div>
+
+      {failed && (
+        <p className="mt-2 text-xs text-amber-700">
+          제원 쪽으로 안 보입니다 — 「… 제원 정보」가 든 쪽 전체를 복사해 주세요.
+        </p>
+      )}
+
+      {pasted && (
+        <div className="mt-3 overflow-x-auto">
+          <p className="text-xs font-semibold text-slate-600">읽은 것 — 맞는지 봐 주세요</p>
+          <table className="mt-1 w-full min-w-[420px] text-left text-[13px]">
+            <thead>
+              <tr className="border-b border-slate-200 text-slate-500">
+                <th className="py-1 pr-2 font-medium">항목</th>
+                {pasted.trims.map((t) => (
+                  <th key={t} className="py-1 pr-2 font-medium">
+                    {t}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {pasted.items.map((it) => (
+                <tr key={`${it.item}-${it.qualifier ?? ""}`} className="border-b border-slate-50">
+                  <td className="py-1 pr-2 text-slate-500">
+                    {it.label}
+                  </td>
+                  {it.values.map((v, i) => (
+                    <td key={i} className="py-1 pr-2 font-semibold text-slate-900">
+                      {v ?? <span className="font-normal text-slate-300">—</span>}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {pasted.hints.length > 0 && (
+            <p className="mt-1.5 text-[11px] text-slate-400">
+              참고: {pasted.hints.map((h) => `${h.label} ${h.values.filter(Boolean).join(" / ")}`).join(" · ")}
+            </p>
+          )}
+          {pasted.warn.length > 0 && (
+            <ul className="mt-1.5 space-y-0.5">
+              {pasted.warn.map((w, i) => (
+                <li key={i} className="text-[11px] text-amber-700">
+                  ⚠ {w}
+                </li>
+              ))}
+            </ul>
+          )}
+          {pasted.items.length === 0 && (
+            <p className="mt-1.5 text-xs text-amber-700">읽어낸 값이 없습니다 — 위 이유를 봐 주세요.</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

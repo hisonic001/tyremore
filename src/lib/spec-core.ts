@@ -410,11 +410,21 @@ export function tireRimInch(v: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
-/** 휠 규격에서 인치만 — 타이어 인치와 맞는지 견주는 데 쓴다 (교차검산) */
+/**
+ * 휠 규격에서 인치만 — 타이어 인치와 맞는지 견주는 데 쓴다 (교차검산)
+ * 🔴 **「17인치」처럼 J 폭 없이 인치만 적힌 것도 읽는다** (2026-09-08).
+ *    제원 쪽(다나와 등)은 J 폭을 안 싣는다 — 못 읽으면 교차검산이 통째로 멈춘다.
+ */
 export function wheelRimInch(v: string): number | null {
-  if (!looksLikeWheelSize(v)) return null;
-  const m = /[xX×]\s?(\d{2})/.exec(v.replace(/\s/g, ""));
-  return m ? Number(m[1]) : null;
+  const s = v.trim().replace(/\s/g, "");
+  if (looksLikeWheelSize(s)) {
+    const m = /[xX×](\d{2})/.exec(s);
+    return m ? Number(m[1]) : null;
+  }
+  const only = /^(\d{2})(?:\.\d)?(?:인치|INCH|"|″)$/i.exec(s);
+  if (!only) return null;
+  const n = Number(only[1]);
+  return n >= 12 && n <= 24 ? n : null;
 }
 
 export function looksLikeWheelSize(v: string): boolean {

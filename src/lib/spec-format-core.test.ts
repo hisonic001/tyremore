@@ -51,9 +51,12 @@ describe("휠 규격", () => {
     }
   });
 
-  it("🔴 J 가 없으면 휠 규격이 아니다", () => {
-    막힘("wheel_size", "18인치");
-    막힘("wheel_size", "18");
+  it("J 가 없으면 인치로 받는다 — 제원 쪽은 J 폭을 안 싣는다 (2026-09-08 규칙 바뀜)", () => {
+    assert.equal(됨("wheel_size", "18인치").textValue, "18인치");
+    assert.equal(됨("wheel_size", "18").textValue, "18인치");
+    /* 🔴 그래도 아무 글자나 받지는 않는다 */
+    막힘("wheel_size", "휠");
+    막힘("wheel_size", "7.5J");
   });
 
   it("상식 밖은 막는다", () => {
@@ -241,5 +244,27 @@ describe("상품 이름에서 패턴명만 남기기", () => {
   it("🔴 못 알아보면 원래 글자를 둔다 — 지워서 빈 값을 만들지 않는다", () => {
     assert.equal(cleanPattern("235/45R18"), "235/45R18");
     assert.equal(cleanPattern(null), null);
+  });
+});
+
+/**
+ * 🔴 제원 쪽(다나와 등)은 휠을 「17 인치」로만 적고 J 폭을 안 싣는다.
+ *    J 를 요구하면 거기서 오는 값을 통째로 못 넣는다 (2026-09-08, 사장님이 붙여넣으신 자료).
+ */
+describe("휠은 인치만 있어도 받는다", () => {
+  it("J 폭이 없으면 인치로 저장한다 — J 를 지어내지 않는다", () => {
+    assert.equal(됨("wheel_size", "17 인치").textValue, "17인치");
+    assert.equal(됨("wheel_size", "18인치").textValue, "18인치");
+    assert.equal(됨("wheel_size", '20"').textValue, "20인치");
+    assert.equal(됨("wheel_size", "17").textValue, "17인치");
+  });
+
+  it("J 폭이 있으면 예전대로 자세히 저장한다", () => {
+    assert.equal(됨("wheel_size", "7.5J x 18").textValue, "7.5Jx18");
+  });
+
+  it("상식 밖 인치는 여전히 막는다", () => {
+    막힘("wheel_size", "99인치");
+    막힘("wheel_size", "5인치");
   });
 });

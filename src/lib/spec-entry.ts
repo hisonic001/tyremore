@@ -33,6 +33,11 @@ export interface SpecEntryLine {
   qualifier?: string | null;
   /** 타이어를 우리 상품에서 고르셨다면 그 상품 번호 */
   productId?: number | null;
+  /**
+   * 세부모델(트림) 이름 — 「익스클루시브 스페셜 (A/T)」
+   * 🔴 트림마다 타이어·휠이 다르다. 이름을 안 달면 245/45R18 이 모던 트림 값으로도 보인다.
+   */
+  trim?: string | null;
 }
 
 export interface SpecEntryResult {
@@ -116,25 +121,40 @@ export async function saveSpecByOwner(input: {
     RETURNING id`);
   if (!src) return { ...empty, error: "근거를 저장하지 못했습니다", rejected };
 
+  /**
+   * 트림 이름 → 벌 번호.
+   * 🔴 **트림마다 다른 벌**이다 — 모던(17인치)과 익스클루시브(18인치)를 한 벌로 뭉치면
+   *    사장님이 엉뚱한 규격을 그 트림 순정으로 보신다.
+   */
+  const trims = [...new Set(good.map((g) => g.line.trim).filter((t): t is string => !!t))];
+
   /* ── 한 줄씩 넣는다 ── */
   let saved = 0;
   const clashes: SpecEntryResult["clashes"] = [];
   for (const { line, made } of good) {
     const label = specItem(line.item)?.label ?? line.item;
     const qual = line.qualifier ? JSON.stringify({ 위치: line.qualifier }) : null;
+    const trim = line.trim ?? null;
+    const groupNo = groupNoFor(line.item, trim ? Math.max(0, trims.indexOf(trim)) : 0);
 
-    /* 같은 항목·같은 조건에 이미 값이 있나 */
+    /* 같은 항목·같은 조건·같은 트림에 이미 값이 있나 */
     const [now] = await db.execute<{ id: number; text_value: string | null; num_min: string | null; unit: string | null }>(sql`
       SELECT id, text_value, num_min::text AS num_min, unit
       FROM vehicle_spec
       WHERE generation_id = ${gen.id} AND item = ${line.item} AND status <> '거절'
         AND COALESCE(qualifier->>'위치', '') = COALESCE(${line.qualifier ?? null}, '')
+        AND COALESCE(group_label, '') = COALESCE(${trim}, '')
       LIMIT 1`);
 
     if (now && !replace.has(line.item)) {
       const 지금 = now.text_value ?? `${now.num_min ?? ""} ${now.unit ?? ""}`.trim();
       if (지금 !== (made.textValue ?? `${made.numMin} ${made.unit}`)) {
-        clashes.push({ item: line.item, label, 지금, 넣으신것: made.display ?? "" });
+        clashes.push({
+          item: line.item,
+          label: trim ? `${label} (${trim})` : label,
+          지금,
+          넣으신것: made.display ?? "",
+        });
         continue;
       }
     }
@@ -155,7 +175,7 @@ export async function saveSpecByOwner(input: {
       INSERT INTO vehicle_spec
         (generation_id, group_no, group_label, item, qualifier, text_value, num_min, num_max, unit,
          status, risk, created_by, verified_by, verified_at)
-      VALUES (${gen.id}, ${groupNoFor(line.item)}, NULL, ${line.item},
+      VALUES (${gen.id}, ${groupNo}, ${trim}, ${line.item},
               ${qual === null ? null : sql`${qual}::jsonb`},
               ${made.textValue}, ${made.numMin}, ${made.numMax}, ${made.unit},
               '승인', ${specItem(line.item)?.risk ?? "보통"}, ${"사장님입력"}, ${uid}, now())
@@ -178,15 +198,18 @@ async function addCitation(specId: number, sourceId: number, value: string, orig
     ON CONFLICT (spec_id, source_id) DO UPDATE SET quote = EXCLUDED.quote`);
 }
 
+/** 타이어 벌에 드는 항목 — 트림마다 갈린다 */
+const PER_TRIM = new Set(["tire_size", "wheel_size", "tire_pressure", "wheel_nut_torque", "oe_tire_brand", "oe_tire_pattern"]);
+
 /**
  * 벌 번호 — 타이어 쪽만 벌을 따진다.
  * 🔴 화면(`spec-sheet-core`)이 타이어 말고는 `group_no` 를 무시하므로 여기서 크게 신경 쓸 것이 없다.
  *    다만 타이어 벌과 겹치지 않게 **90번대**를 쓴다.
+ * 🔴 트림이 여럿이면 **트림마다 다른 벌**이다 (2026-09-08). 안 그러면 모던(17인치)과
+ *    익스클루시브(18인치)가 한 벌로 뭉쳐 사장님이 엉뚱한 규격을 순정으로 보신다.
  */
-function groupNoFor(item: string): number {
-  return item === "tire_size" || item === "wheel_size" || item === "tire_pressure" || item === "wheel_nut_torque"
-    ? 1
-    : 90;
+function groupNoFor(item: string, trimIndex: number): number {
+  return PER_TRIM.has(item) ? 1 + trimIndex : 90;
 }
 
 async function bodyTypeOf(variantKey: string): Promise<string | null> {
