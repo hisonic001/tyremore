@@ -120,7 +120,16 @@ async function shrink(file: File): Promise<string> {
     const ctx = c.getContext("2d");
     if (!ctx) throw new Error("사진을 줄이지 못했습니다");
     ctx.drawImage(img, 0, 0, c.width, c.height);
-    return c.toDataURL("image/jpeg", 0.85);
+    /**
+     * 🔴 품질 사다리 (2026-09-08 — 세 장 전부 413 사고). 서버 액션 상한을 6mb 로
+     *    넓혔지만, 애초에 작게 보내는 게 매장 와이파이에서도 빠르다.
+     *    2.5MB 넘으면 품질을 낮춰 다시 굽는다 — 해상도(2000px)는 유지, 번호판
+     *    글자 선명도가 목적이었다.
+     */
+    let out = c.toDataURL("image/jpeg", 0.85);
+    if (out.length > 2_500_000) out = c.toDataURL("image/jpeg", 0.7);
+    if (out.length > 3_900_000) throw new Error("사진이 너무 큽니다 — 조금 떨어져서 다시 찍어 주세요");
+    return out;
   } finally {
     URL.revokeObjectURL(url);
   }
