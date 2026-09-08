@@ -347,6 +347,7 @@ function Row({
 function OeTirePicker({ onPick }: { onPick: (t: OeTireChoice) => void }) {
   const [q, setQ] = useState("");
   const [list, setList] = useState<OeTireChoice[] | null>(null);
+  const [picked, setPicked] = useState<OeTireChoice | null>(null);
   const [pending, start] = useTransition();
 
   const look = () =>
@@ -370,6 +371,11 @@ function OeTirePicker({ onPick }: { onPick: (t: OeTireChoice) => void }) {
           <Search className="size-4" /> 찾기
         </Button>
       </div>
+      {picked && (
+        <p className="mt-2 text-xs text-brand-700">
+          ✓ {picked.brand} {picked.pattern ?? ""} {picked.size} 을 넣었습니다 — 아래 세 칸이 채워졌습니다
+        </p>
+      )}
       {list !== null &&
         (list.length === 0 ? (
           <p className="mt-2 text-xs text-slate-500">
@@ -381,7 +387,12 @@ function OeTirePicker({ onPick }: { onPick: (t: OeTireChoice) => void }) {
               <li key={t.productId}>
                 <button
                   type="button"
-                  onClick={() => onPick(t)}
+                  onClick={() => {
+                    onPick(t);
+                    setPicked(t);
+                    /* 고르면 목록을 닫는다 — 안 닫으면 입력칸이 저 아래로 밀린다 */
+                    setList(null);
+                  }}
                   className="flex w-full items-center gap-2 py-2 text-left active:bg-slate-50 lg:hover:bg-slate-50"
                 >
                   <span className="min-w-0 flex-1">

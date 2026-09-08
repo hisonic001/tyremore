@@ -106,7 +106,7 @@ function shapeText(item: string, s: string): string | Canonical {
       return batterySize(s);
     case "engine_oil_spec":
     case "transmission_oil_spec":
-      return upperSpec(s);
+      return tidySpec(s);
     /* 브랜드·패턴·그 밖 — 공백만 정리한다 */
     default:
       return s.replace(/\s+/g, " ").trim();
@@ -156,12 +156,21 @@ function viscosity(s: string): string | Canonical {
   return made;
 }
 
-/** `dot4` · `DOT-4` · `DOT 4 LV` → `DOT 4` · `DOT 4 LV` */
+/**
+ * `dot4` · `DOT-4` · `DOT 4 LV` → `DOT 4` · `DOT 4 LV`
+ *
+ * 🔴 **설명서에서 옮겨 온 값은 문장이다** — 「SAE J1704 DOT-4 LV, ISO4925 CLASS-6,
+ *    FMVSS 116 DOT-4」. 여기서 `DOT 4 LV` 만 뽑아 내면 나머지 규격 정보를 버리는 것이다.
+ *    그래서 **짧은 코드면 정본으로 줄이고, 문장이면 띄어쓰기만 정리해 그대로 둔다.**
+ *    (2026-09-08, 실제 값 8건에 걸려 알았다)
+ */
 function brakeFluid(s: string): string | Canonical {
   const up = s.toUpperCase().replace(/\s+/g, " ").trim();
   const m = /^DOT[\s-]?(3|4|5\.1|5)\s*(LV)?$/.exec(up);
-  if (!m) return fail("브레이크액은 「DOT 4」·「DOT 4 LV」처럼 넣어 주세요");
-  return `DOT ${m[1]}${m[2] ? " LV" : ""}`;
+  if (m) return `DOT ${m[1]}${m[2] ? " LV" : ""}`;
+  /* 문장이어도 DOT 등급이 들어 있으면 브레이크액 규격이 맞다 */
+  if (/DOT[\s-]?(3|4|5\.1|5)\b/.test(up)) return tidySpec(s);
+  return fail("브레이크액은 「DOT 4」·「DOT 4 LV」처럼 넣어 주세요");
 }
 
 /**
@@ -177,15 +186,21 @@ function batterySize(s: string): string | Canonical {
   return `${m[1] ?? ""}${m[2]}${m[3]}`;
 }
 
-/** `api sp / ilsac gf6` → `API SP, ILSAC GF-6` — 대문자와 쉼표로만 통일한다 */
-function upperSpec(s: string): string {
-  return s
-    .toUpperCase()
-    .split(/[,/·]|\s또는\s/)
-    .map((p) => p.trim().replace(/\s+/g, " "))
-    .filter(Boolean)
-    .map((p) => p.replace(/\b(GF)\s*-?\s*(\d)\b/, "$1-$2").replace(/\bSP\s*-?\s*(IV|4)\b/, "SP-IV"))
-    .join(", ");
+/**
+ * 오일·변속기유 **규격은 띄어쓰기만 정리한다.**
+ *
+ * 🔴 처음엔 대문자와 쉼표로 통일하려 했다가 **실제 값에 돌려 보고 물렀다** (2026-09-08).
+ *    이건 짧은 코드가 아니라 **제조사가 쓴 문장**이라 손대면 뜻이 바뀐다:
+ *      `API SN PLUS/SP 또는 ILSAC GF-6` → `API SN PLUS, SP, ILSAC GF-6`
+ *        「SN PLUS 또는 SP」가 **두 개의 별개 규격**이 돼 버린다
+ *      `Genesis/HYUNDAI genuine ATF SP-IV-RR` → 뒤의 규격이 앞 이름에서 떨어져 나간다
+ *      `DCTF (H.K.SHELL),7 DCTF PLUS` → 상품 이름 안의 빗금까지 잘린다
+ *
+ *    타이어 규격(`235/60R18`)처럼 **모양이 정해진 것**만 정본으로 바꾼다.
+ *    「틀린 값을 깨끗해 보이게 만들지 않는다」가 이 파일의 규칙이고, 여기도 같다.
+ */
+function tidySpec(s: string): string {
+  return s.replace(/\s+/g, " ").replace(/\s*,\s*/g, ", ").trim();
 }
 
 /* ────────────────────────────────────────────────────────────────────

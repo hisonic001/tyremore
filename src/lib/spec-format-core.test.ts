@@ -85,6 +85,12 @@ describe("브레이크액", () => {
 
   it("없는 규격은 막는다", () => {
     막힘("brake_fluid_spec", "DOT 9");
+    막힘("brake_fluid_spec", "아무거나");
+  });
+
+  it("🔴 설명서 문장은 그대로 둔다 — DOT 4 만 뽑으면 나머지 규격을 버리는 것이다", () => {
+    const 문장 = "SAE J1704 DOT-4 LV, ISO4925 CLASS-6, FMVSS 116 DOT-4";
+    assert.equal(됨("brake_fluid_spec", 문장).textValue, 문장);
   });
 });
 
@@ -194,14 +200,25 @@ describe("와이퍼는 위치별 숫자다", () => {
   });
 });
 
-describe("규격 글자는 대문자와 쉼표로 통일한다", () => {
-  it("엔진오일 규격", () => {
-    assert.equal(됨("engine_oil_spec", "api sp / ilsac gf6").textValue, "API SP, ILSAC GF-6");
-    assert.equal(됨("engine_oil_spec", "API SN PLUS/SP 또는 ILSAC GF-6").textValue, "API SN PLUS, SP, ILSAC GF-6");
+/**
+ * 🔴 오일 규격은 **제조사가 쓴 문장**이라 손대면 뜻이 바뀐다.
+ *    2026-09-08 에 실제 값 284건에 돌려 보고 알았다 — 대문자·쉼표 통일을 물렀다.
+ */
+describe("오일 규격은 띄어쓰기만 정리한다", () => {
+  it("「또는」과 빗금을 건드리지 않는다 — 뜻이 바뀐다", () => {
+    assert.equal(
+      됨("engine_oil_spec", "API SN PLUS/SP 또는 ILSAC GF-6").textValue,
+      "API SN PLUS/SP 또는 ILSAC GF-6",
+      "「SN PLUS 또는 SP」가 두 개의 별개 규격이 되면 안 된다",
+    );
+    assert.equal(
+      됨("transmission_oil_spec", "GS ATF SP-IV-RR, Genesis/Hyundai Genuine ATF SP-IV-RR").textValue,
+      "GS ATF SP-IV-RR, Genesis/Hyundai Genuine ATF SP-IV-RR",
+    );
   });
 
-  it("변속기유 규격", () => {
-    assert.equal(됨("transmission_oil_spec", "atf sp-4").textValue, "ATF SP-IV");
+  it("겹친 공백과 쉼표 뒤 띄어쓰기만 맞춘다", () => {
+    assert.equal(됨("engine_oil_spec", "  SAE 0W-20 ,   API SP  ").textValue, "SAE 0W-20, API SP");
   });
 });
 
