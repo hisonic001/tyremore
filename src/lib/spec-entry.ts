@@ -128,6 +128,39 @@ export async function saveSpecByOwner(input: {
    */
   const trims = [...new Set(good.map((g) => g.line.trim).filter((t): t is string => !!t))];
 
+  /**
+   * 🔴 **트림과 무관한 항목은 한 번만 넣는다** (2026-09-08, 실제로 3줄이 들어가 알았다).
+   *    연료탱크·오일량은 세부모델이 셋이어도 값이 하나다. 트림 이름을 달아 세 번 넣으면
+   *    화면에 같은 값이 세 줄로 뜨고, 트림 이름이 엉뚱하게 붙는다.
+   * 🔴 트림끼리 값이 **다르면** 조용히 하나를 고르지 않는다 — 못 넣었다고 말한다.
+   */
+  const once = new Map<string, string>();
+  const trimmed: typeof good = [];
+  for (const g of good) {
+    if (PER_TRIM.has(g.line.item)) {
+      trimmed.push(g);
+      continue;
+    }
+    const key = `${g.line.item}|${g.line.qualifier ?? ""}`;
+    const asText = g.made.textValue ?? `${g.made.numMin}~${g.made.numMax} ${g.made.unit}`;
+    const seen = once.get(key);
+    if (seen === undefined) {
+      once.set(key, asText);
+      trimmed.push({ ...g, line: { ...g.line, trim: null } });
+      continue;
+    }
+    if (seen !== asText) {
+      rejected.push({
+        item: g.line.item,
+        label: specItem(g.line.item)?.label ?? g.line.item,
+        raw: g.line.raw,
+        why: `세부모델마다 값이 다릅니다 (${seen} vs ${asText}) — 어느 쪽인지 정해 주세요`,
+      });
+    }
+  }
+  good.length = 0;
+  good.push(...trimmed);
+
   /* ── 한 줄씩 넣는다 ── */
   let saved = 0;
   const clashes: SpecEntryResult["clashes"] = [];
