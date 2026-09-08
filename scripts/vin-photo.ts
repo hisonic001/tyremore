@@ -149,12 +149,18 @@ async function readPhoto(buf: Buffer, ext: string, onLog: (s: string) => void, m
 
   const dir = await mkdtemp(path.join(os.tmpdir(), "tyremore-vin-"));
   const name = `card${ext}`;
-  await writeFile(path.join(dir, name), buf);
+  /**
+   * 🔴 **절대 경로로 시킨다** (사장님 제보 2026-09-08 — 계기판 사진이 간헐적으로
+   *    「card.jpg 파일을 찾을 수 없음」). 파일 이름만 주면 모델이 --add-dir 로 열린
+   *    임시 폴더 위치를 못 짚을 때가 있다 — 길을 통째로 적어 주면 못 찾을 수가 없다.
+   */
+  const abs = path.join(dir, name);
+  await writeFile(abs, buf);
   try {
     /* 라벨 한 장 읽기라 무겁게 갈 이유가 없다 */
     const first = await generateJsonViaCli<Raw>({
       system: mode === "판매등록" ? SALE_SYSTEM : SYSTEM,
-      user: `사진 ${name} 을 Read 로 열어 보고, 적혀 있는 차량 정보를 옮겨 적어 주세요.`,
+      user: `사진 ${abs} 을 Read 로 열어 보고, 적혀 있는 차량 정보를 옮겨 적어 주세요.`,
       schema: mode === "판매등록" ? SALE_SCHEMA : SCHEMA,
       model: "sonnet",
       effort: "low",
@@ -170,7 +176,7 @@ async function readPhoto(buf: Buffer, ext: string, onLog: (s: string) => void, m
       try {
         const second = await generateJsonViaCli<{ vin?: string }>({
           system: VIN_SYSTEM,
-          user: `사진 ${name} 을 Read 로 열어 차대번호만 읽어 주세요.`,
+          user: `사진 ${abs} 을 Read 로 열어 차대번호만 읽어 주세요.`,
           schema: VIN_SCHEMA,
           model: "sonnet",
           effort: "low",
