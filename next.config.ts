@@ -40,6 +40,14 @@ const nextConfig: NextConfig = {
     ],
   },
 
+  /**
+   * ⚠️ 사진 올리기(판매 등록 「사진으로 찾기·등록」)가 서버 액션으로 dataURL 을
+   *    보낸다. 기본 상한 1MB 라서 2000px 사진이 **서버 코드에 닿기 전에 413 으로
+   *    잘렸다** (2026-09-08 실사고 — 세 장 전부 「Server Components render」 오류).
+   *    요청량 정본은 requestVinScan 의 MAX_BYTES(4MB) — 여기는 그 위의 여유다.
+   */
+  experimental: { serverActions: { bodySizeLimit: "6mb" } },
+
   typescript: { ignoreBuildErrors: false },
   eslint: { ignoreDuringBuilds: true },
 };
