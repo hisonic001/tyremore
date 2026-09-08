@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/notice";
-import { getVinScan, requestVinScan } from "@/lib/vin-photo";
+import { getVinScan } from "@/lib/vin-photo";
 import { parseVin } from "@/lib/vin";
 
 /**
@@ -101,9 +101,12 @@ function digest(r: NonNullable<ScanResult>): { info: PhotoInfo; line: string; ex
 /**
  * 보내기 전에 긴 변 2000px 로 줄인다 (2026-09-05 — 1600px 에서 키움).
  * 🔴 번호판 사진은 차 전체가 찍혀 번호판 영역이 작다 — 1600px 로 줄이면 가운데
- *    한글이 뭉개져 오독이 잦았다. 2000px jpeg 는 그래도 4MB 상한에 한참 못 미친다.
+ *    한글이 뭉개져 오독이 잦았다.
+ * 🔴 결과는 **이진(Blob)** 이다 (2026-09-08) — 서버 액션의 100만 자 하드 한도
+ *    («Maximum array nesting» 실사고) 때문에 /api/vin-scan 으로 파일째 올린다.
+ *    품질 사다리: 2MB 넘으면 0.7 로 다시 굽고, 그래도 2.9MB 넘으면 잘라 말한다.
  */
-async function shrink(file: File): Promise<string> {
+async function shrink(file: File): Promise<Blob> {
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise<HTMLImageElement>((res, rej) => {
@@ -120,15 +123,13 @@ async function shrink(file: File): Promise<string> {
     const ctx = c.getContext("2d");
     if (!ctx) throw new Error("사진을 줄이지 못했습니다");
     ctx.drawImage(img, 0, 0, c.width, c.height);
-    /**
-     * 🔴 품질 사다리 (2026-09-08 — 세 장 전부 413 사고). 서버 액션 상한을 6mb 로
-     *    넓혔지만, 애초에 작게 보내는 게 매장 와이파이에서도 빠르다.
-     *    2.5MB 넘으면 품질을 낮춰 다시 굽는다 — 해상도(2000px)는 유지, 번호판
-     *    글자 선명도가 목적이었다.
-     */
-    let out = c.toDataURL("image/jpeg", 0.85);
-    if (out.length > 2_500_000) out = c.toDataURL("image/jpeg", 0.7);
-    if (out.length > 3_900_000) throw new Error("사진이 너무 큽니다 — 조금 떨어져서 다시 찍어 주세요");
+    const bake = (q: number) =>
+      new Promise<Blob>((res, rej) =>
+        c.toBlob((b) => (b ? res(b) : rej(new Error("사진을 줄이지 못했습니다"))), "image/jpeg", q),
+      );
+    let out = await bake(0.85);
+    if (out.size > 2_000_000) out = await bake(0.7);
+    if (out.size > 2_900_000) throw new Error("사진이 너무 큽니다 — 조금 떨어져서 다시 찍어 주세요");
     return out;
   } finally {
     URL.revokeObjectURL(url);
@@ -189,8 +190,17 @@ export function PhotoAssist({ onInfo }: { onInfo: (p: PhotoInfo) => void }) {
         const name = `사진 ${key}`;
         setJobs((prev) => [...prev, { key, name, scanId: null, phase: "보내는중", note: "", extra: [] }]);
         try {
-          const dataUrl = await shrink(file);
-          const r = await requestVinScan(dataUrl, "판매등록");
+          const blob = await shrink(file);
+          /* 🔴 서버 액션이 아니라 업로드 — 액션 인자 100만 자 한도를 피한다 (2026-09-08) */
+          const fd = new FormData();
+          fd.append("file", blob, "photo.jpg");
+          fd.append("mode", "판매등록");
+          const res = await fetch("/api/vin-scan", { method: "POST", body: fd });
+          const r = (await res.json().catch(() => null)) as
+            | { ok: true; scanId: number }
+            | { ok: false; error: string }
+            | null;
+          if (!r) throw new Error(`사진을 보내지 못했습니다 (HTTP ${res.status})`);
           if (!r.ok) {
             /* 매장 PC 꺼짐 등 — 남은 줄을 더 보내 봐야 같은 이유로 실패한다. 여기서 멈춘다 */
             setJobs((prev) => prev.filter((x) => x.key !== key));
