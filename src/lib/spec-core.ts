@@ -56,14 +56,35 @@ export const SPEC_ITEMS: SpecItemDef[] = [
     risk: "낮음",
     hint: "넥센 (NEXEN)",
   },
+  /**
+   * ⭐ 순정 타이어의 **패턴명** (2026-09-08, 사장님 지시)
+   *
+   * 🔴 설명서에는 **없다.** 자료실 PDF 의 에너지소비효율 표에는 제조사와 규격까지만 적혀 있다.
+   *    그래서 이 값은 **우리 상품 목록에서 고르거나** 사장님이 실물을 보고 넣는 길뿐이다.
+   *    우리가 파는 물건에서 고르면 브랜드·패턴·규격이 한 번에 맞아 들어온다.
+   */
   {
+    key: "oe_tire_pattern",
+    label: "순정 타이어 패턴",
+    numeric: false,
+    units: [],
+    risk: "낮음",
+    hint: "엔페라 AU7",
+  },
+  {
+    /**
+     * 🔴 **기본 단위는 psi** (2026-09-08, 사장님 지시). 현장에서 공기압을 넣을 때
+     *    보는 눈금이 psi 다. 설명서에서 옮겨 온 값은 kPa 로 들어와 있는데
+     *    그건 **원문 그대로 두고** 화면에서 psi 를 앞에 보여 준다.
+     *    🔴 `units` 의 **첫 칸이 기본값**이다 — 입력칸의 단위 고르기가 이걸 따른다.
+     */
     key: "tire_pressure",
     label: "표준 공기압",
     numeric: true,
-    units: ["kPa", "psi"],
+    units: ["psi", "kPa"],
     risk: "보통",
     range: { kPa: { min: 150, max: 900 }, psi: { min: 22, max: 130 } },
-    hint: "240 kPa (35 psi)",
+    hint: "35 psi",
   },
   {
     key: "wheel_nut_torque",
@@ -174,7 +195,34 @@ export const SPEC_ITEMS: SpecItemDef[] = [
     risk: "보통",
     range: { L: { min: 1, max: 20 } },
   },
-  { key: "battery_size", label: "배터리 규격", numeric: false, units: [], risk: "보통", hint: "AGM 80Ah (DIN80L)" },
+  /**
+   * 🔴 정본은 **형식+용량+단자방향을 한 덩어리로** — `AGM80L` · `DIN80L` · `CMF60R`.
+   *    이 한 줄에 AGM 인지 일반인지와 단자가 왼쪽인지 오른쪽인지가 다 들어간다.
+   *    단자 방향을 틀리면 케이블이 안 닿는다.
+   */
+  { key: "battery_size", label: "배터리 규격", numeric: false, units: [], risk: "보통", hint: "AGM80L" },
+  /**
+   * ⭐ 배터리 두 가지 (2026-09-08, 정비이력을 세어 보고 넣었다 — 배터리 작업이 62건)
+   *
+   * 🔴 공임표에 **「배터리교환 - 트렁크 내부」**가 따로 있다. 어디 붙어 있는지가 곧 작업 시간이다.
+   * 🔴 리셋을 안 하면 충전 제어가 새 배터리를 옛 배터리로 알고 굴려 금방 상한다.
+   */
+  {
+    key: "battery_position",
+    label: "배터리 위치",
+    numeric: false,
+    units: [],
+    risk: "낮음",
+    hint: "엔진룸",
+  },
+  {
+    key: "battery_reset",
+    label: "교체 후 리셋",
+    numeric: false,
+    units: [],
+    risk: "보통",
+    hint: "IBS 리셋 필요",
+  },
   {
     key: "battery_ah",
     label: "배터리 용량",
@@ -199,8 +247,30 @@ export const SPEC_ITEMS: SpecItemDef[] = [
     risk: "낮음",
     range: { L: { min: 20, max: 200 } },
   },
-  { key: "wiper_size", label: "와이퍼 규격", numeric: false, units: [], risk: "낮음", hint: "650mm / 400mm" },
+  /**
+   * 🔴 **위치별 숫자 한 줄씩** 이다 (2026-09-08). 예전엔 「650mm / 400mm」 한 덩어리 글자였는데,
+   *    그러면 운전석 것을 조수석에 끼우는 실수를 화면이 못 막는다.
+   *    `qualifier.위치` 로 운전석·조수석·후방을 나눈다. 바꿀 때 옮길 자료가 **0건**이었다.
+   */
+  {
+    key: "wiper_size",
+    label: "와이퍼 규격",
+    numeric: true,
+    units: ["mm"],
+    risk: "낮음",
+    range: { mm: { min: 300, max: 800 } },
+    hint: "650 mm",
+  },
 ];
+
+/** 고르기로만 받는 항목 — 자유 입력을 막아 표기가 갈리지 않게 한다 */
+export const SPEC_CHOICES: Readonly<Record<string, readonly string[]>> = {
+  battery_position: ["엔진룸", "트렁크", "뒷좌석 밑", "실내 바닥"],
+  battery_reset: ["필요 없음", "IBS 리셋 필요", "스캐너로 등록 필요"],
+};
+
+/** 와이퍼는 위치가 있어야 뜻이 있다 */
+export const WIPER_POSITIONS = ["운전석", "조수석", "후방"] as const;
 
 const BY_KEY = new Map(SPEC_ITEMS.map((i) => [i.key, i]));
 export function specItem(key: string): SpecItemDef | null {
@@ -251,8 +321,29 @@ export function convert(value: number, from: string, to: string): number | null 
   return null;
 }
 
-/** 화면에 두 단위를 나란히 — 토크는 늘 병기한다 (현장에서 렌치 눈금이 다르다) */
-export function bothUnits(min: number, max: number | null, unit: string): string {
+/**
+ * 화면에 두 단위를 나란히 — 토크는 늘 병기한다 (현장에서 렌치 눈금이 다르다)
+ *
+ * 🔴 `prefer` 를 주면 **그 단위를 앞에** 놓는다 (2026-09-08, 공기압을 psi 로 보시겠다는 지시).
+ *    저장된 값은 손대지 않는다 — 보여 주는 순서만 바뀐다. 두 값이 늘 같이 나오므로
+ *    어느 쪽이 원문인지 헷갈릴 일이 없다.
+ */
+export function bothUnits(min: number, max: number | null, unit: string, prefer?: string): string {
+  if (prefer && prefer !== unit) {
+    const a = convert(min, unit, prefer);
+    const b = max === null ? null : convert(max, unit, prefer);
+    if (a !== null) {
+      /* 앞에 세우는 쪽은 우리가 환산한 값이라 반올림한다 — 공기압은 눈금이 정수다 */
+      const head = b === null || Math.round(b) === Math.round(a) ? String(Math.round(a)) : `${Math.round(a)}~${Math.round(b)}`;
+      const one = (v: number) => String(Number(v.toFixed(3)));
+      const tail = max === null || max === min ? one(min) : `${one(min)}~${one(max)}`;
+      return `${head} ${prefer} (${tail} ${unit})`;
+    }
+  }
+  return bothUnitsPlain(min, max, unit);
+}
+
+function bothUnitsPlain(min: number, max: number | null, unit: string): string {
   /**
    * 🔴 값을 반올림해 보여 주지 않는다. `2.45~2.5 L` 을 `2.5~2.5 L` 로 적으면
    *    사장님이 검수하실 때 원문과 달라 보인다 — 화면 글자도 원문 그대로여야 한다.
