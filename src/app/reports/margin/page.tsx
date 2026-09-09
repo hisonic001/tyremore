@@ -5,9 +5,11 @@ import { db } from "@/db";
 import { getSession, hasPerm } from "@/lib/auth";
 import { marginSql, marginBaseSql } from "@/lib/margin-def";
 import { kstToday, ymAdd } from "@/lib/ym";
+import { estimateRebates, listRebateEntries, oilAllocation } from "@/lib/rebate";
 import { ColumnChart, fmtShort } from "../charts";
 import type { Bar } from "../charts";
 import { Section, Stat, BarList } from "../ui";
+import { RebateEntries } from "./rebate-ui";
 
 export const dynamic = "force-dynamic";
 
@@ -117,6 +119,11 @@ export default async function MarginReportPage({
     GROUP BY 1 ORDER BY 3 DESC LIMIT 8
   `);
 
+  /* ⭐ 뒷마진(장려금)·오일 배부 (2026-09-09, 전문가 2인 자문) — 질의 순차 */
+  const rebateCards = await estimateRebates(ym);
+  const rebateEntries = await listRebateEntries(ym);
+  const oil = await oilAllocation(ym);
+
   const salesAll = Number(tot.sales_all);
   const baseNew = Number(tot.base_new); // 마진에 포함된 매출 (물품 원가 아는 것 + 공임)
   const marginNew = Number(tot.margin_new);
@@ -126,6 +133,10 @@ export default async function MarginReportPage({
   const covPct = salesAll > 0 ? Math.round((baseNew / salesAll) * 100) : 0;
   const marginPct = baseNew > 0 ? ((marginNew / baseNew) * 100).toFixed(1) : "0";
   const useTotal = useRows.reduce((s, r) => s + Number(r.cost), 0);
+
+  const rebateEstimate = rebateCards.reduce((s, c) => s + c.estimate, 0);
+  const rebateFixed = rebateEntries.reduce((s, e) => s + e.amount, 0);
+  const trueMargin = marginNew + rebateFixed - oil.total; // 확정만 — 추정은 참고 표기
 
   const trend: Bar[] = [];
   for (let i = 11; i >= 0; i--) {
@@ -203,7 +214,80 @@ export default async function MarginReportPage({
           <Stat label="원가 모르는 매출" value={`${won(salesAll - baseNew)}원`} sub="계산에서 뺌 — 아래 목록" />
         </div>
         <p className="mt-3 text-[11px] leading-tight text-slate-400">
-          공임에는 인건비·엔진오일 원가가 아직 안 빠져 있습니다 — 오일 원가는 리터 기입을 시작하면 잡힙니다.
+          공임에는 인건비가 빠져 있지 않습니다. 엔진오일 원가는{" "}
+          {oil.total > 0 ? "아래 뒷마진 칸에서 월 매입 총액으로 차감됩니다" : "오일 매입 전표를 앱에 넣기 시작하면 자동 차감됩니다 (아직 미입력)"}.
+        </p>
+      </section>
+
+      {/* ---- ①-b ⭐ 뒷마진(제조사 장려금) + 진짜 마진 (2026-09-09, 전문가 2인 자문) ---- */}
+      <section className="mt-4 rounded-card border border-slate-200 bg-white p-5 shadow-card">
+        <h2 className="font-bold">
+          뒷마진 <span className="text-sm font-normal text-slate-400">— 제조사 장려금·행사 (기간이 지나면 자동으로 사라짐)</span>
+        </h2>
+
+        <ul className="mt-3 space-y-3">
+          {rebateCards.map((c) => (
+            <li key={c.id} className="rounded-xl border border-slate-100 bg-slate-50/50 p-3">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="min-w-0 truncate text-sm font-semibold">{c.title}</span>
+                <span className="tabular shrink-0 text-sm">
+                  {c.estimate > 0 ? (
+                    <>
+                      <strong>{won(c.estimate)}원</strong>
+                      <span className="ml-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">추정</span>
+                    </>
+                  ) : (
+                    <span className="text-slate-400">0원</span>
+                  )}
+                </span>
+              </div>
+              {c.gaugePct !== null && (
+                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-200">
+                  <div
+                    className={`h-full rounded-full ${c.gaugePct >= 100 ? "bg-emerald-500" : "bg-amber-400"}`}
+                    style={{ width: `${Math.min(100, c.gaugePct)}%` }}
+                  />
+                </div>
+              )}
+              <p className="tabular mt-1.5 text-xs text-slate-500">{c.statusLine}</p>
+              {c.actionLine && <p className="tabular mt-1 text-xs font-semibold text-amber-700">{c.actionLine}</p>}
+              {c.warnLine && <p className="mt-1 text-[11px] text-slate-400">{c.warnLine}</p>}
+            </li>
+          ))}
+          {rebateCards.length === 0 && <li className="text-sm text-slate-400">이 달에 걸린 프로모션이 없습니다</li>}
+        </ul>
+
+        <RebateEntries ym={ym} entries={rebateEntries} />
+
+        {/* 합계 — 확정만 마진으로, 추정은 참고 (세무 자문: 분리 표기가 혼동을 막는다) */}
+        <div className="tabular mt-4 space-y-1 border-t border-slate-200 pt-3 text-sm">
+          <div className="flex justify-between text-slate-500">
+            <span>앞마진 (판매)</span>
+            <span>{won(marginNew)}원</span>
+          </div>
+          <div className="flex justify-between text-slate-500">
+            <span>+ 확정 뒷마진</span>
+            <span>{won(rebateFixed)}원</span>
+          </div>
+          <div className="flex justify-between text-slate-500">
+            <span>− 엔진오일 원가 배부{oil.jobs > 0 && oil.total > 0 ? ` (오일교환 ${oil.jobs}건, 건당 약 ${won(Math.round(oil.total / oil.jobs))}원)` : ""}</span>
+            <span>{oil.total > 0 ? `−${won(oil.total)}원` : "미입력"}</span>
+          </div>
+          <div className="flex justify-between text-base font-bold">
+            <span>진짜 마진 (확정 기준)</span>
+            <span>{won(trueMargin)}원</span>
+          </div>
+          {rebateEstimate > 0 && (
+            <div className="flex justify-between text-xs text-slate-400">
+              <span>추정 뒷마진까지 들어오면</span>
+              <span>{won(trueMargin + rebateEstimate)}원</span>
+            </div>
+          )}
+        </div>
+        <p className="mt-2 text-[11px] leading-tight text-slate-400">
+          「추정」은 실적 기반 계산일 뿐 아직 내 돈이 아닙니다 — 크레딧 메모·매출할인이 실제로 도착하면 확정 등록해야 합계에
+          들어갑니다. 다음 세금계산서 금액이 깎여 오는 방식(에누리)은 이미 매입 원가에 반영돼 여기 안 넣습니다. 새 행사
+          안내문이 오면 Claude 에게 주시면 추가됩니다.
         </p>
       </section>
 
