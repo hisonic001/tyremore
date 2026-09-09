@@ -17,7 +17,7 @@
  *    부품은 판매 때 행이 남고 수량만 줄기 때문에, 어느 행에서 몇 개를 뺐는지는
  *    이력에만 정확히 남아 있다. 짐작으로 되돌리면 실물과 어긋난다.
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { quote, quotePayment, stockItem, stockMovement } from "@/db/schema";
@@ -168,6 +168,151 @@ export async function fulfillReservation(
  *                    이 확인이 있어야 한다. 우리 쪽만 취소하면 MARS 와 어긋나는데,
  *                    그걸 알고 누르시는 건지 화면이 한 번 더 묻는다.
  */
+/**
+ * ⭐ 일반·외상 판매를 예약으로 바꾼다 (사장님 요청 2026-09-09 —
+ *    "잘못 등록해서 외상으로 등록하거나 판매로 등록한 손님도 예약으로").
+ *
+ *   예약은 재고를 안 뺀 상태다 — 그래서 전환하면 재고가 되살아나고,
+ *   나중에 「시공 완료」를 누르면 다시 빠진다 (fulfillReservation 의 역방향).
+ *   수금·결제 기록은 그대로 둔다 — 돈 받은 사실은 사실이다.
+ */
+export async function convertToReservation(
+  quoteId: number,
+  confirmMars = false,
+  userId?: number,
+): Promise<
+  | { ok: true; restored: number; marsWarning: string | null }
+  | { ok: false; error: string; needMarsConfirm?: boolean }
+> {
+  if (!(await (await import("./auth")).hasPerm("sale_edit"))) return { ok: false, error: PERM_DENIED };
+  const [q] = await db
+    .select({
+      id: quote.id,
+      status: quote.status,
+      marsStatus: quote.marsStatus,
+      quoteNo: quote.quoteNo,
+      reservationStatus: quote.reservationStatus,
+    })
+    .from(quote)
+    .where(eq(quote.id, quoteId))
+    .limit(1);
+  if (!q) return { ok: false, error: "판매 기록을 찾을 수 없습니다" };
+  if (q.status === "취소") return { ok: false, error: "취소된 판매입니다" };
+  if (q.reservationStatus === "예약중") return { ok: false, error: "이미 예약중인 판매입니다" };
+
+  if (q.marsStatus === "전송완료" && !confirmMars) {
+    return {
+      ok: false,
+      needMarsConfirm: true,
+      error:
+        "이 판매는 MARS 에 이미 들어갔습니다. 예약으로 바꿔도 MARS 에는 남아 있으니 " +
+        "MARS 에서도 직접 정리하셔야 합니다. 그래도 바꿀까요?",
+    };
+  }
+
+  const restored = await restoreStockForQuote(quoteId, "예약전환", `${q.quoteNo} 예약으로 전환`, userId);
+
+  const marsWarning =
+    q.marsStatus === "전송완료"
+      ? "MARS 에는 아직 남아 있습니다 — MARS 매출 주문(또는 송장)을 직접 정리해 주세요"
+      : null;
+
+  await db
+    .update(quote)
+    .set({
+      reservationStatus: "예약중",
+      fulfilledOn: null,
+      // 로봇이 집어 가기 전에 뺀다 — 미전송이면 보류로 되돌림 (전송완료·해당없음은 그대로)
+      ...(q.marsStatus === "미전송" ? { marsStatus: "보류" } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(quote.id, quoteId));
+
+  refresh();
+  return { ok: true, restored, marsWarning };
+}
+
+/**
+ * ⭐ 비고만 바로 고치기 (사장님 요청 2026-09-09 — "카드 한번만 누르면 확장된 카드
+ *    하단에 메모를 고치는 부분"). 날짜·결제와 안 얽히게 따로 둔다.
+ */
+export async function updateSaleMemo(
+  quoteId: number,
+  memo: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!(await (await import("./auth")).hasPerm("sale_edit"))) return { ok: false, error: PERM_DENIED };
+  const trimmed = memo.trim().slice(0, 500);
+  const done = await db
+    .update(quote)
+    .set({ paymentMemo: trimmed || null, updatedAt: new Date() })
+    .where(and(eq(quote.id, quoteId), ne(quote.status, "취소")))
+    .returning({ id: quote.id });
+  if (done.length === 0) return { ok: false, error: "판매를 찾을 수 없거나 취소된 판매입니다" };
+  refresh();
+  return { ok: true };
+}
+
+/**
+ * ⭐ 재고 복원 정본 (2026-09-09 추출) — 취소와 예약 전환이 같은 되감기를 쓴다.
+ *
+ *   이 판매의 **순변동(출고 − 이미 되돌린 반품)** 만큼만 되감는다.
+ * 🔴 출고 이력만 보면 안 된다 (코드 리뷰 2026-08-08) — 줄 수정이 일부를 이미
+ *    되돌려 놓았는데 전량을 또 되감으면 유령 재고가 생긴다. 행마다 전체 이력을
+ *    합산하므로 두 번 불러도 이중 복원이 없다.
+ */
+async function restoreStockForQuote(
+  quoteId: number,
+  reason: string,
+  memo: string,
+  userId?: number,
+): Promise<number> {
+  const moves = await db.execute<{ stock_item_id: number; net: number }>(sql`
+    SELECT stock_item_id, -SUM(qty_delta)::int AS net
+    FROM stock_movement
+    WHERE quote_id = ${quoteId}
+    GROUP BY stock_item_id
+    HAVING SUM(qty_delta) < 0
+  `);
+
+  let restored = 0;
+  for (const m of moves) {
+    const take = Number(m.net);
+    if (take <= 0) continue;
+    const [item] = await db
+      .select({ id: stockItem.id, status: stockItem.status, qty: stockItem.qty, quoteId: stockItem.quoteId })
+      .from(stockItem)
+      .where(eq(stockItem.id, Number(m.stock_item_id)))
+      .limit(1);
+    if (!item) continue;
+
+    if (item.status === "판매완료" && item.quoteId === quoteId) {
+      /**
+       * 🔴 부품 행은 판매완료 때 qty 가 그대로 남아 있다 — 상태만 되돌리면
+       *    원래 수량 전체가 살아난다. 복원 수량을 qty 로 **명시**한다
+       *    (타이어 1본 1행은 take=1 이라 결과가 같다). (코드 리뷰 2026-08-08)
+       */
+      await db
+        .update(stockItem)
+        .set({ status: "재고", soldAt: null, quoteId: null, qty: take })
+        .where(eq(stockItem.id, item.id));
+    } else {
+      // 부품 — 행은 그대로 있고 수량만 줄어 있었다
+      await db.update(stockItem).set({ qty: item.qty + take }).where(eq(stockItem.id, item.id));
+    }
+    await db.insert(stockMovement).values({
+      stockItemId: item.id,
+      type: "반품",
+      reason,
+      qtyDelta: take,
+      quoteId,
+      memo,
+      createdBy: userId ?? null,
+    });
+    restored += take;
+  }
+  return restored;
+}
+
 export async function cancelSale(
   quoteId: number,
   confirmMars = false,
@@ -219,50 +364,7 @@ export async function cancelSale(
    *    출고 전량을 또 되감아, 4본 판 것에 6본이 살아나는 유령 재고가 생겼다.
    *    행마다 이 판매의 모든 이력을 합산하면 두 번 눌러도 이중 복원이 없다.
    */
-  const moves = await db.execute<{ stock_item_id: number; net: number }>(sql`
-    SELECT stock_item_id, -SUM(qty_delta)::int AS net
-    FROM stock_movement
-    WHERE quote_id = ${quoteId}
-    GROUP BY stock_item_id
-    HAVING SUM(qty_delta) < 0
-  `);
-
-  let restored = 0;
-  for (const m of moves) {
-    const take = Number(m.net);
-    if (take <= 0) continue;
-    const [item] = await db
-      .select({ id: stockItem.id, status: stockItem.status, qty: stockItem.qty, quoteId: stockItem.quoteId })
-      .from(stockItem)
-      .where(eq(stockItem.id, Number(m.stock_item_id)))
-      .limit(1);
-    if (!item) continue;
-
-    if (item.status === "판매완료" && item.quoteId === quoteId) {
-      /**
-       * 🔴 부품 행은 판매완료 때 qty 가 그대로 남아 있다 — 상태만 되돌리면
-       *    원래 수량 전체가 살아난다. 복원 수량을 qty 로 **명시**한다
-       *    (타이어 1본 1행은 take=1 이라 결과가 같다). (코드 리뷰 2026-08-08)
-       */
-      await db
-        .update(stockItem)
-        .set({ status: "재고", soldAt: null, quoteId: null, qty: take })
-        .where(eq(stockItem.id, item.id));
-    } else {
-      // 부품 — 행은 그대로 있고 수량만 줄어 있었다
-      await db.update(stockItem).set({ qty: item.qty + take }).where(eq(stockItem.id, item.id));
-    }
-    await db.insert(stockMovement).values({
-      stockItemId: item.id,
-      type: "반품",
-      reason: "판매취소",
-      qtyDelta: take,
-      quoteId,
-      memo: `${q.quoteNo} 취소`,
-      createdBy: userId ?? null,
-    });
-    restored += take;
-  }
+  const restored = await restoreStockForQuote(quoteId, "판매취소", `${q.quoteNo} 취소`, userId);
 
   const marsWarning =
     q.marsStatus === "전송완료"

@@ -2,13 +2,14 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { cancelSale, fulfillReservation, updateSaleHead } from "@/lib/sale-edit";
+import { cancelSale, convertToReservation, fulfillReservation, updateSaleHead, updateSaleMemo } from "@/lib/sale-edit";
 import Link from "@/lib/link";
 import type { SaleRow } from "@/lib/sale-history";
 import { EXCLUSIVE, SPLITTABLE, splitLabel } from "@/lib/payments";
 import { signedStr, showSigned } from "@/lib/signed-input";
 import { SquareArrowOutUpRight } from "lucide-react";
 import { StatusPill } from "@/components/ui/badge";
+import { useConfirm } from "@/components/ui/confirm";
 import { CollectionPanel } from "./collections";
 import { AddLine, EditableLine } from "./line-edit";
 import { ReassignPanel } from "./reassign";
@@ -57,6 +58,8 @@ export function SaleCard({
   const [notice, setNotice] = useState<string | null>(null);
   /** MARS 전송완료 건 취소는 두 번 묻는다 */
   const [askMars, setAskMars] = useState(false);
+  /* 예약 전환·확인 시트 (2026-09-09) — 브라우저 confirm() 금지 관례(useConfirm) */
+  const [ask, confirmDialog] = useConfirm();
 
   const [workDate, setWorkDate] = useState(s.workDate);
   /**
@@ -204,6 +207,7 @@ export function SaleCard({
         select ? (select.checked ? "ring-2 ring-indigo-600" : select.eligible ? "" : "opacity-40") : ""
       }`}
     >
+      {confirmDialog}
       <button
         type="button"
         onClick={() => (select ? select.eligible && select.toggle() : setOpen(!open))}
@@ -257,26 +261,30 @@ export function SaleCard({
         {/* ── 품목 — 줄별 금액 (옛 PC 카드 문법을 전 화면으로, 2026-09-04) ── */}
         <div className="mt-2 space-y-1 border-t border-slate-100 pt-2">
           {s.lines.map((l) => (
-            <div key={l.itemId} className="flex items-baseline justify-between gap-3 text-sm text-slate-600">
-              <span className="min-w-0 truncate">
-                {l.lineType === "service" && <span className="mr-1 text-xs text-slate-400">공임</span>}
-                {l.lineType === "use" && <span className="mr-1 text-xs text-sky-600">부품 사용</span>}
-                {l.description}
-                {l.spec && <span className="tabular ml-1 text-slate-500">{l.spec}</span>}
-              </span>
-              {/* ⭐ 「4 × 142,000 = 568,000원」 — 총액이 맨 끝에 (사장님 요청 2026-08-21). 1개면 금액만 */}
-              <span className="tabular shrink-0">
-                {l.qty > 1 ? (
-                  <>
-                    <span className="text-slate-400">
-                      {l.qty} × {won(l.finalPrice)} =
-                    </span>{" "}
-                    <span className="font-medium text-slate-700">{won(l.finalPrice * l.qty)}원</span>
-                  </>
-                ) : (
-                  <>{won(l.finalPrice)}원</>
-                )}
-              </span>
+            <div key={l.itemId}>
+              <div className="flex items-baseline justify-between gap-3 text-sm text-slate-600">
+                <span className="min-w-0 truncate">
+                  {l.lineType === "service" && <span className="mr-1 text-xs text-slate-400">공임</span>}
+                  {l.lineType === "use" && <span className="mr-1 text-xs text-sky-600">부품 사용</span>}
+                  {l.description}
+                  {l.spec && <span className="tabular ml-1 text-slate-500">{l.spec}</span>}
+                </span>
+                {/* ⭐ 「4 × 142,000 = 568,000원」 — 총액이 맨 끝에 (사장님 요청 2026-08-21). 1개면 금액만 */}
+                <span className="tabular shrink-0">
+                  {l.qty > 1 ? (
+                    <>
+                      <span className="text-slate-400">
+                        {l.qty} × {won(l.finalPrice)} =
+                      </span>{" "}
+                      <span className="font-medium text-slate-700">{won(l.finalPrice * l.qty)}원</span>
+                    </>
+                  ) : (
+                    <>{won(l.finalPrice)}원</>
+                  )}
+                </span>
+              </div>
+              {/* ⭐ 줄 메모도 접힌 채로 (사장님 요청 2026-09-09 — "각 품목·공임 메모가 바로 보였으면") */}
+              {l.memo && <p className="truncate pl-3 text-[12px] leading-snug text-amber-700">└ {l.memo}</p>}
             </div>
           ))}
           {s.lines.length === 0 && <div className="text-sm text-slate-400">품목 없음</div>}
@@ -407,6 +415,38 @@ export function SaleCard({
                 <p className="tabular text-amber-700">MARS 마지막 시도: {s.marsLastTry}</p>
               )}
           </div>
+
+          {/* ⭐ 비고 바로 고치기 (사장님 요청 2026-09-09 — "카드 한번만 누르면 하단에서") */}
+          {!canceled && (
+            <div className="mt-3 rounded-lg bg-slate-50 p-2.5">
+              <label className="text-xs font-medium text-slate-500">📝 비고</label>
+              <div className="mt-1 flex items-start gap-2">
+                <textarea
+                  value={memo}
+                  onChange={(e) => setMemo(e.target.value)}
+                  rows={2}
+                  placeholder="예: 다음 방문 때 위치교환 · 좌뒤 슬로우펑크 관찰"
+                  className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2.5 py-2 text-sm outline-none focus:border-slate-900"
+                />
+                <button
+                  type="button"
+                  disabled={pending || memo === (s.paymentMemo ?? "")}
+                  onClick={() =>
+                    start(async () => {
+                      setError(null);
+                      const r = await updateSaleMemo(s.quoteId, memo);
+                      if (!r.ok) return setError(r.error);
+                      setNotice("비고를 저장했습니다");
+                      router.refresh();
+                    })
+                  }
+                  className="shrink-0 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                >
+                  저장
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* ⭐ 외상 수금 (사장님 선택 2026-08-11) */}
           {s.paymentMethod === "외상" && !canceled && (
@@ -587,6 +627,45 @@ export function SaleCard({
                   >
                     날짜·결제 고치기
                   </button>
+                  {/* ⭐ 예약으로 바꾸기 (사장님 요청 2026-09-09) — 잘못 등록한 일반·외상 판매를
+                        예약으로. 재고가 되살아나고 시공 완료 때 다시 빠진다 */}
+                  {s.reservationStatus !== "예약중" && (
+                    <button
+                      type="button"
+                      disabled={pending}
+                      onClick={async () => {
+                        const ok = await ask({
+                          title: "이 판매를 예약으로 바꿀까요?",
+                          body: "예약은 재고를 안 뺀 상태입니다 — 지금 빠져 있던 재고가 되살아나고, 나중에 「시공 완료」를 누르면 다시 빠집니다. 결제·수금 기록은 그대로 둡니다.",
+                          confirmLabel: "예약으로 바꾸기",
+                        });
+                        if (!ok) return;
+                        start(async () => {
+                          setError(null);
+                          let r = await convertToReservation(s.quoteId);
+                          if (!r.ok && r.needMarsConfirm) {
+                            const again = await ask({
+                              title: "MARS 에 이미 들어간 판매입니다",
+                              body: r.error,
+                              confirmLabel: "그래도 예약으로",
+                              tone: "danger",
+                            });
+                            if (!again) return;
+                            r = await convertToReservation(s.quoteId, true);
+                          }
+                          if (!r.ok) return setError(r.error);
+                          setNotice(
+                            `예약으로 바꿨습니다 — 재고 ${r.restored}개가 되살아났습니다.` +
+                              (r.marsWarning ? ` ⚠️ ${r.marsWarning}` : ""),
+                          );
+                          router.refresh();
+                        });
+                      }}
+                      className="flex-1 rounded-lg border border-violet-300 py-2 text-sm font-medium text-violet-700 active:bg-violet-50"
+                    >
+                      📌 예약으로 바꾸기
+                    </button>
+                  )}
                   {/* ⭐ 손님·거래처 바꾸기 (사장님 지시 2026-08-17) — 사장님 계정만 */}
                   {canReassign && (
                     <button
