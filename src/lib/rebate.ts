@@ -165,9 +165,27 @@ export async function estimateRebates(ym: string): Promise<RebateCard[]> {
       `);
       const raw = Number(r?.small ?? 0) * Number(params.le19 ?? 0) + Number(r?.big ?? 0) * Number(params.ge20 ?? 0);
       card.statusLine = `이 달 판매 19"이하 ${r?.small ?? 0}본 · 20"이상 ${r?.big ?? 0}본 → 본당 합 ${won(raw)}원`;
-      if (p.qualified === true) card.estimate = raw;
+      /* ⭐ 자격 자동 판정 (실증 검증 2026-09-09) — 자격 = 자격월(qualifyYm) 매입
+         기표가 ≥ 계약서 타겟(qualifyTarget). 사장님 확인: 캠페인의 매입 타겟은
+         미쉐린 계약서 월 타겟(3,750만)과 같다. 수동 토글(qualified)이 있으면
+         그것이 우선 — 미쉐린이 다르게 통보하면 손으로 덮을 수 있게. */
+      let qualified = p.qualified;
+      if (qualified === null && params.qualifyYm && Number(params.qualifyTarget ?? 0) > 0) {
+        const [qr] = await db.execute<{ listed: string }>(sql`
+          SELECT COALESCE(SUM(pii.unit_list_price * pii.qty), 0)::bigint listed
+          FROM purchase_invoice pi
+          JOIN purchase_invoice_item pii ON pii.invoice_id = pi.id
+          JOIN product p3 ON p3.id = pii.product_id
+          WHERE pi.status <> '취소' AND p3.brand_code = ${p.brand}
+            AND substring(pi.issued_at, 1, 7) = ${String(params.qualifyYm)}
+        `);
+        const qListed = Number(qr?.listed ?? 0);
+        const qTarget = Number(params.qualifyTarget);
+        qualified = qListed >= qTarget;
+        card.actionLine = `자격: ${String(params.qualifyYm).slice(5)}월 매입 기표가 ${won(qListed)}원 / 타겟 ${won(qTarget)}원 (${Math.round((qListed / qTarget) * 100)}%) — ${qualified ? "달성 ✓" : "아직 미달"}`;
+      }
+      if (qualified === true) card.estimate = raw;
       else if (p.qualified === false) card.statusLine += " — 자격 미달로 0원";
-      else card.actionLine = "자격(전월 매입 타겟 달성) 확인 전 — 확인되면 위 금액이 추정에 잡힘";
       if (Number(r?.unknown ?? 0) > 0) card.warnLine = `인치 미상 ${r.unknown}본 제외`;
     } else if (p.kind === "품목매입율") {
       const rate = Number(params.rate ?? 0);

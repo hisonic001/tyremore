@@ -128,6 +128,18 @@ async function main() {
     `);
     added += r.length;
   }
+  /* 실증 검증 반영 (2026-09-09 저녁, 통장·계산서·인보이스 3방향 대조):
+     - 멤버십 자격 타겟 = 계약서 월 타겟 3,750만 (사장님 확인) → 자동 판정 파라미터
+     - 금호 볼륨·특판은 에누리 확정 (할인율 40~54% = 운영안 총지원율, 단가 선반영) */
+  await db.execute(sql`
+    UPDATE promo SET params = params || '{"qualifyYm":"2026-09","qualifyTarget":37500000}'::jsonb
+    WHERE title = '미쉐린 멤버십 캠페인 (본당 1만/1.5만)'
+  `);
+  await db.execute(sql`
+    UPDATE promo SET memo = '실증 확정: 볼륨·특판 지원은 인보이스 단가 선반영(에누리, 할인율 40~54% 실측) — 여기 넣으면 이중 계상. 페이백(익월 감가)·상품권·교체지원금 도착분만 확정 등록'
+    WHERE title = '금호 9월 운영안 (볼륨·재고·페이백)'
+  `);
+
   const [n] = await db.execute<{ p: number; e: number }>(
     sql`SELECT (SELECT count(*)::int FROM promo) p, (SELECT count(*)::int FROM rebate_entry) e`,
   );
