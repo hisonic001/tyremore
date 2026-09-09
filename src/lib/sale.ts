@@ -25,6 +25,7 @@ import { normalizePlate } from "./normalize";
 import { ensureGarageCustomer } from "./garage";
 import { customer, quote, quoteItem, quotePayment, serviceItem, stockItem, stockMovement, vehicle } from "@/db/schema";
 import { checkSplitPayments } from "./payments";
+import { costSnapshotMap } from "./sale-cost";
 import { ageAnchorSql } from "./tire-age";
 import type { NewCustomerInput } from "./sale-types";
 import { PERM_DENIED } from "./perm-keys";
@@ -321,28 +322,11 @@ export async function saveSale(
           );
         }
 
-        /**
-         * ⭐ 원가 스냅샷 (마진 리포트, 사장님 지시 2026-08-25) — 파는 순간의 매입원가를
-         *    줄에 박아 둔다: ①그 상품의 최근 매입 단가 ②없으면 상품의 매입가.
-         *    못 찾으면 빈 칸 — 거짓 원가보다 빈 칸이 낫다. margin = (판매가 − 원가) × 수량.
-         */
-        const costIds = [...new Set(lines.map((l) => l.productId).filter((v): v is number => !!v))].slice(0, 100);
-        const costMap = new Map<number, number>();
-        if (costIds.length > 0) {
-          const inCost = sql.join(costIds.map((i) => sql`${i}`), sql`, `);
-          const recent = await tx.execute<{ product_id: number; unit_cost: number }>(sql`
-            SELECT DISTINCT ON (pii.product_id) pii.product_id, pii.unit_cost
-            FROM purchase_invoice_item pii
-            JOIN purchase_invoice pi ON pi.id = pii.invoice_id
-            WHERE pi.status <> '취소' AND pii.unit_cost IS NOT NULL AND pii.product_id IN (${inCost})
-            ORDER BY pii.product_id, pii.id DESC
-          `);
-          for (const r of recent) costMap.set(Number(r.product_id), Number(r.unit_cost));
-          const base = await tx.execute<{ id: number; purchase_price: number }>(sql`
-            SELECT id, purchase_price FROM product WHERE purchase_price IS NOT NULL AND id IN (${inCost})
-          `);
-          for (const r of base) if (!costMap.has(Number(r.id))) costMap.set(Number(r.id), Number(r.purchase_price));
-        }
+        // 원가 스냅샷 — 정본은 sale-cost.ts (줄 추가 addSaleLine 과 같은 판정, 2026-09-09 추출)
+        const costMap = await costSnapshotMap(
+          tx,
+          lines.map((l) => l.productId).filter((v): v is number => !!v),
+        );
 
         await tx.insert(quoteItem).values(
           lines.map((l) => ({

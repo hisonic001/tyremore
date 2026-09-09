@@ -178,7 +178,7 @@ export default async function ReportsPage({
              COALESCE(SUM(${marginBaseSql}), 0)::bigint known,
              COALESCE(SUM(qi.final_price * qi.qty), 0)::bigint total
       FROM quote_item qi JOIN quote qq ON qq.id = qi.quote_id
-      WHERE qq.status = '성사'
+      WHERE qq.status = '성사' AND qq.quote_no LIKE 'Q%'
         AND COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${prevYm + "-01"}::date
         AND COALESCE(qq.work_date, (qq.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${nextStart}::date
       GROUP BY 1

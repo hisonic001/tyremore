@@ -545,7 +545,12 @@ export async function updateSaleLine(input: {
   }
 
   await db.execute(sql`
-    UPDATE quote_item SET qty = ${input.qty}, final_price = ${input.unitPrice}
+    UPDATE quote_item SET qty = ${input.qty}, final_price = ${input.unitPrice},
+      /* ⭐ 마진 스냅샷 재계산 (마진 검증 2026-09-09) — 수량·단가를 고쳤는데 margin 이
+         옛 값 그대로 남아 8월 마진이 203.6만원 낮게 보였다 (Q26-0831-011 실측).
+         원가 스냅샷(파는 순간 원가)은 그대로 두고 공식만 다시 편다 */
+      margin = CASE WHEN purchase_cost IS NOT NULL
+                    THEN (${input.unitPrice} - purchase_cost) * ${input.qty} END
       ${desc !== undefined ? sql`, description = ${desc}` : sql``}
       ${input.memo !== undefined ? sql`, memo = ${input.memo?.trim() || null}` : sql``}
     WHERE id = ${input.itemId}
@@ -600,10 +605,18 @@ export async function addSaleLine(input: {
   const e = await editableQuote(input.quoteId);
   if (e.error !== undefined) return { ok: false, error: e.error };
 
+  /* ⭐ 원가 스냅샷 (마진 검증 2026-09-09) — 이 경로로 더한 줄만 원가·마진이 비어
+     「원가 미기록」을 늘렸다. 판매 등록과 같은 정본(sale-cost.ts)으로 채운다 */
+  const { costSnapshotMap } = await import("./sale-cost");
+  const costMap = input.productId ? await costSnapshotMap(db, [input.productId]) : new Map<number, number>();
+  const cost = input.productId ? (costMap.get(input.productId) ?? null) : null;
+
   await db.execute(sql`
-    INSERT INTO quote_item (quote_id, line_type, product_id, service_item_id, description, qty, final_price)
+    INSERT INTO quote_item (quote_id, line_type, product_id, service_item_id, description, qty, final_price,
+                            purchase_cost, margin)
     VALUES (${input.quoteId}, ${input.kind}, ${input.productId ?? null}, ${input.serviceItemId ?? null},
-            ${input.description.trim()}, ${input.qty}, ${input.unitPrice})
+            ${input.description.trim()}, ${input.qty}, ${input.unitPrice},
+            ${cost}, ${cost !== null ? (input.unitPrice - cost) * input.qty : null})
   `);
 
   let shortage = 0;
