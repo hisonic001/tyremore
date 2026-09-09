@@ -128,37 +128,48 @@ export async function updateSaleHead(input: {
  *   (급한 손님에게 예약분을 먼저 팔 수 있다는 사장님 방침 — 재주문 신호).
  *   매출 날(work_date)은 안 건드린다 — 돈은 받은 날 그대로다.
  *
- * 🔴 멱등 — 「예약중」일 때만 차감한다. 두 번 눌러도 재고가 두 번 빠지지 않는다.
+ * 🔴 멱등 — 진짜로 (재고 조사 2026-09-09). 전에는 「읽고 나서 판단」이라
+ *    더블클릭·두 기기 동시 클릭이면 둘 다 '예약중'을 읽고 둘 다 차감했고,
+ *    3줄 중 2줄 빼다 죽으면 상태가 안 바뀌어 재클릭 때 앞 2줄을 또 뺐다.
+ *    이제 **조건부 UPDATE 가 먼저** 이기고(한 명만 통과), 차감은 같은
+ *    트랜잭션 안(sellFromStock 의 FOR UPDATE 도 이때만 산다) — 다 되거나
+ *    아무 일도 없거나 둘 중 하나다.
  */
 export async function fulfillReservation(
   quoteId: number,
 ): Promise<{ ok: true; shortages: string[] } | { ok: false; error: string }> {
   if (!(await (await import("./auth")).hasPerm("sale_edit"))) return { ok: false, error: PERM_DENIED };
-  const [q] = await db.execute<{ id: number; status: string; reservation_status: string | null; quote_no: string }>(sql`
-    SELECT id, status, reservation_status, quote_no FROM quote WHERE id = ${quoteId}
-  `);
-  if (!q) return { ok: false, error: "판매 기록을 찾을 수 없습니다" };
-  if (q.status === "취소") return { ok: false, error: "취소된 판매입니다" };
-  if (q.reservation_status === "시공완료") return { ok: false, error: "이미 시공 완료된 예약입니다" };
-  if (q.reservation_status !== "예약중") return { ok: false, error: "예약 건이 아닙니다" };
-
-  const lines = await db.execute<{ product_id: number | null; qty: number; description: string }>(sql`
-    SELECT product_id, qty, description FROM quote_item WHERE quote_id = ${quoteId}
-  `);
-  const shortages: string[] = [];
   const { sellFromStock } = await import("./sale");
-  for (const l of lines) {
-    if (!l.product_id) continue;
-    const { short } = await sellFromStock(Number(l.product_id), Number(l.qty), quoteId);
-    if (short > 0) shortages.push(`${l.description} ${short}본`);
-  }
-  await db.execute(sql`
-    UPDATE quote SET reservation_status = '시공완료',
-      fulfilled_on = (now() AT TIME ZONE 'Asia/Seoul')::date, updated_at = now()
-    WHERE id = ${quoteId}
-  `);
-  refresh();
-  return { ok: true, shortages };
+  const result = await db.transaction(async (tx) => {
+    const [won] = await tx.execute<{ id: number }>(sql`
+      UPDATE quote SET reservation_status = '시공완료',
+        fulfilled_on = (now() AT TIME ZONE 'Asia/Seoul')::date, updated_at = now()
+      WHERE id = ${quoteId} AND reservation_status = '예약중' AND status <> '취소'
+      RETURNING id
+    `);
+    if (!won) {
+      const [q] = await tx.execute<{ status: string; reservation_status: string | null }>(sql`
+        SELECT status, reservation_status FROM quote WHERE id = ${quoteId}
+      `);
+      if (!q) return { ok: false as const, error: "판매 기록을 찾을 수 없습니다" };
+      if (q.status === "취소") return { ok: false as const, error: "취소된 판매입니다" };
+      if (q.reservation_status === "시공완료") return { ok: false as const, error: "이미 시공 완료된 예약입니다" };
+      return { ok: false as const, error: "예약 건이 아닙니다" };
+    }
+
+    const lines = await tx.execute<{ product_id: number | null; qty: number; description: string }>(sql`
+      SELECT product_id, qty, description FROM quote_item WHERE quote_id = ${quoteId}
+    `);
+    const shortages: string[] = [];
+    for (const l of lines) {
+      if (!l.product_id) continue;
+      const { short } = await sellFromStock(Number(l.product_id), Number(l.qty), quoteId, undefined, tx);
+      if (short > 0) shortages.push(`${l.description} ${short}본`);
+    }
+    return { ok: true as const, shortages };
+  });
+  if (result.ok) refresh();
+  return result;
 }
 
 /**
@@ -285,11 +296,15 @@ async function restoreStockForQuote(
       .limit(1);
     if (!item) continue;
 
-    if (item.status === "판매완료" && item.quoteId === quoteId) {
+    if (item.status === "판매완료") {
       /**
        * 🔴 부품 행은 판매완료 때 qty 가 그대로 남아 있다 — 상태만 되돌리면
        *    원래 수량 전체가 살아난다. 복원 수량을 qty 로 **명시**한다
        *    (타이어 1본 1행은 take=1 이라 결과가 같다). (코드 리뷰 2026-08-08)
+       * 🔴 다른 판매가 마지막으로 전량 가져간 행(quote_id 가 남)이어도 같다
+       *    (재고 조사 2026-09-09) — 전에는 기록용 qty 에 가산해 「판매완료인데
+       *    qty>0」 유령이 됐다. 이 판매의 순변동(take)만 재고로 살린다;
+       *    다른 판매의 몫은 그쪽 movement 가 진실이라 취소되면 가산으로 돌아온다.
        */
       await db
         .update(stockItem)
@@ -405,9 +420,20 @@ export async function cancelSale(
 /** 취소 아님 + 존재 확인. 자주 쓰여서 한 곳에 모은다 */
 async function editableQuote(
   quoteId: number,
-): Promise<{ error: string; q?: never } | { error?: never; q: { id: number; status: string; marsStatus: string; quoteNo: string } }> {
+): Promise<
+  | { error: string; q?: never }
+  | { error?: never; q: { id: number; status: string; marsStatus: string; quoteNo: string; reservationStatus: string | null } }
+> {
   const [q] = await db
-    .select({ id: quote.id, status: quote.status, marsStatus: quote.marsStatus, quoteNo: quote.quoteNo })
+    .select({
+      id: quote.id,
+      status: quote.status,
+      marsStatus: quote.marsStatus,
+      quoteNo: quote.quoteNo,
+      /* ⭐ 예약 인지 (재고 조사 2026-09-09) — 예약중 판매의 줄 수정·추가가 즉시
+         재고를 빼면 시공완료 때 또 빠진다(이중 차감). 호출자가 이 값으로 거른다 */
+      reservationStatus: quote.reservationStatus,
+    })
     .from(quote)
     .where(eq(quote.id, quoteId))
     .limit(1);
@@ -481,8 +507,9 @@ async function restoreStockFor(
     const out = Number(r.out);
     if (out <= 0) continue;
     const take = Math.min(out, left);
-    if (r.status === "판매완료" && Number(r.quote_id) === quoteId) {
+    if (r.status === "판매완료") {
       // 🔴 부품 행은 판매완료 때 qty 가 남아 있다 — 복원 수량을 명시해야 과복원이 없다 (2026-08-08)
+      // 🔴 다른 판매 소유(quote_id 다름)여도 같다 (재고 조사 2026-09-09) — 위 restoreStockForQuote 주석 참조
       await db
         .update(stockItem)
         .set({ status: "재고", soldAt: null, quoteId: null, qty: take })
@@ -536,7 +563,12 @@ export async function updateSaleLine(input: {
 
   let shortage = 0;
   const delta = input.qty - Number(line.qty);
-  if (line.product_id && delta > 0) {
+  /* ⭐ 예약중은 재고를 안 뺀다 (재고 조사 2026-09-09) — 여기서 빼면 시공완료 때
+     전량을 또 빼 이중 차감이 된다. 수량 확정은 시공완료 한 번뿐.
+     줄이는 방향(복원)은 movement 근거라 예약중이어도 안전 — 혹시 잘못 빠진 게
+     있으면 되돌려 주므로 그대로 둔다. */
+  const reserved = e.q.reservationStatus === "예약중";
+  if (line.product_id && delta > 0 && !reserved) {
     const { sellFromStock } = await import("./sale");
     const { short } = await sellFromStock(Number(line.product_id), delta, e.q.id);
     shortage = short;
@@ -620,7 +652,8 @@ export async function addSaleLine(input: {
   `);
 
   let shortage = 0;
-  if (input.productId) {
+  // ⭐ 예약중은 재고를 안 뺀다 (재고 조사 2026-09-09) — 시공완료 때 전 줄이 한 번에 빠진다
+  if (input.productId && e.q.reservationStatus !== "예약중") {
     const { sellFromStock } = await import("./sale");
     const { short } = await sellFromStock(input.productId, input.qty, e.q.id);
     shortage = short;

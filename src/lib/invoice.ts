@@ -1281,7 +1281,7 @@ export async function receiveLine(input: {
   qty: number;
   dot?: string | null;
   userId?: number;
-}): Promise<{ ok: true; created: number } | { ok: false; error: string }> {
+}): Promise<{ ok: true; created: number; caughtUp?: number; catchupNotes?: string[] } | { ok: false; error: string }> {
   if (!(await (await import("./auth")).hasPerm("receiving"))) return { ok: false, error: PERM_DENIED };
   const dot = input.dot?.trim() || null;
   if (dot && !isPlausibleDot(dot)) {
@@ -1417,8 +1417,14 @@ export async function receiveLine(input: {
     WHERE id = ${line.invoiceId}
   `);
 
+  /* ⭐ 입고 따라잡기 (재고 조사 2026-09-09) — 실물이 먼저 시공되고 전산 입고가
+     나중이면 그 판매는 재고를 못 뺀 채 남는다. 입고된 지금 소급 차감한다
+     (정본 stock-catchup.ts — 마지막 실사 이후 판매만) */
+  const { catchUpShortSales } = await import("./stock-catchup");
+  const catchup = await catchUpShortSales(line.productId, input.userId);
+
   refresh("/receiving", "/", `/stock/${line.productId}`);
-  return { ok: true, created: input.qty };
+  return { ok: true, created: input.qty, caughtUp: catchup.caughtUp, catchupNotes: catchup.notes };
 }
 
 /** 금액 없는 매입 장부 수 — 매입 입고 화면 배지용 (사장님 목표 2026-08-25: "0원 매입 없애기") */

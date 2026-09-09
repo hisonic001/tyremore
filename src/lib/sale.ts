@@ -141,6 +141,8 @@ export async function sellFromStock(
   quoteId: number,
   userId?: number,
   dbc: Dbc = db,
+  /** 출고 movement 에 남길 표시 — 소급차감(입고 따라잡기) 등이 자기 흔적을 남긴다 */
+  memo?: string,
 ) {
   /**
    * 🔴 읽은 행을 잠근다 — FOR UPDATE (코드 리뷰 2026-08-08).
@@ -174,6 +176,7 @@ export async function sellFromStock(
       reason: "판매",
       qtyDelta: -take,
       quoteId,
+      memo: memo ?? null,
       createdBy: userId ?? null,
     });
 

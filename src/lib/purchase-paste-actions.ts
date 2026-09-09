@@ -252,7 +252,10 @@ export async function savePastedPurchase(input: {
  * ========================================================== */
 export async function receivePastedInvoice(
   invoiceId: number,
-): Promise<{ ok: true; received: number; priceUpdated: number } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; received: number; priceUpdated: number; caughtUp?: number; catchupNotes?: string[] }
+  | { ok: false; error: string }
+> {
   if (!(await (await import("./auth")).hasPerm("receiving"))) return { ok: false, error: PERM_DENIED };
   const session = await getSession();
   if (!session) return { ok: false, error: "로그인이 필요합니다" };
@@ -382,6 +385,21 @@ export async function receivePastedInvoice(
     WHERE id = ${invoiceId}
   `);
 
+  /* ⭐ 입고 따라잡기 (재고 조사 2026-09-09) — 실물 먼저 시공·전산 입고 나중이던
+     판매를 지금 소급 차감 (정본 stock-catchup.ts, 마지막 실사 이후 판매만) */
+  const { catchUpShortSales } = await import("./stock-catchup");
+  const prods = await db.execute<{ product_id: number }>(sql`
+    SELECT DISTINCT product_id FROM purchase_invoice_item
+    WHERE invoice_id = ${invoiceId} AND product_id IS NOT NULL AND received_qty > 0
+  `);
+  let caughtUp = 0;
+  const catchupNotes: string[] = [];
+  for (const pr of prods) {
+    const c = await catchUpShortSales(Number(pr.product_id), session.uid ?? undefined);
+    caughtUp += c.caughtUp;
+    catchupNotes.push(...c.notes);
+  }
+
   refresh("/receiving", "/receiving/history", "/stock", "/");
-  return { ok: true, received, priceUpdated };
+  return { ok: true, received, priceUpdated, caughtUp, catchupNotes };
 }
