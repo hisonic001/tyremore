@@ -106,34 +106,57 @@ function digest(r: NonNullable<ScanResult>): { info: PhotoInfo; line: string; ex
  *    («Maximum array nesting» 실사고) 때문에 /api/vin-scan 으로 파일째 올린다.
  *    품질 사다리: 2MB 넘으면 0.7 로 다시 굽고, 그래도 2.9MB 넘으면 잘라 말한다.
  */
-async function shrink(file: File): Promise<Blob> {
-  const url = URL.createObjectURL(file);
+async function shrink(file: File): Promise<{ blob: Blob; quality: number }> {
+  /**
+   * ⭐ 기종 함정 보강 (사장님 요청 2026-09-09 — 기종별 오류 검증):
+   *    ① EXIF 회전 — 구형 브라우저는 세로 사진을 눕혀 그린다.
+   *       createImageBitmap(from-image) 이 되면 그걸로 바로 잡는다.
+   *    ② 아이폰 HEIC — 크롬/안드로이드는 못 연다. 실패 문구에 설정 팁을 넣는다.
+   */
+  let source: ImageBitmap | HTMLImageElement;
   try {
-    const img = await new Promise<HTMLImageElement>((res, rej) => {
-      const i = new Image();
-      i.onload = () => res(i);
-      i.onerror = () => rej(new Error("사진을 열지 못했습니다"));
-      i.src = url;
-    });
-    const max = 2000;
-    const scale = Math.min(1, max / Math.max(img.width, img.height));
-    const c = document.createElement("canvas");
-    c.width = Math.round(img.width * scale);
-    c.height = Math.round(img.height * scale);
-    const ctx = c.getContext("2d");
-    if (!ctx) throw new Error("사진을 줄이지 못했습니다");
-    ctx.drawImage(img, 0, 0, c.width, c.height);
-    const bake = (q: number) =>
-      new Promise<Blob>((res, rej) =>
-        c.toBlob((b) => (b ? res(b) : rej(new Error("사진을 줄이지 못했습니다"))), "image/jpeg", q),
-      );
-    let out = await bake(0.85);
-    if (out.size > 2_000_000) out = await bake(0.7);
-    if (out.size > 2_900_000) throw new Error("사진이 너무 큽니다 — 조금 떨어져서 다시 찍어 주세요");
-    return out;
-  } finally {
-    URL.revokeObjectURL(url);
+    source = await createImageBitmap(file, { imageOrientation: "from-image" });
+  } catch {
+    const url = URL.createObjectURL(file);
+    try {
+      source = await new Promise<HTMLImageElement>((res, rej) => {
+        const i = new Image();
+        i.onload = () => res(i);
+        i.onerror = () =>
+          rej(
+            new Error(
+              /hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name)
+                ? "이 사진 형식(HEIC)을 이 폰 브라우저가 못 엽니다 — 아이폰이면 설정→카메라→포맷→「호환성 높음」으로 바꾸고 다시 찍어 주세요"
+                : "사진을 열지 못했습니다",
+            ),
+          );
+        i.src = url;
+      });
+    } finally {
+      URL.revokeObjectURL(url);
+    }
   }
+  const max = 2000;
+  const scale = Math.min(1, max / Math.max(source.width, source.height));
+  const c = document.createElement("canvas");
+  c.width = Math.round(source.width * scale);
+  c.height = Math.round(source.height * scale);
+  const ctx = c.getContext("2d");
+  if (!ctx) throw new Error("사진을 줄이지 못했습니다");
+  ctx.drawImage(source, 0, 0, c.width, c.height);
+  if ("close" in source) source.close();
+  const bake = (q: number) =>
+    new Promise<Blob>((res, rej) =>
+      c.toBlob((b) => (b ? res(b) : rej(new Error("사진을 줄이지 못했습니다"))), "image/jpeg", q),
+    );
+  let quality = 0.85;
+  let out = await bake(quality);
+  if (out.size > 2_000_000) {
+    quality = 0.7;
+    out = await bake(quality);
+  }
+  if (out.size > 2_900_000) throw new Error("사진이 너무 큽니다 — 조금 떨어져서 다시 찍어 주세요");
+  return { blob: out, quality };
 }
 
 export function PhotoAssist({ onInfo }: { onInfo: (p: PhotoInfo) => void }) {
@@ -189,12 +212,22 @@ export function PhotoAssist({ onInfo }: { onInfo: (p: PhotoInfo) => void }) {
         const key = ++keySeq.current;
         const name = `사진 ${key}`;
         setJobs((prev) => [...prev, { key, name, scanId: null, phase: "보내는중", note: "", extra: [] }]);
+        /* ⭐ 시도 진단 meta (2026-09-09) — 기종별 오류 검증용 (기기 문자열·크기뿐) */
+        const t0 = Date.now();
+        const meta: Record<string, string | number> = {
+          srcType: file.type || "(없음)",
+          srcBytes: file.size,
+        };
         try {
-          const blob = await shrink(file);
+          const { blob, quality } = await shrink(file);
+          meta.outBytes = blob.size;
+          meta.quality = quality;
+          meta.ms = Date.now() - t0;
           /* 🔴 서버 액션이 아니라 업로드 — 액션 인자 100만 자 한도를 피한다 (2026-09-08) */
           const fd = new FormData();
           fd.append("file", blob, "photo.jpg");
           fd.append("mode", "판매등록");
+          fd.append("meta", JSON.stringify(meta));
           const res = await fetch("/api/vin-scan", { method: "POST", body: fd });
           const r = (await res.json().catch(() => null)) as
             | { ok: true; scanId: number }
@@ -209,9 +242,14 @@ export function PhotoAssist({ onInfo }: { onInfo: (p: PhotoInfo) => void }) {
           }
           setJobs((prev) => prev.map((x) => (x.key === key ? { ...x, scanId: r.scanId, phase: "읽는중" } : x)));
         } catch (e) {
-          setJobs((prev) =>
-            prev.map((x) => (x.key === key ? { ...x, phase: "실패", note: e instanceof Error ? e.message : "사진을 보내지 못했습니다" } : x)),
-          );
+          const note = e instanceof Error ? e.message : "사진을 보내지 못했습니다";
+          setJobs((prev) => prev.map((x) => (x.key === key ? { ...x, phase: "실패", note } : x)));
+          /* ⭐ 폰 안에서 끝난 실패도 서버에 남긴다 (2026-09-09) — 없으면 기종별 검증 불가 */
+          const fd = new FormData();
+          fd.append("mode", "판매등록");
+          fd.append("clientError", note);
+          fd.append("meta", JSON.stringify({ ...meta, ms: Date.now() - t0 }));
+          void fetch("/api/vin-scan", { method: "POST", body: fd }).catch(() => {});
         }
       }
       if (galRef.current) galRef.current.value = "";

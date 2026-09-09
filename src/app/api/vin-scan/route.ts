@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
-import { createVinScan, MAX_BYTES } from "@/lib/vin-scan-core";
+import { createVinScan, MAX_BYTES, recordClientFailure, type ScanMeta } from "@/lib/vin-scan-core";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +24,25 @@ export async function POST(req: Request) {
   }
   const file = form.get("file");
   const mode = form.get("mode") === "판매등록" ? ("판매등록" as const) : ("제원" as const);
+  /* ⭐ 시도 진단 (2026-09-09) — 기종별 오류 검증용. 기기 문자열·크기뿐, 개인정보 아님 */
+  let meta: ScanMeta | null = null;
+  const metaRaw = form.get("meta");
+  if (typeof metaRaw === "string" && metaRaw.length <= 2000) {
+    try {
+      meta = JSON.parse(metaRaw) as ScanMeta;
+    } catch {
+      meta = null;
+    }
+  }
+  if (meta) meta.ua = String(req.headers.get("user-agent") ?? "").slice(0, 200);
+
+  /* ⭐ 폰 안에서 끝난 실패 보고 — 파일 없이 clientError 만 온다. 한 표에 모아야 기종별 검증이 된다 */
+  const clientError = form.get("clientError");
+  if (typeof clientError === "string" && clientError.trim()) {
+    await recordClientFailure(clientError, mode, session.uid ?? null, meta ?? { ua: String(req.headers.get("user-agent") ?? "").slice(0, 200) });
+    return NextResponse.json({ ok: true, recorded: true });
+  }
+
   if (!(file instanceof Blob)) {
     return NextResponse.json({ ok: false, error: "사진 파일이 없습니다" }, { status: 400 });
   }
@@ -37,6 +56,6 @@ export async function POST(req: Request) {
 
   const buf = Buffer.from(await file.arrayBuffer());
   const dataUrl = `data:${file.type.toLowerCase()};base64,${buf.toString("base64")}`;
-  const r = await createVinScan(dataUrl, mode, session.uid ?? null);
+  const r = await createVinScan(dataUrl, mode, session.uid ?? null, meta);
   return NextResponse.json(r, { status: r.ok ? 200 : 400 });
 }

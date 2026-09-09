@@ -17,10 +17,36 @@ import { OUTDATED_MSG } from "./agent-version";
 /** 사진 한 장의 상한 — 화면에서 긴 변 2000px 로 줄여 보낸다. 그래도 넘으면 거절 */
 export const MAX_BYTES = 4 * 1024 * 1024;
 
+/**
+ * ⭐ 시도 진단 (사장님 요청 2026-09-09 — "기종·조건 오류를 데이터로 검증").
+ *    기기 문자열·형식·크기·변환 시간뿐 — 개인정보 아님. scripts/photo-diag.ts 가 통계.
+ */
+export type ScanMeta = Record<string, string | number | boolean | null>;
+
+const trimMeta = (meta: ScanMeta | null): string | null => {
+  if (!meta) return null;
+  const s = JSON.stringify(meta);
+  return s.length > 2000 ? null : s;
+};
+
+/** 폰 안에서 끝난 실패도 한 표에 남긴다 — 없으면 기종별 검증이 불가능하다 */
+export async function recordClientFailure(
+  error: string,
+  mode: "제원" | "판매등록",
+  uid: number | null,
+  meta: ScanMeta | null,
+): Promise<void> {
+  await db.execute(sql`
+    INSERT INTO vin_scan (image, status, error, requested_by, meta, finished_at)
+    VALUES (NULL, '실패', ${"폰에서 실패: " + error.slice(0, 300)}, ${uid}, ${trimMeta(meta)}::jsonb, now())`);
+  void mode;
+}
+
 export async function createVinScan(
   dataUrl: string,
   mode: "제원" | "판매등록",
   uid: number | null,
+  meta: ScanMeta | null = null,
 ): Promise<{ ok: true; scanId: number } | { ok: false; error: string }> {
   if (!/^data:image\/(jpe?g|png|webp);base64,/i.test(dataUrl)) {
     return { ok: false, error: "사진 파일만 올릴 수 있습니다" };
@@ -41,8 +67,8 @@ export async function createVinScan(
 
   /* 🔴 순차로 — 동시 질의가 풀을 채운 전례가 있다 */
   const rows = await db.execute<{ id: number }>(sql`
-    INSERT INTO vin_scan (image, status, requested_by)
-    VALUES (${dataUrl}, '대기', ${uid})
+    INSERT INTO vin_scan (image, status, requested_by, meta)
+    VALUES (${dataUrl}, '대기', ${uid}, ${trimMeta(meta)}::jsonb)
     RETURNING id`);
   const scanId = Number(rows[0].id);
 
