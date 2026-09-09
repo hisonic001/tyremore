@@ -15,7 +15,7 @@
 import { eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { normalizePlate } from "./normalize";
+import { isPlaceholderCustomerName, normalizePlate } from "./normalize";
 import { customer, vehicle } from "@/db/schema";
 import { PERM_DENIED } from "./perm-keys";
 
@@ -34,12 +34,43 @@ export async function updateCustomerInfo(input: {
   name: string;
   phone?: string | null;
   address?: string | null;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+  /** 영향 고지를 보고 그래도 바꾸겠다는 확인 (아래 needsScopeConfirm 왕복) */
+  confirmScope?: boolean;
+}): Promise<{ ok: true } | { ok: false; error: string; needsScopeConfirm?: string }> {
   if (!(await (await import("./auth")).hasPerm("customer"))) return { ok: false, error: PERM_DENIED };
   const name = input.name.trim();
   if (!name) return { ok: false, error: "이름은 비울 수 없습니다" };
-  const [c] = await db.select({ id: customer.id }).from(customer).where(eq(customer.id, input.customerId)).limit(1);
+  const [c] = await db
+    .select({ id: customer.id, name: customer.name, phone: customer.phone, address: customer.address })
+    .from(customer)
+    .where(eq(customer.id, input.customerId))
+    .limit(1);
   if (!c) return { ok: false, error: "고객을 찾을 수 없습니다" };
+
+  // 그대로면 아무 일도 안 한다 — 차량 폼 저장에 딸려 와도 고지가 안 뜬다
+  const same =
+    name === c.name && (input.phone?.trim() || null) === (c.phone ?? null) && (input.address?.trim() || null) === (c.address ?? null);
+  if (same) return { ok: true };
+
+  /**
+   * ⭐ 영향 고지 (박은지 연동 사고 2026-09-09) — 차량이 여러 대 붙은 고객은
+   *    한 행이라 이름을 고치면 **그 차량들의 정비 카드가 전부 함께 바뀐다.**
+   *    자리표시에 딴 손님들이 섞여 있던 실사고를 저장 전에 눈으로 보게 한다.
+   */
+  if (!input.confirmScope) {
+    const [n] = await db.execute<{ ncars: number; nquotes: number }>(sql`
+      SELECT (SELECT count(*)::int FROM vehicle WHERE customer_id = ${input.customerId}) ncars,
+             (SELECT count(*)::int FROM quote WHERE customer_id = ${input.customerId}) nquotes`);
+    if (Number(n?.ncars ?? 0) >= 2) {
+      return {
+        ok: false,
+        error: "확인이 필요합니다",
+        needsScopeConfirm:
+          `이 고객에는 차량 ${n.ncars}대 · 정비 ${n.nquotes}건이 붙어 있습니다 — ` +
+          `고치면 전부 함께 바뀝니다. 다른 손님의 차가 섞여 보인다면 바꾸지 말고 사장님(관리자)에게 알려 주세요.`,
+      };
+    }
+  }
 
   await db
     .update(customer)
@@ -142,6 +173,16 @@ export async function updateVehicleInfo(input: {
      과거 정비 내역은 quote.vehicle_id 로 옛 차에 붙어 있으니 그대로 보존되고,
      오늘부터의 판매는 새 차로 나간다 (사장님 요구 2026-09-02). */
   if (plateChanged && input.plateChangeMode === "replace") {
+    /* 🔴 자리표시 「고객」 행에는 새 차를 못 단다 (연동 사고 2026-09-09) — 265에
+       이 경로로 서로 다른 손님 6대가 붙었다. 새 손님은 판매 등록에서 새로 등록. */
+    const [own] = await db.execute<{ name: string; sup: string | null }>(sql`
+      SELECT name, supplier_name sup FROM customer WHERE id = ${v.customerId}`);
+    if (!own?.sup && isPlaceholderCustomerName(own?.name)) {
+      return {
+        ok: false,
+        error: `「${own?.name}」 은 여러 손님이 섞이는 자리표시입니다 — 새 손님의 차는 판매 등록 화면에서 새로 등록해 주세요`,
+      };
+    }
     const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
     const [nv] = await db
       .insert(vehicle)

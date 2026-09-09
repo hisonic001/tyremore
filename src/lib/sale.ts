@@ -21,7 +21,7 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { normalizePlate } from "./normalize";
+import { isPlaceholderPhone, normalizeName, normalizePlate } from "./normalize";
 import { ensureGarageCustomer } from "./garage";
 import { customer, quote, quoteItem, quotePayment, serviceItem, stockItem, stockMovement, vehicle } from "@/db/schema";
 import { checkSplitPayments } from "./payments";
@@ -244,14 +244,19 @@ export async function saveSale(
 
   /** 회원이 아닌 손님도 이름·전화가 있으면 남겨 둔다 — 다음에 오시면 이어진다 */
   let customerId = input.customerId ?? null;
-  if (!customerId && input.walkIn?.phone?.replace(/\D/g, "").length) {
+  /* 🔴 더미 전화(010-1234-5678 등)는 「같은 손님 증거」가 아니다 — 매칭하면 서로
+     다른 손님이 한 행에 묶인다 (박은지 연동 사고 2026-09-09, 정본 normalize.ts) */
+  if (!customerId && input.walkIn?.phone?.replace(/\D/g, "").length && !isPlaceholderPhone(input.walkIn.phone)) {
     const phone = input.walkIn.phone.replace(/\D/g, "");
     const [found] = await db
-      .select({ id: customer.id })
+      .select({ id: customer.id, name: customer.name })
       .from(customer)
       .where(sql`replace(replace(${customer.phone},'-',''),' ','') = ${phone}`)
       .limit(1);
-    customerId = found?.id ?? null;
+    /* 전화가 같아도 이름이 다르면 안 합친다 — 잘못 합치는 것보다 잘못 나누는 게 낫다
+       (중복 행은 나중에 합칠 수 있지만, 섞인 행은 수사가 필요하다) */
+    const inName = normalizeName(input.walkIn.name ?? "");
+    if (found && (!inName || inName === normalizeName(found.name))) customerId = Number(found.id);
   }
 
   /**
@@ -456,14 +461,17 @@ export async function createCustomerAndVehicle(
   }
 
   // 같은 전화번호가 있으면 그 손님의 차량으로 붙인다
+  /* 🔴 단, ①더미 전화(010-1234-5678 등)는 매칭 금지 ②이름이 다르면 안 합친다 —
+     이관 자리표시 264 「고객」에 서로 다른 손님 6명의 차가 붙어 한쪽 정보를 고치면
+     전부 바뀌던 실사고 (박은지 2026-09-09). 중복 행이 섞인 행보다 낫다. */
   let customerId: number | null = null;
-  if (phone.length >= 9) {
+  if (phone.length >= 9 && !isPlaceholderPhone(phone)) {
     const [dupC] = await db
-      .select({ id: customer.id })
+      .select({ id: customer.id, name: customer.name })
       .from(customer)
       .where(sql`replace(replace(${customer.phone},'-',''),' ','') = ${phone}`)
       .limit(1);
-    customerId = dupC?.id ?? null;
+    if (dupC && normalizeName(name) === normalizeName(dupC.name)) customerId = Number(dupC.id);
   }
 
   const now = new Date();

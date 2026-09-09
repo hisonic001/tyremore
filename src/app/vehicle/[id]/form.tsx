@@ -5,6 +5,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { updateCustomerInfo, updateVehicleInfo } from "@/lib/customer-edit";
+import { useConfirm } from "@/components/ui/confirm";
 import { isMarsMaker, makerSuggestions, MARS_MAKER_LIST_ID, MarsMakerDatalist } from "@/lib/mars-makers";
 import { FUEL_TYPES } from "@/lib/sale-types";
 
@@ -30,6 +31,7 @@ export function VehicleEditForm({
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
+  const [ask, confirmDialog] = useConfirm();
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   /* ⭐ 번호판이 바뀌면 뜻을 묻는다 (조혜진 사건 2026-09-02) — 차 바꿈 vs 오타 수정 */
@@ -62,7 +64,20 @@ export function VehicleEditForm({
         );
         return;
       }
-      const rc = await updateCustomerInfo({ customerId: customer.customerId, name, phone, address });
+      let rc = await updateCustomerInfo({ customerId: customer.customerId, name, phone, address });
+      /* ⭐ 영향 고지 (연동 사고 2026-09-09) — 차량이 여러 대 붙은 고객은 고치면
+         그 차들의 정비 카드가 전부 함께 바뀐다. 저장 전에 눈으로 확인받는다. */
+      if (!rc.ok && rc.needsScopeConfirm) {
+        const go = await ask({
+          title: "이 고객의 카드가 전부 함께 바뀝니다",
+          body: rc.needsScopeConfirm,
+          confirmLabel: "알고 바꾸기",
+          cancelLabel: "그만두기",
+          tone: "danger",
+        });
+        if (!go) return;
+        rc = await updateCustomerInfo({ customerId: customer.customerId, name, phone, address, confirmScope: true });
+      }
       if (!rc.ok) return setError(rc.error);
       const rv = await updateVehicleInfo({
         vehicleId: vehicle.vehicleId,
@@ -93,6 +108,7 @@ export function VehicleEditForm({
 
   return (
     <div className="mt-5 space-y-5">
+      {confirmDialog}
       <section className="rounded-2xl border border-slate-300 bg-white p-4">
         <h2 className="font-bold">고객</h2>
         <div className="mt-2 grid grid-cols-2 gap-3">

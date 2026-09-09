@@ -47,6 +47,35 @@ export function normalizePhone(raw: unknown): string | null {
   return digits;
 }
 
+/**
+ * ⭐ 더미(자리표시) 전화 판별 정본 (박은지 연동 사고 2026-09-09)
+ *
+ *   MARS 이관 데이터에 010-1111-2222 · 010-1234-5678 을 받은 고객이 184명 있다.
+ *   전화 매칭이 이런 번호까지 합치면 **서로 다른 손님이 한 행에 묶인다** —
+ *   벤츠 두 대(351머1108·353더6455)가 고객 264 하나에 붙어 한쪽을 고치면
+ *   다른쪽도 바뀌던 실사고. 더미 번호는 어떤 매칭에서도 「같은 손님 증거」가
+ *   아니다.
+ */
+export function isPlaceholderPhone(raw: unknown): boolean {
+  const p = normalizePhone(raw);
+  if (!p) return false;
+  if (p === "01012345678" || p === "01011112222" || p === "01023456789") return true;
+  // 010 + 같은 숫자만 반복 (01000000000 · 01011111111 …)
+  if (/^010(\d)\1+$/.test(p)) return true;
+  // 짝 반복 (01012121212 · 01034343434)
+  if (/^010(\d\d)\1{3}$/.test(p)) return true;
+  return false;
+}
+
+/**
+ * 자리표시 고객 이름 — 실명이 아니라 「아무 손님」이라는 뜻의 이름들.
+ * 이런 행에 새 차를 달면 서로 다른 손님이 한 행에 섞인다 (같은 사고의 265 경로).
+ */
+export function isPlaceholderCustomerName(raw: unknown): boolean {
+  const n = String(raw ?? "").trim();
+  return ["고객", "김고객", "관광객", "비회원", "손님", "일반고객"].includes(n);
+}
+
 /** 표시용 010-1234-5678 */
 export function formatPhone(digits: string | null): string | null {
   if (!digits) return null;
