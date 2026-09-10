@@ -51,8 +51,18 @@ async function main() {
            COALESCE(SUM(q.total_amount), 0)::bigint amount,
            count(DISTINCT q.id) FILTER (WHERE q.supplier_name IS NOT NULL)::int supplier_sales,
            count(DISTINCT q.id) FILTER (WHERE q.payment_method = '외상')::int credit_sales,
+           /* 🔴 MARS 상태를 **갈라서** 담는다 (2026-09-10 — 첫 점검에서 갈래가
+              「보류 110건 = 거래처 110건」으로 오해했다. 우연히 숫자가 같았을 뿐,
+              거래처 판매는 '해당없음'이라 보류에 안 들어간다).
+                전송완료 = 올라감 · 보류 = 아직 안 올림(자동으로 안 올라감) ·
+                미전송 = 올리기로 체크했는데 아직 안 감 · 해당없음 = 대상 아님
+                (거래처 판매·무상 서비스) */
            count(DISTINCT q.id) FILTER (WHERE q.mars_status = '전송완료')::int mars_done,
-           count(DISTINCT q.id) FILTER (WHERE q.mars_status IN ('보류','미전송'))::int mars_open
+           count(DISTINCT q.id) FILTER (WHERE q.mars_status = '보류')::int mars_hold,
+           count(DISTINCT q.id) FILTER (WHERE q.mars_status = '미전송')::int mars_pending,
+           count(DISTINCT q.id) FILTER (WHERE q.mars_status = '해당없음')::int mars_none,
+           COALESCE(SUM(q.total_amount) FILTER (WHERE q.mars_status = '보류'), 0)::bigint mars_hold_amt,
+           COALESCE(SUM(q.total_amount) FILTER (WHERE q.mars_status = '미전송'), 0)::bigint mars_pending_amt
     FROM quote q WHERE q.status = '성사' AND ${D} >= ${from12}::date
     GROUP BY 1 ORDER BY 1`);
 
@@ -162,7 +172,10 @@ async function main() {
   const bankByMonth = await db.execute(sql`
     SELECT to_char(occurred_at, 'YYYY-MM') ym,
            COALESCE(SUM(in_amount), 0)::bigint in_amt, COALESCE(SUM(out_amount), 0)::bigint out_amt,
-           count(*) FILTER (WHERE in_amount > 0 AND recon_status NOT IN ('확정','무시') AND category IS NULL)::int open_in
+           count(*) FILTER (WHERE in_amount > 0 AND recon_status NOT IN ('확정','무시') AND category IS NULL)::int open_in,
+           /* 금액도 담는다 — 첫 점검에서 「짝 못 찾은 입금이 몇 건인지는 알겠는데
+              얼마인지 못 봤다」는 지적이 나왔다 (2026-09-10) */
+           COALESCE(SUM(in_amount) FILTER (WHERE in_amount > 0 AND recon_status NOT IN ('확정','무시') AND category IS NULL), 0)::bigint open_in_amt
     FROM cash_txn WHERE is_active AND occurred_at >= ${from12}::date
     GROUP BY 1 ORDER BY 1`);
   put("bank.json", { byMonth: bankByMonth });
@@ -199,9 +212,13 @@ async function main() {
       count(*) FILTER (WHERE days_since <= 30)::int active_30d
     FROM v`);
 
+  /* 예약은 **건별로** 담는다 — 첫 점검에서 「예약중 7건이 오래된 것인지 이번 주
+     것인지 못 봤다」는 지적이 나왔다 (2026-09-10) */
   const reservations = await db.execute(sql`
-    SELECT reservation_status, count(*)::int n FROM quote
-    WHERE reservation_status IS NOT NULL AND status = '성사' GROUP BY 1`);
+    SELECT q.quote_no, q.reservation_status, ${D}::text work_date, q.fulfilled_on::text,
+           q.total_amount, ((now() AT TIME ZONE 'Asia/Seoul')::date - ${D})::int age_days
+    FROM quote q WHERE q.reservation_status IS NOT NULL AND q.status = '성사'
+    ORDER BY ${D}`);
   put("customer.json", { visits: visits[0] ?? null, reservations });
 
   put("meta.json", {
