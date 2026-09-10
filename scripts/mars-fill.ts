@@ -2398,12 +2398,24 @@ async function openInvoice(page: Page, row: Locator): Promise<boolean> {
   await row.click({ position: { x: 5, y: 5 } }).catch(() => {});
   await page.waitForTimeout(600);
 
-  const opened = async () =>
-    await f
+  /**
+   * 🔴 「탐색 메뉴가 보인다」만으로는 모자란다 (2026-09-10 run#207) — **목록 화면에도**
+   *    탐색 메뉴가 있어서(취소·정정·고객) 줄만 선택된 채로 「열렸다」고 답했고, 그
+   *    뒤 「전기 후 차량 점검」을 목록에서 찾다 실패했다. 카드에만 있는 것으로 가른다:
+   *    카드 제목은 「61168583-23SI+003376 · 고객」처럼 번호 뒤에 가운뎃점이 붙고,
+   *    목록에는 「완료된 매출 송장:」 캡션(콜론)이 있다.
+   */
+  const opened = async () => {
+    const nav = await f
       .getByRole("menuitem", { name: "탐색" })
       .first()
       .isVisible({ timeout: 3000 })
       .catch(() => false);
+    if (!nav) return false;
+    const body = ((await f.locator("body").innerText().catch(() => "")) || "").replace(/\s+/g, " ");
+    if (/-23SI\+\d+\s*[·‧∙•]/.test(body)) return true;
+    return !/완료된 매출 송장\s*:/.test(body);
+  };
   if (await opened()) return true;
 
   const tries: Locator[] = [];
@@ -2954,7 +2966,7 @@ async function main_() {
           bad.push("송장 열기");
           log("  ⚠️ 최근 송장을 못 열었습니다 (번호 링크가 안 눌립니다)");
         } else {
-          log("  ✅ 송장 카드 열림 (탐색 메뉴 보임)");
+          log("  ✅ 송장 카드 열림 (카드 제목 확인)");
           try {
             await clickAny(page, "탐색");
             await page.waitForTimeout(700);
