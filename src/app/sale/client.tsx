@@ -72,6 +72,12 @@ export function SaleForm({
   const [claimParty, setClaimParty] = useState<string | null>(null);
   const [claimKind, setClaimKind] = useState("데미지쿠폰");
   /**
+   * ⭐ 본사청구인데 고객도 일부 낸 경우 (사장님 2026-09-10) — 타이어값은 본사,
+   *    장착비는 고객처럼 갈리는 일이 흔하다. 여기 적은 만큼 그 자리에서 받은
+   *    수금으로 기록되고, 남는 잔액이 본사에 청구할 돈이 된다.
+   */
+  const [claimPaid, setClaimPaid] = useState<{ method: string; amount: string }[]>([]);
+  /**
    * ⭐ 복합결제 스위치 (사장님 요청 2026-08-10 — "두개를 누르는게 활성화되니까 좀 불편").
    *    꺼져 있으면 예전처럼 하나만 골라진다(누르면 바뀜). 켰을 때만 2개 이상 + 금액 분배.
    */
@@ -106,6 +112,8 @@ export function SaleForm({
   }, [tyreQty]);
 
   const total = rows.reduce((s, r) => s + r.unitPrice * r.qty, 0);
+  /** 본사청구에서 고객이 낸 합 — 남는 금액이 본사에 청구할 돈 */
+  const claimPaidSum = claimPaid.reduce((s, p) => s + Number(p.amount || "0"), 0);
 
   /* ---- 분할 결제 (사장님 요청 2026-08-10) ---- */
   const splitPay = (SPLITTABLE as readonly string[]);
@@ -142,7 +150,10 @@ export function SaleForm({
   const toggleClaim = () => {
     setError(null);
     setClaimParty((prev) => {
-      if (prev) return null;
+      if (prev) {
+        setClaimPaid([]);
+        return null;
+      }
       setCombo(false);
       setPayMethods(["외상"]);
       setPayAmounts({});
@@ -153,6 +164,7 @@ export function SaleForm({
   const togglePay = (p: string) => {
     setError(null);
     setClaimParty(null); // 다른 수단을 고르면 본사청구는 해제
+    setClaimPaid([]);
     if (exclusivePay.includes(p)) {
       // 외상·서비스는 단독 — MARS·대기열 처리가 결제수단 하나를 전제한다
       setCombo(false);
@@ -445,6 +457,9 @@ export function SaleForm({
         // ⭐ 본사청구 (2026-09-10) — supplierName 과 달리 MARS 를 막지 않는다
         claimParty,
         claimKind: claimParty ? claimKind : null,
+        claimPaid: claimParty
+          ? claimPaid.map((p) => ({ method: p.method, amount: Number(p.amount || "0") })).filter((p) => p.amount > 0)
+          : null,
         lines: rows.map(({ key, rimInch, ...l }) => l),
         paymentMethod: payMethods.length === 1 ? payMethods[0] : "혼합",
         payments:
@@ -788,10 +803,65 @@ export function SaleForm({
                 </button>
               ))}
             </div>
-            <p className="mt-2 text-xs leading-tight text-sky-900">
-              손님은 <strong>0원</strong>이지만 <strong>{claimParty}에 청구할 금액</strong>을 단가로 넣어 주세요 — 재고가
-              빠지고 마진도 제대로 잡힙니다. 받을 돈은 「{claimParty}」 앞으로 쌓이고, 본사 입금이 오면 수금으로
-              정리됩니다. MARS 에는 평소처럼 올라갑니다.
+            {/* ⭐ 고객도 일부 낸 경우 (사장님 2026-09-10) — 타이어값은 본사, 장착비는
+                고객처럼 갈린다. 적은 만큼 그 자리에서 받은 수금으로 기록된다 */}
+            <div className="mt-2 border-t border-sky-200 pt-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-semibold text-sky-900">고객이 낸 돈</span>
+                <span className="text-xs text-sky-800">있으면 적어 주세요 (장착비만 받는 경우 등)</span>
+              </div>
+              {claimPaid.map((cp, i) => (
+                <div key={i} className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  <select
+                    value={cp.method}
+                    onChange={(e) =>
+                      setClaimPaid((prev) => prev.map((x, j) => (j === i ? { ...x, method: e.target.value } : x)))
+                    }
+                    className="rounded-lg border border-sky-300 px-2 py-1 text-xs outline-none focus:border-sky-700"
+                  >
+                    {splitPay.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    value={cp.amount}
+                    onChange={(e) =>
+                      setClaimPaid((prev) =>
+                        prev.map((x, j) => (j === i ? { ...x, amount: e.target.value.replace(/[^\d]/g, "") } : x)),
+                      )
+                    }
+                    placeholder="금액"
+                    inputMode="numeric"
+                    className="tabular w-28 rounded-lg border border-sky-300 px-2 py-1 text-xs outline-none focus:border-sky-700"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setClaimPaid((prev) => prev.filter((_, j) => j !== i))}
+                    className="px-1 text-xs text-slate-400"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => setClaimPaid((prev) => [...prev, { method: "카드", amount: "" }])}
+                className="mt-1.5 rounded-lg border border-sky-300 bg-white px-2.5 py-1 text-xs font-medium text-sky-800"
+              >
+                + 고객이 낸 돈 추가
+              </button>
+            </div>
+            <p className="tabular mt-2 text-xs leading-tight text-sky-900">
+              합계 <strong>{won(total)}원</strong>
+              {claimPaidSum > 0 && <> · 고객이 냄 <strong>{won(claimPaidSum)}원</strong></>} →{" "}
+              <strong>{claimParty}에 청구 {won(Math.max(0, total - claimPaidSum))}원</strong>
+            </p>
+            <p className="mt-1 text-xs leading-tight text-sky-900">
+              타이어 단가에는 <strong>본사에 청구할 값</strong>을 넣어 주세요 — 재고가 빠지고 마진도 제대로 잡힙니다.
+              고객이 낸 몫은 그 자리에서 받은 수금으로 기록되고, 남는 금액이 「{claimParty}」 앞으로 쌓입니다.
+              MARS 에는 평소처럼 올라갑니다.
             </p>
           </div>
         )}

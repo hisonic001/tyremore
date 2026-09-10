@@ -24,7 +24,7 @@ import { db } from "@/db";
 import { isPlaceholderPhone, normalizeName, normalizePlate } from "./normalize";
 import { ensureGarageCustomer } from "./garage";
 import { customer, quote, quoteItem, quotePayment, serviceItem, stockItem, stockMovement, vehicle } from "@/db/schema";
-import { checkSplitPayments } from "./payments";
+import { checkSplitPayments, COLLECT_METHODS } from "./payments";
 import { costSnapshotMap } from "./sale-cost";
 import { ageAnchorSql } from "./tire-age";
 import type { NewCustomerInput } from "./sale-types";
@@ -108,6 +108,18 @@ export interface SaleInput {
   claimParty?: string | null;
   /** '데미지쿠폰' · 'OE AS' · '기타' */
   claimKind?: string | null;
+  /**
+   * ⭐ 본사청구인데 **고객도 일부를 낸 경우** (사장님 2026-09-10 —
+   *    "타이어 값은 타이어 회사에서 받고 장착비는 고객에게 받는 경우도 있고,
+   *     타이어 가격의 일부만 고객이 지불하는 경우도 있다").
+   *
+   * 🔴 분할 결제(quote_payment)로 넣지 않는다 — 외상은 「결제수단 하나」를 전제해
+   *    분할에 못 섞고, 그 규칙을 풀면 외상 모집단을 보는 15개 파일이 같이 흔들린다.
+   *    대신 **그 자리에서 받은 수금**(receivable_payment)으로 적는다: 총액은 전부
+   *    외상으로 잡히고 고객이 낸 만큼 즉시 깎여, 남는 잔액이 곧 본사에 청구할 돈이다.
+   *    화면·장부·청구가 전부 기존 길 그대로 돈다.
+   */
+  claimPaid?: { method: string; amount: number }[] | null;
 }
 
 /** 오늘 (YYYY-MM-DD) */
@@ -331,6 +343,29 @@ export async function saveSale(
                 : null,
           })
           .returning({ id: quote.id });
+
+        /**
+         * ⭐ 본사청구인데 고객도 일부 낸 경우 — 그 자리에서 받은 수금으로 적는다
+         *    (2026-09-10). 총액은 외상으로 잡히고 고객이 낸 만큼 즉시 깎이니,
+         *    남는 잔액이 본사에 청구할 돈이 된다. 외상 장부·월 청구·수금 화면이
+         *    전부 기존 길 그대로 돈다 (분할 결제로 넣으면 그 길들이 흔들린다).
+         */
+        if (input.claimParty && input.claimPaid?.length) {
+          const rows = input.claimPaid
+            .filter((p) => Number.isFinite(p.amount) && p.amount > 0 && COLLECT_METHODS.includes(p.method))
+            .slice(0, 5);
+          const paidSum = rows.reduce((s, p) => s + Math.round(p.amount), 0);
+          if (paidSum > total) {
+            throw new Error(`고객이 낸 금액(${paidSum.toLocaleString()}원)이 합계(${total.toLocaleString()}원)보다 큽니다`);
+          }
+          for (const p of rows) {
+            await tx.execute(sql`
+              INSERT INTO receivable_payment (quote_id, amount, method, paid_on, memo)
+              VALUES (${q.id}, ${Math.round(p.amount)}, ${p.method},
+                      ${input.workDate?.trim() || todayISO()}, '본사청구 — 고객이 그 자리에서 낸 몫')
+            `);
+          }
+        }
 
         // 분할 결제 — 수단별 금액을 한 줄씩 (2026-08-10)
         if (split) {
