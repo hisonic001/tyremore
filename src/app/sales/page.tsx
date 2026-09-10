@@ -268,11 +268,30 @@ export default async function SalesPage({
       {audit?.hasIssues && (
         <details className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
           <summary className="cursor-pointer text-sm font-semibold text-amber-900">
-            ⚠️ MARS 정리할 것 {audit.unposted.length + audit.unchecked.length}건
+            ⚠️ MARS 정리할 것 {audit.unposted.length + audit.unchecked.length + (audit.pendingCount >= 20 ? audit.pendingCount : 0)}건
             {audit.smoke && !audit.smoke.ok && " · 아침 자가점검 이상"}
             <span className="ml-1 font-normal text-amber-700">(눌러서 자세히)</span>
           </summary>
           <div className="mt-3 space-y-3 text-sm text-amber-900">
+            {/* ⭐ 안 올린 판매가 쌓인 것 (2026-09-10 점검) — 이 화면은 「오늘」만 보여
+                주므로 그동안 뒤에 쌓인 것이 안 보였다. 실측 177건 4,385만원 */}
+            {audit.pendingCount >= 20 && (
+              <div>
+                <p className="font-semibold">
+                  아직 MARS 에 안 올린 판매 {audit.pendingCount}건
+                </p>
+                <p className="mt-0.5 text-amber-800">
+                  이 화면은 고른 기간만 보여 줍니다 — 전체를 열어 한꺼번에 올리실 수 있습니다.
+                  분기 평가는 <strong>올린 것만</strong> 셉니다.
+                </p>
+                <Link
+                  href="/sales?range=all"
+                  className="mt-1.5 inline-block rounded-lg bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white"
+                >
+                  전체 열어서 올리기 →
+                </Link>
+              </div>
+            )}
             {audit.unposted.length > 0 && (
               <div>
                 <p className="font-semibold">전기 미확인 {audit.unposted.length}건 — 주문은 MARS 에 채워져 있습니다. MARS 에서 전기해 주세요</p>

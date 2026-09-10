@@ -135,6 +135,15 @@ export async function marsAudit(): Promise<MarsAudit> {
     hasIssues: false,
   };
   // 보류는 「아직 안 올린 것」일 뿐 문제가 아니다 — 배너 기준은 어긋남·점검 누락·자가점검 실패
-  audit.hasIssues = audit.unposted.length > 0 || audit.unchecked.length > 0 || (smoke !== null && !smoke.ok);
+  /* ⭐ 보류도 경고에 넣는다 (2026-09-10 점검) — 전에는 「보류 = 오늘 아직 안 누른 것」
+     이라 일부러 뺐지만, 지금은 보류가 **몇 달째 쌓이는 창고**가 됐다.
+     실측: 8·9월 보류 177건 4,385만원, 그중 122건은 어떤 차단 규칙에도 안 걸리고
+     그냥 아무도 안 눌렀다 — 정비 내역이 「오늘」만 보여 주기 때문. 분기 평가에서
+     수천만원어치가 조용히 빠지므로 20건 넘게 쌓이면 알린다. */
+  audit.hasIssues =
+    audit.unposted.length > 0 ||
+    audit.unchecked.length > 0 ||
+    audit.pendingCount >= 20 ||
+    (smoke !== null && !smoke.ok);
   return audit;
 }
