@@ -153,6 +153,14 @@ export async function saleHistory(opts: {
   paymentMethod?: string;
   /** ⭐ 예약중만 보기 (예약거래 2026-09-01) */
   reserved?: boolean;
+  /**
+   * ⭐ MARS 에 아직 안 올린 것만 보기 (2026-09-10 점검)
+   *
+   * 「전체 기간」으로 펴도 최근 240건까지만 상세가 오므로(FETCH_CAP), 8월 초 보류는
+   * 화면에 끝내 안 나타났다 — 8/4 이후 판매만 534건이다. 보류로 먼저 거른 뒤
+   * 240건을 세면 179건이 전부 한 화면에 들어온다.
+   */
+  marsPending?: boolean;
 }): Promise<SaleHistory> {
   const { db } = await import("@/db");
   const m = opts.month && /^\d{4}-\d{2}$/.test(opts.month) ? opts.month : null;
@@ -190,6 +198,13 @@ export async function saleHistory(opts: {
         : sql``
     }
     ${opts.reserved ? sql`AND q.reservation_status = '예약중'` : sql``}
+    ${
+      opts.marsPending
+        ? // 예약중은 시공 전이라 「안 올린 판매」가 아니다 — mars-audit 의 셈과 같은 기준
+          sql`AND q.status = '성사' AND q.mars_status IN ('보류', '수동처리')
+               AND COALESCE(q.reservation_status, '') <> '예약중'`
+        : sql``
+    }
   `;
   /**
    * 🔴 질의는 **하나씩 차례로** (2026-08-11 2차 마비).

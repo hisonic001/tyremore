@@ -37,6 +37,7 @@ export default async function SalesPage({
     canceled?: string;
     pay?: string;
     reserved?: string;
+    mars?: string;
   }>;
 }) {
   const sp = await searchParams;
@@ -53,8 +54,16 @@ export default async function SalesPage({
   const pay = sp.pay && PAY_OPTIONS.includes(sp.pay) ? sp.pay : undefined;
   // ⭐ 예약중만 보기 (예약거래 2026-09-01) — 언제 올지 모르는 예약을 한 목록으로
   const reserved = sp.reserved === "1";
+  /**
+   * ⭐ MARS 에 안 올린 것만 보기 (2026-09-10 점검)
+   *    기본 기간이 「오늘」이라 8월부터 쌓인 보류 179건이 아무에게도 안 보였다.
+   *    기간을 「전체」로 펴도 최근 240건 컷에 걸려 오래된 것은 여전히 안 나온다 —
+   *    그래서 보류로 **먼저 거르는** 길을 따로 둔다. 감사 배너가 여기로 보낸다.
+   */
+  const marsPending = sp.mars === "pending";
   // 대상을 콕 집어 들어온 것이면 기간은 「전체」로 편다 — 그 대상의 과거를 보러 온 것이니까
-  const scoped = Number.isFinite(customerId) || Number.isFinite(vehicleId) || !!supplierName || reserved;
+  const scoped =
+    Number.isFinite(customerId) || Number.isFinite(vehicleId) || !!supplierName || reserved || marsPending;
 
   /**
    * ⭐ 기간 필터 — 기본은 **오늘** (사장님 요청 2026-08-05).
@@ -113,6 +122,7 @@ export default async function SalesPage({
     to: active === "today" ? today : active === "yesterday" ? yesterday : active === "range" ? sp.to : undefined,
     customerId: Number.isFinite(customerId) ? customerId : undefined,
     vehicleId: Number.isFinite(vehicleId) ? vehicleId : undefined,
+    marsPending: marsPending || undefined,
     supplierName,
     includeCanceled,
     paymentMethod: pay,
@@ -151,6 +161,7 @@ export default async function SalesPage({
       supplier: sp.supplier,
       canceled: sp.canceled,
       pay: sp.pay,
+      mars: sp.mars,
       ...over,
     };
     for (const [k, v] of Object.entries(merged)) if (v) p.set(k, v);
@@ -219,12 +230,14 @@ export default async function SalesPage({
           from: sp.from,
           to: sp.to,
           pay: sp.pay,
+          mars: sp.mars,
         }}
         extra={
           <PayFilter
             pay={pay ?? null}
             payOptions={PAY_OPTIONS}
             reserved={reserved}
+            marsPending={marsPending}
             keep={{
               customer: sp.customer,
               vehicle: sp.vehicle,
@@ -236,6 +249,7 @@ export default async function SalesPage({
               to: sp.to,
               pay: sp.pay,
               reserved: sp.reserved,
+              mars: sp.mars,
             }}
           />
         }
@@ -298,7 +312,7 @@ export default async function SalesPage({
                   분기 평가는 <strong>올린 것만</strong> 셉니다.
                 </p>
                 <Link
-                  href="/sales?range=all"
+                  href="/sales?mars=pending"
                   className="mt-1.5 inline-block rounded-lg bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white"
                 >
                   전체 열어서 올리기 →

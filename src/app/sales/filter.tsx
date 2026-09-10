@@ -15,6 +15,7 @@ export function PayFilter({
   payOptions,
   keep,
   reserved = false,
+  marsPending = false,
 }: {
   /** null 이면 전체 */
   pay: string | null;
@@ -22,6 +23,8 @@ export function PayFilter({
   keep: Record<string, string | undefined>;
   /** ⭐ 예약중만 보기 (예약거래 2026-09-01) */
   reserved?: boolean;
+  /** ⭐ MARS 에 안 올린 것만 보기 (2026-09-10) */
+  marsPending?: boolean;
 }) {
   const router = useRouter();
   const go = (over: Record<string, string | undefined>) => {
@@ -49,6 +52,15 @@ export function PayFilter({
         className={`${chip(reserved)} ${reserved ? "" : "text-violet-700 ring-1 ring-inset ring-violet-300"}`}
       >
         📌 예약중
+      </button>
+      {/* ⭐ 보류만 골라 보기 (2026-09-10 점검) — 기간 「오늘」과 240건 컷 때문에
+          8월부터 쌓인 보류가 어느 화면에도 안 나왔다. 켜면 기간은 전체로 편다. */}
+      <button
+        type="button"
+        onClick={() => go({ mars: marsPending ? undefined : "pending", range: marsPending ? undefined : "all" })}
+        className={`${chip(marsPending)} ${marsPending ? "" : "text-amber-700 ring-1 ring-inset ring-amber-300"}`}
+      >
+        ⏳ MARS 안 올림
       </button>
     </div>
   );
