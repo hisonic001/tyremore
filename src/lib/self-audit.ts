@@ -190,20 +190,52 @@ export async function runSelfAudit(): Promise<AuditItem[]> {
   return items;
 }
 
-/** 검사를 돌리고 결과를 남긴다 — cron 과 「지금 검사」 단추가 같이 쓴다 */
+/**
+ * ⭐ 자료의 지문 (2026-09-10) — 검사 결과가 「어떤 자료 상태」에서 찍혔는지.
+ *
+ *   사진(audit_run)은 아침에 찍히고, 오후에 14건을 정리해도 배너는 아침 숫자를 보여 줬다.
+ *   홈 인박스·돈 추적은 실시간이라 **같은 건을 두고 화면마다 말이 달랐다.**
+ *   자료를 바꾸는 서버 액션이 6개 파일 40개가 넘어 하나하나 갱신을 붙이면 빠뜨린다 —
+ *   대신 A1~A4 가 보는 표들의 개수·상태 수·합을 한 줄로 묶어 저장하고, 돈관리를 열 때
+ *   지문이 다르면 그 자리에서 다시 찍는다. 삭제·되돌리기·올리기·상태 바꿈이 전부
+ *   개수나 합에 잡힌다. 날짜가 들어 있어 아침 cron 이 죽어도 하루 한 번은 새로 찍힌다.
+ *   질의 하나, 수 ms — 매 화면마다 불러도 된다.
+ */
+export async function auditFingerprint(): Promise<string> {
+  const [r] = await db.execute<{ fp: string }>(sql`
+    SELECT concat_ws('|',
+      (SELECT count(*) || '/' || count(*) FILTER (WHERE status = '확정') || '/' || COALESCE(max(id), 0) FROM recon_match),
+      (SELECT count(*) || '/' || count(*) FILTER (WHERE recon_status = '확정') || '/' || count(*) FILTER (WHERE category IS NOT NULL)
+              || '/' || count(*) FILTER (WHERE is_active) FROM cash_txn),
+      (SELECT count(*) || '/' || count(*) FILTER (WHERE recon_status = '확정') || '/' || count(*) FILTER (WHERE COALESCE(recon_reason, '') <> '')
+              || '/' || count(*) FILTER (WHERE is_active) FROM tax_invoice),
+      (SELECT count(*) FROM pos_note),
+      (SELECT count(*) || '/' || COALESCE(sum(amount), 0) FROM purchase_payment),
+      (SELECT count(*) || '/' || COALESCE(sum(total_amount), 0) FROM quote WHERE status = '성사'),
+      to_char(now() AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')
+    ) fp
+  `);
+  return r?.fp ?? "";
+}
+
+/** 검사를 돌리고 결과를 남긴다 — cron 과 「지금 검사」 단추, 지문이 달라졌을 때의 자동 갱신이 같이 쓴다 */
 export async function runAndSaveAudit(): Promise<{ items: AuditItem[] }> {
+  const fp = await auditFingerprint();
   const items = await runSelfAudit();
   await db.execute(sql`
-    INSERT INTO audit_run (item_count, items) VALUES (${items.length}, ${JSON.stringify(items)}::jsonb)
+    INSERT INTO audit_run (item_count, items, fingerprint)
+    VALUES (${items.length}, ${JSON.stringify(items)}::jsonb, ${fp})
   `);
   return { items };
 }
 
-/** 최신 결과 — /finance 배너 */
-export async function latestAuditRun(): Promise<AuditRun | null> {
-  const [r] = await db.execute<{ id: number; at: string; age_min: number; item_count: number; items: unknown }>(sql`
+/** 최신 결과 — 저장된 그대로 (지문 포함) */
+export async function latestAuditRun(): Promise<(AuditRun & { fingerprint: string | null }) | null> {
+  const [r] = await db.execute<{
+    id: number; at: string; age_min: number; item_count: number; items: unknown; fingerprint: string | null;
+  }>(sql`
     SELECT id, to_char(at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at,
-           (EXTRACT(EPOCH FROM (now() - at)) / 60)::int age_min, item_count, items
+           (EXTRACT(EPOCH FROM (now() - at)) / 60)::int age_min, item_count, items, fingerprint
     FROM audit_run ORDER BY id DESC LIMIT 1
   `);
   if (!r) return null;
@@ -213,7 +245,25 @@ export async function latestAuditRun(): Promise<AuditRun | null> {
     ageMin: Math.max(0, Number(r.age_min)),
     itemCount: Number(r.item_count),
     items: (typeof r.items === "string" ? JSON.parse(r.items) : r.items) as AuditItem[],
+    fingerprint: r.fingerprint ?? null,
   };
+}
+
+/**
+ * ⭐ 「지금」을 보여 주는 결과 — /finance 배너가 쓴다.
+ *   저장본의 지문이 지금 자료와 같으면 그대로, 다르면 다시 찍어 저장한다(자료가 바뀐 뒤
+ *   첫 방문에 1~2초). 다시 찍다 실패하면 저장본을 돌려준다 — 배너 때문에 돈관리가 죽으면 안 된다.
+ */
+export async function freshAuditRun(): Promise<AuditRun | null> {
+  const last = await latestAuditRun();
+  try {
+    const fp = await auditFingerprint();
+    if (last && last.fingerprint === fp) return last;
+    await runAndSaveAudit();
+    return (await latestAuditRun()) ?? last;
+  } catch {
+    return last;
+  }
 }
 
 /* ============================================================

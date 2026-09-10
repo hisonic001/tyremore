@@ -10,7 +10,7 @@ import { taxOpenCounts, CASH_LAT, DONE, LIVE } from "@/lib/tax-recon";
 import { depositOpenCount, expenseOpen } from "@/lib/recon-data";
 import { uploadCoverage, coverageStatus } from "@/lib/upload-coverage";
 import { cardDaySums } from "@/lib/card-recon";
-import { latestAuditRun } from "@/lib/self-audit";
+import { freshAuditRun } from "@/lib/self-audit";
 import { AuditBanner } from "./audit-banner";
 import { finInbox } from "@/lib/fin-inbox";
 import { InboxSection } from "./inbox-ui";
@@ -145,7 +145,8 @@ export default async function FinancePage({
   const depOpen = await depositOpenCount(ym);
   // ⭐ 2026 감사 R2·R3 — 이 달 자료 컷오프·카드 차이 (올리기·카드 화면·체크리스트와 같은 정본)
   const covSt = coverageStatus(await uploadCoverage(), ym);
-  const audit = await latestAuditRun();
+  // ⭐ 자료가 바뀌었으면 여기서 다시 찍는다 (2026-09-10) — 아침 사진이 오후에 틀린 말을 하지 않게
+  const audit = await freshAuditRun();
   const cardSum = await cardDaySums(ym);
   const posDays = await posDaysSummary(ym);
   const posToday = posDays.find((d) => d.day === kstToday());
