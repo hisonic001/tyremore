@@ -24,7 +24,7 @@ import { db } from "@/db";
 import { isPlaceholderPhone, normalizeName, normalizePlate } from "./normalize";
 import { ensureGarageCustomer } from "./garage";
 import { customer, quote, quoteItem, quotePayment, serviceItem, stockItem, stockMovement, vehicle } from "@/db/schema";
-import { checkSplitPayments, COLLECT_METHODS } from "./payments";
+import { checkSplitPayments, COLLECT_METHODS, type PaymentPart } from "./payments";
 import { costSnapshotMap } from "./sale-cost";
 import { ageAnchorSql } from "./tire-age";
 import type { NewCustomerInput } from "./sale-types";
@@ -109,17 +109,24 @@ export interface SaleInput {
   /** '데미지쿠폰' · 'OE AS' · '기타' */
   claimKind?: string | null;
   /**
-   * ⭐ 본사청구인데 **고객도 일부를 낸 경우** (사장님 2026-09-10 —
-   *    "타이어 값은 타이어 회사에서 받고 장착비는 고객에게 받는 경우도 있고,
-   *     타이어 가격의 일부만 고객이 지불하는 경우도 있다").
+   * ⭐ **그 자리에서 받은 몫** — 총액은 외상으로 잡고 받은 만큼만 수금으로 적는다
+   *    (2026-09-10 통일). 뿌리가 같은 두 가지가 이 한 칸을 같이 쓴다:
    *
-   * 🔴 분할 결제(quote_payment)로 넣지 않는다 — 외상은 「결제수단 하나」를 전제해
-   *    분할에 못 섞고, 그 규칙을 풀면 외상 모집단을 보는 15개 파일이 같이 흔들린다.
-   *    대신 **그 자리에서 받은 수금**(receivable_payment)으로 적는다: 총액은 전부
-   *    외상으로 잡히고 고객이 낸 만큼 즉시 깎여, 남는 잔액이 곧 본사에 청구할 돈이다.
-   *    화면·장부·청구가 전부 기존 길 그대로 돈다.
+   *      · 본사청구인데 고객도 일부 낸 경우 (사장님 2026-09-10 — "타이어 값은
+   *        타이어 회사에서 받고 장착비는 고객에게 받는 경우도 있고, 타이어 가격의
+   *        일부만 고객이 지불하는 경우도 있다") → 남는 잔액이 본사 청구액
+   *      · 예약금을 **일부만** 걸고 나머지는 시공 때 받는 경우 → 남는 잔액이 잔금
+   *
+   * 🔴 분할 결제(quote_payment)로 넣지 않는다 — 그 표의 CHECK 에 '외상'이 없고,
+   *    「이 판매가 외상인가」를 21개 파일 40군데가 `payment_method='외상'` 하나로
+   *    판단한다. 받은 몫을 분할 결제로 밀어 넣으면 그 판단이 통째로 흔들린다.
+   *    대신 **수금**(receivable_payment)으로 적는다: 총액은 전부 외상으로 잡히고
+   *    받은 만큼 즉시 깎여, 남는 잔액이 곧 받을 돈이다 — 외상 장부·월 청구·수금
+   *    화면이 **기존 길 그대로** 돈다. 바뀌는 것은 입력 UI 와 목적지 분기뿐이다.
+   *
+   *    `paidOn` 은 receivable_payment.paid_on 으로 — 비면 작업일(workDate).
    */
-  claimPaid?: { method: string; amount: number }[] | null;
+  prepaid?: PaymentPart[] | null;
 }
 
 /** 오늘 (YYYY-MM-DD) */
@@ -345,24 +352,37 @@ export async function saveSale(
           .returning({ id: quote.id });
 
         /**
-         * ⭐ 본사청구인데 고객도 일부 낸 경우 — 그 자리에서 받은 수금으로 적는다
-         *    (2026-09-10). 총액은 외상으로 잡히고 고객이 낸 만큼 즉시 깎이니,
-         *    남는 잔액이 본사에 청구할 돈이 된다. 외상 장부·월 청구·수금 화면이
-         *    전부 기존 길 그대로 돈다 (분할 결제로 넣으면 그 길들이 흔들린다).
+         * ⭐ 그 자리에서 받은 몫 — 수금으로 적는다 (2026-09-10 본사청구·예약 공용).
+         *    총액은 외상으로 잡히고 받은 만큼 즉시 깎이니, 남는 잔액이 그대로
+         *    「본사에 청구할 돈」이거나 「시공 때 받을 잔금」이 된다.
+         *
+         * 🔴 목적지만 가른다 — 받은 돈이 합계와 같으면 위 분할 결제(quote_payment)로,
+         *    모자라면 여기로. 판매 자체는 여느 외상 판매와 **글자 그대로 같은 모습**이라
+         *    외상 장부·월 청구·수금·돈관리가 기존 길 그대로 돈다.
          */
-        if (input.claimParty && input.claimPaid?.length) {
-          const rows = input.claimPaid
+        if (input.prepaid?.length) {
+          if (payMethod !== "외상") {
+            // 여기 걸리면 부르는 쪽 버그다 — 돈 기록을 조용히 흘리느니 저장을 멈춘다
+            throw new Error("받은 몫(수금)은 외상으로 저장되는 판매에만 적을 수 있습니다");
+          }
+          const rows = input.prepaid
             .filter((p) => Number.isFinite(p.amount) && p.amount > 0 && COLLECT_METHODS.includes(p.method))
             .slice(0, 5);
           const paidSum = rows.reduce((s, p) => s + Math.round(p.amount), 0);
           if (paidSum > total) {
-            throw new Error(`고객이 낸 금액(${paidSum.toLocaleString()}원)이 합계(${total.toLocaleString()}원)보다 큽니다`);
+            throw new Error(`받은 금액(${paidSum.toLocaleString()}원)이 합계(${total.toLocaleString()}원)보다 큽니다`);
           }
+          const memo = input.claimParty
+            ? `본사청구(${input.claimParty}) — 고객이 그 자리에서 낸 몫`
+            : input.reserve
+              ? "예약금 — 그 자리에서 받은 몫"
+              : "판매 등록 때 받은 몫";
           for (const p of rows) {
             await tx.execute(sql`
               INSERT INTO receivable_payment (quote_id, amount, method, paid_on, memo)
               VALUES (${q.id}, ${Math.round(p.amount)}, ${p.method},
-                      ${input.workDate?.trim() || todayISO()}, '본사청구 — 고객이 그 자리에서 낸 몫')
+                      ${/^\d{4}-\d{2}-\d{2}$/.test(p.paidOn ?? "") ? p.paidOn : input.workDate?.trim() || todayISO()},
+                      ${memo})
             `);
           }
         }

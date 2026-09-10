@@ -169,6 +169,7 @@ export async function queueForMars(
     id: number;
     quote_no: string;
     payment_method: string | null;
+    claim_party: string | null;
     reservation_status: string | null;
     vehicle_id: number | null;
     mars_vehicle_no: string | null;
@@ -185,7 +186,7 @@ export async function queueForMars(
     posted_max: number | null;
     total_amount: number;
   }>(sql`
-    SELECT q.id, q.quote_no, q.payment_method, q.vehicle_id, q.total_amount,
+    SELECT q.id, q.quote_no, q.payment_method, q.vehicle_id, q.total_amount, q.claim_party,
            v.mars_vehicle_no, v.maker_name, v.model, v.year, v.fuel_type,
            COALESCE(q.mileage, v.mileage)::int AS eff,
            q.reservation_status,
@@ -207,8 +208,12 @@ export async function queueForMars(
       blocked.push(`${r.quote_no}: 예약 건입니다 — 시공 완료 후에 올릴 수 있습니다`);
       continue;
     }
-    // 외상·서비스는 MARS 대상이 아니다 (2026-08-17 — 올려 봐야 로봇이 되돌린다)
-    if (r.payment_method === "외상" || r.payment_method === "서비스") {
+    /* 외상·서비스는 MARS 대상이 아니다 (2026-08-17 — 올려 봐야 로봇이 되돌린다)
+       ⭐ 단 **본사청구는 예외** (2026-09-10): 데미지 프리 쿠폰 무상 교체·OE AS 는
+          돈만 본사가 줄 뿐 **손님 차에 한 시공**이라 MARS 에 올려야 한다
+          (사장님 확인). 저장은 「외상」이지만 claim_party 가 차 있으면 소매다 —
+          이 예외가 없으면 claim_party 를 만든 목적 자체가 무너진다. */
+    if ((r.payment_method === "외상" && !r.claim_party) || r.payment_method === "서비스") {
       blocked.push(
         r.payment_method === "외상"
           ? `${r.quote_no}: 외상은 MARS 에 넣지 않습니다 — 수금 뒤 결제를 실제 수단으로 바꾸고 다시 체크해 주세요`

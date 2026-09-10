@@ -70,13 +70,26 @@ export default async function SalesPage({
   const explicit = sp.range ?? (sp.month ? "month" : sp.from || sp.to ? "range" : null);
   const active = explicit ?? (scoped ? "all" : "today");
 
-  // ⭐ 외상 필터일 때 미수금 총액 (사장님 선택 2026-08-11)
+  /**
+   * ⭐ 외상 필터일 때 미수금 총액 (사장님 선택 2026-08-11).
+   *
+   * ⭐ 예약(시공 전) 몫은 갈라 센다 (2026-09-10 — 예약금 일부만 받기).
+   *    예약 잔금은 「못 받은 돈」이 아니라 **아직 받을 때가 안 된 돈**이다.
+   *    한 숫자에 섞으면 독촉할 외상이 얼마인지가 흐려진다. 대상 범위 자체는
+   *    외상 장부와 그대로 같다 (정본 lib/receivable-book.ts).
+   */
   const receivable =
     pay === "외상"
       ? (
-          await db.execute<{ n: number; remain: string }>(sql`
-            SELECT count(*) FILTER (WHERE q.total_amount > COALESCE(rp.paid, 0))::int n,
-                   COALESCE(SUM(q.total_amount - COALESCE(rp.paid, 0)), 0)::bigint remain
+          await db.execute<{ n: number; remain: string; rn: number; rremain: string }>(sql`
+            SELECT count(*) FILTER (WHERE q.total_amount > COALESCE(rp.paid, 0)
+                                      AND q.reservation_status IS DISTINCT FROM '예약중')::int n,
+                   COALESCE(SUM(q.total_amount - COALESCE(rp.paid, 0))
+                            FILTER (WHERE q.reservation_status IS DISTINCT FROM '예약중'), 0)::bigint remain,
+                   count(*) FILTER (WHERE q.total_amount > COALESCE(rp.paid, 0)
+                                      AND q.reservation_status = '예약중')::int rn,
+                   COALESCE(SUM(q.total_amount - COALESCE(rp.paid, 0))
+                            FILTER (WHERE q.reservation_status = '예약중'), 0)::bigint rremain
             FROM quote q
             LEFT JOIN (SELECT quote_id, SUM(amount) paid FROM receivable_payment GROUP BY 1) rp
               ON rp.quote_id = q.id
@@ -236,6 +249,12 @@ export default async function SalesPage({
         >
           <span>
             못 받은 외상 {Number(receivable.n)}건 · 잔액 {won(Number(receivable.remain))}원 (전체 기간 기준)
+            {/* 예약 잔금은 아직 시공 전 — 독촉할 돈이 아니라 갈라 적는다 (2026-09-10) */}
+            {Number(receivable.rn) > 0 && (
+              <span className="block font-normal text-violet-800">
+                📌 예약 잔금 {Number(receivable.rn)}건 · {won(Number(receivable.rremain))}원 — 시공하러 오시면 받을 돈
+              </span>
+            )}
           </span>
           <span className="shrink-0 font-normal underline underline-offset-4">장부 →</span>
         </Link>

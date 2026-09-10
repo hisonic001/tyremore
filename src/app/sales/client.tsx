@@ -312,8 +312,18 @@ export function SaleCard({
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             {canceled && <StatusPill>취소</StatusPill>}
             {!canceled && s.reservationStatus === "예약중" && <StatusPill tone="reserve">📌 예약중</StatusPill>}
-            {/* ⭐ 외상 잔액 (2026-08-11) — 접힌 채로도 얼마 남았는지 보인다 */}
-            {remain > 0 && <StatusPill tone="error">외상 잔액 {won(remain)}원</StatusPill>}
+            {/* ⭐ 외상 잔액 (2026-08-11) — 접힌 채로도 얼마 남았는지 보인다.
+                ⭐ 무슨 돈인지까지 (2026-09-10) — 예약 잔금은 아직 시공 전이라 독촉할 돈이
+                   아니고, 본사청구 잔액은 제조사에 청구할 돈이다. 같은 붉은 배지로 묶으면
+                   「밀린 외상」이 얼마인지가 흐려진다 */}
+            {remain > 0 &&
+              (s.reservationStatus === "예약중" ? (
+                <StatusPill tone="reserve">잔금 {won(remain)}원</StatusPill>
+              ) : s.claimParty ? (
+                <StatusPill tone="info">{s.claimParty} 청구 {won(remain)}원</StatusPill>
+              ) : (
+                <StatusPill tone="error">외상 잔액 {won(remain)}원</StatusPill>
+              ))}
             {/* ⭐ 카드 일마감 (2026-08-26) — POS 결제와 안 이어진 건. 누르면 일마감 화면 */}
             {!canceled && s.posMatch === "missing" && (
               <Link

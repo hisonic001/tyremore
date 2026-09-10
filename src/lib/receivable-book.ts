@@ -12,6 +12,8 @@
  *
  * 🔴 대상 범위는 /sales 의 미수금 배너와 **글자 그대로 같아야 한다**:
  *    `status='성사' AND payment_method='외상'`. 두 숫자가 다르면 사장님은 둘 다 못 믿는다.
+ *    ⭐ 그래서 예약(시공 전) 몫도 **빼지 않고 갈라만 둔다** (2026-09-10) — 총액의 뜻은
+ *    그대로 두고 `reserveRemain` 을 곁들여, 배너·장부가 같은 방식으로 나눠 보여 준다.
  */
 import { sql } from "drizzle-orm";
 import { receivableKeySql, receivablePartySql } from "./receivable-key";
@@ -41,6 +43,12 @@ export interface ReceivableSale {
   summary: string;
   /** 작업일로부터 며칠 지났나 — 묵은 것을 붉게 표시한다 */
   ageDays: number;
+  /**
+   * ⭐ 아직 시공 전인 예약 건인가 (2026-09-10 — 예약금 일부만 받기).
+   *    예약 잔금은 「못 받은 돈」이 아니라 **아직 받을 때가 안 된 돈**이다.
+   *    독촉 대상도 아니고 묵었다고 붉힐 것도 아니라 소계를 갈라 둔다.
+   */
+  reserved: boolean;
 }
 
 export interface ReceivableTarget {
@@ -57,6 +65,15 @@ export interface ReceivableTarget {
   oldestDate: string;
   oldestDays: number;
   sales: ReceivableSale[];
+  /**
+   * ⭐ 그중 아직 시공 전인 예약 건 (2026-09-10) — `remain` 에 **포함된 채로** 따로 센다.
+   *
+   * 🔴 빼서 돌려주지 않는 이유: `remain`·`totalRemain` 을 보는 곳이 여럿(외상 장부·
+   *    대사 recon-data)이라 뜻을 바꾸면 숫자가 조용히 달라진다. 갈라 보여 줄지는
+   *    화면이 정한다 — 「못 받은 외상 X원 (그중 예약 잔금 Y원)」.
+   */
+  reserveRemain: number;
+  reserveCount: number;
 }
 
 export interface ReceivableBook {
@@ -65,6 +82,9 @@ export interface ReceivableBook {
   totalCount: number;
   /** 상세를 못 실은 건 수 (너무 많으면 자른다) */
   detailCapped: number;
+  /** 위 총액 중 예약(시공 전) 몫 — 갈라 보여 주려고 (2026-09-10) */
+  reserveRemain: number;
+  reserveCount: number;
 }
 
 /** 정본은 receivable-key.ts — 본사청구(claim_party)도 거래처와 같이 묶인다 (2026-09-10) */
@@ -98,6 +118,8 @@ export async function receivableBook(opts?: {
     remain: string;
     oldest: string;
     oldest_days: number;
+    reserve_remain: string;
+    reserve_n: number;
   }>(sql`
     SELECT ${KEY} k,
            /* 🔴 2회차 수리 A4(2026-08-28): 이름 짓기도 **집계**로 바꿨다.
@@ -115,6 +137,11 @@ export async function receivableBook(opts?: {
            SUM(q.total_amount)::bigint total,
            SUM(COALESCE(rp.paid, 0))::bigint paid,
            SUM(q.total_amount - COALESCE(rp.paid, 0))::bigint remain,
+           /* ⭐ 그중 아직 시공 전인 예약 몫 (2026-09-10) — 위 remain 에 포함된 채로 따로 센다.
+              예약 잔금은 독촉할 돈이 아니라 시공하러 오시면 받을 돈이다 */
+           COALESCE(SUM(q.total_amount - COALESCE(rp.paid, 0))
+                    FILTER (WHERE q.reservation_status = '예약중'), 0)::bigint reserve_remain,
+           count(*) FILTER (WHERE q.reservation_status = '예약중')::int reserve_n,
            min(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date))::text oldest,
            (${KST_TODAY} - min(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)))::int oldest_days
     FROM quote q
@@ -154,8 +181,11 @@ export async function receivableBook(opts?: {
     plate_no: string | null;
     summary: string | null;
     age_days: number;
+    reserved: boolean;
   }>(sql`
     SELECT ${KEY} k, q.id, q.quote_no,
+           /* NULL 이면 예약이 아니다 — IS NOT DISTINCT FROM 이라야 false 로 온다 */
+           (q.reservation_status IS NOT DISTINCT FROM '예약중') reserved,
            COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)::text work_date,
            q.total_amount total,
            COALESCE((SELECT SUM(amount)::int FROM receivable_payment rp WHERE rp.quote_id = q.id), 0) paid,
@@ -188,6 +218,7 @@ export async function receivableBook(opts?: {
       plateNo: d.plate_no,
       summary: d.summary ?? "품목 없음",
       ageDays: Number(d.age_days),
+      reserved: !!d.reserved,
     });
     byKey.set(d.k, list);
   }
@@ -205,6 +236,8 @@ export async function receivableBook(opts?: {
     oldestDate: r.oldest,
     oldestDays: Number(r.oldest_days),
     sales: byKey.get(r.k) ?? [],
+    reserveRemain: Number(r.reserve_remain),
+    reserveCount: Number(r.reserve_n),
   }));
 
   return {
@@ -212,5 +245,8 @@ export async function receivableBook(opts?: {
     totalRemain: targets.reduce((s, t) => s + t.remain, 0),
     totalCount: targets.reduce((s, t) => s + t.count, 0),
     detailCapped: Math.max(0, targets.reduce((s, t) => s + t.count, 0) - detail.length),
+    // 위 총액에 포함된 채로 갈라 둔 예약(시공 전) 몫 (2026-09-10)
+    reserveRemain: targets.reduce((s, t) => s + t.reserveRemain, 0),
+    reserveCount: targets.reduce((s, t) => s + t.reserveCount, 0),
   };
 }

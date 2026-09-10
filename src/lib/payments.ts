@@ -24,6 +24,10 @@ export const EXCLUSIVE = ["외상", "서비스"] as const;
  * ⭐ 외상 수금 수단 (사장님 제보 2026-09-07 — 강원수산 수금을 개인계좌로 받음).
  *    「개인계좌」는 법인 통장 자료에 안 찍히는 수령 — 통장 대조 대상이 아니고,
  *    돈관리 홈이 「통장 밖 수령」으로 따로 보여 준다. 판매 수단에는 안 쓴다.
+ *
+ *    🔴 DB 의 `receivable_payment_method_check` 에도 「개인계좌」가 들어 있어야 한다 —
+ *       이 목록만 늘리고 제약을 안 늘리면 수금 저장이 23514 로 튕긴다.
+ *       정본 스크립트: scripts/add-collect-personal.ts (점검·수리: add-collect-personal-fix.ts)
  */
 export const COLLECT_METHODS: readonly string[] = [...SPLITTABLE, "개인계좌"];
 /**
@@ -45,6 +49,11 @@ export interface PaymentPart {
 /**
  * 분할 결제 검증 — 2개 이상일 때만 「분할」이다.
  * 통과하면 { split } 에 정리된 배열(1개 이하면 null)을 돌려준다.
+ *
+ * 🔴 합계 일치는 **풀지 않는다** (2026-09-10 확인). 본사청구·예약처럼 덜 받는 자리는
+ *    quote_payment 를 아예 안 쓰고 「외상 + 받은 몫 수금(receivable_payment)」으로
+ *    간다 (정본 sale.ts `prepaid`). 여기를 느슨하게 풀면 합이 안 맞는 분할 결제가
+ *    quote_payment 에 남아, 그 표를 합계로 믿는 카드 일마감·정산이 조용히 어긋난다.
  */
 export function checkSplitPayments(
   payments: PaymentPart[] | null | undefined,

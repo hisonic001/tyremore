@@ -747,7 +747,10 @@ export const receivablePayment = pgTable(
   },
   (t) => [
     check("receivable_payment_amount_check", sql`${t.amount} > 0`),
-    check("receivable_payment_method_check", sql`${t.method} IN ('현금','카드','계좌이체','지역화폐','간편결제')`),
+    /* ⭐ 「개인계좌」는 2026-09-07 에 실DB 제약을 넓혔는데(scripts/add-collect-personal.ts)
+       여기 선언만 낡아 있었다 — 새 DB 를 세우면 개인계좌 수금이 즉사한다.
+       정본은 lib/payments.ts 의 COLLECT_METHODS 이고 이 줄과 한 벌이어야 한다 (2026-09-10 실측 정정) */
+    check("receivable_payment_method_check", sql`${t.method} IN ('현금','카드','계좌이체','지역화폐','간편결제','개인계좌')`),
     index("idx_receivable_quote").on(t.quoteId),
   ],
 );

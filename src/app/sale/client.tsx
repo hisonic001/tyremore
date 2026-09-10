@@ -72,12 +72,6 @@ export function SaleForm({
   const [claimParty, setClaimParty] = useState<string | null>(null);
   const [claimKind, setClaimKind] = useState("데미지쿠폰");
   /**
-   * ⭐ 본사청구인데 고객도 일부 낸 경우 (사장님 2026-09-10) — 타이어값은 본사,
-   *    장착비는 고객처럼 갈리는 일이 흔하다. 여기 적은 만큼 그 자리에서 받은
-   *    수금으로 기록되고, 남는 잔액이 본사에 청구할 돈이 된다.
-   */
-  const [claimPaid, setClaimPaid] = useState<{ method: string; amount: string }[]>([]);
-  /**
    * ⭐ 복합결제 스위치 (사장님 요청 2026-08-10 — "두개를 누르는게 활성화되니까 좀 불편").
    *    꺼져 있으면 예전처럼 하나만 골라진다(누르면 바뀜). 켰을 때만 2개 이상 + 금액 분배.
    */
@@ -112,21 +106,40 @@ export function SaleForm({
   }, [tyreQty]);
 
   const total = rows.reduce((s, r) => s + r.unitPrice * r.qty, 0);
-  /** 본사청구에서 고객이 낸 합 — 남는 금액이 본사에 청구할 돈 */
-  const claimPaidSum = claimPaid.reduce((s, p) => s + Number(p.amount || "0"), 0);
 
   /* ---- 분할 결제 (사장님 요청 2026-08-10) ---- */
   const splitPay = (SPLITTABLE as readonly string[]);
   const exclusivePay = (EXCLUSIVE as readonly string[]);
   const paySum = payMethods.reduce((s, m) => s + Number(payAmounts[m] || "0"), 0);
   const payKey = payMethods.join("|");
-  /** 복합결제에서 수단이 1개면 금액은 전액 — 품목이 바뀌어 합계가 달라져도 따라간다 */
+  /**
+   * ⭐ 합계보다 **덜 받아도 되는** 자리 (사장님 요청 2026-09-10) —
+   *    본사청구(나머지는 제조사에 청구)와 예약(나머지는 시공하러 오실 때 받는 잔금).
+   *    이 두 자리에서만 복합결제 칸이 「받은 만큼만」 적는 칸이 된다.
+   *    일반 복합결제는 지금처럼 합계와 딱 맞아야 한다 — 바꾸지 않았다.
+   */
+  const partial = !!claimParty || reserve;
+  /** 금액을 실제로 적은 수단만 — 비워 둔 칸은 「안 적었다」지 「0원 받았다」가 아니다 */
+  const paidParts = payMethods
+    .filter((m) => splitPay.includes(m) && (payAmounts[m] ?? "") !== "")
+    .map((m) => ({ method: m, amount: Number(payAmounts[m] || "0"), paidOn: payDates[m] || null }))
+    .filter((p) => p.amount > 0);
+  /**
+   * 총액을 외상으로 잡고 받은 몫만 그 자리에서 수금 기록할 것인가.
+   *  · 본사청구는 **늘** 그렇다 — 정의상 돈은 제조사가 준다 (전에도 외상으로 저장했다)
+   *  · 예약은 **금액을 적었고 모자랄 때만** — 안 적으면 예전 그대로 전액 결제로 저장된다
+   */
+  const credit = !!claimParty || (reserve && paidParts.length > 0 && paySum < total);
+  /** 못 받은 몫 — 본사청구면 청구액, 예약이면 잔금 */
+  const shortfall = total - paySum;
+  /** 복합결제에서 수단이 1개면 금액은 전액 — 품목이 바뀌어 합계가 달라져도 따라간다.
+      🔴 본사청구·예약은 예외 — 전액을 미리 채우면 「받은 만큼만」을 적을 수가 없다 */
   useEffect(() => {
-    if (combo && payMethods.length === 1 && splitPay.includes(payMethods[0])) {
+    if (combo && !partial && payMethods.length === 1 && splitPay.includes(payMethods[0])) {
       setPayAmounts({ [payMethods[0]]: String(total) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [total, payKey, combo]);
+  }, [total, payKey, combo, partial]);
 
   /** 복합결제 켜고 끄기 — 끄면 첫 수단 하나만 남긴다 */
   const toggleCombo = () => {
@@ -146,16 +159,18 @@ export function SaleForm({
     });
   };
 
-  /** 본사청구 켜기·끄기 — 결제수단은 「외상」으로 굳는다 (받을 돈이 맞으므로) */
+  /**
+   * 본사청구 켜기·끄기 — 결제수단은 「외상」으로 굳는다 (받을 돈이 맞으므로).
+   *
+   * 🔴 복합결제를 끄지 않는다 (2026-09-10) — 전에는 `setCombo(false)` 라 두 UI 가
+   *    만날 수 없었고, 그래서 「고객이 낸 돈」 전용 입력기를 따로 달아 카드가 길어졌다.
+   *    이제 고객이 낸 몫은 아래 복합결제 칸에 그대로 적는다.
+   */
   const toggleClaim = () => {
     setError(null);
     setClaimParty((prev) => {
-      if (prev) {
-        setClaimPaid([]);
-        return null;
-      }
-      setCombo(false);
-      setPayMethods(["외상"]);
+      if (prev) return null;
+      setPayMethods(["외상"]); // 고객이 낸 게 없으면 이대로 — 전액이 청구액이 된다
       setPayAmounts({});
       return "미쉐린";
     });
@@ -163,10 +178,11 @@ export function SaleForm({
 
   const togglePay = (p: string) => {
     setError(null);
-    setClaimParty(null); // 다른 수단을 고르면 본사청구는 해제
-    setClaimPaid([]);
     if (exclusivePay.includes(p)) {
-      // 외상·서비스는 단독 — MARS·대기열 처리가 결제수단 하나를 전제한다
+      /* 외상·서비스는 단독 — MARS·대기열 처리가 결제수단 하나를 전제한다.
+         본사청구도 여기서 해제한다 (외상은 「받은 게 없다」는 뜻이라 본사청구와 겹치지만,
+         서비스로 바꾸는 건 청구를 그만둔다는 뜻이다) */
+      if (p === "서비스") setClaimParty(null);
       setCombo(false);
       setPayMethods([p]);
       setPayAmounts({});
@@ -186,16 +202,20 @@ export function SaleForm({
         setPayAmounts((a) => {
           const rest = { ...a };
           delete rest[p];
-          return next.length === 1 ? { [next[0]]: String(total) } : rest;
+          return next.length === 1 && !partial ? { [next[0]]: String(total) } : rest;
         });
         return next;
       }
       /**
        * ⭐ 새 수단을 고르는 순간 **나머지 금액이 자동으로** 들어간다 (사장님 요청 2026-08-10).
        *    "합계가 10000원이면 카드를 골라 2000원을 입력하고 현금을 고르는 순간 자동으로 8000원"
+       *
+       * 🔴 본사청구·예약은 비워 둔다 (2026-09-10) — 거기서는 나머지가 「받을 돈」이지
+       *    「이 수단으로 받은 돈」이 아니다. 자동으로 채우면 청구액·잔금이 0 이 돼 버린다.
        */
       setPayAmounts((a) => {
         const used = cur.reduce((s, m) => s + Number(a[m] || "0"), 0);
+        if (partial) return { ...a, [p]: "" };
         return cur.length === 0
           ? { [p]: String(total) }
           : { ...a, [p]: String(total - used) }; // 마이너스 판매면 나머지도 마이너스 (2026-08-21)
@@ -293,7 +313,12 @@ export function SaleForm({
     setMemo("");
     setPayMethods(["카드"]);
     setPayAmounts({});
+    setPayDates({});
     setCombo(false);
+    /* 본사청구는 그 판매에만 붙는 성격이라 판을 접으면 같이 내린다 — 안 내리면
+       다음 손님이 모르는 사이에 본사청구로 저장된다 (2026-09-10) */
+    setClaimParty(null);
+    setReserve(false);
     setWheels([]);
     setWorkDate(today);
     setNewCust(null);
@@ -436,8 +461,17 @@ export function SaleForm({
       });
       if (!ok) return;
     }
-    // 분할 결제는 금액 합이 판매 합계와 같아야 저장된다 (서버도 다시 검증한다)
-    if (payMethods.length >= 2 && paySum !== total) {
+    /* 받은 돈이 합계보다 많을 수는 없다 — 본사청구·예약에서도 마찬가지 */
+    if (partial && paySum > total) {
+      setError(
+        `받은 금액(${won(paySum)}원)이 판매 합계(${won(total)}원)보다 ${won(paySum - total)}원 많습니다 — 결제 칸을 확인해 주세요`,
+      );
+      return;
+    }
+    /* 분할 결제는 금액 합이 판매 합계와 같아야 저장된다 (서버도 다시 검증한다).
+       🔴 「외상으로 잡고 받은 만큼만 수금」(credit) 인 자리만 예외 — 모자란 몫이
+          청구액·잔금이다. 예약인데 금액을 하나도 안 적었으면 여전히 여기서 걸린다 */
+    if (!credit && payMethods.length >= 2 && paySum !== total) {
       setError(
         `분할 금액 합계(${won(paySum)}원)가 판매 합계(${won(total)}원)와 ${won(Math.abs(total - paySum))}원 다릅니다 — 결제 칸에서 맞춰 주세요`,
       );
@@ -457,15 +491,24 @@ export function SaleForm({
         // ⭐ 본사청구 (2026-09-10) — supplierName 과 달리 MARS 를 막지 않는다
         claimParty,
         claimKind: claimParty ? claimKind : null,
-        claimPaid: claimParty
-          ? claimPaid.map((p) => ({ method: p.method, amount: Number(p.amount || "0") })).filter((p) => p.amount > 0)
-          : null,
         lines: rows.map(({ key, rimInch, ...l }) => l),
-        paymentMethod: payMethods.length === 1 ? payMethods[0] : "혼합",
+        /**
+         * ⭐ 결제 칸은 하나인데 **목적지만 갈린다** (2026-09-10 통일).
+         *    · 받은 돈 = 합계  → 지금까지처럼 결제(quote_payment)로
+         *    · 받은 돈 < 합계  → 총액은 외상, 받은 몫은 그 자리에서 수금(receivable_payment)
+         *
+         * 🔴 왜 목적지만 가르나: quote_payment 는 「외상」을 못 담고(CHECK), 외상인지
+         *    아닌지는 21개 파일 40군데가 `payment_method='외상'` 하나로 판단한다.
+         *    받은 몫을 분할 결제로 밀어 넣으면 그 판단이 통째로 흔들린다 — 반대로
+         *    수금으로 적으면 외상 장부·월 청구·돈관리가 **기존 길 그대로** 돈다.
+         */
+        paymentMethod: credit ? "외상" : payMethods.length === 1 ? payMethods[0] : "혼합",
         payments:
-          payMethods.length >= 2
+          !credit && payMethods.length >= 2
             ? payMethods.map((m) => ({ method: m, amount: Number(payAmounts[m] || "0"), paidOn: payDates[m] || null }))
             : null,
+        /** 외상으로 잡되 그 자리에서 받은 몫 — 본사청구의 「고객이 낸 돈」과 예약금이 같은 길 */
+        prepaid: credit && paidParts.length > 0 ? paidParts : null,
         reserve,
         workDate,
         memo: memo.trim() || null,
@@ -499,6 +542,7 @@ export function SaleForm({
       setPayDates({});
       setReserve(false);
       setCombo(false);
+      setClaimParty(null); // 다음 손님이 모르는 사이에 본사청구로 저장되지 않게
       setWheels([]);
       wheelsTouched.current = false;
       router.refresh();
@@ -803,83 +847,39 @@ export function SaleForm({
                 </button>
               ))}
             </div>
-            {/* ⭐ 고객도 일부 낸 경우 (사장님 2026-09-10) — 타이어값은 본사, 장착비는
-                고객처럼 갈린다. 적은 만큼 그 자리에서 받은 수금으로 기록된다 */}
-            <div className="mt-2 border-t border-sky-200 pt-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs font-semibold text-sky-900">고객이 낸 돈</span>
-                <span className="text-xs text-sky-800">있으면 적어 주세요 (장착비만 받는 경우 등)</span>
-              </div>
-              {claimPaid.map((cp, i) => (
-                <div key={i} className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                  <select
-                    value={cp.method}
-                    onChange={(e) =>
-                      setClaimPaid((prev) => prev.map((x, j) => (j === i ? { ...x, method: e.target.value } : x)))
-                    }
-                    className="rounded-lg border border-sky-300 px-2 py-1 text-xs outline-none focus:border-sky-700"
-                  >
-                    {splitPay.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    value={cp.amount}
-                    onChange={(e) =>
-                      setClaimPaid((prev) =>
-                        prev.map((x, j) => (j === i ? { ...x, amount: e.target.value.replace(/[^\d]/g, "") } : x)),
-                      )
-                    }
-                    placeholder="금액"
-                    inputMode="numeric"
-                    className="tabular w-28 rounded-lg border border-sky-300 px-2 py-1 text-xs outline-none focus:border-sky-700"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setClaimPaid((prev) => prev.filter((_, j) => j !== i))}
-                    className="px-1 text-xs text-slate-400"
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-              <button
-                type="button"
-                onClick={() => setClaimPaid((prev) => [...prev, { method: "카드", amount: "" }])}
-                className="mt-1.5 rounded-lg border border-sky-300 bg-white px-2.5 py-1 text-xs font-medium text-sky-800"
-              >
-                + 고객이 낸 돈 추가
-              </button>
-            </div>
+            {/* ⭐ 요약 한 줄 (2026-09-10) — 고객이 낸 몫은 전용 칸을 없애고 위 결제 단추 ·
+                아래 금액 칸에서 그대로 받는다. 여기서는 결과만 보여 준다 */}
             <p className="tabular mt-2 text-xs leading-tight text-sky-900">
               합계 <strong>{won(total)}원</strong>
-              {claimPaidSum > 0 && <> · 고객이 냄 <strong>{won(claimPaidSum)}원</strong></>} →{" "}
-              <strong>{claimParty}에 청구 {won(Math.max(0, total - claimPaidSum))}원</strong>
+              {paySum > 0 && <> · 고객이 냄 <strong>{won(paySum)}원</strong></>} →{" "}
+              <strong>{claimParty}에 청구 {won(Math.max(0, shortfall))}원</strong>
             </p>
             <p className="mt-1 text-xs leading-tight text-sky-900">
-              타이어 단가에는 <strong>본사에 청구할 값</strong>을 넣어 주세요 — 재고가 빠지고 마진도 제대로 잡힙니다.
-              고객이 낸 몫은 그 자리에서 받은 수금으로 기록되고, 남는 금액이 「{claimParty}」 앞으로 쌓입니다.
-              MARS 에는 평소처럼 올라갑니다.
+              단가는 <strong>본사에 청구할 값</strong>으로, 고객이 일부 냈으면 위에서 카드·현금을 눌러 <strong>받은 금액만</strong> 적으세요.
             </p>
           </div>
         )}
         {reserve && (
           <p className="mt-1.5 rounded-lg bg-violet-50 px-2 py-1.5 text-xs text-violet-900">
             <strong>예약으로 저장</strong> — 오늘 받은 돈은 오늘 매출로 남고, <strong>재고는 안 빠집니다</strong>
-            (시공하러 오시면 정비 내역에서 「시공 완료」). 재고가 없어도, 돈을 안 받았어도(0원) 담을 수 있습니다.
-            MARS 는 시공 완료 뒤에 올립니다.
+            (시공하러 오시면 정비 내역에서 「시공 완료」). MARS 는 시공 완료 뒤에 올립니다.
+            {/* ⭐ 예약금 일부만 받기 (사장님 요청 2026-09-10) — 아래 금액 칸에 받은 만큼만 */}
+            {" "}예약금을 <strong>일부만 받으셨으면 아래 금액 칸에 받은 만큼만</strong> 적으세요 — 나머지는 잔금으로 남습니다.
           </p>
         )}
-        {combo && (
+        {combo && !partial && (
           <p className="mt-1.5 text-xs text-indigo-700">
             복합결제 — 수단을 2개 이상 고르세요. 새 수단을 고르면 나머지 금액이 자동으로 들어갑니다.
           </p>
         )}
 
-        {/* 수단별 금액 — 복합결제일 때만 */}
-        {combo && payMethods.every((m) => splitPay.includes(m)) && (
+        {/**
+          수단별 금액 — 복합결제일 때, 그리고 **본사청구·예약일 때도** (2026-09-10).
+          전에는 본사청구가 제 입력기를 따로 달고 있었고(카드가 40줄 넘게 길었다),
+          예약은 「일부만 받고 나머지는 나중에」를 아예 적을 수가 없었다.
+          둘 다 「받은 만큼만 적는다」는 같은 일이라 이 칸 하나로 합쳤다.
+        */}
+        {(combo || partial) && payMethods.every((m) => splitPay.includes(m)) && (
           <div className="mt-2 space-y-1.5">
             {payMethods.map((m) => (
               <label key={m} className="flex items-center gap-2">
@@ -888,6 +888,8 @@ export function SaleForm({
                   value={showSigned(payAmounts[m] ?? "")}
                   onChange={(e) => setPayAmounts((a) => ({ ...a, [m]: signedStr(e.target.value) }))}
                   inputMode="numeric"
+                  /* 본사청구·예약은 전액이 아니라 「지금 받은 만큼」을 적는 칸이다 */
+                  placeholder={partial ? "받은 만큼" : ""}
                   className="tabular min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-right text-sm"
                 />
                 <span className="shrink-0 text-xs text-slate-400">원</span>
@@ -901,14 +903,38 @@ export function SaleForm({
                 />
               </label>
             ))}
-            {payMethods.length >= 2 && paySum !== total && (
+            {/* 🔴 일반 복합결제는 지금처럼 합계 일치를 강제한다 — 안 맞으면 빨간 경고 */}
+            {!partial && payMethods.length >= 2 && paySum !== total && (
               <p className="rounded-lg bg-red-50 px-2 py-1.5 text-xs text-red-700">
                 합계 {won(total)}원과 <strong>{won(Math.abs(total - paySum))}원 차이</strong> — 저장 전에 맞춰 주세요
               </p>
             )}
-            {payMethods.length === 1 && payAmounts[payMethods[0]] !== undefined && Number(payAmounts[payMethods[0]]) !== total && (
+            {!partial && payMethods.length === 1 && payAmounts[payMethods[0]] !== undefined && Number(payAmounts[payMethods[0]]) !== total && (
               <p className="text-xs text-slate-400">
                 수단이 1개면 전액 {won(total)}원으로 저장됩니다 — 나눠 받으려면 수단을 하나 더 고르세요 (나머지가 자동으로 들어갑니다)
+              </p>
+            )}
+            {/* ⭐ 본사청구·예약은 덜 받아도 된다 (2026-09-10) — 모자란 몫이 무엇인지 말해 준다 */}
+            {partial && shortfall > 0 && (
+              <p
+                className={`tabular rounded-lg px-2 py-1.5 text-xs ${
+                  claimParty ? "bg-sky-50 text-sky-900" : "bg-violet-50 text-violet-900"
+                }`}
+              >
+                {claimParty ? (
+                  <>
+                    <strong>{claimParty}에 청구 {won(shortfall)}원</strong> — 나머지는 받은 몫으로 기록됩니다
+                  </>
+                ) : (
+                  <>
+                    <strong>잔금 {won(shortfall)}원</strong> — 시공하러 오시면 받으시면 됩니다
+                  </>
+                )}
+              </p>
+            )}
+            {partial && paySum > total && (
+              <p className="rounded-lg bg-red-50 px-2 py-1.5 text-xs text-red-700">
+                받은 돈이 합계보다 <strong>{won(paySum - total)}원 많습니다</strong> — 저장 전에 맞춰 주세요
               </p>
             )}
           </div>
@@ -920,8 +946,14 @@ export function SaleForm({
             재고는 되돌리지 않고(타이어 반품은 재고 화면에서), MARS 에는 올라가지 않습니다.
           </p>
         )}
-        {payMethods[0] === "외상" && (
+        {/* credit — 본사청구·예약 잔금도 저장은 「외상」이라 같은 주의가 걸린다 (2026-09-10) */}
+        {(payMethods[0] === "외상" || credit) && (
           <p className="mt-1.5 rounded-lg bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+            {credit && payMethods[0] !== "외상" && (
+              <>
+                받은 몫 {won(paySum)}원을 뺀 <strong>{won(Math.max(0, shortfall))}원이 외상</strong>으로 남습니다.{" "}
+              </>
+            )}
             외상은 <strong>MARS 자동 입력에서 빠집니다.</strong> 여기 기록만 남고, MARS 는 직접 처리해 주세요.
           </p>
         )}
