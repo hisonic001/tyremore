@@ -108,6 +108,13 @@ async function main() {
       memo: "볼륨 지원(230본~ 1~4%)·과다재고 3~5%·페이백(TA92 1.5만/TA91 1.2만/HP71 5천/HP51 6~8천, 익월 감가)·교체지원금(본당 1만, 월한도 200만) — 대부분 에누리·감가 형태라 자동 추정 없음, 도착분만 확정 등록 (이중 계상 방지)",
     },
     {
+      title: "미쉐린 데미지 프리·AS 정산",
+      brand: "MI", kind: "수기전용",
+      params: {},
+      sellFrom: "2026-01-01", sellTo: "2026-12-31",
+      memo: "데미지 프리 쿠폰 무상 교체(본사가 타이어값 반환)·OE 타이어 AS 조치비 — ㈜트랜스코스모스 이름으로 입금됨. 도착하면 확정 등록 (2026-09-10 사장님 확인)",
+    },
+    {
       title: "콘티넨탈 RSP",
       brand: "CO", kind: "본수타겟",
       params: { monthlyQty: 50, monthlyBonus: 300_000 },
@@ -138,6 +145,20 @@ async function main() {
   await db.execute(sql`
     UPDATE promo SET memo = '실증 확정: 볼륨·특판 지원은 인보이스 단가 선반영(에누리, 할인율 40~54% 실측) — 여기 넣으면 이중 계상. 페이백(익월 감가)·상품권·교체지원금 도착분만 확정 등록'
     WHERE title = '금호 9월 운영안 (볼륨·재고·페이백)'
+  `);
+
+  /* 9/4 트랜스코스모스 입금 252,340원 = 데미지 프리 쿠폰 사용건 정산 (사장님
+     확인 2026-09-10). 원 시공이 앱 도입 전으로 보여 입금 확인월(9월) 귀속 */
+  await db.execute(sql`
+    INSERT INTO rebate_entry (ym, title, amount, status, received_on, memo)
+    SELECT '2026-09', '미쉐린 데미지 프리 쿠폰 정산', 252340, '정산완료', '2026-09-04',
+           '9/4 ㈜트랜스코스모스 입금 — 데미지 쿠폰 사용건 (사장님 확인)'
+    WHERE NOT EXISTS (SELECT 1 FROM rebate_entry WHERE ym = '2026-09' AND title = '미쉐린 데미지 프리 쿠폰 정산')
+  `);
+  // 사용 고객 확인(사장님 2026-09-10): 김영호 41러7253 EV6 — 메모 보강 (멱등)
+  await db.execute(sql`
+    UPDATE rebate_entry SET memo = '9/4 ㈜트랜스코스모스 입금 — 데미지 쿠폰 사용건: 김영호 41러7253 EV6 (사장님 확인)'
+    WHERE ym = '2026-09' AND title = '미쉐린 데미지 프리 쿠폰 정산'
   `);
 
   const [n] = await db.execute<{ p: number; e: number }>(
