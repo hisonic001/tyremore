@@ -22,9 +22,12 @@ import { config } from "dotenv";
 config({ path: ".env.local" });
 
 import { spawn } from "node:child_process";
+import os from "node:os";
 import postgres from "postgres";
 
 const POLL_MS = 10_000;
+/** 맥박 간격 — 앱은 「10분 안에 찍혔으면 켜짐」으로 본다 */
+const HEARTBEAT_MS = 60_000;
 const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
 
 const stamp = () => new Date().toLocaleTimeString("ko-KR", { hour12: false });
@@ -36,6 +39,22 @@ async function appendLog(id: number, line: string) {
     UPDATE mars_run
     SET log = LEFT(COALESCE(log || E'\n', '') || ${line}, 200000)
     WHERE id = ${id}`.catch(() => {});
+}
+
+/**
+ * ⭐ 살아 있다고 알리기 (2026-09-10 점검에서 빠진 것이 드러남)
+ *
+ * 지금까지 이 대리인은 아무 흔적도 남기지 않아서, **꺼져 있어도 앱이 알 수 없었다.**
+ * 요청은 「대기」로 조용히 쌓이고 사장님은 로봇이 도는 줄 아신다.
+ * 블로그 대리인(blog-agent.ts)이 이미 쓰는 표에 같은 방식으로 한 줄 남긴다.
+ * 실패해도 무시한다 — 맥박 때문에 본 일이 멈추면 안 된다.
+ */
+async function beat() {
+  await sql`
+    INSERT INTO agent_heartbeat (name, host, last_seen, version)
+    VALUES ('mars', ${os.hostname()}, now(), ${process.version})
+    ON CONFLICT (name, host) DO UPDATE
+      SET last_seen = now(), version = EXCLUDED.version`.catch(() => {});
 }
 
 async function runOne(id: number, kind: string): Promise<void> {
@@ -174,6 +193,10 @@ async function main() {
     UPDATE mars_run SET status='실패', finished_at=now(),
       log = COALESCE(log || E'\n','') || '(대리인이 재시작되며 중단 처리)'
     WHERE status='실행중'`;
+
+  await beat();
+  const heart = setInterval(() => void beat(), HEARTBEAT_MS);
+  heart.unref?.();
 
   for (;;) {
     try {

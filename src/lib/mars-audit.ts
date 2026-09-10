@@ -35,6 +35,13 @@ export interface MarsAudit {
   recentRuns: { total: number; warned: number };
   /** 마지막 자가점검 결과 — 없으면 null */
   smoke: { at: string; ok: boolean; note: string } | null;
+  /**
+   * ⭐ 매장 PC 의 MARS 대리인이 켜져 있나 (2026-09-10 점검)
+   * 한 번도 찍힌 적이 없으면 null — 아직 새 판번호를 안 받은 PC 다.
+   */
+  robot: { alive: boolean; at: string; host: string } | null;
+  /** 처리를 눌러 놨는데 로봇이 안 받아 가는 요청이 있나 */
+  waitingRun: boolean;
   /** 배너를 띄울 일이 있는가 */
   hasIssues: boolean;
 }
@@ -111,6 +118,18 @@ export async function marsAudit(): Promise<MarsAudit> {
       SELECT to_char(requested_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at, log, status
       FROM mars_run WHERE kind = '자가점검' ORDER BY id DESC LIMIT 1
     `);
+  /* 매장 PC 두 대 중 **하나라도** 최근에 찍었으면 켜진 것 (blog-job.ts 와 같은 기준) */
+  const beats = await db.execute<{ at: string; host: string; fresh: boolean }>(sql`
+      SELECT to_char(last_seen AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at, host,
+             (last_seen > now() - interval '10 minutes') fresh
+      FROM agent_heartbeat WHERE name = 'mars'
+      ORDER BY last_seen DESC LIMIT 2
+    `);
+  /* 눌러 놓은 요청이 로봇을 못 만나고 5분 넘게 서 있나 */
+  const waiting = await db.execute<{ n: number }>(sql`
+      SELECT count(*)::int n FROM mars_run
+      WHERE status = '대기' AND requested_at < now() - interval '5 minutes'
+    `);
 
   const smoke = smokeRows[0]
     ? {
@@ -132,6 +151,8 @@ export async function marsAudit(): Promise<MarsAudit> {
     pendingCount: Number(pending[0]?.n ?? 0),
     recentRuns: { total: runs.length, warned: runs.filter((r) => r.warned).length },
     smoke,
+    robot: beats[0] ? { alive: beats.some((b) => b.fresh), at: beats[0].at, host: beats[0].host } : null,
+    waitingRun: Number(waiting[0]?.n ?? 0) > 0,
     hasIssues: false,
   };
   // 보류는 「아직 안 올린 것」일 뿐 문제가 아니다 — 배너 기준은 어긋남·점검 누락·자가점검 실패
@@ -144,6 +165,7 @@ export async function marsAudit(): Promise<MarsAudit> {
     audit.unposted.length > 0 ||
     audit.unchecked.length > 0 ||
     audit.pendingCount >= 20 ||
+    audit.waitingRun ||
     (smoke !== null && !smoke.ok);
   return audit;
 }

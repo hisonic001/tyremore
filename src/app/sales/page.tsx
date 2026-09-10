@@ -273,6 +273,19 @@ export default async function SalesPage({
             <span className="ml-1 font-normal text-amber-700">(눌러서 자세히)</span>
           </summary>
           <div className="mt-3 space-y-3 text-sm text-amber-900">
+            {/* ⭐ 로봇이 요청을 안 받아 간다 (2026-09-10 점검) — 전에는 요청이 「대기」로
+                조용히 서 있어도 아무 표시가 없었다 */}
+            {audit.waitingRun && (
+              <div>
+                <p className="font-semibold">매장 PC 의 MARS 프로그램이 요청을 안 받아 갑니다</p>
+                <p className="mt-0.5 text-amber-800">
+                  매장 컴퓨터에서 <code>npm run mars:agent</code> 창이 켜져 있는지 봐 주세요.
+                  {audit.robot
+                    ? ` (마지막 신호 ${audit.robot.at} · ${audit.robot.host})`
+                    : " (아직 신호를 한 번도 못 받았습니다)"}
+                </p>
+              </div>
+            )}
             {/* ⭐ 안 올린 판매가 쌓인 것 (2026-09-10 점검) — 이 화면은 「오늘」만 보여
                 주므로 그동안 뒤에 쌓인 것이 안 보였다. 실측 177건 4,385만원 */}
             {audit.pendingCount >= 20 && (
