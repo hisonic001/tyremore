@@ -14,6 +14,7 @@
  *    `status='성사' AND payment_method='외상'`. 두 숫자가 다르면 사장님은 둘 다 못 믿는다.
  */
 import { sql } from "drizzle-orm";
+import { receivableKeySql, receivablePartySql } from "./receivable-key";
 import { db } from "@/db";
 
 /**
@@ -66,15 +67,8 @@ export interface ReceivableBook {
   detailCapped: number;
 }
 
-/**
- * 🔴 비회원은 **건별로 하나의 대상**('W:'||q.id)이다.
- *    이름으로 묶으면 동명이인의 외상이 한 덩어리가 되어 남의 것을 대신 털게 된다.
- *    같아 보이는 두 줄이 나오는 쪽이 훨씬 안전하다.
- */
-const KEY = sql`CASE
-  WHEN q.supplier_name IS NOT NULL THEN 'S:' || q.supplier_name
-  WHEN q.customer_id   IS NOT NULL THEN 'C:' || q.customer_id
-  ELSE 'W:' || q.id END`;
+/** 정본은 receivable-key.ts — 본사청구(claim_party)도 거래처와 같이 묶인다 (2026-09-10) */
+const KEY = receivableKeySql;
 
 export async function receivableBook(opts?: {
   kind?: "supplier" | "customer";
@@ -84,9 +78,9 @@ export async function receivableBook(opts?: {
   const openOnly = opts?.includeSettled ? sql`` : sql`AND q.total_amount > COALESCE(rp.paid, 0)`;
   const kindCond =
     opts?.kind === "supplier"
-      ? sql`AND q.supplier_name IS NOT NULL`
+      ? sql`AND ${receivablePartySql} IS NOT NULL`
       : opts?.kind === "customer"
-        ? sql`AND q.supplier_name IS NULL`
+        ? sql`AND ${receivablePartySql} IS NULL`
         : sql``;
 
   /**
@@ -113,9 +107,9 @@ export async function receivableBook(opts?: {
                 · S: 묶음 → supplier_name 이 열쇠의 일부라 전부 같은 값
                 · C: 묶음 → customer_id 가 열쇠라 c.name 이 전부 같은 값
                 · W: 묶음 → 견적 한 건이 한 묶음이라 애초에 한 줄 */
-           COALESCE(max(q.supplier_name), max(c.name),
+           COALESCE(max(${receivablePartySql}), max(c.name),
                     NULLIF(max(split_part(q.mars_memo, '·', 1)), ''), '이름 없음') label,
-           max(q.supplier_name) supplier_name,
+           max(${receivablePartySql}) supplier_name,
            max(q.customer_id)::int customer_id,
            count(*)::int n,
            SUM(q.total_amount)::bigint total,

@@ -52,13 +52,34 @@ async function syncLines(runId: number, supplier: string, ym: string): Promise<n
     INSERT INTO settlement_line (run_id, quote_id, billed_amount)
     SELECT ${runId}, q.id, q.total_amount
     FROM quote q
-    WHERE q.status = '성사' AND q.payment_method = '외상' AND q.supplier_name = ${supplier}
+    /* 본사청구(claim_party)도 같은 대상으로 — 정본 receivable-key.ts (2026-09-10) */
+    WHERE q.status = '성사' AND q.payment_method = '외상'
+      AND COALESCE(q.supplier_name, q.claim_party) = ${supplier}
       AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${start}::date
       AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${nextStart}::date
     ON CONFLICT (run_id, quote_id) DO NOTHING
     RETURNING id
   `);
   return ins.length;
+}
+
+/**
+ * ⭐ 「항상 최신으로」 (사장님 요청 2026-09-10) — 화면을 열 때마다 그 달 외상을
+ *    다시 긁는다.
+ *
+ *   전에는 회차를 만든 **그 순간으로 굳어** 낡았다: 쏘카 8월 회차가 9/1 에
+ *   160만으로 만들어졌는데, 그 뒤 등록된 8월 판매까지 합치면 213만이었다
+ *   (실제 발행한 계산서도 213만). 담기 단추가 있었지만 아무도 안 눌렀다.
+ *
+ * 🔴 **「작성중」 회차만** 자동으로 담는다 — 이미 청구서를 내보내 회신을 받거나
+ *    입금까지 끝난 회차에 새 건이 슬쩍 들어가면 합의한 금액이 흔들린다.
+ */
+export async function autoSyncDraft(supplier: string, ym: string): Promise<number> {
+  const [run] = await db.execute<{ id: number; status: string }>(sql`
+    SELECT id, status FROM settlement_run WHERE supplier_name = ${supplier} AND ym = ${ym} LIMIT 1
+  `);
+  if (!run || run.status !== "작성중") return 0;
+  return syncLines(Number(run.id), supplier, ym);
 }
 
 /** 회차를 연 뒤 새로 등록된 그 달 판매 담기 */

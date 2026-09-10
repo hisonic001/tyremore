@@ -1,6 +1,8 @@
 import Link from "@/lib/link";
 import {hasPerm, requireSession } from "@/lib/auth";
 import { settlementView } from "@/lib/settlement-data";
+import { autoSyncDraft } from "@/lib/settlement-apply";
+import { settleTaxCandidates } from "@/lib/settle-tax";
 import { kstToday } from "@/lib/ym";
 import { SettleClient } from "./client";
 
@@ -37,14 +39,19 @@ export default async function SettleSupplierPage({
     );
   }
 
+  /* ⭐ 항상 최신으로 (사장님 요청 2026-09-10) — 「작성중」 회차는 열 때마다 그 달
+     외상을 다시 긁는다. 전에는 만든 순간으로 굳어 쏘카 8월이 160만으로 낡아
+     있었다(실제·계산서는 213만). 이제 단추를 안 눌러도 숫자가 맞는다. */
+  const autoAdded = await autoSyncDraft(supplier, ym);
   const view = await settlementView(supplier, ym);
+  const taxHints = await settleTaxCandidates(supplier, ym);
 
   return (
     <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6 lg:max-w-4xl">
       <Link href="/receivables/settle" className="text-sm text-slate-500 underline underline-offset-4">
         ← 정산 관리대장
       </Link>
-      <SettleClient view={view} />
+      <SettleClient view={view} autoAdded={autoAdded} taxHints={taxHints} />
     </main>
   );
 }

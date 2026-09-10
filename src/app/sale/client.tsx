@@ -65,6 +65,13 @@ export function SaleForm({
   const [payMethods, setPayMethods] = useState<string[]>(["카드"]);
   const [payAmounts, setPayAmounts] = useState<Record<string, string>>({});
   /**
+   * ⭐ 본사청구 (2026-09-10) — 손님 차에 시공했지만 **돈은 제조사가 준다**
+   *    (미쉐린 데미지 프리 쿠폰 · OE 타이어 AS). 저장은 「외상 + 청구처」라
+   *    MARS 소매 등록은 그대로 되고, 받을 돈은 그 제조사 앞으로 쌓인다.
+   */
+  const [claimParty, setClaimParty] = useState<string | null>(null);
+  const [claimKind, setClaimKind] = useState("데미지쿠폰");
+  /**
    * ⭐ 복합결제 스위치 (사장님 요청 2026-08-10 — "두개를 누르는게 활성화되니까 좀 불편").
    *    꺼져 있으면 예전처럼 하나만 골라진다(누르면 바뀜). 켰을 때만 2개 이상 + 금액 분배.
    */
@@ -131,8 +138,21 @@ export function SaleForm({
     });
   };
 
+  /** 본사청구 켜기·끄기 — 결제수단은 「외상」으로 굳는다 (받을 돈이 맞으므로) */
+  const toggleClaim = () => {
+    setError(null);
+    setClaimParty((prev) => {
+      if (prev) return null;
+      setCombo(false);
+      setPayMethods(["외상"]);
+      setPayAmounts({});
+      return "미쉐린";
+    });
+  };
+
   const togglePay = (p: string) => {
     setError(null);
+    setClaimParty(null); // 다른 수단을 고르면 본사청구는 해제
     if (exclusivePay.includes(p)) {
       // 외상·서비스는 단독 — MARS·대기열 처리가 결제수단 하나를 전제한다
       setCombo(false);
@@ -422,6 +442,9 @@ export function SaleForm({
         customerId: vehicle?.customerId ?? null,
         walkIn: supplierSale || vehicle ? null : walkIn.name || walkIn.phone || walkIn.plateNo ? walkIn : null,
         supplierName: supplierSale,
+        // ⭐ 본사청구 (2026-09-10) — supplierName 과 달리 MARS 를 막지 않는다
+        claimParty,
+        claimKind: claimParty ? claimKind : null,
         lines: rows.map(({ key, rimInch, ...l }) => l),
         paymentMethod: payMethods.length === 1 ? payMethods[0] : "혼합",
         payments:
@@ -706,6 +729,16 @@ export function SaleForm({
           >
             복합결제
           </button>
+          {/* ⭐ 본사청구 (2026-09-10) — 데미지 쿠폰·OE AS. 돈은 제조사가 준다 */}
+          <button
+            type="button"
+            onClick={toggleClaim}
+            className={`rounded-lg border border-dashed px-4 py-2 text-sm font-medium ${
+              claimParty ? "border-sky-700 bg-sky-700 text-white" : "border-sky-400 bg-white text-sky-700"
+            }`}
+          >
+            본사청구
+          </button>
           {/* ⭐ 예약 (2026-09-01) — 선금·구두 예약. 재고는 시공 완료 때 */}
           <button
             type="button"
@@ -717,6 +750,51 @@ export function SaleForm({
             📌 예약
           </button>
         </div>
+        {claimParty && (
+          <div className="mt-1.5 rounded-lg bg-sky-50 px-3 py-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold text-sky-900">청구처</span>
+              {["미쉐린", "금호", "콘티넨탈"].map((b) => (
+                <button
+                  key={b}
+                  type="button"
+                  onClick={() => setClaimParty(b)}
+                  className={`rounded-lg border px-2.5 py-1 text-xs font-medium ${
+                    claimParty === b ? "border-sky-700 bg-sky-700 text-white" : "border-sky-300 bg-white text-sky-800"
+                  }`}
+                >
+                  {b}
+                </button>
+              ))}
+              <input
+                value={["미쉐린", "금호", "콘티넨탈"].includes(claimParty) ? "" : claimParty}
+                onChange={(e) => setClaimParty(e.target.value || "미쉐린")}
+                placeholder="직접 입력"
+                className="w-24 rounded-lg border border-sky-300 px-2 py-1 text-xs outline-none focus:border-sky-700"
+              />
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold text-sky-900">사유</span>
+              {["데미지쿠폰", "OE AS", "기타"].map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setClaimKind(k)}
+                  className={`rounded-lg border px-2.5 py-1 text-xs font-medium ${
+                    claimKind === k ? "border-sky-700 bg-sky-700 text-white" : "border-sky-300 bg-white text-sky-800"
+                  }`}
+                >
+                  {k}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-xs leading-tight text-sky-900">
+              손님은 <strong>0원</strong>이지만 <strong>{claimParty}에 청구할 금액</strong>을 단가로 넣어 주세요 — 재고가
+              빠지고 마진도 제대로 잡힙니다. 받을 돈은 「{claimParty}」 앞으로 쌓이고, 본사 입금이 오면 수금으로
+              정리됩니다. MARS 에는 평소처럼 올라갑니다.
+            </p>
+          </div>
+        )}
         {reserve && (
           <p className="mt-1.5 rounded-lg bg-violet-50 px-2 py-1.5 text-xs text-violet-900">
             <strong>예약으로 저장</strong> — 오늘 받은 돈은 오늘 매출로 남고, <strong>재고는 안 빠집니다</strong>

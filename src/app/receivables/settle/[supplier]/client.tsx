@@ -16,12 +16,14 @@ import {
   markDeposited,
   reopenRun,
   saveDecision,
+  linkSettleTax,
   saveMatchedDecisions,
   startSettlement,
   type ApplyLineResult,
 } from "@/lib/settlement";
 import { previewReply, type ReplyPreview } from "@/lib/settlement-paste";
 import type { SettleLineView, SettleView } from "@/lib/settlement-data";
+import type { SettleTaxHint } from "@/lib/settle-tax";
 import { useConfirm } from "@/components/ui/confirm";
 import { SPLITTABLE } from "@/lib/payments";
 
@@ -36,7 +38,17 @@ const DECISION_TONE: Record<string, string> = {
   보류: "bg-slate-200 text-slate-600",
 };
 
-export function SettleClient({ view }: { view: SettleView }) {
+export function SettleClient({
+  view,
+  autoAdded = 0,
+  taxHints = [],
+}: {
+  view: SettleView;
+  /** 이 화면을 여는 순간 자동으로 담긴 건 수 (2026-09-10 「항상 최신으로」) */
+  autoAdded?: number;
+  /** 이 청구와 짝일 만한 매출계산서 후보 */
+  taxHints?: SettleTaxHint[];
+}) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [err, setErr] = useState<string | null>(null);
@@ -131,6 +143,63 @@ export function SettleClient({ view }: { view: SettleView }) {
           </>
         )}
       </p>
+
+      {/* ⭐ 항상 최신으로 (2026-09-10) — 열 때 자동으로 담긴 것을 알린다 */}
+      {autoAdded > 0 && (
+        <p className="tabular mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+          지난번 만든 뒤 등록된 <strong>{autoAdded}건</strong>을 방금 담아 최신으로 맞췄습니다 — 지금 청구액은{" "}
+          <strong>{won(billedSum)}원</strong>입니다.
+        </p>
+      )}
+
+      {/* ⭐ 이 청구의 계산서 짝 (2026-09-10) — 자동으로 잇지 않고 확인을 받는다 */}
+      {taxHints.length > 0 && (
+        <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50/60 p-3">
+          <p className="text-sm font-semibold text-sky-900">이 청구의 계산서 짝</p>
+          <ul className="mt-2 space-y-2">
+            {taxHints.map((h) => (
+              <li key={h.invoiceId} className="flex flex-wrap items-baseline justify-between gap-2">
+                <span className="tabular min-w-0 text-sm">
+                  <strong>{h.counterparty}</strong> · {h.issueDate} · {won(h.total)}원
+                  <span className="ml-1 text-xs text-slate-500">{h.summary}</span>
+                  <span className="block text-xs text-sky-800">{h.why}</span>
+                </span>
+                {h.linked ? (
+                  <span className="shrink-0 rounded bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">
+                    이미 이어짐
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() =>
+                      start(async () => {
+                        setErr(null);
+                        const ok = await ask({
+                          title: "이 계산서에 그 달 외상을 이을까요?",
+                          body:
+                            `${h.counterparty} ${h.issueDate} ${won(h.total)}원 계산서에 ` +
+                            `${supplier} ${ym} 외상 ${lines.length}건을 잇습니다.
+` +
+                            "이으면 「계산서로 받은 돈」으로 인식돼 외상 화면에서 정리됩니다.",
+                          confirmLabel: "잇기",
+                        });
+                        if (!ok) return;
+                        const r = await linkSettleTax(supplier, ym, h.invoiceId);
+                        if (!r.ok) return setErr(r.error);
+                        router.refresh();
+                      })
+                    }
+                    className="shrink-0 rounded-control border border-sky-400 bg-white px-3 py-1.5 text-sm font-medium text-sky-800 disabled:opacity-50"
+                  >
+                    이 계산서로 잇기
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* ── 도구 줄: 청구서 · 새 판매 담기 · 다시 열기 ── */}
       <div className="mt-3 flex flex-wrap items-center gap-2">

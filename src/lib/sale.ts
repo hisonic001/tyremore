@@ -97,6 +97,17 @@ export interface SaleInput {
    *    저장해 MARS 대기열에 아예 올라가지 않는다. 재고 차감은 똑같이 된다.
    */
   supplierName?: string | null;
+  /**
+   * ⭐ 본사청구 (2026-09-10) — 손님 차에 시공했지만 **돈은 제조사가 준다**
+   *    (미쉐린 데미지 프리 쿠폰 무상 교체 · OE 타이어 AS).
+   *
+   * 🔴 `supplierName` 과 달리 MARS 를 막지 않는다 — 데미지 교체는 소매 시공이라
+   *    MARS 에 올려야 한다(사장님 확인). 결제수단은 「외상」으로 저장하고, 받을
+   *    돈은 거래처와 같은 묶음이 된다 (정본 lib/receivable-key.ts).
+   */
+  claimParty?: string | null;
+  /** '데미지쿠폰' · 'OE AS' · '기타' */
+  claimKind?: string | null;
 }
 
 /** 오늘 (YYYY-MM-DD) */
@@ -307,6 +318,10 @@ export async function saveSale(
              *    같이 쓴다 — 되돌려도 옛 코드가 이름을 읽을 수 있게 (한 배포 뒤 뗀다).
              */
             supplierName: input.supplierName?.trim() || null,
+            /* ⭐ 본사청구 (2026-09-10) — 청구처만 담는다. supplierName 이 아니므로
+               MARS 는 위에서 「보류」로 남아 소매 등록이 정상 진행된다 */
+            claimParty: input.claimParty?.trim() || null,
+            claimKind: input.claimParty ? (input.claimKind?.trim() || "기타") : null,
             marsMemo: input.supplierName
               ? `거래처 ${input.supplierName.trim()}`
               : input.walkIn?.name

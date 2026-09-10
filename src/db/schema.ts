@@ -648,6 +648,23 @@ export const quote = pgTable(
      */
     referral: text("referral"),
 
+    /**
+     * ⭐ 본사청구 — 「손님 차에 시공했지만 돈은 제조사가 준다」 (2026-09-10)
+     *
+     *   미쉐린 데미지 프리 쿠폰 무상 교체 · OE 타이어 AS. 전에는 앱 밖이라
+     *   재고도 안 빠지고 원가도 안 잡혔고, 입금만 뒷마진에 넣으니 마진이
+     *   20만원쯤 부풀었다.
+     *
+     * 🔴 `supplierName` 을 쓰지 않는 이유: 그 칸이 차 있으면 sale.ts 가 MARS 를
+     *    「해당없음」으로 굳힌다. 데미지 교체는 **소매 시공이라 MARS 에 올려야
+     *    한다**(사장님 확인 2026-09-10). 그래서 청구처만 따로 담는다 —
+     *    결제수단은 「외상」 그대로이고, 받을 돈 묶음은 거래처와 동일하게
+     *    처리된다 (정본 lib/receivable-key.ts).
+     */
+    claimParty: text("claim_party"),
+    /** '데미지쿠폰' · 'OE AS' · '기타' */
+    claimKind: text("claim_kind"),
+
     createdBy: bigint("created_by", { mode: "number" }).references(() => appUser.id),
     createdAt,
     updatedAt,

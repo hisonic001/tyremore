@@ -42,6 +42,9 @@ export interface SaleRow {
   vehicleId: number | null;
   /** ⭐ 거래처 판매면 거래처 이름 (2026-08-17) — 전에는 walkIn 에 뭉뚱그려져 있었다 */
   supplierName: string | null;
+  /** ⭐ 본사청구 (2026-09-10) — 돈은 제조사가 준다 (데미지 쿠폰·OE AS) */
+  claimParty: string | null;
+  claimKind: string | null;
   plateNo: string | null;
   vehicleModel: string | null;
   /** ⭐ 제조사 (사장님 요청 2026-08-09 — "현대 카니발 23나1111 처럼") */
@@ -273,6 +276,8 @@ export async function saleHistory(opts: {
     customer_name: string | null;
     vehicle_id: number | null;
     supplier_name: string | null;
+    claim_party: string | null;
+    claim_kind: string | null;
     plate_no: string | null;
     vehicle_model: string | null;
     maker_name: string | null;
@@ -321,6 +326,7 @@ export async function saleHistory(opts: {
               FROM receivable_payment rp WHERE rp.quote_id = q.id) collections,
            to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM-DD') work_date,
            q.customer_id, c.name customer_name, q.vehicle_id, q.supplier_name,
+           q.claim_party, q.claim_kind,
            v.plate_no, v.model vehicle_model,
            -- 제조사는 코드 사전의 한글 이름 우선 (customer-edit 와 같은 규칙, 2026-08-09)
            COALESCE(mk.name_ko, v.maker_name) maker_name,
@@ -377,6 +383,8 @@ export async function saleHistory(opts: {
         customerName: r.customer_name,
         vehicleId: r.vehicle_id === null ? null : Number(r.vehicle_id),
         supplierName: r.supplier_name,
+        claimParty: r.claim_party,
+        claimKind: r.claim_kind,
         plateNo: r.plate_no,
         vehicleModel: r.vehicle_model,
         makerName: r.maker_name,

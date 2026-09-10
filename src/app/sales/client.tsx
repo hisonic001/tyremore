@@ -294,7 +294,12 @@ export function SaleCard({
         <div className="mt-2 flex items-baseline justify-between gap-3 border-t border-slate-100 pt-2">
           {/* 분할 결제는 「카드+현금」 으로 (2026-08-10) — 수단별 금액은 펼치면 나온다 */}
           <span className="text-[13px] text-slate-500">
-            {s.payments.length ? s.payments.map((p) => p.method).join("+") : (s.paymentMethod ?? "")}
+            {/* ⭐ 본사청구 (2026-09-10) — 저장은 「외상」이지만 받을 상대가 제조사다 */}
+            {s.claimParty
+              ? `본사청구 · ${s.claimParty}`
+              : s.payments.length
+                ? s.payments.map((p) => p.method).join("+")
+                : (s.paymentMethod ?? "")}
           </span>
           <span
             className={`tabular shrink-0 text-[18px] font-extrabold leading-snug ${canceled ? "text-slate-400 line-through" : ""}`}

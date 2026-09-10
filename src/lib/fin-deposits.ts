@@ -16,6 +16,7 @@ import { getSession, hasPerm } from "@/lib/auth";
 import { payerKeyOf } from "./expense-cats";
 import { getDeposit, learnAlias, linkDepositToQuoteCore, linkDepositsToQuoteCore, markCardSettlementsCore } from "./deposit-core";
 import { revalidateFinance } from "./fin-revalidate";
+import { receivableKeyCond } from "./receivable-key";
 import { planSettlement } from "./receivable-plan";
 import { settleReceivables } from "./receivable";
 import { restoreCashLine } from "./cash-restore";
@@ -85,11 +86,12 @@ export async function collectFromDeposit(
   if (dep.recon_status === "확정") return { ok: false, error: "이미 정리된 입금입니다" };
   if (dep.remain <= 0) return { ok: false, error: "이 입금은 남은 금액이 없습니다 — 계산서 확인이 이미 썼습니다" };
 
-  // 대상 조건 — receivable-book 의 KEY 와 글자 그대로 같은 규칙
-  let cond;
-  if (partyKey.startsWith("S:")) cond = sql`q.supplier_name = ${partyKey.slice(2)}`;
-  else if (partyKey.startsWith("C:")) cond = sql`q.supplier_name IS NULL AND q.customer_id = ${Number(partyKey.slice(2))}`;
-  else return { ok: false, error: "대상이 올바르지 않습니다 (비회원 외상은 정비 내역에서 건별로)" };
+  /* 대상 조건 — 정본 receivable-key.ts (외상 장부의 열쇠와 같은 규칙, 2026-09-10
+     추출). 본사청구(claim_party)도 거래처와 같이 묶여 수금이 된다 */
+  if (!partyKey.startsWith("S:") && !partyKey.startsWith("C:")) {
+    return { ok: false, error: "대상이 올바르지 않습니다 (비회원 외상은 정비 내역에서 건별로)" };
+  }
+  const cond = receivableKeyCond(partyKey);
 
   const rows = await db.execute<{ id: number; quote_no: string; total: number; paid: number }>(sql`
     SELECT q.id, q.quote_no, q.total_amount total,

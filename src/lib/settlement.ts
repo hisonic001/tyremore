@@ -54,6 +54,35 @@ export async function addNewSales(runId: number) {
   return r;
 }
 
+/**
+ * ⭐ 「이 청구의 계산서 짝」 잇기 (사장님 요청 2026-09-10)
+ *
+ *   그 달 외상 판매들을 매출계산서 한 장에 이어 준다. 이어지는 순간
+ *   taxChainCoveredSql(deposit-core.ts)이 완성돼 외상·입금 화면이 「계산서로
+ *   받음」을 인식한다 — 잇는 일 자체는 기존 정본 confirmTaxMatch 가 하고,
+ *   중복·금액 검증도 거기 있다.
+ */
+export async function linkSettleTax(supplier: string, ym: string, taxInvoiceId: number) {
+  if (!(await hasPerm("finance"))) return OWNER_ONLY;
+  const { settleQuoteIds } = await import("./settle-tax");
+  const { confirmTaxMatch } = await import("./recon");
+  const quotes = await settleQuoteIds(supplier, ym);
+  if (quotes.length === 0) return { ok: false as const, error: "그 달 외상 판매가 없습니다" };
+  const r = await confirmTaxMatch({
+    taxInvoiceId,
+    refs: quotes.map((q) => ({ table: "quote" as const, id: q.id, amount: q.amount })),
+    method: "수동",
+  });
+  refresh();
+  try {
+    revalidatePath("/finance/deposits");
+    revalidatePath("/finance/tax");
+  } catch {
+    /* 요청 밖 */
+  }
+  return r;
+}
+
 export async function saveDecision(input: Parameters<typeof saveDecisionCore>[0]) {
   if (!(await hasPerm("finance"))) return OWNER_ONLY;
   const r = await saveDecisionCore(input);
