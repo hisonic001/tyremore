@@ -1,11 +1,11 @@
 import {hasPerm } from "@/lib/auth";
 import { traceMoney, type TraceRow } from "@/lib/money-trace";
-import { a1OpenTransfers, type A1Row } from "@/lib/self-audit";
+import { a1OpenTransfers, asideMarkedSales, type A1Row, type AsideRow } from "@/lib/self-audit";
 import { kstToday } from "@/lib/ym";
 import Link from "@/lib/link";
 import { FinShell } from "@/components/fin/shell";
 import { Notice } from "@/components/ui/notice";
-import { TraceSearch, TraceLinkButton, TraceAsideButton } from "./client";
+import { TraceSearch, TraceLinkButton, TraceAsideButton, TraceAsideUndoButton } from "./client";
 
 export const dynamic = "force-dynamic";
 
@@ -26,9 +26,11 @@ export default async function TracePage({ searchParams }: { searchParams: Promis
   /* ⭐ 검색어가 없으면 = 정합성 검사에서 눌러 들어온 것 — 「확인할 것」 목록을 바로 보여주고
      그 자리에서 처리한다 (사장님 제보 2026-09-02: "링크를 누르면 검색창 하나만 달랑").
      목록은 감사 A1 과 같은 정본(a1OpenTransfers, 45일). */
-  const open = owner && !q
-    ? await a1OpenTransfers({ from: new Date(Date.parse(kstToday()) - 45 * 86400000).toISOString().slice(0, 10) })
-    : null;
+  const from45 = new Date(Date.parse(kstToday()) - 45 * 86400000).toISOString().slice(0, 10);
+  const open = owner && !q ? await a1OpenTransfers({ from: from45 }) : null;
+  /* ⭐ 되돌릴 자리 (2026-09-10) — 「통장 밖에서 정리한 판매」. 인박스·이 화면의 안내문이
+     "추적 화면에서 되돌릴 수 있습니다"라고 하는데 정작 부르는 곳이 0곳이었다. */
+  const asides = owner && !q ? await asideMarkedSales({ from: from45 }) : null;
 
   return (
     <FinShell tab="trace">
@@ -42,6 +44,7 @@ export default async function TracePage({ searchParams }: { searchParams: Promis
         <>
           <TraceSearch initial={q} />
           {open && <OpenList rows={open} />}
+          {asides && asides.length > 0 && <AsideList rows={asides} />}
           {r?.hint && <Notice tone="info">{r.hint}</Notice>}
           {r && r.rows.length > 0 && (
             <ul className="mt-3 space-y-2">
@@ -141,6 +144,35 @@ function OpenList({ rows }: { rows: A1Row[] }) {
         진짜 미수(아직 안 받은 돈)는 그대로 두시면 됩니다 — 입금이 올라오면 ⚡잇기가 나타납니다.
       </p>
     </section>
+  );
+}
+
+/* ============================================================
+ * ⭐ 통장 밖에서 정리한 판매 (2026-09-10) — 되돌리기가 사는 곳.
+ *   입금 정리 화면의 [개인 통장으로 받음]·[아직 안 들어옴]과 이 화면의 [개인계좌·현금으로 받음]이
+ *   남긴 자국은 모두 여기 모인다 (정본 self-audit.asideMarkedSales).
+ * ========================================================== */
+function AsideList({ rows }: { rows: AsideRow[] }) {
+  return (
+    <details className="mt-4 rounded-card border border-slate-200 bg-white p-3">
+      <summary className="cursor-pointer text-sm font-semibold text-slate-600">
+        통장 밖에서 정리한 판매 {rows.length}건 (최근 45일) — 잘못 눌렀거나 돈이 들어왔으면 되돌리기
+      </summary>
+      <ul className="mt-2 divide-y divide-slate-100">
+        {rows.map((a) => (
+          <li key={a.quoteId} className="flex items-center justify-between gap-2 py-1.5">
+            <span className="tabular min-w-0 truncate text-xs text-slate-600">
+              {a.d.slice(5)} · {a.who} · {won(a.amount)}원 · {a.reason ?? "개인계좌·현금"}
+              {a.markedAt && <span className="text-slate-400"> ({a.markedAt} 표시)</span>}
+            </span>
+            <TraceAsideUndoButton quoteId={a.quoteId} title={a.who} amount={a.amount} />
+          </li>
+        ))}
+      </ul>
+      <p className="mt-1.5 text-xs text-slate-400">
+        되돌리면 위 「확인할 것」으로 다시 올라옵니다 — 통장 셈(들어온 돈)은 처음부터 안 건드립니다.
+      </p>
+    </details>
   );
 }
 

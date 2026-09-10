@@ -162,10 +162,17 @@ export async function unlinkPos(posId: number): Promise<{ ok: true } | { ok: fal
   return { ok: true };
 }
 
-/** 미매칭 건에 사유 남기기 — 목록은 pos-close.POS_REASONS 정본 하나 (전엔 서버·화면이 갈려 있었다) */
+/**
+ * 미매칭 건에 사유 남기기 — 목록은 pos-close.POS_REASONS 정본 하나 (전엔 서버·화면이 갈려 있었다)
+ *
+ * 🔴 kind 에서 'transfer' 를 뺐다 (2026-09-10) — 계좌이체 판매의 정리는 **사유가 아니라 판정**이다.
+ *    `pos_note` 를 읽는 곳은 입금 화면 하나뿐이라, 여기에만 적으면 감사 A1·홈 인박스·추적
+ *    화면엔 사장님이 이미 정리한 건이 영원히 남았다. 이제 trace-actions.markSaleSettledAside
+ *    가 자국(recon_match)을 남기고 사유를 함께 적는다 — 부르는 곳을 컴파일러가 막게 타입에서 뺀다.
+ */
 export async function setPosNote(input: {
   day: string;
-  kind: "pos_only" | "app_only" | "transfer";
+  kind: "pos_only" | "app_only";
   ref: string;
   reason: string;
   memo?: string | null;

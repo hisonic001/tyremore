@@ -42,7 +42,7 @@ export function InboxSection({ inbox, ym }: { inbox: FinInbox; ym: string }) {
       !(await ask({
         title: "개인계좌·현금으로 받은 판매인가요?",
         body: `${e.text}
-법인 통장에 안 찍히는 돈이라 확인 끝으로 표시합니다. 잘못 표시했으면 추적 화면에서 되돌릴 수 있습니다.`,
+법인 통장에 안 찍히는 돈이라 확인 끝으로 표시합니다. 잘못 표시했으면 돈 추적 화면의 「통장 밖에서 정리한 판매」에서 되돌릴 수 있습니다.`,
         confirmLabel: "받았음 — 확인 끝",
       }))
     )

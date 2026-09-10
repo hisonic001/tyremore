@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
 import type { DepositReconData, DepositSuggestion } from "@/lib/recon-data";
 import type { DepositBreakdown, DepositTaxBundles, DepositTaxCands, TransferSale } from "@/lib/deposit-tax";
-import { clearPosNote, fixSaleMethod, setPosNote } from "@/lib/pos-actions";
+import type { AsideRow } from "@/lib/self-audit";
+import { clearPosNote, fixSaleMethod } from "@/lib/pos-actions";
+import { markSaleSettledAside } from "@/lib/trace-actions";
 import {
   collectFromDeposit,
   confirmSureDeposits,
@@ -32,6 +34,7 @@ export function DepositsRecon({
   sureIds,
   breakdown,
   transfers,
+  asides,
 }: {
   data: DepositReconData;
   ym: string;
@@ -41,6 +44,8 @@ export function DepositsRecon({
   bundles: DepositTaxBundles;
   /** 앱엔 계좌이체인데 법인 통장에 없는 판매 */
   transfers: TransferSale[];
+  /** 통장 밖(개인계좌·현금·아직 안 들어옴)으로 정리해 둔 판매 — 되돌리기용 (2026-09-10) */
+  asides: AsideRow[];
   /** 짝이 확실한 입금 id — 한 번에 잇기 */
   sureIds: number[];
   breakdown: DepositBreakdown;
@@ -393,15 +398,18 @@ export function DepositsRecon({
                         <BankSearch direction="매출" pending={pending} onPick={(id) => act(() => linkDepositToQuote(id, t.quoteId), () => "이었습니다.")} anchor={t.day} />
                       </div>
                     </details>
+                    {/* 🔴 2026-09-10: 이 두 단추는 이제 사유(pos_note)가 아니라 **자국**을 남긴다
+                        (markSaleSettledAside) — 전엔 여기서만 사라지고 감사·홈 인박스·추적 화면엔
+                        영원히 남았다. 되돌리기는 아래 「통장 밖에서 정리한 판매」에 있다. */}
                     <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                       <button type="button" disabled={pending}
-                        onClick={() => act(() => setPosNote({ day: t.day, kind: "transfer", ref: t.key, reason: "개인통장 입금" }), () => "「개인 통장으로 받음」으로 정리했습니다.")}
+                        onClick={() => act(() => markSaleSettledAside(t.quoteId, false, "개인통장 입금"), () => "「개인 통장으로 받음」으로 정리했습니다 — 모든 화면에서 빠집니다.")}
                         className="rounded-full border border-brand-500 bg-brand-50 px-2.5 py-0.5 font-semibold text-brand-700 disabled:opacity-40">개인 통장으로 받음</button>
                       <button type="button" disabled={pending}
                         onClick={() => act(() => fixSaleMethod(t.quoteId, "현금"), () => "결제수단을 현금으로 고쳤습니다.")}
                         className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-slate-600 disabled:opacity-40">현금으로 받음 (수단 고치기)</button>
                       <button type="button" disabled={pending}
-                        onClick={() => act(() => setPosNote({ day: t.day, kind: "transfer", ref: t.key, reason: "아직 안 들어옴" }), () => "「아직 안 들어옴」으로 남겼습니다 — 들어오면 되돌리고 이으세요.")}
+                        onClick={() => act(() => markSaleSettledAside(t.quoteId, false, "아직 안 들어옴"), () => "「아직 안 들어옴」으로 정리했습니다 — 들어오면 아래에서 되돌리고 이으세요.")}
                         className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-slate-600 disabled:opacity-40">아직 안 들어옴</button>
                     </div>
                   </div>
@@ -410,6 +418,37 @@ export function DepositsRecon({
             ))}
           </ul>
         </section>
+      )}
+
+      {/* ⭐ 2026-09-10 — 통장 밖으로 정리한 판매 되돌리기.
+          정리하면 이 화면·감사·인박스에서 한꺼번에 빠지므로, 되돌릴 자리가 여기 없으면
+          「눌렀더니 통째로 사라졌다」가 된다 (안내문만 있고 부르는 곳이 0곳이던 것). */}
+      {asides.length > 0 && (
+        <details className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-600">
+            통장 밖에서 정리한 판매 {asides.length}건 (이 달 · 개인 통장·현금·아직 안 들어옴) — 잘못 눌렀거나 돈이 들어왔으면 되돌리기
+          </summary>
+          <ul className="mt-2 divide-y divide-slate-100 text-sm">
+            {asides.map((a) => (
+              <li key={a.quoteId} className="flex items-center justify-between gap-2 py-1.5">
+                <span className="tabular min-w-0 truncate text-xs">
+                  {a.d.slice(5)} · {a.who} · {won(a.amount)}원 · {a.reason ?? "사유 없음"}
+                  {a.markedAt && <span className="text-slate-400"> ({a.markedAt} 표시)</span>}
+                </span>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() =>
+                    act(() => markSaleSettledAside(a.quoteId, true), () => "되돌렸습니다 — 위 목록으로 돌아왔습니다.")
+                  }
+                  className="shrink-0 text-xs text-slate-400 underline"
+                >
+                  되돌리기
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
 
       {/* 판매와 무관으로 분류한 입금 — 되돌리기 */}

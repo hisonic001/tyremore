@@ -91,7 +91,7 @@ export function TraceAsideButton({ quoteId, title, amount }: { quoteId: number; 
     const ok = await ask({
       title: "개인계좌·현금으로 받은 판매인가요?",
       body: `${title} ${won(amount)}원
-법인 통장에 안 찍히는 돈이라 확인 끝으로 표시합니다. 잘못 표시했으면 다시 눌러도 한 번만 기록됩니다.`,
+법인 통장에 안 찍히는 돈이라 확인 끝으로 표시합니다. 잘못 표시했으면 아래 「통장 밖에서 정리한 판매」에서 되돌릴 수 있습니다.`,
       confirmLabel: "받았음 — 확인 끝",
     });
     if (!ok) return;
@@ -113,6 +113,45 @@ export function TraceAsideButton({ quoteId, title, amount }: { quoteId: number; 
         className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 disabled:opacity-40"
       >
         개인계좌·현금으로 받음
+      </button>
+      {error && <Notice tone="error">{error}</Notice>}
+    </span>
+  );
+}
+
+/**
+ * ⭐ 되돌리기 (2026-09-10) — `markSaleSettledAside(quoteId, true)` 는 처음부터 서버에 있었지만
+ *   **부르는 곳이 한 곳도 없었다.** 그래서 인박스·추적 화면의 "되돌릴 수 있습니다" 안내가
+ *   거짓말이었다. 되돌리면 그 판매는 다시 「확인할 것」으로 올라온다.
+ */
+export function TraceAsideUndoButton({ quoteId, title, amount }: { quoteId: number; title: string; amount: number }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [ask, confirmDialog] = useConfirm();
+  const [error, setError] = useState<string | null>(null);
+
+  const go = async () => {
+    const ok = await ask({
+      title: "이 표시를 되돌릴까요?",
+      body: `${title} ${won(amount)}원
+「확인할 것」 목록으로 다시 올라옵니다 — 통장 입금이 올라왔으면 그 자리에서 이으시면 됩니다.`,
+      confirmLabel: "되돌리기",
+      tone: "danger",
+    });
+    if (!ok) return;
+    start(async () => {
+      setError(null);
+      const r = await markSaleSettledAside(quoteId, true);
+      if (!r.ok) return setError(r.error);
+      router.refresh();
+    });
+  };
+
+  return (
+    <span className="inline-block">
+      {confirmDialog}
+      <button type="button" disabled={pending} onClick={go} className="text-xs text-slate-400 underline disabled:opacity-40">
+        되돌리기
       </button>
       {error && <Notice tone="error">{error}</Notice>}
     </span>

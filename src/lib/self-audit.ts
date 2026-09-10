@@ -38,6 +38,8 @@ export interface AuditItem {
 export interface AuditRun {
   id: number;
   at: string;
+  /** 검사한 지 몇 분 지났나 — 배너가 「○○ 기준(스냅샷)」임을 눈에 보이게 (2026-09-10) */
+  ageMin: number;
   itemCount: number;
   items: AuditItem[];
 }
@@ -199,15 +201,66 @@ export async function runAndSaveAudit(): Promise<{ items: AuditItem[] }> {
 
 /** 최신 결과 — /finance 배너 */
 export async function latestAuditRun(): Promise<AuditRun | null> {
-  const [r] = await db.execute<{ id: number; at: string; item_count: number; items: unknown }>(sql`
-    SELECT id, to_char(at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at, item_count, items
+  const [r] = await db.execute<{ id: number; at: string; age_min: number; item_count: number; items: unknown }>(sql`
+    SELECT id, to_char(at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at,
+           (EXTRACT(EPOCH FROM (now() - at)) / 60)::int age_min, item_count, items
     FROM audit_run ORDER BY id DESC LIMIT 1
   `);
   if (!r) return null;
   return {
     id: Number(r.id),
     at: r.at,
+    ageMin: Math.max(0, Number(r.age_min)),
     itemCount: Number(r.item_count),
     items: (typeof r.items === "string" ? JSON.parse(r.items) : r.items) as AuditItem[],
   };
+}
+
+/* ============================================================
+ * ⭐ 별도 수령으로 정리해 둔 판매 (2026-09-10)
+ *
+ *   markSaleSettledAside 가 남긴 자국을 사람이 보는 목록으로 되돌린다 —
+ *   되돌리기 단추가 붙을 곳이 없으면 「눌러서 사라지는」 정리는 무서운 정리가 된다
+ *   (인박스·추적 화면 안내문은 "되돌릴 수 있습니다"라고 하는데 부르는 곳이 0곳이었다).
+ *   사유(pos_note)는 사람이 읽는 말일 뿐 — 판정은 자국 하나다.
+ * ========================================================== */
+export interface AsideRow {
+  quoteId: number;
+  quoteNo: string;
+  /** YYYY-MM-DD — 판매일 */
+  d: string;
+  amount: number;
+  who: string;
+  /** 사장님이 고른 사유 (없을 수 있다 — 옛 자국·추적 화면에서 표시한 것) */
+  reason: string | null;
+  /** MM-DD HH:MI — 표시한 때 */
+  markedAt: string | null;
+}
+
+export async function asideMarkedSales(range: { from: string; to?: string }): Promise<AsideRow[]> {
+  const rows = await db.execute<{
+    id: number; quote_no: string; d: string; amount: number; who: string; reason: string | null; at: string | null;
+  }>(sql`
+    SELECT q.id, q.quote_no,
+           to_char(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date), 'YYYY-MM-DD') d,
+           m.amount, COALESCE(q.supplier_name, c.name, '?') who, n.reason,
+           to_char(m.confirmed_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at
+    FROM recon_match m
+    JOIN quote q ON q.id = m.ref_id
+    LEFT JOIN customer c ON c.id = q.customer_id
+    LEFT JOIN pos_note n ON n.kind = 'transfer' AND n.ref = 'quote:' || q.id
+    WHERE m.kind = '이체입금' AND m.src_table = '별도수령' AND m.ref_table = 'quote'
+      AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${range.from}::date
+      ${range.to ? sql`AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${range.to}::date` : sql``}
+    ORDER BY 3 DESC, q.id DESC LIMIT 60
+  `);
+  return rows.map((r) => ({
+    quoteId: Number(r.id),
+    quoteNo: r.quote_no,
+    d: r.d,
+    amount: Number(r.amount),
+    who: r.who,
+    reason: r.reason,
+    markedAt: r.at,
+  }));
 }

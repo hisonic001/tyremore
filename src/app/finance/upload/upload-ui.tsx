@@ -5,14 +5,21 @@ import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
 import { applyFinUpload, previewFinUpload, type FinPreview } from "@/lib/fin-upload";
 
-/** 파일 종류별 다음 화면 (2026 감사 R5) */
+/**
+ * 파일 종류별 다음 화면 (2026 감사 R5)
+ *
+ * 🔴 ym 은 **올린 파일이 말하는 달**이다 (2026-09-10) — 전엔 「보고 있던 달」(기본=이번 달)이라
+ *    월초에 지난달 자료를 올리면 이번 달 빈 화면으로 데려갔다. 달을 라벨에도 적어
+ *    어디로 가는지 눈에 보이게 한다.
+ */
 function nextStepOf(source: string, ym: string): { href: string; label: string } {
-  if (source.includes("통장")) return { href: `/finance/deposits?ym=${ym}`, label: "입금 정리로 →" };
-  if (source.includes("법인카드")) return { href: `/finance/expenses?ym=${ym}`, label: "지출 분류로 →" };
-  if (source.includes("토스포스")) return { href: `/finance/card?ym=${ym}`, label: "카드 일마감으로 →" };
-  if (source.includes("카드매출")) return { href: `/finance/card?ym=${ym}`, label: "카드 매출 맞추기로 →" };
-  if (source.includes("홈택스")) return { href: `/finance/tax?view=money&ym=${ym}`, label: "세금계산서 돈 확인으로 →" };
-  return { href: `/finance?ym=${ym}`, label: "현황으로 →" };
+  const m = /^\d{4}-\d{2}$/.test(ym) ? `${Number(ym.slice(5, 7))}월 ` : "";
+  if (source.includes("통장")) return { href: `/finance/deposits?ym=${ym}`, label: `${m}입금 정리로 →` };
+  if (source.includes("법인카드")) return { href: `/finance/expenses?ym=${ym}`, label: `${m}지출 분류로 →` };
+  if (source.includes("토스포스")) return { href: `/finance/card?ym=${ym}`, label: `${m}카드 일마감으로 →` };
+  if (source.includes("카드매출")) return { href: `/finance/card?ym=${ym}`, label: `${m}카드 매출 맞추기로 →` };
+  if (source.includes("홈택스")) return { href: `/finance/tax?view=money&ym=${ym}`, label: `${m}세금계산서 돈 확인으로 →` };
+  return { href: `/finance?ym=${ym}`, label: `${m}현황으로 →` };
 }
 
 const won = (n: number) => n.toLocaleString("ko-KR");
@@ -68,8 +75,13 @@ export function FinUpload({ ym }: { ym: string }) {
       try {
       const r = await applyFinUpload(fd);
       if (!r.ok) return setError(r.error);
-      setDoneMsg(`${r.source} 반영했습니다 — 새로 ${r.newCount}줄 · 이미 있음 ${r.dupCount}줄`);
-      setNext(nextStepOf(r.source, ym));
+      /* 파일이 말하는 달로 데려간다 — 못 알아냈을 때만 보고 있던 달 (2026-09-10) */
+      const fileYm = r.ym ?? ym;
+      setDoneMsg(
+        `${r.source} 반영했습니다 — 새로 ${r.newCount}줄 · 이미 있음 ${r.dupCount}줄` +
+          (r.ym && r.ym !== ym ? ` (자료는 ${Number(r.ym.slice(5, 7))}월입니다)` : ""),
+      );
+      setNext(nextStepOf(r.source, fileYm));
       setPreview(null);
       setFile(null);
       if (input.current) input.current.value = ""; // 계정 이름은 남긴다 — 다음 파일에 이어 쓰게

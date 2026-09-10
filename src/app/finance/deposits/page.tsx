@@ -1,9 +1,10 @@
 import { redirect } from "next/navigation";
 import { getSession, hasPerm } from "@/lib/auth";
-import { pickYm } from "@/lib/ym";
+import { monthRange, pickYm } from "@/lib/ym";
 import { FinShell } from "@/components/fin/shell";
 import { depositReconData } from "@/lib/recon-data";
 import { arrangeDeposits, depositSurePicks, depositTaxCandidates, transferSalesMissing } from "@/lib/deposit-tax";
+import { asideMarkedSales } from "@/lib/self-audit";
 import { DepositsRecon } from "./deposits-ui";
 
 export const dynamic = "force-dynamic";
@@ -39,6 +40,10 @@ export default async function FinanceDepositsPage({
   const data = { ...raw, open };
   // ⭐ 계좌이체로 적혔는데 법인 통장에 없는 판매 (개인 통장 입금 등, 사장님 제보 2026-08-26)
   const transfers = await transferSalesMissing(ym);
+  /* ⭐ 2026-09-10 — 그중 「통장 밖」으로 정리해 둔 것. 정리하면 위 목록에서 빠지므로
+     되돌릴 자리를 같은 화면에 둔다 (정본 self-audit.asideMarkedSales) */
+  const { start, nextStart } = monthRange(ym);
+  const asides = await asideMarkedSales({ from: start, to: nextStart });
 
   return (
     <FinShell tab="deposits" monthNav={{ ym, basePath: "/finance/deposits" }}>
@@ -46,7 +51,7 @@ export default async function FinanceDepositsPage({
         통장에 들어온 돈이 무엇인지 정리합니다 — 카드 정산 · 세금계산서 대금 · 판매 · 외상 수금 · 판매와 무관(이자·지원금·환불).
         짝이 확실한 것은 한 번에, 나머지는 카드마다 고르면 됩니다.
       </p>
-      <DepositsRecon data={data} ym={ym} taxCands={taxCands} bundles={bundles} sureIds={[...sure.keys()]} breakdown={breakdown} transfers={transfers} />
+      <DepositsRecon data={data} ym={ym} taxCands={taxCands} bundles={bundles} sureIds={[...sure.keys()]} breakdown={breakdown} transfers={transfers} asides={asides} />
     </FinShell>
   );
 }

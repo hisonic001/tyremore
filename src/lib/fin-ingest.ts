@@ -11,13 +11,14 @@
  * 🔴 질의는 순차 — Promise.all 금지 (커넥션 max 3). 삽입은 100줄씩 묶는다.
  * 🔴 "use server" 아님 — fin-upload.ts(서버 액션)만 부른다.
  */
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { CARD_SETTLE_PATTERN_SQL } from "./expense-cats";
 import { normName } from "./recon-data";
 import type { CardDayParseResult, CardDepositParseResult, CardTxnParseResult, FinParseResult, NormalizedCashTxn, PosParseResult, TaxParseResult } from "./fin-sheet";
 import { autoMatchPosDayCore } from "./pos-close";
 import { applyAutoCategories } from "./expense-core";
+import { restoreCashLine } from "./cash-restore";
 
 export interface IngestResult {
   uploadId: number;
@@ -108,6 +109,24 @@ export async function ingestCashTxns(
 }
 
 /**
+ * 계산서 줄 상태 복원 (2026-09-10) — 「확정인데 근거도 사유도 없는」 상태를 안 만든다.
+ *
+ * 🔴 감사 A2 의 조건과 **글자 그대로 같은 조건**만 되돌린다 — 사장님이 손으로 남긴
+ *    사유('월정산'·차액 확인 끝)나 다른 자국이 남은 계산서는 건드리지 않는다.
+ *    cash_txn 쪽 짝은 줄 단위 정본 cash-restore.restoreCashLine.
+ */
+async function restoreTaxLines(which: SQL): Promise<void> {
+  await db.execute(sql`
+    UPDATE tax_invoice t SET recon_status = '미대조'
+    WHERE ${which}
+      AND t.recon_status = '확정' AND COALESCE(t.recon_reason, '') = ''
+      AND NOT EXISTS (SELECT 1 FROM recon_match m
+        WHERE (m.src_table = 'tax_invoice' AND m.src_id = t.id)
+           OR (m.ref_table = 'tax_invoice' AND m.ref_id = t.id))
+  `);
+}
+
+/**
  * 배치 취소 — 그 배치가 새로 넣었던 줄만 잠재운다 (겹친 줄은 다른 배치 소속이라 그대로).
  * 🔴 원천별로 제 표를 잠재워야 한다 (2026-08-25 감사에서 발견 — 전에는 cash_txn 만
  *    처리해서 세금계산서·카드매출 배치는 취소해도 줄이 살아 있었다).
@@ -153,17 +172,33 @@ export async function cancelFinUploadBatch(uploadId: number): Promise<number> {
     `);
   }
   /* 🔴 감사 M10: 잠재운 줄에 붙어 있던 대조 연결을 지운다 — 안 지우면 죽은 줄과 이어진
-     매입·판매·계산서가 영영 후보에서 제외된다. 계산서(src) 쪽은 상태도 미대조로 되돌림 */
+     매입·판매·계산서가 영영 후보에서 제외된다.
+     🔴 2026-09-10: 자국만 지우고 **상태를 안 되돌렸다** (주석은 "미대조로 되돌림"이라 쓰여
+     있었지만 코드엔 없었다). 잠재운 줄은 같은 파일을 다시 올리면 `is_active=true` 로
+     되살아나는데, 그때 '확정'인 채 근거(자국)만 없어 **스스로 감사 A2(「확정인데 근거 없음」)를
+     만들었다.** 줄 상태는 줄 단위 정본 restoreCashLine — 반드시 자국을 지운 **뒤에** 부른다. */
   if (up.source === "통장" || up.source === "법인카드") {
-    await db.execute(sql`
+    const gone = await db.execute<{ src_table: string; src_id: number; ref_id: number }>(sql`
       DELETE FROM recon_match WHERE ref_table = 'cash_txn'
         AND ref_id IN (SELECT id FROM cash_txn WHERE upload_id = ${uploadId})
+      RETURNING src_table, src_id, ref_id
     `);
+    for (const id of new Set(gone.map((g) => Number(g.ref_id)))) await restoreCashLine(db, id);
+    // 계산서(src) 쪽 — 근거가 하나도 안 남고 사유도 없는 것만 미대조로 (「월정산」·「차액 확인 끝」은 사장님 판단이라 둔다)
+    const taxIds = [...new Set(gone.filter((g) => g.src_table === "tax_invoice").map((g) => Number(g.src_id)))];
+    if (taxIds.length > 0) await restoreTaxLines(sql`t.id IN (${sql.join(taxIds.map((n) => sql`${n}`), sql`, `)})`);
   } else if (up.source === "홈택스매출" || up.source === "홈택스매입") {
-    await db.execute(sql`
+    const gone = await db.execute<{ ref_table: string; ref_id: number }>(sql`
       DELETE FROM recon_match WHERE src_table = 'tax_invoice'
         AND src_id IN (SELECT id FROM tax_invoice WHERE upload_id = ${uploadId})
+      RETURNING ref_table, ref_id
     `);
+    // 반대편 통장 줄 — 이 계산서가 유일한 근거였다면 '확정'인 채 남아 감사 A2 가 된다
+    for (const id of new Set(gone.filter((g) => g.ref_table === "cash_txn").map((g) => Number(g.ref_id)))) {
+      await restoreCashLine(db, id);
+    }
+    // 잠재운 계산서 자신도 — 되살아날 때를 위해 (위와 같은 까닭)
+    await restoreTaxLines(sql`t.upload_id = ${uploadId}`);
   }
   await db.execute(sql`UPDATE fin_upload SET status = '취소' WHERE id = ${uploadId}`);
   return rows.length;

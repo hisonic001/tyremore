@@ -6,7 +6,7 @@ import { getSession, hasPerm } from "@/lib/auth";
 import { finHealth } from "@/lib/fin-health";
 import { finPL } from "@/lib/fin-pl";
 import { kstToday, ymAdd, pickYm } from "@/lib/ym";
-import { taxOpenCounts } from "@/lib/tax-recon";
+import { taxOpenCounts, CASH_LAT, DONE, LIVE } from "@/lib/tax-recon";
 import { depositOpenCount, expenseOpen } from "@/lib/recon-data";
 import { uploadCoverage, coverageStatus } from "@/lib/upload-coverage";
 import { cardDaySums } from "@/lib/card-recon";
@@ -90,10 +90,15 @@ export default async function FinancePage({
     LEFT JOIN LATERAL (SELECT SUM(amount)::int paid FROM purchase_payment x WHERE x.invoice_id = pi.id) pp ON true
     WHERE pi.status <> '취소' AND pi.total IS NOT NULL AND pi.total > COALESCE(pp.paid, 0)
   `);
+  /* 🔴 2026-09-10: 같은 화면에서 숫자 정의가 둘이었다 — 이 손익 카드만 `recon_status IN
+     ('미대조','제안')` 로 세고, 바로 아래 ⑤ 칩은 정본(taxOpenCounts = LIVE AND NOT DONE)이라
+     「돈 확인 안 됨 0건인데 금액은 있음」이 나왔다. 셈은 정본 조각(CASH_LAT·LIVE·DONE) 하나로.
+     금액식은 tax-recon.taxCashData 의 open_s 와 글자 그대로 같다. */
   const taxBuyOpenRows = await db.execute<{ s: string }>(sql`
-    SELECT COALESCE(SUM(total), 0)::bigint s FROM tax_invoice
-    WHERE is_active AND direction = '매입' AND recon_status IN ('미대조', '제안')
-      AND write_date >= ${start}::date AND write_date < ${nextStart}::date
+    SELECT COALESCE(SUM(t.total) FILTER (WHERE ${LIVE} AND NOT ${DONE}), 0)::bigint s
+    FROM tax_invoice t ${CASH_LAT}
+    WHERE t.is_active AND t.direction = '매입'
+      AND t.write_date >= ${start}::date AND t.write_date < ${nextStart}::date
   `);
   // 분류 안 된 지출 — 지출 화면·체크리스트와 같은 정본 (2026 감사 N3)
   const expOpen = await expenseOpen(ym);
@@ -356,7 +361,8 @@ export default async function FinancePage({
           </p>
           {gTaxBuyOpen > 0 && (
             <p>
-              이 달 매입 세금계산서 중 돈 확인 안 됨: {won(gTaxBuyOpen)}원 —{" "}
+              {/* 건수와 금액이 같은 정의(⑤ 칩과 같은 셈)임을 보이게 나란히 적는다 (2026-09-10) */}
+              이 달 매입 세금계산서 중 돈 확인 안 됨: {taxOpenBy.buy}건 · {won(gTaxBuyOpen)}원 —{" "}
               <Link href={`/finance/tax?view=money&ym=${ym}&direction=매입`} className="underline">세금계산서 돈 확인</Link>에서 확인
             </p>
           )}

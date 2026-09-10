@@ -283,11 +283,34 @@ export async function previewFinUpload(
   }
 }
 
-/** 미리보기에서 본 대로 반영한다 */
+/**
+ * ⭐ 이 파일이 말하는 달 (2026-09-10) — 반영 뒤 「다음 화면」이 어느 달을 보여줄지.
+ *
+ * 🔴 **조회기간(periodTo)이 아니라 줄이 가장 많은 달**을 쓴다. 월초에 지난달 통장을 받으면
+ *    조회기간 끝은 이번 달(예: 09-03)인데 내용은 전부 지난달이라, 기간으로 데려가면
+ *    빈 화면이 나온다 (전엔 아예 「보고 있던 달」로 데려가 같은 증상이었다).
+ *    같은 수면 늦은 달 — 달을 걸친 파일은 새 달을 정리하러 가는 게 자연스럽다.
+ */
+function ymOfRows(dates: string[], fallback: string | null): string | null {
+  const n = new Map<string, number>();
+  for (const d of dates) {
+    const ym = String(d ?? "").slice(0, 7);
+    if (/^\d{4}-\d{2}$/.test(ym)) n.set(ym, (n.get(ym) ?? 0) + 1);
+  }
+  let best: string | null = null;
+  for (const [ym, c] of n) {
+    if (best === null || c > (n.get(best) ?? 0) || (c === n.get(best) && ym > best)) best = ym;
+  }
+  if (best) return best;
+  const f = String(fallback ?? "").slice(0, 7);
+  return /^\d{4}-\d{2}$/.test(f) ? f : null;
+}
+
+/** 미리보기에서 본 대로 반영한다 — ym 은 「파일이 말하는 달」(다음 화면이 쓴다) */
 export async function applyFinUpload(
   fd: FormData,
 ): Promise<
-  | { ok: true; source: string; newCount: number; dupCount: number; rowCount: number }
+  | { ok: true; source: string; newCount: number; dupCount: number; rowCount: number; ym: string | null }
   | { ok: false; error: string }
 > {
   if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
@@ -298,12 +321,27 @@ export async function applyFinUpload(
     const p = parseAnyFin(t.buf, shop.bizNo, t.name);
     if (p.rows.length === 0) return { ok: false, error: "읽을 수 있는 줄이 없습니다 — 파일을 확인해 주세요" };
     const session = await getSession();
+    /* 원천마다 날짜 칸 이름이 다르다 — 「파일이 말하는 달」은 한 곳에서 정한다 */
+    const ym = ymOfRows(
+      p.kind === "tax"
+        ? p.rows.map((r) => r.writeDate)
+        : p.kind === "cardday"
+          ? p.rows.map((r) => r.date)
+          : p.kind === "carddeposit"
+            ? p.rows.map((r) => r.month)
+            : p.kind === "cardtxn"
+              ? p.rows.map((r) => r.approvedAt)
+              : p.kind === "postxn"
+                ? p.rows.map((r) => r.day)
+                : p.rows.map((r) => r.occurredAt),
+      p.periodTo ?? p.periodFrom,
+    );
 
     if (p.kind === "tax") {
       const r = await ingestTaxInvoices(p, session?.uid ?? null, t.name);
       revalidatePath("/finance");
       revalidatePath("/finance/tax");
-      return { ok: true, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount };
+      return { ok: true, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount, ym };
     }
 
     if (p.kind === "postxn") {
@@ -311,13 +349,13 @@ export async function applyFinUpload(
       revalidatePath("/finance");
       revalidatePath("/finance/card");
       revalidatePath("/sales");
-      return { ok: true, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount };
+      return { ok: true, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount, ym };
     }
     if (p.kind === "cardtxn") {
       const r = await ingestCardTxns(p, session?.uid ?? null, t.name);
       revalidatePath("/finance");
       revalidatePath("/finance/card");
-      return { ok: true, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount };
+      return { ok: true, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount, ym };
     }
     if (p.kind === "cardday" || p.kind === "carddeposit") {
       const r =
@@ -326,14 +364,14 @@ export async function applyFinUpload(
           : await ingestCardDeposits(p, session?.uid ?? null, t.name);
       revalidatePath("/finance");
       revalidatePath("/finance/card");
-      return { ok: true, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount };
+      return { ok: true, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount, ym };
     }
 
     const label = String(fd.get("label") ?? "").trim();
     if (!label) return { ok: false, error: "어느 통장·카드인지 계정 이름을 적어 주세요 (예: 신한주거래 · 국민법인카드)" };
     const r = await ingestCashTxns(p, label, session?.uid ?? null, t.name);
     revalidatePath("/finance");
-    return { ok: true, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount };
+    return { ok: true, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount, ym };
   } catch (e) {
     return { ok: false, error: `반영하지 못했습니다: ${e instanceof Error ? e.message : String(e)}` };
   }
