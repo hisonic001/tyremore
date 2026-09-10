@@ -639,6 +639,7 @@ function ReplySection({ runId, onErr }: { runId: number; onErr: (s: string | nul
             읽은 줄 {preview.parsedCount} — 이어진 판매 {preview.matched.length}건
             {preview.ambiguous.length > 0 && ` · 골라야 할 것 ${preview.ambiguous.length}건`}
             {preview.unmatched.length > 0 && ` · 못 이은 줄 ${preview.unmatched.length}`}
+            {(preview.noMark?.length ?? 0) > 0 && ` · 표시 없어 그대로 둔 것 ${preview.noMark!.length}건`}
           </p>
           <ul className="mt-1.5 max-h-72 space-y-1 overflow-y-auto">
             {preview.matched.map((m) => {
@@ -656,7 +657,10 @@ function ReplySection({ runId, onErr }: { runId: number; onErr: (s: string | nul
                     <span className="ml-1 text-slate-400">({m.matchedBy})</span>
                   </span>
                   <span className="tabular shrink-0 text-right">
-                    {m.agreed == null || m.agreed === m.billed ? (
+                    {/* 승인금액 0 = 거래처 반려 (청구서의 승인금액 칸·비고 「반려」) */}
+                    {m.decision === "반려" || m.agreed === 0 ? (
+                      <span className="font-semibold text-red-700">반려 — 판매 취소</span>
+                    ) : m.agreed == null || m.agreed === m.billed ? (
                       <span className="text-emerald-700">{won(m.billed)} 그대로</span>
                     ) : (
                       <span className={delta < 0 ? "font-semibold text-red-600" : "font-semibold text-sky-700"}>

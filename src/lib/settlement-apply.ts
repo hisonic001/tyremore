@@ -187,7 +187,13 @@ export async function saveMatchedDecisionsCore(
     `);
     if (!line) continue;
     const billed = Number(line.billed_amount);
-    const decision = r.agreed == null || r.agreed === billed ? "승인" : "조정";
+    /**
+     * ⭐ 승인금액 0 = 거래처 **반려** (2026-09-10) — 사장님 청구서의 「승인금액」
+     *    칸에 0 이 적혀 오거나 비고에 「반려」가 적힌 줄이 여기로 온다.
+     *    0원짜리 조정으로 저장하면 판매가 0원으로 깎여 남아 버린다.
+     * 🔴 그래도 여기서 바로 판매가 취소되진 않는다 — 「한꺼번에 적용」이 실제 반영.
+     */
+    const decision = r.agreed === 0 ? "반려" : r.agreed == null || r.agreed === billed ? "승인" : "조정";
     const res = await saveDecisionCore({
       lineId: r.lineId,
       decision,

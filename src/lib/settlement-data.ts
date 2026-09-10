@@ -66,6 +66,58 @@ export async function settlementBook(): Promise<SettleRunSummary[]> {
   }));
 }
 
+/* ============================================================
+ * ⭐ 관리대장 시트 자료 (사장님 요청 2026-09-10)
+ *
+ *   수기 「렌트카_거래처_청구입금_관리대장.xlsx」 의 「거래내역」 시트와 같은 줄:
+ *   No. / 청구일 / 거래처 / 내용 / 청구금액 / 입금일 / 입금금액 / 미수금 / 상태 / 비고
+ *
+ * 🔴 청구금액은 **합의액이 있으면 합의액** — 수기 대장에 적어 오신 것도 거래처와
+ *    맞춘 뒤 실제로 청구한 금액이다 (합의 전이면 청구서 스냅샷).
+ * ========================================================== */
+export interface SettleLedgerRow {
+  supplierName: string;
+  ym: string;
+  /** 청구일 = 청구서를 내보낸 날 (아직이면 null) */
+  billedOn: string | null;
+  billed: number | null;
+  depositedOn: string | null;
+  deposited: number | null;
+  status: string;
+  memo: string | null;
+}
+
+export async function settlementLedger(limit = 200): Promise<SettleLedgerRow[]> {
+  const rows = await db.execute<{
+    supplier_name: string;
+    ym: string;
+    billed_on: string | null;
+    billed: number | null;
+    deposited_on: string | null;
+    deposited_amount: number | null;
+    status: string;
+    memo: string | null;
+  }>(sql`
+    SELECT r.supplier_name, r.ym,
+           (r.invoice_exported_at AT TIME ZONE 'Asia/Seoul')::date::text billed_on,
+           COALESCE(r.agreed_amount, r.invoiced_amount) billed,
+           r.deposited_on::text deposited_on, r.deposited_amount, r.status, r.memo
+    FROM settlement_run r
+    ORDER BY r.ym ASC, r.supplier_name ASC
+    LIMIT ${limit}
+  `);
+  return rows.map((r) => ({
+    supplierName: r.supplier_name,
+    ym: r.ym,
+    billedOn: r.billed_on,
+    billed: r.billed === null ? null : Number(r.billed),
+    depositedOn: r.deposited_on,
+    deposited: r.deposited_amount === null ? null : Number(r.deposited_amount),
+    status: r.status,
+    memo: r.memo,
+  }));
+}
+
 export interface SettleItem {
   id: number;
   description: string;
