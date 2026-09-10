@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
-import { sql } from "drizzle-orm";
-import { db } from "@/db";
 import { getSession, hasPerm } from "@/lib/auth";
+import { uploadLedger } from "@/lib/upload-ledger";
 import Link from "@/lib/link";
 import { FinShell } from "@/components/fin/shell";
 import { pickYm } from "@/lib/ym";
@@ -36,15 +35,8 @@ export default async function FinanceUploadPage({
   const cov = await uploadCoverage();
   const st = coverageStatus(cov, ym);
   const lag = new Set(st.lagging.map((r) => r.key));
-  const uploads = await db.execute<{
-    id: number; source: string; l: string | null; file_name: string; new_count: number; dup_count: number;
-    status: string; at: string; pf: string | null; pt: string | null;
-  }>(sql`
-    SELECT id, source, account_label l, file_name, new_count, dup_count, status,
-           to_char(created_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at,
-           period_from::text pf, period_to::text pt
-    FROM fin_upload ORDER BY id DESC LIMIT 8
-  `);
+  // ⭐ 정본 하나 (2026-09-10, upload-ledger.ts) — 「올린 자료」 화면과 같은 목록·같은 상태
+  const uploads = await uploadLedger({ limit: 8 });
 
   return (
     <FinShell tab="upload" ym={ym}>
@@ -100,17 +92,20 @@ export default async function FinanceUploadPage({
                   <span className="tabular text-xs text-slate-400">{u.at}</span>{" "}
                   <span className="mr-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">{u.source}</span>
                   <span className="break-all text-xs">
-                    {u.l ? `${u.l} · ` : ""}
-                    {u.file_name}
+                    {u.accountLabel ? `${u.accountLabel} · ` : ""}
+                    {u.fileName}
                   </span>
                   <span className="tabular ml-1 text-xs text-slate-500">
-                    {u.pf && u.pt ? `${u.pf.slice(2)}~${u.pt.slice(5)} · ` : ""}새 {u.new_count} · 중복 {u.dup_count}
+                    {u.periodFrom && u.periodTo ? `${u.periodFrom.slice(2)}~${u.periodTo.slice(5)} · ` : ""}새 {u.newCount} · 중복 {u.dupCount}
+                    {u.note === "정리 안 됨" && (
+                      <Link href={u.openHref} className="ml-1 text-amber-700 underline">정리 안 된 {u.open}줄</Link>
+                    )}
                   </span>
                 </span>
                 {u.status === "취소" ? (
                   <span className="shrink-0 text-xs text-slate-400">되돌림</span>
                 ) : (
-                  <form action={cancelBatch.bind(null, Number(u.id))}>
+                  <form action={cancelBatch.bind(null, u.id)}>
                     <button type="submit" className="shrink-0 text-xs text-slate-400 underline">
                       되돌리기
                     </button>
@@ -120,7 +115,7 @@ export default async function FinanceUploadPage({
             ))}
           </ul>
           <p className="mt-2 text-xs text-slate-400">
-            더 오래된 파일은 <Link href={`/finance?ym=${ym}&v=내역`} className="underline">현황 › 통장·파일 내역</Link>에서.
+            전체 목록·검색은 <Link href={`/finance/files?ym=${ym}`} className="underline">올린 자료</Link>에서.
           </p>
         </section>
       )}

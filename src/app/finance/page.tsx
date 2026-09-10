@@ -551,7 +551,12 @@ export default async function FinancePage({
       {/* ── 올린 파일 ── */}
       {uploads.length > 0 && (
         <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-          <h2 className="font-semibold">올린 파일</h2>
+          <h2 className="font-semibold">
+            올린 파일{" "}
+            <Link href={`/finance/files?ym=${ym}`} className="ml-1 text-xs font-normal text-slate-500 underline">
+              전체·검색 →
+            </Link>
+          </h2>
           <p className="mt-1 text-xs text-slate-400">
             취소하면 그 파일이 새로 넣은 줄만 잠재웁니다 — 같은 파일을 다시 올리면 되살아납니다
           </p>
