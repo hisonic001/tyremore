@@ -216,7 +216,10 @@ export async function queueForMars(
     if ((r.payment_method === "외상" && !r.claim_party) || r.payment_method === "서비스") {
       blocked.push(
         r.payment_method === "외상"
-          ? `${r.quote_no}: 외상은 MARS 에 넣지 않습니다 — 수금 뒤 결제를 실제 수단으로 바꾸고 다시 체크해 주세요`
+          ? r.reservation_status === "시공완료"
+            // 예약 잔금은 받는 순간 보통 결제로 정리된다 (2026-09-10, reservation-pay.ts)
+            ? `${r.quote_no}: 예약 잔금이 남았습니다 — 잔금을 받으면 올릴 수 있습니다`
+            : `${r.quote_no}: 외상은 MARS 에 넣지 않습니다 — 수금 뒤 결제를 실제 수단으로 바꾸고 다시 체크해 주세요`
           : `${r.quote_no}: 서비스(무상)는 MARS 에 넣지 않습니다`,
       );
       continue;

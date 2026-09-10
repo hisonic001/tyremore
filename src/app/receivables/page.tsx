@@ -54,6 +54,14 @@ export default async function ReceivablesPage({
         못 받은 외상 <strong>{book.totalCount}건</strong> · 잔액{" "}
         <strong className="text-amber-800">{won(book.totalRemain)}원</strong> · {book.targets.length}곳
       </p>
+      {/* ⭐ 예약 잔금은 「못 받은 돈」이 아니라 아직 받을 때가 안 된 돈 (2026-09-10) —
+          위 잔액에 포함돼 있으니 갈라서 보여 준다. 독촉 대상이 아니다 */}
+      {book.reserveCount > 0 && (
+        <p className="tabular mt-1 text-sm text-violet-800">
+          그중 📌 예약 잔금 <strong>{book.reserveCount}건 · {won(book.reserveRemain)}원</strong> — 시공하러 오시면 받을 돈
+          {" · "}독촉할 외상은 <strong>{won(book.totalRemain - book.reserveRemain)}원</strong>
+        </p>
+      )}
 
       <BookFilter kind={kind ?? null} includeSettled={includeSettled} />
 
@@ -79,7 +87,8 @@ export default async function ReceivablesPage({
       <p className="mt-8 text-xs leading-relaxed text-slate-400">
         거래처를 펼쳐 받은 건들을 체크하고 「한꺼번에 털기」를 누르면 한 번에 수금됩니다. 받은 금액이
         고른 건들의 합보다 적으면 <strong>오래된 건부터</strong> 채웁니다 — 마지막 한 건만 잔액이
-        남습니다. 완납돼도 결제수단은 「외상」 그대로입니다(그렇게 판 것이 사실이니).
+        남습니다. 완납돼도 결제수단은 「외상」 그대로입니다(그렇게 판 것이 사실이니) — 단 📌 예약 건은
+        잔금까지 받으면 앱이 알아서 보통 결제로 정리합니다(예약금·잔금이 각각 받은 날로 남습니다).
       </p>
     </main>
   );

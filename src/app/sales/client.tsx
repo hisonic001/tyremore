@@ -11,6 +11,7 @@ import { SquareArrowOutUpRight } from "lucide-react";
 import { StatusPill } from "@/components/ui/badge";
 import { useConfirm } from "@/components/ui/confirm";
 import { CollectionPanel } from "./collections";
+import { ReservationFixPanel } from "./reservation-fix";
 import { AddLine, EditableLine } from "./line-edit";
 import { ReassignPanel } from "./reassign";
 
@@ -298,7 +299,8 @@ export function SaleCard({
             {s.claimParty
               ? `본사청구 · ${s.claimParty}`
               : s.payments.length
-                ? s.payments.map((p) => p.method).join("+")
+                // 같은 수단이 날짜만 다르게 여러 줄이면(예약금+잔금) 한 번만 (2026-09-10)
+                ? [...new Set(s.payments.map((p) => p.method))].join("+")
                 : (s.paymentMethod ?? "")}
           </span>
           <span
@@ -463,10 +465,31 @@ export function SaleCard({
             </div>
           )}
 
-          {/* ⭐ 외상 수금 (사장님 선택 2026-08-11) */}
+          {/* ⭐ 외상 수금 (사장님 선택 2026-08-11) — 예약이면 「예약금·잔금 받기」 (2026-09-10) */}
           {s.paymentMethod === "외상" && !canceled && (
-            <CollectionPanel quoteId={s.quoteId} total={s.totalAmount} collections={s.collections} owner={canCollect} />
+            <CollectionPanel
+              quoteId={s.quoteId}
+              total={s.totalAmount}
+              collections={s.collections}
+              owner={canCollect}
+              reserved={!!s.reservationStatus && !s.claimParty}
+            />
           )}
+          {/* ⭐ 전액 받은 것으로 저장된 예약 — 실제 받은 돈으로 고치는 자리 (2026-09-10).
+              실측 예약중 8건 전부 이 모양이었다. 수금 권한이 있어야 고친다 */}
+          {canCollect &&
+            !canceled &&
+            s.reservationStatus === "예약중" &&
+            s.paymentMethod !== "외상" &&
+            s.paymentMethod !== "서비스" &&
+            !s.claimParty && (
+              <ReservationFixPanel
+                quoteId={s.quoteId}
+                total={s.totalAmount}
+                paymentMethod={s.paymentMethod}
+                memo={s.paymentMemo}
+              />
+            )}
 
           {/* ⭐ 손님·거래처 바꾸기 (사장님 지시 2026-08-17) */}
           {canReassign && reassigning && !canceled && (
@@ -622,10 +645,12 @@ export function SaleCard({
                           setError(null);
                           const r = await fulfillReservation(s.quoteId);
                           if (!r.ok) return setError(r.error);
+                          // ⭐ 잔금이 남았으면 그걸 먼저 말한다 (2026-09-10) — 시공 완료 = 돈 받을 순간
+                          const due = remain > 0 ? ` 잔금 ${won(remain)}원을 아래 「예약금·잔금 받기」에서 받아 주세요 —` : "";
                           setNotice(
                             r.shortages.length > 0
-                              ? `시공 완료 — ⚠️ 재고 부족: ${r.shortages.join(" · ")} (재주문 확인!)`
-                              : "시공 완료 — 재고가 차감됐습니다. 이제 MARS 에 올릴 수 있습니다.",
+                              ? `시공 완료 — ⚠️ 재고 부족: ${r.shortages.join(" · ")} (재주문 확인!)${due}`
+                              : `시공 완료 — 재고가 차감됐습니다.${due}${remain > 0 ? " 받으면 MARS 에 올릴 수 있습니다." : " 이제 MARS 에 올릴 수 있습니다."}`,
                           );
                           router.refresh();
                         })

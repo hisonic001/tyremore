@@ -23,11 +23,14 @@ export function CollectionPanel({
   total,
   collections,
   owner = false,
+  reserved = false,
 }: {
   quoteId: number;
   total: number;
   collections: { id: number; amount: number; method: string; paidOn: string; memo: string | null }[];
   owner?: boolean;
+  /** ⭐ 예약 건 (2026-09-10) — 「외상 수금」이 아니라 「예약금·잔금」이고, 완납되면 앱이 알아서 정리한다 */
+  reserved?: boolean;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -44,7 +47,7 @@ export function CollectionPanel({
   return (
     <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3">
       <div className="flex items-baseline justify-between">
-        <h3 className="text-sm font-bold text-amber-900">외상 수금</h3>
+        <h3 className="text-sm font-bold text-amber-900">{reserved ? "📌 예약금·잔금 받기" : "외상 수금"}</h3>
         <span className="tabular text-sm font-semibold text-amber-900">
           {remain > 0 ? `잔액 ${won(remain)}원` : "완납 ✅"}
           <span className="ml-2 font-normal text-amber-700">
@@ -158,7 +161,9 @@ export function CollectionPanel({
       )}
       {remain <= 0 && (
         <p className="mt-1.5 text-xs text-amber-700">
-          다 받았습니다. MARS 에 올리려면 「날짜·결제 고치기」에서 실제 받은 수단으로 바꾸세요.
+          {reserved
+            ? "다 받았습니다 — 개인계좌로 받은 몫이 섞여 보통 결제로 정리하지 못했습니다. MARS 에 올리려면 「날짜·결제 고치기」에서 실제 받은 수단으로 바꾸세요."
+            : "다 받았습니다. MARS 에 올리려면 「날짜·결제 고치기」에서 실제 받은 수단으로 바꾸세요."}
         </p>
       )}
       {err && <p className="mt-1.5 text-xs text-red-600">{err}</p>}

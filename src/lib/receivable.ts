@@ -20,6 +20,7 @@ import { hasPerm } from "./auth";
 import { PERM_DENIED } from "./perm-keys";
 import { COLLECT_METHODS } from "./payments";
 import { planSettlement } from "./receivable-plan";
+import { normalizeSettledReservation } from "./reservation-pay";
 
 function refresh() {
   for (const p of ["/sales", "/", "/receivables"]) {
@@ -91,12 +92,16 @@ export async function addCollection(input: {
     return { ok: false, error: `잔액(${remainBefore.toLocaleString()}원)보다 많이 받을 수 없습니다` };
   }
 
-  await db.insert(receivablePayment).values({
-    quoteId: q.id,
-    amount,
-    method: input.method,
-    ...(paidOn ? { paidOn } : {}),
-    memo: input.memo?.trim() || null,
+  await db.transaction(async (tx) => {
+    await tx.insert(receivablePayment).values({
+      quoteId: q.id,
+      amount,
+      method: input.method,
+      ...(paidOn ? { paidOn } : {}),
+      memo: input.memo?.trim() || null,
+    });
+    // ⭐ 예약 잔금까지 다 받았으면 보통 판매로 되돌린다 (2026-09-10, 정본 reservation-pay.ts)
+    await normalizeSettledReservation(q.id, tx);
   });
   refresh();
   return { ok: true, remain: remainBefore - amount };
@@ -195,6 +200,8 @@ export async function settleReceivables(input: {
           memo: input.memo?.trim() || null,
         })),
       );
+      // ⭐ 예약 건이 완납되면 보통 판매로 (2026-09-10) — 예약이 아니면 아무 일도 안 한다
+      for (const p of plan) await normalizeSettledReservation(p.quoteId, tx);
       return {
         ok: true as const,
         settled: plan.length,

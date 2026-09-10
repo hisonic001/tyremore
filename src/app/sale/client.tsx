@@ -127,9 +127,14 @@ export function SaleForm({
   /**
    * 총액을 외상으로 잡고 받은 몫만 그 자리에서 수금 기록할 것인가.
    *  · 본사청구는 **늘** 그렇다 — 정의상 돈은 제조사가 준다 (전에도 외상으로 저장했다)
-   *  · 예약은 **금액을 적었고 모자랄 때만** — 안 적으면 예전 그대로 전액 결제로 저장된다
+   *  · 예약은 **받은 돈이 합계보다 적으면** — 한 푼도 안 적었으면 전액 잔금이다.
+   *
+   * 🔴 2026-09-10 오후 정정: 전에는 「금액을 적었을 때만」이라, 예약을 체크하고 카드만 누르고
+   *    금액을 비우면 **전액 카드로 저장됐다**. 실측 예약중 8건 전부 그 모양(권미선 20만원 예약금이
+   *    메모 글자로만 남음). 사장님: "안 받고 진행도 하고 받기도 하고 금액은 정해진 게 없음" —
+   *    그러니 비운 칸은 「0원 받음」이 맞다. 예약금 = 합계면 지금처럼 보통 판매.
    */
-  const credit = !!claimParty || (reserve && paidParts.length > 0 && paySum < total);
+  const credit = !!claimParty || (reserve && paySum < total);
   /** 못 받은 몫 — 본사청구면 청구액, 예약이면 잔금 */
   const shortfall = total - paySum;
   /** 복합결제에서 수단이 1개면 금액은 전액 — 품목이 바뀌어 합계가 달라져도 따라간다.
@@ -188,8 +193,9 @@ export function SaleForm({
       setPayAmounts({});
       return;
     }
-    /** 복합결제가 꺼져 있으면 예전처럼 하나만 — 누르면 바뀐다 (사장님 요청 2026-08-10) */
-    if (!combo) {
+    /** 복합결제가 꺼져 있으면 예전처럼 하나만 — 누르면 바뀐다 (사장님 요청 2026-08-10).
+        본사청구·예약(partial)은 「받은 만큼」을 적는 자리라 스위치 없이도 여러 수단을 고른다 (2026-09-10) */
+    if (!combo && !partial) {
       setPayMethods([p]);
       setPayAmounts({});
       return;
@@ -198,7 +204,7 @@ export function SaleForm({
       const cur = prev.filter((m) => splitPay.includes(m));
       if (cur.includes(p)) {
         const next = cur.filter((m) => m !== p);
-        if (next.length === 0) return prev; // 마지막 하나는 못 끈다
+        if (next.length === 0) return partial ? [] : prev; // 마지막 하나는 못 끈다 — 예약·본사청구는 「안 받음」이 있으니 끌 수 있다
         setPayAmounts((a) => {
           const rest = { ...a };
           delete rest[p];
@@ -798,10 +804,20 @@ export function SaleForm({
           >
             본사청구
           </button>
-          {/* ⭐ 예약 (2026-09-01) — 선금·구두 예약. 재고는 시공 완료 때 */}
+          {/* ⭐ 예약 (2026-09-01) — 선금·구두 예약. 재고는 시공 완료 때.
+              켜면 결제 수단을 비운다 (2026-09-10) — 기본이 「예약금 안 받음」이고, 받았으면
+              수단을 눌러 금액을 적는다. 끄면 예전처럼 카드 하나로 돌아간다 */}
           <button
             type="button"
-            onClick={() => setReserve((v) => !v)}
+            onClick={() => {
+              setError(null);
+              setReserve((v) => {
+                setPayAmounts({});
+                setCombo(false);
+                setPayMethods(v ? ["카드"] : []);
+                return !v;
+              });
+            }}
             className={`rounded-lg border border-dashed px-4 py-2 text-sm font-medium ${
               reserve ? "border-violet-700 bg-violet-700 text-white" : "border-violet-400 bg-white text-violet-700"
             }`}
@@ -861,10 +877,19 @@ export function SaleForm({
         )}
         {reserve && (
           <p className="mt-1.5 rounded-lg bg-violet-50 px-2 py-1.5 text-xs text-violet-900">
-            <strong>예약으로 저장</strong> — 오늘 받은 돈은 오늘 매출로 남고, <strong>재고는 안 빠집니다</strong>
+            <strong>예약으로 저장</strong> — <strong>재고는 안 빠집니다</strong>
             (시공하러 오시면 정비 내역에서 「시공 완료」). MARS 는 시공 완료 뒤에 올립니다.
-            {/* ⭐ 예약금 일부만 받기 (사장님 요청 2026-09-10) — 아래 금액 칸에 받은 만큼만 */}
-            {" "}예약금을 <strong>일부만 받으셨으면 아래 금액 칸에 받은 만큼만</strong> 적으세요 — 나머지는 잔금으로 남습니다.
+            {/* ⭐ 예약금은 그때그때 다르다 (사장님 2026-09-10) — 안 받음이 기본, 받았으면 수단 눌러 금액 */}
+            {" "}
+            {payMethods.length === 0 ? (
+              <>
+                지금은 <strong>예약금 안 받음</strong>으로 저장됩니다 — 받으셨으면 위에서 카드·현금을 누르고 <strong>받은 만큼</strong>을 적으세요.
+              </>
+            ) : (
+              <>
+                <strong>받은 만큼만</strong> 적으세요 — 나머지는 잔금으로 남고, 시공 후 정비 내역에서 받습니다.
+              </>
+            )}
           </p>
         )}
         {combo && !partial && (

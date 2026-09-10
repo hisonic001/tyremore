@@ -68,7 +68,10 @@ export function SalesList({
   const blockedReason = (s: SaleRow) => {
     if (s.status !== "성사" || (s.marsStatus !== "보류" && s.marsStatus !== "수동처리")) return null;
     if (s.paymentMethod === "외상" && !s.claimParty)
-      return "외상 — 수금 뒤 「날짜·결제 고치기」로 실제 수단으로 바꾸면 올릴 수 있습니다";
+      // 예약 잔금은 받는 순간 앱이 보통 결제로 정리한다 (2026-09-10, reservation-pay.ts) — 사람이 결제를 바꿀 일이 없다
+      return s.reservationStatus === "시공완료"
+        ? "예약 잔금이 남았습니다 — 카드를 펼쳐 잔금을 받으면 올릴 수 있습니다"
+        : "외상 — 수금 뒤 「날짜·결제 고치기」로 실제 수단으로 바꾸면 올릴 수 있습니다";
     if (s.paymentMethod === "서비스") return "서비스(무상) — MARS 에 올리지 않습니다";
     if (s.totalAmount <= 0) return "0원·마이너스(환불) 판매 — MARS 에 올리지 않습니다 (반품은 MARS 에서 직접)";
     if (s.marsMissing.length > 0) return `MARS 필수 정보 없음: ${s.marsMissing.join(" · ")}`;

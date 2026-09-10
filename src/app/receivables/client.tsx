@@ -62,7 +62,8 @@ function TargetCard({ t, owner }: { t: ReceivableTarget; owner: boolean }) {
   }, [picked, received, pickedSum]);
 
   const isSupplier = t.kind === "supplier";
-  const old = t.oldestDays >= OLD_DAYS;
+  // 예약 잔금만 남은 상대는 묵은 외상이 아니다 (2026-09-10)
+  const old = t.oldestDays >= OLD_DAYS && t.remain > t.reserveRemain;
 
   function settle() {
     start(async () => {
@@ -139,7 +140,7 @@ function TargetCard({ t, owner }: { t: ReceivableTarget; owner: boolean }) {
                   onClick={() =>
                     setSel(
                       Object.fromEntries(
-                        openSales.filter((s) => s.ageDays >= OLD_DAYS).map((s) => [s.quoteId, true]),
+                        openSales.filter((s) => !s.reserved && s.ageDays >= OLD_DAYS).map((s) => [s.quoteId, true]),
                       ),
                     )
                   }
@@ -177,8 +178,13 @@ function TargetCard({ t, owner }: { t: ReceivableTarget; owner: boolean }) {
                           <span className="font-medium">{s.quoteNo}</span>
                           <span className="text-slate-500">{s.workDate.slice(5)}</span>
                           {s.plateNo && <span className="text-slate-400">{s.plateNo}</span>}
-                          {s.ageDays >= OLD_DAYS && (
-                            <span className="text-xs font-semibold text-red-600">{s.ageDays}일</span>
+                          {/* ⭐ 예약 잔금은 독촉할 돈이 아니다 (2026-09-10) — 붉히지 않고 📌 로 가른다 */}
+                          {s.reserved ? (
+                            <span className="rounded bg-violet-100 px-1.5 py-0.5 text-xs font-medium text-violet-800">📌 예약 잔금</span>
+                          ) : (
+                            s.ageDays >= OLD_DAYS && (
+                              <span className="text-xs font-semibold text-red-600">{s.ageDays}일</span>
+                            )
                           )}
                         </div>
                         <div className="truncate text-xs text-slate-500">{s.summary}</div>
