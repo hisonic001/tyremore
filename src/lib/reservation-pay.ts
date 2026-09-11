@@ -57,7 +57,8 @@ export interface PaidPart {
  * 이미 저장된 예약을 「외상 + 실제 받은 몫」으로 고친다.
  *   parts 가 비면 = 아직 한 푼도 안 받음 (전액 잔금).
  *   parts 합 = 총액이면 곧바로 보통 판매로 정리된다(normalize).
- * 기존 분할(quote_payment)·수금(receivable_payment) 줄은 **전부 갈아 끼운다** — 「고치기」니까.
+ * 기존 분할(quote_payment)·수금(receivable_payment) 줄은 갈아 끼우되, **카드 일마감과 이미 맞춰진 수금 줄은
+ * 같은 수단·금액이 입력에 있으면 그대로 둔다**(2026-09-11 권미선 — 짝이 고아가 되던 결함).
  */
 export async function restateReservationPaid(input: {
   quoteId: number;
@@ -91,12 +92,45 @@ export async function restateReservationPaid(input: {
         throw new Error(`받은 금액(${paidSum.toLocaleString()}원)이 판매 합계(${total.toLocaleString()}원)보다 큽니다`);
       }
 
+      /* 🔴 이미 카드 일마감(POS)과 맞춰진 수금 줄은 지우지 않는다 (사장님 제보 2026-09-11 — 권미선 9/10 카드
+         200,000·854,000 이 POS 와 맞춰져 있었는데 「받은 돈 고치기」를 다시 하자 줄을 지우고 새로 만들어
+         짝이 없는 줄을 가리키게 됐고, 일마감에 「짝 없음」으로 다시 떴다).
+         같은 수단·같은 금액의 새 입력이 있으면 그 줄을 **그대로 두고** 그 입력만 건너뛴다.
+         그래도 지워지는 줄의 짝(recon_match)은 함께 지워 고아 자국을 안 남긴다. */
+      const existing = await tx.execute<{ id: number; method: string; amount: number; matched: boolean }>(sql`
+        SELECT r.id, r.method, r.amount,
+               EXISTS (SELECT 1 FROM recon_match m WHERE m.ref_table = 'receivable_payment' AND m.ref_id = r.id) matched
+        FROM receivable_payment r WHERE r.quote_id = ${q.id} ORDER BY r.id
+      `);
+      const remainingParts = [...parts];
+      const keepIds: number[] = [];
+      for (const row of existing) {
+        if (!row.matched) continue;
+        const i = remainingParts.findIndex((p) => p.method === row.method && p.amount === Number(row.amount));
+        if (i >= 0) {
+          keepIds.push(Number(row.id));
+          remainingParts.splice(i, 1);
+        }
+      }
+      const keepList = keepIds.length ? sql.join(keepIds.map((i) => sql`${i}`), sql`, `) : null;
+      await tx.execute(sql`
+        DELETE FROM recon_match WHERE ref_table = 'quote_payment'
+          AND ref_id IN (SELECT id FROM quote_payment WHERE quote_id = ${q.id})
+      `);
       await tx.execute(sql`DELETE FROM quote_payment WHERE quote_id = ${q.id}`);
-      await tx.execute(sql`DELETE FROM receivable_payment WHERE quote_id = ${q.id}`);
+      await tx.execute(sql`
+        DELETE FROM recon_match WHERE ref_table = 'receivable_payment'
+          AND ref_id IN (SELECT id FROM receivable_payment WHERE quote_id = ${q.id}
+                         ${keepList ? sql`AND id NOT IN (${keepList})` : sql``})
+      `);
+      await tx.execute(sql`
+        DELETE FROM receivable_payment WHERE quote_id = ${q.id}
+          ${keepList ? sql`AND id NOT IN (${keepList})` : sql``}
+      `);
       await tx.execute(sql`
         UPDATE quote SET payment_method = '외상', updated_at = now() WHERE id = ${q.id}
       `);
-      for (const p of parts) {
+      for (const p of remainingParts) {
         await tx.execute(sql`
           INSERT INTO receivable_payment (quote_id, amount, method, paid_on, memo)
           VALUES (${q.id}, ${p.amount}, ${p.method},
@@ -139,8 +173,8 @@ export async function normalizeSettledReservation(
   if (!q || q.payment_method !== "외상" || !q.reservation_status || q.claim_party) {
     return { converted: false, personal: false };
   }
-  const rows = await runner.execute<{ amount: number; method: string; paid_on: string }>(sql`
-    SELECT amount, method, to_char(paid_on, 'YYYY-MM-DD') paid_on
+  const rows = await runner.execute<{ id: number; amount: number; method: string; paid_on: string }>(sql`
+    SELECT id, amount, method, to_char(paid_on, 'YYYY-MM-DD') paid_on
     FROM receivable_payment WHERE quote_id = ${q.id} ORDER BY paid_on, id
   `);
   const paid = rows.reduce((s, r) => s + Number(r.amount), 0);
@@ -149,9 +183,16 @@ export async function normalizeSettledReservation(
     return { converted: false, personal: true };
   }
   for (const r of rows) {
-    await runner.execute(sql`
+    const [qp] = await runner.execute<{ id: number }>(sql`
       INSERT INTO quote_payment (quote_id, method, amount, paid_on)
       VALUES (${q.id}, ${r.method}, ${Number(r.amount)}, ${r.paid_on}::date)
+      RETURNING id
+    `);
+    /* 🔴 카드 일마감의 짝(recon_match)을 새 분할 줄로 옮긴다 (2026-09-11) — 지우면 POS 대조가 고아가 된다.
+       pos-close 는 quote_payment 줄도 대사 항목으로 안다 (KIND_OF 'qp'). */
+    await runner.execute(sql`
+      UPDATE recon_match SET ref_table = 'quote_payment', ref_id = ${Number(qp.id)}
+      WHERE ref_table = 'receivable_payment' AND ref_id = ${Number(r.id)}
     `);
   }
   await runner.execute(sql`DELETE FROM receivable_payment WHERE quote_id = ${q.id}`);
