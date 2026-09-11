@@ -72,7 +72,7 @@ export async function closeChecklist(ym: string, healthOk?: boolean): Promise<Cl
   const taxCheck: CloseCheck = {
     key: "tax",
     ok: taxN === 0,
-    text: taxN === 0 ? "세금계산서 돈 확인 다 됨" : `세금계산서 돈 확인 안 됨 ${taxN}건`,
+    text: taxN === 0 ? "계산서 대사 다 됨" : `계산서 미대사 ${taxN}건`,
     href: `/finance/tax?view=money&ym=${ym}`,
   };
   const hOk = healthOk ?? (await finHealth()).allOk;
@@ -123,7 +123,7 @@ export async function closeChecklist(ym: string, healthOk?: boolean): Promise<Cl
       key: "payables" as const,
       ok: pay.suppliers.length === 0,
       soft: true,
-      text: pay.suppliers.length === 0 ? "미지급 없음" : `줄 돈 확인 — 미지급 ${pay.suppliers.length}곳 ${pay.totalRemain.toLocaleString("ko-KR")}원`,
+      text: pay.suppliers.length === 0 ? "미지급 없음" : `미지급금 확인 — ${pay.suppliers.length}곳 ${pay.totalRemain.toLocaleString("ko-KR")}원`,
       href: `/finance/payables?ym=${ym}`,
     },
     ...(zeroN > 0

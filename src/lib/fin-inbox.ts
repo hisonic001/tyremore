@@ -93,7 +93,7 @@ export async function finInbox(ym: string): Promise<FinInbox> {
       text: `입금 ${won(s.dep.amount)}원 (${s.dep.date.slice(5)}) 미확인${s.taxHint ? ` — ${s.taxHint}` : ""}`,
       tone: "warn",
       href: `/finance/deposits?ym=${ym}`,
-      linkDeposit: one ? { cashTxnId: s.dep.id, quoteId: one.quoteId, label: `판매 「${one.label}」와 잇기` } : undefined,
+      linkDeposit: one ? { cashTxnId: s.dep.id, quoteId: one.quoteId, label: `판매 「${one.label}」와 대사` } : undefined,
     });
   }
 
@@ -104,7 +104,7 @@ export async function finInbox(ym: string): Promise<FinInbox> {
       text: `계좌이체 판매 ${won(r.total)}원 (${r.d.slice(5)} ${r.quoteNo}) — 입금과 안 이어짐${r.candCount === 0 ? " · 동액 입금 없음(미수·현금?)" : ""}`,
       tone: "warn",
       href: `/finance/trace?q=${encodeURIComponent(r.who)}`,
-      linkDeposit: r.cand ? { cashTxnId: r.cand.cashTxnId, quoteId: r.quoteId, label: `${r.cand.label}와 잇기` } : undefined,
+      linkDeposit: r.cand ? { cashTxnId: r.cand.cashTxnId, quoteId: r.quoteId, label: `${r.cand.label}와 대사` } : undefined,
       aside: { quoteId: r.quoteId },
     });
   }
@@ -117,7 +117,7 @@ export async function finInbox(ym: string): Promise<FinInbox> {
       tone: "warn",
       href: `/finance/payables?ym=${ym}`,
       payFrom: r.suggest
-        ? { cashTxnId: r.id, supplier: r.suggest.supplier, label: `${r.suggest.supplier} 지급으로 잇기` }
+        ? { cashTxnId: r.id, supplier: r.suggest.supplier, label: `${r.suggest.supplier} 지급 대사` }
         : undefined,
     });
   }
@@ -135,7 +135,7 @@ export async function finInbox(ym: string): Promise<FinInbox> {
     }
     for (const [name, v] of byName) {
       put(name, {
-        text: `${dir} 계산서 ${v.n}장 · ${won(v.sum)}원 돈 확인 대기`,
+        text: `${dir} 계산서 ${v.n}장 · ${won(v.sum)}원 미대사`,
         tone: "info",
         href: `/finance/tax?view=money&ym=${ym}&direction=${dir}`,
       });
