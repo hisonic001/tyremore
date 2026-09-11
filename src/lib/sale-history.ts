@@ -498,13 +498,27 @@ export async function saleHistory(opts: {
   }
 
   /**
+   * ⭐ 판 날에 바로 받은 돈은 그 판매 카드가 이미 보여 준다 (사장님 지시 2026-09-11 —
+   *    "예약을 하면서 당일에 돈을 일부나 전부를 치른 경우는 한개의 카드로 나와야함").
+   *    예약금·본사청구 고객 부담·「받은 돈 고치기」는 판 날짜와 같은 paid_on 으로 들어오니,
+   *    받은 날 = 정비한 날이면 별도 항목·재등장 카드를 안 만든다. 시공 재등장의
+   *    「예약한 그날 바로 시공했으면 재등장 없음」과 같은 규칙.
+   *    단 그 판매 카드가 이 화면에 없으면(240건 컷 밖) 돈이 어디서도 안 보이니 그대로 둔다.
+   */
+  const sameDayAsSale = (r: (typeof colls)[number]) =>
+    r.paid_on === r.work_date && periodIds.has(Number(r.quote_id));
+
+  /**
    * ⭐ 외상 수금을 「받은 날」 그룹에 싣는다 (사장님 요청 2026-09-03).
    * 🔴 매출 합계(d.amount·totalAmount)에는 절대 안 더한다 — 판 날에 이미 세었다.
    *    수금 정본은 receivable_payment 그대로(외상 장부와 같은 표), 새 판정 없음.
    *    수금만 있고 판매가 없는 날도 그룹이 생긴다. 예약중 필터에선 생략(질의 자체를 위에서 안 함).
+   *    같은 날 수금은 collectedSum(그날 받은 돈)에는 더하되 항목으로는 안 싣는다.
    */
   for (const r of colls) {
     const d = dayOf(r.paid_on);
+    d.collectedSum += Number(r.amount);
+    if (sameDayAsSale(r)) continue;
     d.collections.push({
       id: Number(r.id),
       quoteId: Number(r.quote_id),
@@ -516,7 +530,6 @@ export async function saleHistory(opts: {
       workDate: r.work_date,
       memo: r.memo,
     });
-    d.collectedSum += Number(r.amount);
   }
 
   /* ⭐ 재등장 카드 조립 (2026-09-05) — 시공한 날·수금한 날에 원래 카드가 배지를 달고 다시 뜬다 */
@@ -529,6 +542,8 @@ export async function saleHistory(opts: {
     // 같은 날 같은 판매의 수금 여러 건(나눠 받기)은 카드 하나에 금액 합산
     const byDayQuote = new Map<string, { qid: number; day: string; sum: number; wd: string }>();
     for (const r of colls) {
+      // 판 날에 받은 돈은 원래 카드가 보여 준다 — 재등장 없음 (2026-09-11, 위 sameDayAsSale)
+      if (sameDayAsSale(r)) continue;
       const k = `${r.paid_on}|${r.quote_id}`;
       const cur = byDayQuote.get(k) ?? { qid: Number(r.quote_id), day: r.paid_on, sum: 0, wd: r.work_date.slice(5) };
       cur.sum += Number(r.amount);

@@ -190,10 +190,20 @@ export function SaleCard({
    *    결제수단 ↔ 합계 크게 / 문제 배지만. 정상 완료 건은 배지 0개 —
    *    MARS ✓·포스 ✓·완납·시공 ✓ 은 펼치면 보인다.
    */
-  const remain =
-    s.paymentMethod === "외상" && !canceled
-      ? s.totalAmount - s.collections.reduce((sum, c) => sum + c.amount, 0)
-      : 0;
+  /**
+   * ⭐ 받은 몫 (사장님 지시 2026-09-11 — "예약을 하면서 당일에 돈을 일부나 전부를 치른
+   *    경우는 한개의 카드로 나와야함"). 같은 날 수금 카드가 따로 안 뜨는 대신
+   *    접힌 카드가 「받음 200,000원 (카드 09-10) · 잔금 …」 을 직접 말한다.
+   *    외상(예약금·본사청구 고객 부담 포함)이 아니면 0 — 잔금 셈은 전과 같다.
+   */
+  const paid =
+    s.paymentMethod === "외상" && !canceled ? s.collections.reduce((sum, c) => sum + c.amount, 0) : 0;
+  const remain = s.paymentMethod === "외상" && !canceled ? s.totalAmount - paid : 0;
+  /** 「카드 09-10」 — 여러 번 받았으면 마지막 것 + 「외 N건」 (펼치면 다 보인다) */
+  const lastColl = paid > 0 ? s.collections[s.collections.length - 1] : null;
+  const paidWhen = lastColl
+    ? `${lastColl.method} ${lastColl.paidOn.slice(5)}${s.collections.length > 1 ? ` 외 ${s.collections.length - 1}건` : ""}`
+    : "";
   const hasBadges =
     canceled ||
     s.reservationStatus === "예약중" ||
@@ -309,11 +319,24 @@ export function SaleCard({
             {won(s.totalAmount)}원
           </span>
         </div>
+        {/* ⭐ 받은 몫 한 줄 (2026-09-11) — 예약은 아래 배지 줄이 「예약금 … 받음」으로 잇는다 */}
+        {paid > 0 && s.reservationStatus !== "예약중" && (
+          <p className="tabular mt-1 text-[13px] text-slate-600">
+            받음 {won(paid)}원 <span className="text-slate-400">({paidWhen})</span>
+            {remain > 0 ? ` · 잔금 ${won(remain)}원` : " · 완납"}
+          </p>
+        )}
         {/* ⭐ 문제 배지 줄 — 지금 신경 쓸 것만 (사장님 답변 2026-09-04). 없으면 줄 자체가 없다 */}
         {hasBadges && (
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             {canceled && <StatusPill>취소</StatusPill>}
             {!canceled && s.reservationStatus === "예약중" && <StatusPill tone="reserve">📌 예약중</StatusPill>}
+            {/* 예약금 받은 몫 — 「📌 예약중 · 예약금 200,000원 받음 · 잔금 …」 으로 읽힌다 (2026-09-11) */}
+            {!canceled && s.reservationStatus === "예약중" && paid > 0 && (
+              <StatusPill tone="reserve">
+                예약금 {won(paid)}원 받음{remain <= 0 ? " · 완납" : ""}
+              </StatusPill>
+            )}
             {/* ⭐ 외상 잔액 (2026-08-11) — 접힌 채로도 얼마 남았는지 보인다.
                 ⭐ 무슨 돈인지까지 (2026-09-10) — 예약 잔금은 아직 시공 전이라 독촉할 돈이
                    아니고, 본사청구 잔액은 제조사에 청구할 돈이다. 같은 붉은 배지로 묶으면
