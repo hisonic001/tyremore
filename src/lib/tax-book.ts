@@ -562,9 +562,10 @@ export async function taxBook(ym: string): Promise<TaxBook> {
       mark = monthly.remain > 0 ? "confirm" : "done";
       const gave = monthly.direction === "매출" ? "받은 돈" : "준 돈";
       const appReceived = supplier && monthly.direction === "매입" ? (appRecvBySup.get(supplier.name) ?? null) : null;
+      /* 이 달 숫자와 누적 남은 돈이 섞여 보이지 않게 「이 달 …」·「남은(누적)」로 가른다 (운영 확인 2026-09-11) */
       summary =
-        `계산서 ${count}장 ${manWon(monthly.monthInvoiced)} · ${gave} ${manWon(monthly.monthPaid)} · ` +
-        (monthly.remain > 0 ? `남은 ${manWon(monthly.remain)}` : "맞음") +
+        `이 달 계산서 ${count}장 ${manWon(monthly.monthInvoiced)} · ${gave} ${manWon(monthly.monthPaid)} · ` +
+        (monthly.remain > 0 ? `남은(누적) ${manWon(monthly.remain)}` : "남은 돈 없음") +
         (monthly.paidPast > 0 ? ` · 그 전 것 ${manWon(monthly.paidPast)} 갚음` : "");
       monthlySummary = {
         baselineDate: monthly.baselineDate,
