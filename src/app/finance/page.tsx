@@ -145,7 +145,7 @@ export default async function FinancePage({
                   <Mark warn />
                   <span className="font-medium">{Number(deadline.prevYm.slice(5, 7))}월 계산서</span>
                   <span className="tabular text-slate-500">
-                    {deadline.missing.length > 0 ? `${deadline.missing.length}곳 아직 안 끊음` : "확인 필요"}
+                    {deadline.missing.length > 0 ? `${deadline.missing.length}곳 계산서 짝 없음 — 끊을지 확인` : "확인 필요"}
                   </span>
                   <span className="ml-auto text-[11px] text-slate-400">10일까지</span>
                 </div>
@@ -162,7 +162,7 @@ export default async function FinancePage({
                         <span className="min-w-0 truncate">{r.supplier}</span>
                         <span className="tabular font-semibold">{won(r.sold)}원</span>
                         <span className="text-slate-400">{r.count}건</span>
-                        <InvoiceSkipButton supplier={r.supplier} />
+                        <InvoiceSkipButton supplier={r.supplier} ym={deadline.prevYm} />
                       </li>
                     ))}
                   </ul>

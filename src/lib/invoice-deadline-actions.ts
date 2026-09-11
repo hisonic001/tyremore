@@ -1,8 +1,10 @@
 "use server";
 
 /**
- * 계산서 마감 경고 — 「이 거래처는 계산서 안 끊음」 (2026-09-11)
- *   app_setting `invoice_deadline_skip` 에 거래처 이름을 넣고 뺀다. 조회 정본은 invoice-deadline.ts.
+ * 계산서 짝 없음 경고 — 넘기기 (2026-09-11)
+ *   사장님: "거래처마다 다르기도 하고 같은 거래처에서도 건마다 다르기 때문에 유동적임."
+ *   그래서 둘이다 — scope 'month' = 그 달만("거래처|YYYY-MM"), 'always' = 늘("거래처").
+ *   app_setting `invoice_deadline_skip` 에 넣고 뺀다. 조회 정본은 invoice-deadline.ts.
  */
 import { sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -13,14 +15,18 @@ import { SKIP_KEY, skipList } from "./invoice-deadline";
 
 export async function setInvoiceDeadlineSkip(
   supplier: string,
-  skip: boolean,
+  scope: "month" | "always",
+  ym: string | null,
+  skip = true,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!(await hasPerm("finance"))) return { ok: false, error: PERM_DENIED };
   const name = supplier.trim();
   if (!name) return { ok: false, error: "거래처 이름이 비었습니다" };
+  if (scope === "month" && !(ym && /^\d{4}-\d{2}$/.test(ym))) return { ok: false, error: "달이 올바르지 않습니다" };
+  const entry = scope === "month" ? `${name}|${ym}` : name;
   const cur = new Set(await skipList());
-  if (skip) cur.add(name);
-  else cur.delete(name);
+  if (skip) cur.add(entry);
+  else cur.delete(entry);
   await db.execute(sql`
     INSERT INTO app_setting (key, value, updated_at) VALUES (${SKIP_KEY}, ${JSON.stringify([...cur])}, now())
     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()

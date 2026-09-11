@@ -92,31 +92,40 @@ export function TransferRow({ t }: { t: A1Row }) {
   );
 }
 
-/** 계산서 경고 줄의 「이 거래처는 계산서 안 끊음」 */
-export function InvoiceSkipButton({ supplier }: { supplier: string }) {
+/**
+ * 계산서 짝 없음 줄의 넘기기 — 「이번 달은 안 끊음」 / 「늘 안 끊는 곳」
+ * 사장님(2026-09-11): "거래처마다 다르기도 하고 같은 거래처에서도 건마다 다르기 때문에 유동적임."
+ */
+export function InvoiceSkipButton({ supplier, ym }: { supplier: string; ym: string }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [ask, confirmDialog] = useConfirm();
   const [error, setError] = useState<string | null>(null);
-  const go = async () => {
+  const go = async (scope: "month" | "always") => {
     const ok = await ask({
-      title: "이 거래처는 계산서를 안 끊나요?",
-      body: `${supplier} — 앞으로 계산서 경고에서 뺍니다. (다시 넣으려면 설정 → 돈관리에서)`,
-      confirmLabel: "안 끊음",
+      title: scope === "month" ? "이번 달은 계산서를 안 끊나요?" : "이 거래처는 늘 계산서를 안 끊나요?",
+      body:
+        scope === "month"
+          ? `${supplier} — ${Number(ym.slice(5, 7))}월분만 경고에서 뺍니다. 다음 달엔 다시 봅니다.`
+          : `${supplier} — 앞으로 계산서 경고에서 계속 뺍니다.`,
+      confirmLabel: scope === "month" ? "이번 달만" : "늘 안 끊음",
     });
     if (!ok) return;
     start(async () => {
       setError(null);
-      const r = await setInvoiceDeadlineSkip(supplier, true);
+      const r = await setInvoiceDeadlineSkip(supplier, scope, ym);
       if (!r.ok) return setError(r.error);
       router.refresh();
     });
   };
   return (
-    <span className="inline-block">
+    <span className="inline-flex items-center gap-1.5">
       {confirmDialog}
-      <button type="button" disabled={pending} onClick={go} className="text-[11px] text-slate-400 underline disabled:opacity-40">
-        계산서 안 끊는 곳
+      <button type="button" disabled={pending} onClick={() => go("month")} className="text-[11px] text-slate-500 underline disabled:opacity-40">
+        이번 달은 안 끊음
+      </button>
+      <button type="button" disabled={pending} onClick={() => go("always")} className="text-[11px] text-slate-400 underline disabled:opacity-40">
+        늘 안 끊는 곳
       </button>
       {error && <Notice tone="error">{error}</Notice>}
     </span>

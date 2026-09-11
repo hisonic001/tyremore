@@ -9,7 +9,11 @@
  *   맞춘다(쏘카→㈜카랑, AJ→오픈링크 같은 상호 차이 포함). 후보가 하나도 없으면 「아직 안 끊음」.
  *
  *   본사청구(claim_party)는 뺀다 — 제조사에 청구하는 것이지 계산서를 끊는 거래처 외상이 아니다.
- *   「이 거래처는 계산서 안 끊음」은 app_setting `invoice_deadline_skip`(JSON 배열)로 끈다.
+ *
+ * 🔴 「끊어야 한다」가 아니라 「짝이 아직 없다 — 끊을지 확인」이다. 사장님(2026-09-11): "거래처마다 다르기도
+ *    하고 같은 거래처에서도 건마다 다르기 때문에 유동적임." 그래서 금액 하한도 없고, 넘기는 단추가 둘이다 —
+ *    「이번 달은 안 끊음」(그 달만) · 「늘 안 끊는 곳」(계속). app_setting `invoice_deadline_skip`(JSON 배열)에
+ *    "거래처" 또는 "거래처|YYYY-MM" 으로 남는다.
  *
  * 🔴 "use server" 아님 — 조회 전용. 거래처마다 settleTaxCandidates 가 질의 2개 — 순차.
  */
@@ -64,7 +68,10 @@ export async function invoiceDeadline(today = kstToday()): Promise<InvoiceDeadli
       AND to_char(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date), 'YYYY-MM') = ${prevYm}
     GROUP BY 1 ORDER BY 2 DESC LIMIT 30
   `);
+  /* 건너뛰기 항목은 두 꼴 — "거래처"(늘 안 끊는 곳) · "거래처|2026-08"(그 달만 안 끊음).
+     사장님(2026-09-11): "거래처마다 다르기도 하고 같은 거래처에서도 건마다 다르기 때문에 유동적임" */
   const skip = new Set(await skipList());
+  const skipped = (name: string) => skip.has(name) || skip.has(`${name}|${prevYm}`);
   const [up] = await db.execute<{ n: number }>(sql`
     SELECT count(*)::int n FROM fin_upload
     WHERE source = '홈택스매출' AND status = '반영'
@@ -74,7 +81,7 @@ export async function invoiceDeadline(today = kstToday()): Promise<InvoiceDeadli
   const missing: InvoiceDeadlineRow[] = [];
   let okCount = 0;
   for (const s of suppliers) {
-    if (skip.has(s.supplier)) continue;
+    if (skipped(s.supplier)) continue;
     const hints = await settleTaxCandidates(s.supplier, prevYm);
     if (hints.length > 0) okCount++;
     else missing.push({ supplier: s.supplier, sold: Number(s.sold), count: Number(s.n) });
