@@ -797,6 +797,20 @@ export interface PayablesData {
 }
 
 /** 거래처별 미지급 장부 — 외상 장부(receivable-book)의 거울상 */
+/**
+ * ⭐ 「줄 돈」 총액 정본 (2026-09-11) — 첫 화면·장부·미지급 화면·마감 체크가 같은 숫자.
+ *   전엔 현황이 같은 SQL 을 인라인으로 한 벌 더 갖고 있었다. 목록(400건 캡) 없이 집계만.
+ */
+export async function payableTotal(): Promise<number> {
+  const [totalRow] = await db.execute<{ s: string }>(sql`
+    SELECT COALESCE(SUM(pi.total - COALESCE(pp.paid, 0)), 0)::bigint s
+    FROM purchase_invoice pi
+    LEFT JOIN LATERAL (SELECT SUM(amount)::int paid FROM purchase_payment x WHERE x.invoice_id = pi.id) pp ON true
+    WHERE pi.status <> '취소' AND pi.total IS NOT NULL AND pi.total > COALESCE(pp.paid, 0)
+  `);
+  return Number(totalRow?.s ?? 0);
+}
+
 export async function payablesData(): Promise<PayablesData> {
   const rows = await db.execute<{
     id: number; supplier: string; invoice_no: string; d: string | null; total: number; paid: string;
@@ -849,16 +863,11 @@ export async function payablesData(): Promise<PayablesData> {
   `);
 
   // 🔴 감사 M8: 총액은 목록(400건)이 아니라 SQL 전체 집계로 — 첫 화면 「줄 돈」과 일치
-  const [totalRow] = await db.execute<{ s: string }>(sql`
-    SELECT COALESCE(SUM(pi.total - COALESCE(pp.paid, 0)), 0)::bigint s
-    FROM purchase_invoice pi
-    LEFT JOIN LATERAL (SELECT SUM(amount)::int paid FROM purchase_payment x WHERE x.invoice_id = pi.id) pp ON true
-    WHERE pi.status <> '취소' AND pi.total IS NOT NULL AND pi.total > COALESCE(pp.paid, 0)
-  `);
+  const totalRemain = await payableTotal();
 
   return {
     suppliers,
-    totalRemain: Number(totalRow.s),
+    totalRemain,
     recent: recent.map((r) => ({
       id: Number(r.id),
       supplier: r.supplier,

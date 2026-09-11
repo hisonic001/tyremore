@@ -7,6 +7,7 @@ import { marsAudit } from "@/lib/mars-audit";
 import { ResolveButton } from "./audit-resolve";
 import { latestMarsRun } from "@/lib/mars-run";
 import { saleHistory } from "@/lib/sale-history";
+import { receivableTotal } from "@/lib/receivable-total";
 import { PeriodFilter } from "@/components/ui/period-filter";
 import { PayFilter } from "./filter";
 import { SalesList } from "./mars-upload";
@@ -89,22 +90,16 @@ export default async function SalesPage({
    */
   const receivable =
     pay === "외상"
-      ? (
-          await db.execute<{ n: number; remain: string; rn: number; rremain: string }>(sql`
-            SELECT count(*) FILTER (WHERE q.total_amount > COALESCE(rp.paid, 0)
-                                      AND q.reservation_status IS DISTINCT FROM '예약중')::int n,
-                   COALESCE(SUM(q.total_amount - COALESCE(rp.paid, 0))
-                            FILTER (WHERE q.reservation_status IS DISTINCT FROM '예약중'), 0)::bigint remain,
-                   count(*) FILTER (WHERE q.total_amount > COALESCE(rp.paid, 0)
-                                      AND q.reservation_status = '예약중')::int rn,
-                   COALESCE(SUM(q.total_amount - COALESCE(rp.paid, 0))
-                            FILTER (WHERE q.reservation_status = '예약중'), 0)::bigint rremain
-            FROM quote q
-            LEFT JOIN (SELECT quote_id, SUM(amount) paid FROM receivable_payment GROUP BY 1) rp
-              ON rp.quote_id = q.id
-            WHERE q.status = '성사' AND q.payment_method = '외상'
-          `)
-        )[0]
+      ? await (async () => {
+          // 정본 receivable-total.ts (2026-09-11) — 돈관리 첫 화면·장부와 같은 숫자
+          const t = await receivableTotal();
+          return {
+            n: t.count - t.reserveCount,
+            remain: String(t.remain - t.reserveRemain),
+            rn: t.reserveCount,
+            rremain: String(t.reserveRemain),
+          };
+        })()
       : null;
 
   /* ⭐ 2026-09-02 권한 스위치 분리 — owner(매입가 표시=cost)·수금·재배정이 각자 스위치 */

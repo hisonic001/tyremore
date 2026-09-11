@@ -25,6 +25,8 @@ import { posDaysSummary } from "./pos-close";
 import { zeroTotalInvoiceCount } from "./invoice";
 
 export interface CloseCheck {
+  /** 항목 이름 — 화면이 순서가 아니라 이름으로 고른다 (2026-09-11 첫 화면 개편) */
+  key: "upload" | "card" | "deposits" | "expenses" | "tax" | "posclose" | "payables" | "zero" | "health";
   ok: boolean;
   text: string;
   href: string;
@@ -66,6 +68,7 @@ export async function closeChecklist(ym: string, healthOk?: boolean): Promise<Cl
   const taxN = await taxOpenCount(ym);
   const dep = { n: depN };
   const taxCheck: CloseCheck = {
+    key: "tax",
     ok: taxN === 0,
     text: taxN === 0 ? "세금계산서 돈 확인 다 됨" : `세금계산서 돈 확인 안 됨 ${taxN}건`,
     href: `/finance/tax?view=money&ym=${ym}`,
@@ -82,12 +85,14 @@ export async function closeChecklist(ym: string, healthOk?: boolean): Promise<Cl
   const zeroN = await zeroTotalInvoiceCount();
   const softChecks: CloseCheck[] = [
     {
+      key: "upload",
       ok: cov.ok,
       soft: true,
       text: cov.ok ? "자료 다 올라옴" : `안 올라온 자료 — ${cov.lagging.map((l) => `${l.label} ~${l.last ? l.last.slice(5) : "없음"}`).join(" · ")}`,
       href: `/finance/upload?ym=${ym}`,
     },
     {
+      key: "card",
       ok: !!card.assocLast && card.diffDays === 0,
       soft: true,
       text: !card.assocLast
@@ -104,6 +109,7 @@ export async function closeChecklist(ym: string, healthOk?: boolean): Promise<Cl
     ...(posDays.length > 0
       ? [
           {
+            key: "posclose" as const,
             ok: posOpen.length === 0,
             soft: true,
             text: posOpen.length === 0 ? `카드 일마감 ${posDays.length}일 다 됨` : `카드 일마감 안 된 날 ${posOpen.length}일`,
@@ -112,24 +118,27 @@ export async function closeChecklist(ym: string, healthOk?: boolean): Promise<Cl
         ]
       : []),
     {
+      key: "payables" as const,
       ok: pay.suppliers.length === 0,
       soft: true,
       text: pay.suppliers.length === 0 ? "미지급 없음" : `줄 돈 확인 — 미지급 ${pay.suppliers.length}곳 ${pay.totalRemain.toLocaleString("ko-KR")}원`,
       href: `/finance/payables?ym=${ym}`,
     },
     ...(zeroN > 0
-      ? [{ ok: false, soft: true, text: `금액 없는 매입 장부 ${zeroN}건 — 단가를 채워 주세요`, href: "/receiving" }]
+      ? [{ key: "zero" as const, ok: false, soft: true, text: `금액 없는 매입 장부 ${zeroN}건 — 단가를 채워 주세요`, href: "/receiving" }]
       : []),
   ];
 
   return [
     ...softChecks,
     {
+      key: "deposits",
       ok: Number(dep.n) === 0,
       text: Number(dep.n) === 0 ? "입금 다 정리됨" : `정리 안 된 입금 ${dep.n}건`,
       href: `/finance/deposits?ym=${ym}`,
     },
     {
+      key: "expenses",
       ok: Number(exp.n) === 0,
       text: Number(exp.n) === 0 ? "지출 다 분류됨" : `분류 안 된 지출 ${exp.n}건`,
       href: `/finance/expenses?ym=${ym}`,
@@ -137,6 +146,7 @@ export async function closeChecklist(ym: string, healthOk?: boolean): Promise<Cl
     taxCheck,
     ...softTail,
     {
+      key: "health",
       ok: hOk || past,
       text: hOk ? "자료 검증 ✓" : past ? "자료 검증 경고 있음 (최근 자료 기준 — 지난 달 마감은 막지 않음)" : "자료 검증 경고 있음",
       href: `/finance?ym=${ym}`,

@@ -22,10 +22,19 @@ function agoText(min: number): string {
   return `${Math.floor(min / (24 * 60))}일 전`;
 }
 
-export function AuditBanner({ audit }: { audit: AuditRun | null }) {
+export function AuditBanner({ audit: raw, hideCodes = [] }: { audit: AuditRun | null; hideCodes?: string[] }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  /* ⭐ 첫 화면 개편(2026-09-11): A1(안 들어온 이체)은 「오늘」 칸이 직접 보여 주므로 여기선 뺀다 —
+     같은 건이 두 곳에 뜨지 않게 (사장님 「한 곳으로 합치기」). 저장된 검사 결과는 그대로다 */
+  const audit: AuditRun | null =
+    raw === null
+      ? null
+      : (() => {
+          const items = raw.items.filter((i) => !hideCodes.includes(i.code));
+          return { ...raw, items, itemCount: items.length };
+        })();
   const ok = audit !== null && audit.itemCount === 0;
   /** 반나절이 넘었으면 「지금과 다를 수 있다」를 눈에 띄게 */
   const stale = audit !== null && audit.ageMin >= 12 * 60;

@@ -18,7 +18,9 @@ import Link from "@/lib/link";
 export type FinTabId =
   | "home" | "tax" | "card" | "deposits" | "expenses" | "payables" | "party" | "trace" | "upload"
   /** ⭐ 올린 자료 (2026-09-10) */
-  | "files";
+  | "files"
+  /** ⭐ 장부 첫 화면 — 손익·근거·마감 (2026-09-11 개편 1단계) */
+  | "ledger";
 
 type Tab = { id: FinTabId | "receivables"; href: string; label: string; external?: boolean };
 type Group = { id: "todo" | "book" | "data"; label: string; tabs: Tab[] };
@@ -38,6 +40,7 @@ const GROUPS: Group[] = [
     id: "book",
     label: "장부",
     tabs: [
+      { id: "ledger", href: "/finance/ledger", label: "손익" },
       { id: "party", href: "/finance/party", label: "거래처" },
       { id: "payables", href: "/finance/payables", label: "미지급" },
       /* 외상 장부는 돈관리 밖 화면이다 — 「받을 돈」 자리에서 바로 가게 (사장님 모형 그대로) */
