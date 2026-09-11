@@ -26,7 +26,7 @@ import type { SettleLineView, SettleView } from "@/lib/settlement-data";
 import type { SettleTaxHint } from "@/lib/settle-tax";
 import { useConfirm } from "@/components/ui/confirm";
 import { SPLITTABLE } from "@/lib/payments";
-// ⭐ 계산서 짝 붙이기 글자는 fin-words 정본 (ERP 용어, 2026-09-12): 잇기→대사, 외상→미수금
+// ⭐ 계산서 짝 붙이기 글자는 fin-words 정본 (ERP 용어, 2026-09-12): 잇기→대조, 외상→미수금
 import { W } from "@/lib/fin-words";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
@@ -154,7 +154,7 @@ export function SettleClient({
         </p>
       )}
 
-      {/* ⭐ 이 청구의 계산서 짝 (2026-09-10) — 자동으로 대사하지 않고 확인을 받는다 */}
+      {/* ⭐ 이 청구의 계산서 짝 (2026-09-10) — 자동으로 대조하지 않고 확인을 받는다 */}
       {taxHints.length > 0 && (
         <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50/60 p-3">
           <p className="text-sm font-semibold text-sky-900">이 청구의 계산서 짝</p>

@@ -2,10 +2,11 @@
  * ⭐ 돈관리 용어 정본 (개편 2단계, 2026-09-12) — 화면 글자는 전부 여기서 가져온다.
  *
  *   사장님(09-11): "좀 더 한국의 ERP 기준으로 생각해서 깔끔하고 명료한 단어가 필요함",
- *   "「대사」는 좋은데 「반제」는 어려움 — 「지급 확인」으로", 손익 세 줄은 "매출 · 비용 · 이익으로".
+ *   "「반제」는 어려움 — 「지급 확인」으로", 손익 세 줄은 "매출 · 비용 · 이익으로".
+ *   하루 써 보시고(09-12) "「대사」가 여기저기 쓰인 게 어색함" → **「대조」**로 바꿈(앱 안 DB 값 '미대조'와도 같은 말).
  *
- *   국내 ERP(더존·영림원) 관행을 따른다: 잇기·맞추기·붙이기 → **대사**, 자국 → 대사 내역,
- *   확정 → 대사 완료, 미대조 → 미대사, 제안 → 대사 후보, 이을 것 없음 → 대사 제외,
+ *   국내 ERP(더존·영림원) 관행을 따른다: 잇기·맞추기·붙이기 → **대조**, 자국 → 대조 내역,
+ *   확정 → 대조 완료, 미대조 → 미대조(그대로), 제안 → 대조 후보, 이을 것 없음 → 대조 제외,
  *   도장 찍기 → **지급 확인**, 예치금 → 선급금, 나중에·대기 → 보류, 무시·안 봄 → 제외,
  *   상쇄 → 상계, 컷오프 → 자료 기준일, 못 받은 돈 → 미수금, 줄 돈 → 미지급금.
  *
@@ -16,21 +17,21 @@
 
 export const W = {
   /** 잇기·맞추기·붙이기 */
-  recon: "대사",
-  reconDeposit: "입금 대사",
-  reconTax: "계산서 대사",
-  reconPay: "지급 대사",
-  reconCard: "카드 대사",
+  recon: "대조",
+  reconDeposit: "입금 대조",
+  reconTax: "계산서 대조",
+  reconPay: "지급 대조",
+  reconCard: "카드 대조",
   /** 자국·연결·맞춘 기록 */
-  reconLog: "대사 내역",
+  reconLog: "대조 내역",
   /** 확정 */
-  done: "대사 완료",
+  done: "대조 완료",
   /** 미대조·확인 필요 */
-  open: "미대사",
+  open: "미대조",
   /** 제안·추천·앱 추측 */
-  candidate: "대사 후보",
+  candidate: "대조 후보",
   /** 이을 것 없음·건너뜀·짝 없음 */
-  excluded: "대사 제외",
+  excluded: "대조 제외",
   /** 나중에·대기·기다림 */
   hold: "보류",
   /** 안 봄·무시·정리(무시) */
@@ -59,14 +60,14 @@ export const W = {
   activity: "최근 한 일",
   activityUndoHere: "최근 한 일에서 되돌리기 →",
   /** 3층 배치 머리말 */
-  tierAuto: "앱이 자동 대사한 것",
+  tierAuto: "앱이 자동 대조한 것",
   tierCheck: "확인해 주세요",
   tierHand: "손이 필요한 것",
 } as const;
 
-/** 「짝이 확실한 N건 모두 잇기」 → 「자동 대사 N건」 */
+/** 「짝이 확실한 N건 모두 잇기」 → 「자동 대조 N건」 */
 export function autoReconLabel(n: number): string {
-  return `자동 대사 ${n}건`;
+  return `자동 대조 ${n}건`;
 }
 
 /**
@@ -92,3 +93,16 @@ export const METHOD_WORD: Record<string, string> = {
   수동: "사장님",
   조정: "앱이 조정",
 };
+
+/**
+ * fin_activity.verb(DB 값) → 화면 글자. 「최근 한 일」 배지가 이걸 쓴다.
+ *   🔴 DB CHECK 값은 '대사' 그대로다(고치면 기존 줄이 깨진다) — 화면 글자만 「대조」.
+ */
+export const VERB_WORD: Record<string, string> = {
+  대사: W.recon,
+};
+
+export function verbWord(verb: string | null | undefined): string {
+  if (!verb) return "";
+  return VERB_WORD[verb] ?? verb;
+}

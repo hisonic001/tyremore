@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { ActivityDay, ActivityRow, ActivityVerb } from "@/lib/fin-activity-types";
 import { undoActivity } from "@/lib/fin-activity-actions";
-import { W } from "@/lib/fin-words";
+import { W, verbWord } from "@/lib/fin-words";
 import { won } from "@/components/fin/money";
 import { StatusPill } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty";
@@ -12,7 +12,7 @@ import { Notice } from "@/components/ui/notice";
 import { useConfirm } from "@/components/ui/confirm";
 
 /**
- * ⭐ 최근 한 일 목록 (개편 2단계) — 한 줄 = 시각 · 누가 · verb 배지 · label · 금액 · [되돌리기]/「되돌림 ✓」
+ * ⭐ 최근 한 일 목록 (개편 2단계) — 한 줄 = 시각 · 누가 · verb 배지(글자는 fin-words 정본) · label · 금액 · [되돌리기]/「되돌림 ✓」
  *   일괄(n>1)은 「N건 ▾」 로 접고 펼치면 건별 되돌리기(2단계 결정 d — 375줄 폭발 방지).
  *   부품은 ui 정본(StatusPill·EmptyState·Notice·useConfirm) — 새 배지·배너 스타일 없음.
  *   폰 폭(390px): flex-wrap + min-w-0, 가로 스크롤 없음.
@@ -97,7 +97,7 @@ export function ActivityList({ days }: { days: ActivityDay[] }) {
                   <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                     <span className="tabular shrink-0 text-xs text-slate-400">{row.atLabel.slice(6)}</span>
                     <span className="shrink-0 text-xs font-medium text-slate-500">{row.how === "사람" ? (row.actorName ?? "직원") : "앱"}</span>
-                    <StatusPill tone={undone ? "neutral" : VERB_TONE[row.verb] ?? "neutral"}>{row.verb}</StatusPill>
+                    <StatusPill tone={undone ? "neutral" : VERB_TONE[row.verb] ?? "neutral"}>{verbWord(row.verb)}</StatusPill>
                     {row.afterClose && <StatusPill tone="warn">마감 뒤</StatusPill>}
                     <span className={`min-w-0 flex-1 basis-40 break-words ${undone ? "line-through decoration-slate-300" : ""}`}>
                       {row.label}

@@ -447,7 +447,7 @@ export async function ingestCardTxns(
     `);
   }
 
-  // 일별 합계도 세부에서 만든다 — 요약 파일 없이 세부만 올려도 대사 화면이 돈다
+  // 일별 합계도 세부에서 만든다 — 요약 파일 없이 세부만 올려도 대조 화면이 돈다
   const byDay = new Map<string, { total: number; cnt: number; ok: number; okCnt: number; cx: number; cxCnt: number }>();
   for (const r of parsed.rows) {
     const day = r.approvedAt.slice(0, 10);

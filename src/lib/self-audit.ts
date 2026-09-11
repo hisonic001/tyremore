@@ -155,7 +155,7 @@ export async function runSelfAudit(): Promise<AuditItem[]> {
   if (a2n > 0) {
     items.push({
       code: "A2",
-      title: "「대사 완료」인데 대사 내역도 사유도 없는 줄",
+      title: "「대조 완료」인데 대조 내역도 사유도 없는 줄",
       n: a2n,
       samples: [`계산서 ${a2t[0].n}장 · 통장 줄 ${a2c[0].n}건 — 무엇으로 확정됐는지 알 수 없습니다`],
       href: "/finance/tax?view=money",
@@ -176,9 +176,9 @@ export async function runSelfAudit(): Promise<AuditItem[]> {
   if (a3bad.length > 0) {
     items.push({
       code: "A3",
-      title: "지급 대사 내역이 지급 기록보다 큰 거래처 (기록이 어긋남)",
+      title: "지급 대조 내역이 지급 기록보다 큰 거래처 (기록이 어긋남)",
       n: a3bad.length,
-      samples: a3bad.slice(0, 6).map((r) => `${r.supplier} — 대사 내역 ${Number(r.marks).toLocaleString()} > 지급 ${Number(r.pays).toLocaleString()}`),
+      samples: a3bad.slice(0, 6).map((r) => `${r.supplier} — 대조 내역 ${Number(r.marks).toLocaleString()} > 지급 ${Number(r.pays).toLocaleString()}`),
       href: "/finance/payables",
     });
   }

@@ -4,12 +4,12 @@
  * ⭐ 계산서 화면 (개편 2026-09-11, 사장님 결정 1~10 — 설계서 「계산서 화면 개편」)
  *
  *   상대별 한 줄 → 펼치면 그 상대의 계산서 카드(한 장 = 두 칸: 누구 → 돈).
- *   매입(빨강)·매출(초록) 한 화면. 사람이 누르는 건 [대사] [경비] [보류] [제외] 넷뿐.
+ *   매입(빨강)·매출(초록) 한 화면. 사람이 누르는 건 [대조] [경비] [보류] [제외] 넷뿐.
  *   월정산 거래처는 장 단위로 안 보고 「계산서 합 · 준 돈 · 잔액」 한 줄(기준일 + 시작 잔액).
  *
  *   ⭐ 용어(2026-09-12, 사장님 "ERP 기준 명료한 단어"): 화면 글자는 fin-words 정본 —
- *      맞추기→대사, 맞춘 기록→대사 내역, 나중에→보류, 안 봄→제외, 서로 지움→상계.
- *      「앱이 자동 대사한 것」의 되돌리기는 「최근 한 일」 한 곳으로(결정 f) — 목록만 남김.
+ *      맞추기→대조, 맞춘 기록→대조 내역, 나중에→보류, 안 봄→제외, 서로 지움→상계.
+ *      「앱이 자동 대조한 것」의 되돌리기는 「최근 한 일」 한 곳으로(결정 f) — 목록만 남김.
  *   🔴 데이터는 taxBook(ym) 하나(tax-book.ts 정본). 여기서는 새 판정을 만들지 않는다.
  *   🔴 서버 액션은 순차 호출(for … await) — DB 풀 max 3. Promise.all 금지.
  */
@@ -52,7 +52,7 @@ interface Ctx {
   ask: (opts: ConfirmOpts) => Promise<boolean>;
 }
 
-/** 표시 낱말은 뱃지(components/fin/badge.tsx)와 같은 벌 — 끝→대사 완료 · 확인→대사 후보 · 손 필요→미대사 · 기다림→보류 */
+/** 표시 낱말은 뱃지(components/fin/badge.tsx)와 같은 벌 — 끝→대조 완료 · 확인→대조 후보 · 손 필요→미대조 · 기다림→보류 */
 const MARK: Record<Mark, { icon: string; label: string; cls: string }> = {
   done: { icon: "✅", label: W.done, cls: "text-brand-700" },
   confirm: { icon: "🟡", label: W.candidate, cls: "text-amber-700" },
@@ -135,7 +135,7 @@ export function TaxBookView({ book, ym }: { book: TaxBook; ym: string }) {
     });
   const ctx: Ctx = { pending, act, notes, ask };
 
-  // 정렬: ✖ 미대사 → 🟡 대사 후보 → ⚪ 보류 → ✅ 대사 완료, 같은 층은 금액 큰 순
+  // 정렬: ✖ 미대조 → 🟡 대조 후보 → ⚪ 보류 → ✅ 대조 완료, 같은 층은 금액 큰 순
   const parties = useMemo(
     () => [...book.parties].sort((a, b) => MARK_ORDER[a.mark] - MARK_ORDER[b.mark] || b.total - a.total),
     [book.parties],
@@ -233,7 +233,7 @@ export function TaxBookView({ book, ym }: { book: TaxBook; ym: string }) {
   );
 }
 
-/* ───────────────────────── 앱이 자동 대사한 것 ───────────────────────── */
+/* ───────────────────────── 앱이 자동 대조한 것 ───────────────────────── */
 
 /** 목록은 남기고(무엇을 자동으로 했는지 보는 곳), 줄마다 있던 되돌리기(undoTaxMatch·ignoreTaxInvoice(id,true))는
  *  2단계(2026-09-12)부터 「최근 한 일」 한 곳에서 한다 — 링크 한 줄. */
@@ -272,7 +272,7 @@ function AutoDoneList({ book }: { book: TaxBook }) {
 
 /* ───────────────────────── 확인 층 (체크해서 한 번에) ───────────────────────── */
 
-/** 카드 하나를 대사 후보대로 대사하는 계획 — 어떤 액션을 부를지 + 사람에게 보여 줄 한 줄 */
+/** 카드 하나를 대조 후보대로 대조하는 계획 — 어떤 액션을 부를지 + 사람에게 보여 줄 한 줄 */
 function planFor(c: InvoiceCard): { text: string; run: () => Promise<R>; dedupe?: string } | null {
   const mo = c.money;
   if (mo.fix) {
@@ -542,7 +542,7 @@ function CardView({ card: c, party, ctx }: { card: InvoiceCard; party: PartyRow;
   );
 }
 
-/* ───────────────────────── [대사] 패널 ───────────────────────── */
+/* ───────────────────────── [대조] 패널 ───────────────────────── */
 
 function bankMsg(r: { remaining?: number; shortfall?: number; netted?: boolean; applied?: number; absorbed?: number; settled?: number }) {
   const parts: string[] = [];

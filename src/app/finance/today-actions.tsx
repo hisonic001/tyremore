@@ -4,7 +4,7 @@
  * ⭐ 첫 화면 「오늘」 칸의 단추들 (돈관리 개편 1단계, 2026-09-11)
  *
  *   원칙: 한 줄 = 무엇 · 숫자 · 단추 하나. 여기 단추는 전부 **기존 정본 액션**을 부른다 —
- *   대사는 추적 화면의 TraceLinkButton 그대로, 「개인계좌 / 현금 / 보류」는 입금 화면과
+ *   대조는 추적 화면의 TraceLinkButton 그대로, 「개인계좌 / 현금 / 보류」는 입금 화면과
  *   같은 markSaleSettledAside · fixSaleMethod. 새 논리 없음. 글자는 fin-words 정본(2026-09-12).
  */
 import { useState, useTransition } from "react";

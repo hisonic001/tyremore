@@ -1,11 +1,11 @@
 "use client";
 
 /**
- * ⭐ 대사 공통 조각 (tax 재설계 배치2, 2026-08-25 · 문구 쉬운 말로 2026-09-11 · ERP 용어 2026-09-12)
+ * ⭐ 대조 공통 조각 (tax 재설계 배치2, 2026-08-25 · 문구 쉬운 말로 2026-09-11 · ERP 용어 2026-09-12)
  *
  *   후보 목록·통장 후보·통장 검색 렌더의 단일 지점.
  *   계산서 화면(tax-book-ui)과 입금 화면(deposits-ui)이 같이 쓴다 — 🔴 시그니처는 바꾸지 말 것.
- *   말: 「잇기」→「맞추기」→「대사」(fin-words 정본, 사장님 "ERP 기준 명료한 단어").
+ *   말: 「잇기」→「맞추기」→「대조」(fin-words 정본, 사장님 "ERP 기준 명료한 단어").
  */
 import { useState, useTransition } from "react";
 import { searchBankLines, type BankHit } from "@/lib/recon";
@@ -15,18 +15,18 @@ export interface PickItem {
   key: string | number;
   label: string;
   onPick: () => void;
-  /** 통장 줄 남은 금액 — 「골라서 대사」 합계용 */
+  /** 통장 줄 남은 금액 — 「골라서 대조」 합계용 */
   amount?: number;
 }
 
-/** 골라서 대사 — 체크 상태 (통장 줄 id → 남은 금액) */
+/** 골라서 대조 — 체크 상태 (통장 줄 id → 남은 금액) */
 export type Picked = Record<number, number>;
 export const pickedSum = (p: Picked) => Object.values(p).reduce((s, n) => s + n, 0);
 const won = (n: number) => n.toLocaleString("ko-KR");
 
 /**
- * ⭐ 골라서 대사 막대 (사장님 요청 2026-08-26 — 규칙이 못 잡는 모든 합산 계산서의 최종 수단)
- *   체크한 줄 합 vs 계산서 남은 금액을 실시간으로 보여주고 버튼 하나로 대사한다.
+ * ⭐ 골라서 대조 막대 (사장님 요청 2026-08-26 — 규칙이 못 잡는 모든 합산 계산서의 최종 수단)
+ *   체크한 줄 합 vs 계산서 남은 금액을 실시간으로 보여주고 버튼 하나로 대조한다.
  *   차이가 몇백 원(허용 오차)이면 서버가 잔돈·차액을 자동 정리한다.
  */
 export function MultiPickBar({
@@ -76,7 +76,7 @@ export function MultiPickBar({
   );
 }
 
-/** 후보 목록 — hint 한 줄 + [대사] 버튼들. strong 이면 채움 버튼(확실한 대사 후보) */
+/** 후보 목록 — hint 한 줄 + [대조] 버튼들. strong 이면 채움 버튼(확실한 대조 후보) */
 export function PickList({
   hint,
   items,
@@ -91,7 +91,7 @@ export function PickList({
   pending: boolean;
   strong?: boolean;
   buttonLabel?: string;
-  /** 주면 줄마다 체크칸이 생긴다 (골라서 대사) */
+  /** 주면 줄마다 체크칸이 생긴다 (골라서 대조) */
   picked?: Picked;
   onToggle?: (it: PickItem) => void;
 }) {

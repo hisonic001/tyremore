@@ -394,7 +394,7 @@ export async function saveSale(
               quoteId: q.id,
               method: p.method,
               amount: p.amount,
-              // ⭐ 받은 날 (2026-09-01) — 예약금·잔금이 다른 날이어도 카드 대사가 전표와 맞게
+              // ⭐ 받은 날 (2026-09-01) — 예약금·잔금이 다른 날이어도 카드 대조가 전표와 맞게
               paidOn: /^\d{4}-\d{2}-\d{2}$/.test(p.paidOn ?? "") ? p.paidOn : null,
             })),
           );

@@ -69,7 +69,7 @@ export interface ReceivableTarget {
    * ⭐ 그중 아직 시공 전인 예약 건 (2026-09-10) — `remain` 에 **포함된 채로** 따로 센다.
    *
    * 🔴 빼서 돌려주지 않는 이유: `remain`·`totalRemain` 을 보는 곳이 여럿(외상 장부·
-   *    대사 recon-data)이라 뜻을 바꾸면 숫자가 조용히 달라진다. 갈라 보여 줄지는
+   *    대조 recon-data)이라 뜻을 바꾸면 숫자가 조용히 달라진다. 갈라 보여 줄지는
    *    화면이 정한다 — 「못 받은 외상 X원 (그중 예약 잔금 Y원)」.
    */
   reserveRemain: number;

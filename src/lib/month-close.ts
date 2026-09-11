@@ -72,7 +72,7 @@ export async function closeChecklist(ym: string, healthOk?: boolean): Promise<Cl
   const taxCheck: CloseCheck = {
     key: "tax",
     ok: taxN === 0,
-    text: taxN === 0 ? "계산서 대사 다 됨" : `계산서 미대사 ${taxN}건`,
+    text: taxN === 0 ? "계산서 대조 다 됨" : `계산서 미대조 ${taxN}건`,
     href: `/finance/tax?view=money&ym=${ym}`,
   };
   const hOk = healthOk ?? (await finHealth()).allOk;

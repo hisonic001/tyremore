@@ -30,10 +30,10 @@ export default async function FinancePayablesPage({
   const ym = pickYm(sp.ym);
   const data = await payablesData();
   const links = await payLinkData(ym);
-  // ⭐ 리모델링(2026-08-31) — 거래처마다 세 장부(준 돈·계산서·자동 대사·선급금)를 한 장으로
+  // ⭐ 리모델링(2026-08-31) — 거래처마다 세 장부(준 돈·계산서·자동 대조·선급금)를 한 장으로
   const cards = await payablesCardInfo(ym, data.suppliers.map((s) => s.supplier));
   const payerOptions = await bankPayerOptions(ym);
-  // ⭐ 재설계(2026-08-25): 계산서 대사의 정본은 /finance/tax 「계산서 대사」 뷰 — 여기는 요약만
+  // ⭐ 재설계(2026-08-25): 계산서 대조의 정본은 /finance/tax 「계산서 대조」 뷰 — 여기는 요약만
   const cash = await taxCashData("매입", ym);
   // 🔴 2단계(2026-09-12): links.skipped·links.linked(되돌리기 표 2개)는 「최근 한 일」로 옮겨 안 넘긴다
 

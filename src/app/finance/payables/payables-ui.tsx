@@ -21,8 +21,8 @@ const kstToday = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/
 const METHODS = ["계좌이체", "현금", "카드", "기타"];
 
 /** ⭐ 미지급금 장부 — 거래처별 잔액 + 지급 등록 (ERP ⑦, 2026-08-25)
- *   화면 글자는 fin-words 정본(ERP 용어, 2026-09-12): 지급 잡기→지급 대사, 도장 찍기→지급 확인, 예치금→선급금.
- *   되돌리기 표(접어둔 출금·출금에서 대사한 지급·최근 지급)는 「최근 한 일」로 옮겼다. */
+ *   화면 글자는 fin-words 정본(ERP 용어, 2026-09-12): 지급 잡기→지급 대조, 도장 찍기→지급 확인, 예치금→선급금.
+ *   되돌리기 표(접어둔 출금·출금에서 대조한 지급·최근 지급)는 「최근 한 일」로 옮겼다. */
 export function PayablesUi({
   data,
   cards,
@@ -32,7 +32,7 @@ export function PayablesUi({
   cashSummary,
 }: {
   data: PayablesData;
-  /** ⭐ 리모델링(2026-08-31) — 거래처마다 세 장부(준 돈·계산서·선급금·자동 대사)를 합친 카드 정보 */
+  /** ⭐ 리모델링(2026-08-31) — 거래처마다 세 장부(준 돈·계산서·선급금·자동 대조)를 합친 카드 정보 */
   cards: Record<string, SupplierCardInfo>;
   /** 별명 추가할 때 고를 이 달 통장 이름 후보 (검색) */
   payerOptions: string[];
@@ -80,7 +80,7 @@ export function PayablesUi({
     });
   };
 
-  /* ⚡ 원단위 자동 대사 (리모델링 ②) — 출금이 인보이스(묶음)와 정확히 일치할 때 한 번에 */
+  /* ⚡ 원단위 자동 대조 (리모델링 ②) — 출금이 인보이스(묶음)와 정확히 일치할 때 한 번에 */
   const autoLink = async (supplier: string, e: { cashTxnId: number; day: string; amount: number; invoiceNos: string[] }) => {
     if (
       !(await ask({
@@ -148,7 +148,7 @@ export function PayablesUi({
       router.refresh();
     });
 
-  /* ⭐ 「대사 제외 — 접기」 (2026-08-31) — 앱 이전 기간 대금은 대사할 인보이스가 없다.
+  /* ⭐ 「대조 제외 — 접기」 (2026-08-31) — 앱 이전 기간 대금은 대조할 인보이스가 없다.
      되살리기(skipWithdrawal(id,true))는 2단계부터 「최근 한 일」에서. */
   const skipRow = async (row: PayLinkRow) => {
     if (
@@ -207,7 +207,7 @@ export function PayablesUi({
         <p className="tabular mt-1 text-xl font-bold text-red-600">{won(data.totalRemain)}원</p>
       </section>
 
-      {/* ⭐ 정본 안내 (재설계 2026-08-25) — 계산서 대사의 단일 답변처는 「계산서 대사」 뷰 */}
+      {/* ⭐ 정본 안내 (재설계 2026-08-25) — 계산서 대조의 단일 답변처는 「계산서 대조」 뷰 */}
       <section className="mt-4 rounded-card border-2 border-brand-500 bg-white p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="min-w-0 text-sm">
@@ -226,7 +226,7 @@ export function PayablesUi({
         </div>
       </section>
 
-      {/* 🔴 감사 P2 — 출금에서 지급 대사: 이미 준 돈을 장부가 알게 하는 고리 */}
+      {/* 🔴 감사 P2 — 출금에서 지급 대조: 이미 준 돈을 장부가 알게 하는 고리 */}
       {links.length > 0 && (
         <section className="mt-4 rounded-2xl border border-sky-300 bg-sky-50 p-4">
           <h2 className="font-semibold text-sky-900">출금에서 {W.reconPay} ({links.length}건)</h2>
@@ -272,7 +272,7 @@ export function PayablesUi({
                     </button>
                   </span>
                 )}
-                {/* ⭐ 대사할 인보이스가 없는 출금(지난달 대금 등)은 접는다 (2026-08-31) */}
+                {/* ⭐ 대조할 인보이스가 없는 출금(지난달 대금 등)은 접는다 (2026-08-31) */}
                 <button
                   type="button"
                   disabled={pending}
@@ -367,7 +367,7 @@ export function PayablesUi({
                         ⚡ {e.day} 출금 {won(e.amount)}원 = 인보이스 {e.invoiceNos.length}장 — 자동 {W.recon}
                       </button>
                     ))}
-                    {/* 🔴 지급 확인은 대사 완료 계산서 합이 잔액을 덮을 때만 — 소액 계산서 몇 장으로
+                    {/* 🔴 지급 확인은 대조 완료 계산서 합이 잔액을 덮을 때만 — 소액 계산서 몇 장으로
                         큰 잔액을 확인 처리하면 안 준 돈이 사라진다 (강남세차장 사례로 발견) */}
                     {info.taxOkN > 0 && info.taxOkSum >= s.remain && info.exact.length === 0 && (
                       <button
@@ -507,7 +507,7 @@ export function PayablesUi({
         ))}
       </datalist>
 
-      {/* ⭐ 개편 2단계(2026-09-12) — 「출금에서 대사한 지급」·「최근 지급 기록」·「접어둔 출금」의
+      {/* ⭐ 개편 2단계(2026-09-12) — 「출금에서 대조한 지급」·「최근 지급 기록」·「접어둔 출금」의
           되돌리기 표 3개는 「최근 한 일」 한 곳으로(결정 f). 여기엔 링크 한 줄만. */}
       <p className="mt-4 text-xs text-slate-400">
         잘못 {W.recon}한 지급·잘못 접은 출금은{" "}

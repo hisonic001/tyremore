@@ -17,7 +17,7 @@ import { PosCloseUi } from "./pos-close-ui";
 export const dynamic = "force-dynamic";
 
 /**
- * ⭐ 카드 매출 대사 (ERP 3단계, 2026-08-24) — 사장님 전용
+ * ⭐ 카드 매출 대조 (ERP 3단계, 2026-08-24) — 사장님 전용
  *
  *   여신금융협회 「일별 승인내역」과 앱의 카드 판매를 **날짜별 합계**로 견준다
  *   (여신협회 자료가 건별이 아니라 일합계 — 실파일 실측).
@@ -188,7 +188,7 @@ export default async function FinanceCardPage({
             </div>
           </section>
 
-          {/* 날짜별 대사 표 */}
+          {/* 날짜별 대조 표 */}
           <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
             <h2 className="font-semibold">날짜별 — 여신협회 · 토스POS · 앱</h2>
             <p className="mt-1 text-xs text-slate-400">

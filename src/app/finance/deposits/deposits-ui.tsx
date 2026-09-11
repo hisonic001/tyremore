@@ -23,7 +23,7 @@ import { W, autoReconLabel } from "@/lib/fin-words";
 
 
 /** ⭐ 통장 입금을 카드 정산·이체 판매·외상 수금으로 정리 (ERP 4단계, 2026-08-24)
- *   화면 글자는 fin-words 정본(ERP 용어, 2026-09-12) — 잇기→대사, 번 돈→매출. */
+ *   화면 글자는 fin-words 정본(ERP 용어, 2026-09-12) — 잇기→대조, 번 돈→매출. */
 export function DepositsRecon({
   data,
   ym,
@@ -41,7 +41,7 @@ export function DepositsRecon({
   bundles: DepositTaxBundles;
   /** 앱엔 계좌이체인데 법인 통장에 없는 판매 */
   transfers: TransferSale[];
-  /** 짝이 확실한 입금 id — 한 번에 대사 */
+  /** 짝이 확실한 입금 id — 한 번에 대조 */
   sureIds: number[];
   breakdown: DepositBreakdown;
 }) {
@@ -209,7 +209,7 @@ export function DepositsRecon({
                 </button>
               </div>
             )}
-            {/* ⭐ 세금계산서 바로 대사 (사장님 요청 2026-08-26) — 전엔 "계산서 화면에서 이으세요"만 있고 버튼이 없었다 */}
+            {/* ⭐ 세금계산서 바로 대조 (사장님 요청 2026-08-26) — 전엔 "계산서 화면에서 이으세요"만 있고 버튼이 없었다 */}
             {(taxCands[s.dep.id]?.length ?? 0) > 0 && (
               <div className="mt-2 rounded-lg bg-violet-50 p-2 text-sm">
                 <p className="text-xs text-violet-900">
@@ -393,7 +393,7 @@ export function DepositsRecon({
                         <BankSearch direction="매출" pending={pending} onPick={(id) => act(() => linkDepositToQuote(id, t.quoteId), () => `${W.recon}했습니다.`)} anchor={t.day} />
                       </div>
                     </details>
-                    {/* 🔴 2026-09-10: 이 두 단추는 이제 사유(pos_note)가 아니라 **대사 내역**을 남긴다
+                    {/* 🔴 2026-09-10: 이 두 단추는 이제 사유(pos_note)가 아니라 **대조 내역**을 남긴다
                         (markSaleSettledAside) — 전엔 여기서만 사라지고 감사·홈 인박스·추적 화면엔
                         영원히 남았다. 되돌리기는 「최근 한 일」(/finance/activity)에 있다 (2단계, 2026-09-12). */}
                     <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
@@ -415,7 +415,7 @@ export function DepositsRecon({
         </section>
       )}
 
-      {/* ⭐ 개편 2단계(2026-09-12) — 이 달에 한 일(통장 밖 정리·분류·카드정산 표시·판매·수금 대사)의
+      {/* ⭐ 개편 2단계(2026-09-12) — 이 달에 한 일(통장 밖 정리·분류·카드정산 표시·판매·수금 대조)의
           되돌리기는 「최근 한 일」 한 곳으로 모았다. 전엔 접힌 표 4개가 여기 있었다(결정 f). */}
       <p className="mt-4 text-xs text-slate-400">
         잘못 {W.recon}한 입금·분류·카드정산 표시는{" "}

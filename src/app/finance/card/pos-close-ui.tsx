@@ -4,11 +4,11 @@
  * ⭐ 카드 일마감 화면 (사장님 요청 2026-08-26)
  *
  *   ① 매출리포트 올리기(zip 그대로) ② POS vs 앱 요약 ③ POS에만 있음 / 앱에서 못 채운 것
- *   (각각 버튼 하나) ④ 대사 내역(접힘 — 풀기는 「최근 한 일」에서, 2026-09-12) ⑤ [이 날 마감] / 마감 풀기.
+ *   (각각 버튼 하나) ④ 대조 내역(접힘 — 풀기는 「최근 한 일」에서, 2026-09-12) ⑤ [이 날 마감] / 마감 풀기.
  *
  * ⭐ 2026-08-29 (사장님 제보 "카드 일마감시 예외사항들이 많음")
  *   · 카드 옆에 **간편결제**가 나란히 선다 (토스 포스의 QR결제).
- *   · 양쪽 다 「대사된 돈 / 남은 금액」을 보여준다 — 미리 받은 돈·나중에 받은 돈이 눈에 보인다.
+ *   · 양쪽 다 「대조된 돈 / 남은 금액」을 보여준다 — 미리 받은 돈·나중에 받은 돈이 눈에 보인다.
  *   · POS 여러 건에 체크해서 **한 판매에 함께 붙이기** (카드 두 장으로 나눠 긁기).
  *   · 다른 날 후보를 앞뒤 7일까지, 며칠 차이인지 적어서 보여준다.
  *   · 「선결제」로 남긴 건은 판매가 생길 때까지 맨 위에 따라다닌다.
@@ -33,7 +33,7 @@ import {
 import { applyFinUpload } from "@/lib/fin-upload";
 import { won } from "@/components/fin/money";
 import { useConfirm } from "@/components/ui/confirm";
-// ⭐ 화면 글자는 fin-words 정본 (ERP 용어, 2026-09-12): 붙이기→대사, 붙은 자국→대사 내역
+// ⭐ 화면 글자는 fin-words 정본 (ERP 용어, 2026-09-12): 붙이기→대조, 붙은 자국→대조 내역
 import { W } from "@/lib/fin-words";
 
 /** POS 에만 있을 때 고를 만한 사유 (「단말기 누락」은 앱 쪽 사유다) */
@@ -82,7 +82,7 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
   };
 
   const diff = data.posTotal - data.appTotal;
-  /** 대사할 수 있는 대상 — 그 날 남은 금액이 있는 앱 항목 */
+  /** 대조할 수 있는 대상 — 그 날 남은 금액이 있는 앱 항목 */
   const targets = data.appOpen.filter((a) => a.remain > 0);
   const pickedSum = data.posOpen.filter((p) => picked.includes(p.id)).reduce((s, p) => s + p.remain, 0);
   const toggle = (id: number) => setPicked((v) => (v.includes(id) ? v.filter((x) => x !== id) : [...v, id]));
@@ -156,7 +156,7 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
       )}
       {(data.posOther.length > 0 || data.posCancelled.length > 0) && (
         <p className="tabular mt-1.5 text-xs text-slate-400">
-          {data.posOther.length > 0 && `대사 안 하는 POS 결제: ${data.posOther.map((o) => `${o.method} ${o.n}건 ${won(o.sum)}원`).join(" · ")}`}
+          {data.posOther.length > 0 && `대조 안 하는 POS 결제: ${data.posOther.map((o) => `${o.method} ${o.n}건 ${won(o.sum)}원`).join(" · ")}`}
           {data.posCancelled.length > 0 && ` · 취소로 ${W.offset} ${Math.floor(data.posCancelled.length / 2)}건`}
         </p>
       )}
@@ -428,7 +428,7 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
         </div>
       )}
 
-      {/* ⑤ 대사 내역 — 목록은 이 화면의 일부라 남기고, 줄마다 있던 「풀기」(unlinkMatch)는
+      {/* ⑤ 대조 내역 — 목록은 이 화면의 일부라 남기고, 줄마다 있던 「풀기」(unlinkMatch)는
           2단계(2026-09-12)부터 「최근 한 일」 한 곳에서 되돌린다(결정 f). */}
       {data.matches.length > 0 && (
         <details className="mt-4 rounded-control border border-slate-200 p-2.5">

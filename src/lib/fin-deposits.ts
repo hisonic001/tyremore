@@ -123,7 +123,7 @@ export async function collectFromDeposit(
     paidOn: dep.date,
     received: Math.min(dep.remain, planned),
     memo: `통장 입금 대조 (${dep.l} ${dep.date})`,
-    quiet: true, // 기록은 아래서 「수금+대사」 한 줄로 (settleReceivables 의 수금 줄과 이중 기록 금지)
+    quiet: true, // 기록은 아래서 「수금+대조」 한 줄로 (settleReceivables 의 수금 줄과 이중 기록 금지)
   });
   if (!r.ok) return r;
 

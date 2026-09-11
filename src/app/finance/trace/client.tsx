@@ -6,7 +6,7 @@ import { Search } from "lucide-react";
 import { markSaleSettledAside, traceLinkDeposit } from "@/lib/trace-actions";
 import { useConfirm } from "@/components/ui/confirm";
 import { Notice } from "@/components/ui/notice";
-// ⭐ 화면 글자는 fin-words 정본 (ERP 용어, 2026-09-12): 잇기→대사, 확인 끝→대사 제외
+// ⭐ 화면 글자는 fin-words 정본 (ERP 용어, 2026-09-12): 잇기→대조, 확인 끝→대조 제외
 import { W } from "@/lib/fin-words";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
@@ -35,7 +35,7 @@ export function TraceSearch({ initial }: { initial: string }) {
   );
 }
 
-/** 판매 ↔ 입금 대사 — 후보가 하나뿐일 때만 서버가 내려보낸다 */
+/** 판매 ↔ 입금 대조 — 후보가 하나뿐일 때만 서버가 내려보낸다 */
 export function TraceLinkButton({
   action,
   title,

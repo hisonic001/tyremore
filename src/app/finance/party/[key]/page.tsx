@@ -114,7 +114,7 @@ export default async function FinancePartyLedgerPage({
         </p>
       )}
 
-      {/* 잔액 요약 — 세 숫자는 축이 다르다 (2026 감사 N7): 앱 매입 장부 / 계산서 대사 / 미수금 */}
+      {/* 잔액 요약 — 세 숫자는 축이 다르다 (2026 감사 N7): 앱 매입 장부 / 계산서 대조 / 미수금 */}
       <section className="mt-3 grid grid-cols-3 gap-2 text-center">
         <Link href={`/finance/payables?ym=${ym}`} className="rounded-2xl border border-slate-200 bg-white p-3">
           <p className="text-xs text-slate-500">앱 매입 장부 {W.payable}</p>

@@ -5,7 +5,7 @@
  *   정본 = POS 결제 건(실제로 긁힌 돈). 앱 판매는 그에 맞춰 고친다(수단 착오·미등록·날짜 착오).
  *
  * ⭐ 2026-08-29 개편 (사장님 제보 — "카드 일마감시 예외사항들이 많음")
- *   ① 간편결제(QR·네이버페이·카카오페이·토스페이)를 카드와 나란히 대사한다.
+ *   ① 간편결제(QR·네이버페이·카카오페이·토스페이)를 카드와 나란히 대조한다.
  *      토스 포스는 「QR결제」로 적어 오고 여신협회 승인내역에는 안 잡힌다
  *      (실측 2026-08-28: QR결제 7줄 — 토스페이 305,000 · 현대 120,000 · 삼성 200,000 + 취소 2쌍).
  *   ② **금액을 나눠 붙일 수 있다.** 자국 한 줄이 「이 POS 건의 얼마가 이 판매에 갔는지」다.
@@ -15,7 +15,7 @@
  *   ③ 다른 날 후보를 앞뒤 1일 → **앞뒤 7일**로 넓혔다. 미리 결제·나중 결제가 여기 걸린다.
  *   ④ 「선결제 — 판매는 나중에」 사유를 새로 뒀다. 그 건은 판매가 생길 때까지 계속 따라다닌다.
  *
- *   앱 쪽 대사 항목 = quote 단일(총액) + quote_payment 분할 몫 + receivable_payment 수금.
+ *   앱 쪽 대조 항목 = quote 단일(총액) + quote_payment 분할 몫 + receivable_payment 수금.
  *   자국 = recon_match kind '포스결제' (src pos_txn → ref quote | quote_payment | receivable_payment).
  *   🔴 자국은 **짝 단위로 유일**하다 (scripts/add-easypay.ts 의 uq_recon_match_pos).
  *
@@ -118,11 +118,11 @@ export interface PosMatch {
 export interface PosDayData {
   day: string;
   hasPos: boolean;
-  /** 그 날 살아 있는 대사 대상 결제 (카드 + 간편결제) */
+  /** 그 날 살아 있는 대조 대상 결제 (카드 + 간편결제) */
   posLive: PosRow[];
   /** 취소로 상쇄된 승인·취소 쌍 (정보) */
   posCancelled: PosRow[];
-  /** 대사 대상이 아닌 수단 요약 (현금·계좌이체·기타) */
+  /** 대조 대상이 아닌 수단 요약 (현금·계좌이체·기타) */
   posOther: { method: string; n: number; sum: number }[];
   /** 이 날과 얽힌 자국 — 다른 날 판매·다른 날 POS 도 들어 있다 */
   matches: PosMatch[];
@@ -206,7 +206,7 @@ async function posRowsByIds(ids: number[]): Promise<PosRow[]> {
   return rows.map(toPos);
 }
 
-/** 앱 대사 항목 — 카드 + 간편결제 (단일 판매 · 분할 몫 · 외상 수금) */
+/** 앱 대조 항목 — 카드 + 간편결제 (단일 판매 · 분할 몫 · 외상 수금) */
 export async function appPayItems(from: string, to: string): Promise<AppItem[]> {
   const D = sql`COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)`;
   const who = sql`COALESCE(q.supplier_name, c.name, NULLIF(split_part(COALESCE(q.mars_memo, ''), ' ', 2), ''), '손님')`;
@@ -782,7 +782,7 @@ export async function autoMatchPosDayCore(day: string, uid: number | null): Prom
       items.push({ kind: "pos", args: { matchId: id }, label: `${l.app.quoteNo} ${l.app.who} ${won(l.amount)}`, amount: l.amount });
     }
   }
-  /* ⭐ 최근 한 일 — 자동 대사는 한 줄 n건, 건별 되돌리기 = unlinkMatch(matchId). 0건이면 안 남긴다 */
+  /* ⭐ 최근 한 일 — 자동 대조는 한 줄 n건, 건별 되돌리기 = unlinkMatch(matchId). 0건이면 안 남긴다 */
   if (items.length > 0) {
     await logActivity({
       ym: day.slice(0, 7),

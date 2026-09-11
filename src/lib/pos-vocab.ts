@@ -16,7 +16,7 @@ export const POS_TO_APP: Record<string, string> = {
   계좌이체: "계좌이체",
 };
 
-/** 카드 일마감이 대사하는 앱 결제수단 — 현금·계좌이체는 여기서 안 맞춘다 */
+/** 카드 일마감이 대조하는 앱 결제수단 — 현금·계좌이체는 여기서 안 맞춘다 */
 export const RECON_METHODS = ["카드", "간편결제"] as const;
 
 /** 그에 해당하는 토스 포스 쪽 낱말 — 카드 · QR결제 · 선불지급수단 */

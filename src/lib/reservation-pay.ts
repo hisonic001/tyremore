@@ -168,7 +168,7 @@ export async function restateReservationPaid(input: {
  *   · 수단이 전부 SPLITTABLE(카드·현금·계좌이체·지역화폐·간편결제)이어야 옮길 수 있다 —
  *     「개인계좌」가 섞이면 외상으로 남긴다 (personal: true 로 알린다)
  *   · 줄이 하나여도 '혼합' + quote_payment 1줄로 둔다 — 받은 날(paid_on)을 잃지 않으려고.
- *     카드 일마감은 혼합이면 quote_payment 줄로 대사한다 (pos-close.ts).
+ *     카드 일마감은 혼합이면 quote_payment 줄로 대조한다 (pos-close.ts).
  *
  * 부르는 곳: addCollection · settleReceivables (수금 뒤) · restateReservationPaid (고치기 뒤)
  */
@@ -201,7 +201,7 @@ export async function normalizeSettledReservation(
       RETURNING id
     `);
     /* 🔴 카드 일마감의 짝(recon_match)을 새 분할 줄로 옮긴다 (2026-09-11) — 지우면 POS 대조가 고아가 된다.
-       pos-close 는 quote_payment 줄도 대사 항목으로 안다 (KIND_OF 'qp'). */
+       pos-close 는 quote_payment 줄도 대조 항목으로 안다 (KIND_OF 'qp'). */
     await runner.execute(sql`
       UPDATE recon_match SET ref_table = 'quote_payment', ref_id = ${Number(qp.id)}
       WHERE ref_table = 'receivable_payment' AND ref_id = ${Number(r.id)}

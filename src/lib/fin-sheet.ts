@@ -128,8 +128,8 @@ export function parseFinFile(buf: Buffer, fileName?: string): FinParseResult {
   // ── 아직 다음 단계인 자료를 먼저 알아본다 (앞 10행의 글자로)
   const headText = rows.slice(0, 10).flat().map(normHead).join("|");
   if (headText.includes("세금계산서목록")) throw new Error("전자세금계산서 파일입니다 — 2단계(세금계산서 대조)에서 지원됩니다");
-  if (headText.includes("일별승인내역")) throw new Error("여신협회 승인내역 파일입니다 — 3단계(카드 매출 대사)에서 지원됩니다");
-  if (headText.includes("월별입금내역")) throw new Error("여신협회 입금내역 파일입니다 — 3단계(카드 매출 대사)에서 지원됩니다");
+  if (headText.includes("일별승인내역")) throw new Error("여신협회 승인내역 파일입니다 — 3단계(카드 매출 대조)에서 지원됩니다");
+  if (headText.includes("월별입금내역")) throw new Error("여신협회 입금내역 파일입니다 — 3단계(카드 매출 대조)에서 지원됩니다");
   if (headText.includes("부가세신고자료")) throw new Error("단말기 앱의 월 요약 파일입니다 — 업로드 대상이 아니라 검증 참고자료입니다");
   if (headText.includes("국외이용")) throw new Error("카드 국외이용 내역은 아직 지원하지 않습니다 — 건수가 적어 손으로 보시는 게 낫습니다");
 

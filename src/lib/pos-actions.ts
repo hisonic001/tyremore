@@ -283,7 +283,7 @@ export async function fixSaleToPos(
   const before = await saleLabel(quoteId); // 기록에 이전 값을 남기려고
   const r = await updateSaleHead({ quoteId, paymentMethod: method, payments: null });
   if (!r.ok) return r;
-  /* ⭐ 최근 한 일 — 수정은 되돌리기 없음, 이전 값이 label 에 (자동 대사 n건은 autoMatchPosDayCore 가 따로 남긴다) */
+  /* ⭐ 최근 한 일 — 수정은 되돌리기 없음, 이전 값이 label 에 (자동 대조 n건은 autoMatchPosDayCore 가 따로 남긴다) */
   await logActivity({
     ym: (before?.day ?? day).slice(0, 7),
     actor: g.uid,

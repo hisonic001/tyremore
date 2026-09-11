@@ -109,7 +109,7 @@ export async function weeklySteps(ym: string): Promise<WeeklySteps> {
     {
       key: "deposits",
       no: 3,
-      title: "입금 대사",
+      title: "입금 대조",
       status: depOpen > 0 ? `남은 ${depOpen}건` : "다 됨",
       href: `/finance/deposits?ym=${ym}`,
       warn: depOpen > 0,
@@ -127,7 +127,7 @@ export async function weeklySteps(ym: string): Promise<WeeklySteps> {
     {
       key: "tax",
       no: 5,
-      title: "계산서 대사",
+      title: "계산서 대조",
       status: taxOpen > 0 ? `남은 ${taxOpen}장` : "다 됨",
       href: `/finance/tax?view=money&ym=${ym}`,
       warn: taxOpen > 0,
@@ -136,7 +136,7 @@ export async function weeklySteps(ym: string): Promise<WeeklySteps> {
     {
       key: "payables",
       no: 6,
-      title: "지급 대사",
+      title: "지급 대조",
       status: payable > 0 ? `미지급금 ${Math.round(payable / 10000).toLocaleString("ko-KR")}만` : "다 맞음",
       href: `/finance/payables?ym=${ym}`,
       warn: payable > 0,

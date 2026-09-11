@@ -228,7 +228,7 @@ export const descRuleSql = (cond: string, prefix = ""): string =>
     ? cond.split("description").join(prefix + "description").split("out_amount").join(prefix + "out_amount")
     : cond;
 
-/** 카드 정산 입금 적요 패턴 — SQL 3곳(fin-ingest·recon-data·카드 대사)이 이 한 벌을 쓴다.
+/** 카드 정산 입금 적요 패턴 — SQL 3곳(fin-ingest·recon-data·카드 대조)이 이 한 벌을 쓴다.
  *  🔴 감사 L1(2026-08-25): 세 곳에 복제돼 있던 것을 정본화 — 카드사 추가는 여기서만. */
 export const CARD_SETTLE_PATTERN_SQL =
   // 🔴 2026 감사 G10: 「[FB이체] 현대5816」 — '현' 뒤에 '대'가 와서 놓쳤다 → 현대?

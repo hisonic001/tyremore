@@ -3,7 +3,7 @@
 /**
  * ⭐ 할 일 인박스 화면 (돈관리 근본책 2단계, 2026-08-31)
  *   자료는 서버(fin-inbox 정본)가 만들고, 여기는 그리기 + 확실한 두 액션만:
- *   ⚡ 판매↔입금 대사(traceLinkDeposit) · 지급 대사(payFromWithdrawal) — 정본 재사용.
+ *   ⚡ 판매↔입금 대조(traceLinkDeposit) · 지급 대조(payFromWithdrawal) — 정본 재사용.
  *   화면 글자는 fin-words 정본(ERP 용어, 2026-09-12).
  */
 import { useState, useTransition } from "react";
@@ -37,7 +37,7 @@ export function InboxSection({ inbox, ym }: { inbox: FinInbox; ym: string }) {
     });
   };
 
-  /* 통장에 안 찍히는 수령(개인계좌·현금) — 대사 제외 표시 (사장님 제보 2026-09-01 나기춘) */
+  /* 통장에 안 찍히는 수령(개인계좌·현금) — 대조 제외 표시 (사장님 제보 2026-09-01 나기춘) */
   const doAside = async (e: InboxEntry) => {
     const a = e.aside!;
     if (
