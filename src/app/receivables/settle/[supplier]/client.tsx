@@ -3,7 +3,7 @@
 /**
  * ⭐ 거래처×달 정산 화면 (사장님 요청 2026-09-01)
  *
- *   판정은 건마다 저장되고(멱등 — 고치면 적용 자국이 풀린다), 「한꺼번에 적용」이
+ *   판정은 건마다 저장되고(멱등 — 고치면 적용 내역이 풀린다), 「한꺼번에 적용」이
  *   실제로 판매를 고친다. 미리보기 강제 리듬은 receiving/paste.tsx 그대로.
  */
 import { useRef, useState, useTransition } from "react";
@@ -26,6 +26,8 @@ import type { SettleLineView, SettleView } from "@/lib/settlement-data";
 import type { SettleTaxHint } from "@/lib/settle-tax";
 import { useConfirm } from "@/components/ui/confirm";
 import { SPLITTABLE } from "@/lib/payments";
+// ⭐ 계산서 짝 붙이기 글자는 fin-words 정본 (ERP 용어, 2026-09-12): 잇기→대사, 외상→미수금
+import { W } from "@/lib/fin-words";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
 
@@ -152,7 +154,7 @@ export function SettleClient({
         </p>
       )}
 
-      {/* ⭐ 이 청구의 계산서 짝 (2026-09-10) — 자동으로 잇지 않고 확인을 받는다 */}
+      {/* ⭐ 이 청구의 계산서 짝 (2026-09-10) — 자동으로 대사하지 않고 확인을 받는다 */}
       {taxHints.length > 0 && (
         <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50/60 p-3">
           <p className="text-sm font-semibold text-sky-900">이 청구의 계산서 짝</p>
@@ -166,7 +168,7 @@ export function SettleClient({
                 </span>
                 {h.linked ? (
                   <span className="shrink-0 rounded bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">
-                    이미 이어짐
+                    이미 {W.recon}됨
                   </span>
                 ) : (
                   <button
@@ -176,13 +178,13 @@ export function SettleClient({
                       start(async () => {
                         setErr(null);
                         const ok = await ask({
-                          title: "이 계산서에 그 달 외상을 이을까요?",
+                          title: `이 계산서에 그 달 ${W.receivable}을 ${W.recon}할까요?`,
                           body:
                             `${h.counterparty} ${h.issueDate} ${won(h.total)}원 계산서에 ` +
-                            `${supplier} ${ym} 외상 ${lines.length}건을 잇습니다.
+                            `${supplier} ${ym} ${W.receivable} ${lines.length}건을 ${W.recon}합니다.
 ` +
-                            "이으면 「계산서로 받은 돈」으로 인식돼 외상 화면에서 정리됩니다.",
-                          confirmLabel: "잇기",
+                            `${W.recon}하면 「계산서로 받은 돈」으로 인식돼 ${W.receivable} 화면에서 정리됩니다.`,
+                          confirmLabel: W.recon,
                         });
                         if (!ok) return;
                         const r = await linkSettleTax(supplier, ym, h.invoiceId);
@@ -192,7 +194,7 @@ export function SettleClient({
                     }
                     className="shrink-0 rounded-control border border-sky-400 bg-white px-3 py-1.5 text-sm font-medium text-sky-800 disabled:opacity-50"
                   >
-                    이 계산서로 잇기
+                    이 계산서로 {W.recon}
                   </button>
                 )}
               </li>

@@ -12,6 +12,8 @@ import { taxOpenCounts, CASH_LAT, DONE, LIVE } from "@/lib/tax-recon";
 import { FinShell } from "@/components/fin/shell";
 import { won } from "@/components/fin/money";
 import { closeChecklist, closeMonthForm, monthCloseStatus, reopenMonthForm } from "@/lib/month-close";
+// ⭐ 손익 세 줄은 「매출 · 비용 · 이익」 (사장님 2단계 답, 2026-09-11) — fin-words 정본
+import { W } from "@/lib/fin-words";
 
 export const dynamic = "force-dynamic";
 
@@ -108,7 +110,7 @@ export default async function FinanceLedgerPage({
   const endShown = ym === thisYm ? kstToday() : lastDay;
   const covWarnings: string[] = [];
   if (!cov.card_last || cov.card_last < start) {
-    covWarnings.push(`법인카드 내역이 이 달에 없습니다 (마지막 자료 ${cov.card_last ?? "없음"}) — 카드로 쓴 돈이 0원으로 계산됩니다`);
+    covWarnings.push(`법인카드 내역이 이 달에 없습니다 (마지막 자료 ${cov.card_last ?? "없음"}) — 카드 ${W.cost}이 0원으로 계산됩니다`);
   } else if (cov.card_last < endShown) {
     covWarnings.push(`법인카드 내역이 ${cov.card_last}까지만 올라와 있습니다`);
   }
@@ -116,7 +118,7 @@ export default async function FinanceLedgerPage({
     covWarnings.push(`카드 수수료는 정산 자료가 아직 없어 평균 요율(${(pl.feeRate * 100).toFixed(2)}%)로 추정한 값입니다`);
   }
   if (pl.bought === 0 && cov.buy_first && start < cov.buy_first.slice(0, 8) + "01") {
-    covWarnings.push(`이 달 매입 기록이 없습니다 (앱 매입 기록은 ${cov.buy_first}부터) — 매출만 잡혀 남은 돈이 실제보다 커 보입니다`);
+    covWarnings.push(`이 달 매입 기록이 없습니다 (앱 매입 기록은 ${cov.buy_first}부터) — ${W.sales}만 잡혀 ${W.profit}이 실제보다 커 보입니다`);
   }
   const gTaxBuyOpen = Number(taxBuyOpenRows[0].s);
   const noData = sums.length === 0;
@@ -140,7 +142,7 @@ export default async function FinanceLedgerPage({
             <div className="tabular mt-2 space-y-1 text-sm">
               <div id="earned">
                 <p className="flex justify-between">
-                  <span>번 돈 (판매)</span>
+                  <span>{W.sales}</span>
                   <strong className="text-emerald-700">{won(pl.earnedTotal)}원</strong>
                 </p>
                 <Why>
@@ -151,18 +153,18 @@ export default async function FinanceLedgerPage({
               </div>
               <div id="spent">
                 <p className="flex justify-between">
-                  <span>쓴 돈</span>
+                  <span>{W.cost}</span>
                   <strong className="text-red-600">{won(pl.spent)}원</strong>
                 </p>
                 <Why>
                   <p>= 상품 매입 {won(pl.bought)}원 (앱 매입 장부, 발행일 기준 — <Link href={`/finance/payables?ym=${ym}`} className="underline">미지급</Link>)</p>
-                  <p>+ 법인카드로 쓴 돈 {won(pl.cardOut)}원 (미분류 + 경비로 분류된 것 — 매입대금·카드대금 분류는 이중이라 뺌 — <Link href={`/finance/expenses?ym=${ym}`} className="underline">지출</Link>)</p>
+                  <p>+ 법인카드 {W.cost} {won(pl.cardOut)}원 (미분류 + 경비로 분류된 것 — 매입대금·카드대금 분류는 이중이라 뺌 — <Link href={`/finance/expenses?ym=${ym}`} className="underline">지출</Link>)</p>
                   <p>+ 카드 수수료 {won(pl.feeShown)}원 {pl.feeEstimated > 0 ? `(정산 자료 없어 평균 요율 ${((pl.feeRate ?? 0) * 100).toFixed(2)}% 로 추정)` : "(카드사 정산 자료 실측)"} — <Link href={`/finance/card?ym=${ym}`} className="underline">카드</Link></p>
                   <p>+ 통장 경비 {won(pl.bankExp)}원 (임차료·인건비 등 「지출 분류」에서 나눈 것만 — 내부이체·카드대금은 뺌)</p>
                 </Why>
               </div>
               <p className="flex justify-between border-t border-slate-200 pt-1 text-base font-bold" id="profit">
-                <span>남은 돈</span>
+                <span>{W.profit}</span>
                 <span className={pl.profit >= 0 ? "text-emerald-700" : "text-red-600"}>{won(pl.profit)}원</span>
               </p>
             </div>
@@ -177,8 +179,8 @@ export default async function FinanceLedgerPage({
               <div className="tabular mt-3 space-y-0.5 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
                 {gTaxBuyOpen > 0 && (
                   <p>
-                    이 달 매입 세금계산서 중 돈 확인 안 됨: {taxOpenBy.buy}건 · {won(gTaxBuyOpen)}원 —{" "}
-                    <Link href={`/finance/tax?view=money&ym=${ym}&direction=매입`} className="underline">계산서 돈 확인</Link>
+                    이 달 매입 세금계산서 중 {W.open}: {taxOpenBy.buy}건 · {won(gTaxBuyOpen)}원 —{" "}
+                    <Link href={`/finance/tax?view=money&ym=${ym}&direction=매입`} className="underline">{W.reconTax}</Link>
                   </p>
                 )}
                 {expOpen.sum > 0 && (
@@ -189,7 +191,7 @@ export default async function FinanceLedgerPage({
               </div>
             )}
             <p className="tabular mt-1 text-[11px] text-slate-400">
-              기준: 번 돈=판매일 · 매입=발행일 · 카드·경비=사용일 · 수수료=정산월. 통장 잔액과는 원래 다른 숫자입니다(장사 손익).
+              기준: {W.sales}=판매일 · 매입=발행일 · 카드·경비=사용일 · 수수료=정산월. 통장 잔액과는 원래 다른 숫자입니다(장사 손익).
             </p>
           </section>
 
@@ -200,19 +202,19 @@ export default async function FinanceLedgerPage({
             </h2>
             <div className="tabular mt-2 space-y-1 text-sm">
               <p className="flex justify-between" id="receivable">
-                <span>못 받은 돈 (외상 잔액 전체)</span>
+                <span>{W.receivable} (잔액 전체)</span>
                 <Link href="/receivables" className="font-semibold text-amber-800 underline underline-offset-2">
                   {won(recv.remain)}원
                 </Link>
               </p>
               {recv.reserveCount > 0 && (
                 <p className="flex justify-between pl-3 text-xs text-slate-500">
-                  <span>· 그중 📌 예약 잔금 (시공하러 오시면 받을 돈)</span>
+                  <span>· 그중 📌 예약 잔금 (시공 때 받는 잔금)</span>
                   <span>{won(recv.reserveRemain)}원 · {recv.reserveCount}건</span>
                 </p>
               )}
               <p className="flex justify-between" id="payable">
-                <span>줄 돈 (매입 미지급 잔액)</span>
+                <span>{W.payable} (매입 잔액)</span>
                 <Link href={`/finance/payables?ym=${ym}`} className="font-semibold text-red-700 underline underline-offset-2">
                   {won(payable)}원
                 </Link>
@@ -243,7 +245,7 @@ export default async function FinanceLedgerPage({
                 <p className="tabular mt-1 font-bold text-red-600">{won(Number(bank?.out_sum ?? 0))}원</p>
               </div>
               <div className="rounded-2xl border border-slate-200 bg-white p-3 text-center">
-                <p className="text-xs text-slate-500">카드로 쓴 돈</p>
+                <p className="text-xs text-slate-500">카드 {W.cost}</p>
                 <p className="tabular mt-1 font-bold text-red-600">{won(pl.cardOut)}원</p>
               </div>
             </section>
@@ -257,7 +259,7 @@ export default async function FinanceLedgerPage({
                 <p className="text-emerald-800">
                   ✅ 마감됨 ({mc.closedAt})
                   {mc.profit !== null && mc.dataComplete ? (
-                    <> — 남은 돈 <strong className="tabular">{won(mc.profit)}원</strong>으로 확정</>
+                    <> — {W.profit} <strong className="tabular">{won(mc.profit)}원</strong>으로 확정</>
                   ) : (
                     <span className="text-slate-500"> — 자료 기준 마감 (앱 판매·매입 기록이 없는 달이라 손익은 없음)</span>
                   )}

@@ -6,6 +6,8 @@ import { Search } from "lucide-react";
 import { markSaleSettledAside, traceLinkDeposit } from "@/lib/trace-actions";
 import { useConfirm } from "@/components/ui/confirm";
 import { Notice } from "@/components/ui/notice";
+// ⭐ 화면 글자는 fin-words 정본 (ERP 용어, 2026-09-12): 잇기→대사, 확인 끝→대사 제외
+import { W } from "@/lib/fin-words";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
 
@@ -33,7 +35,7 @@ export function TraceSearch({ initial }: { initial: string }) {
   );
 }
 
-/** 판매 ↔ 입금 잇기 — 후보가 하나뿐일 때만 서버가 내려보낸다 */
+/** 판매 ↔ 입금 대사 — 후보가 하나뿐일 때만 서버가 내려보낸다 */
 export function TraceLinkButton({
   action,
   title,
@@ -50,9 +52,9 @@ export function TraceLinkButton({
 
   const go = async () => {
     const ok = await ask({
-      title: "이 입금과 이을까요?",
-      body: `${title} ${won(amount)}원 ↔ ${action.label}\n입금 정리와 같은 방식으로 이어지고, 입금자명도 이 상대로 기억합니다.`,
-      confirmLabel: "잇기",
+      title: `이 입금과 ${W.recon}할까요?`,
+      body: `${title} ${won(amount)}원 ↔ ${action.label}\n${W.reconDeposit}와 같은 방식으로 ${W.recon}되고, 입금자명도 이 상대로 기억합니다.`,
+      confirmLabel: W.recon,
     });
     if (!ok) return;
     start(async () => {
@@ -91,8 +93,8 @@ export function TraceAsideButton({ quoteId, title, amount }: { quoteId: number; 
     const ok = await ask({
       title: "개인계좌·현금으로 받은 판매인가요?",
       body: `${title} ${won(amount)}원
-법인 통장에 안 찍히는 돈이라 확인 끝으로 표시합니다. 잘못 표시했으면 아래 「통장 밖에서 정리한 판매」에서 되돌릴 수 있습니다.`,
-      confirmLabel: "받았음 — 확인 끝",
+법인 통장에 안 찍히는 돈이라 ${W.excluded}로 표시합니다. 잘못 표시했으면 아래 「통장 밖에서 정리한 판매」에서 되돌릴 수 있습니다.`,
+      confirmLabel: `받았음 — ${W.excluded}`,
     });
     if (!ok) return;
     start(async () => {
@@ -134,7 +136,7 @@ export function TraceAsideUndoButton({ quoteId, title, amount }: { quoteId: numb
     const ok = await ask({
       title: "이 표시를 되돌릴까요?",
       body: `${title} ${won(amount)}원
-「확인할 것」 목록으로 다시 올라옵니다 — 통장 입금이 올라왔으면 그 자리에서 이으시면 됩니다.`,
+「확인할 것」 목록으로 다시 올라옵니다 — 통장 입금이 올라왔으면 그 자리에서 ${W.recon}하시면 됩니다.`,
       confirmLabel: "되돌리기",
       tone: "danger",
     });

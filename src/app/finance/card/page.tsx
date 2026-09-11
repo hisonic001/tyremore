@@ -11,6 +11,7 @@ import { TableWrap } from "@/components/fin/table";
 import { cardDaySums, cardDiff } from "@/lib/card-recon";
 import { posDayData } from "@/lib/pos-close";
 import { kstToday } from "@/lib/ym";
+import { W } from "@/lib/fin-words";
 import { PosCloseUi } from "./pos-close-ui";
 
 export const dynamic = "force-dynamic";
@@ -130,7 +131,7 @@ export default async function FinanceCardPage({
       {/* ⭐ 카드 일마감 (사장님 요청 2026-08-26) — 토스 포스 매출리포트 ↔ 앱 판매 */}
       <PosCloseUi data={pos} />
 
-      <h2 className="mt-6 text-lg font-bold">카드 매출 맞추기 (달)</h2>
+      <h2 className="mt-6 text-lg font-bold">{W.reconCard} (달)</h2>
       <p className="mt-1 text-sm text-slate-500">
         세 자료를 <strong>날짜별로 나란히</strong> 봅니다 — 여신협회 승인(카드사가 승인한 금액) · 토스POS 결제(실제로
         긁힌 돈) · 앱에 적은 판매. 차이 난 날만 열어 보면 됩니다.

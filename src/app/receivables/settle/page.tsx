@@ -2,6 +2,7 @@ import Link from "@/lib/link";
 import {hasPerm, requireSession } from "@/lib/auth";
 import { settlementBook, settleCandidates } from "@/lib/settlement-data";
 import { kstToday } from "@/lib/ym";
+import { W } from "@/lib/fin-words";
 import { StartForm } from "./start-form";
 
 export const dynamic = "force-dynamic";
@@ -44,7 +45,7 @@ export default async function SettleIndexPage() {
   return (
     <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6 lg:max-w-4xl">
       <Link href="/receivables" className="text-sm text-slate-500 underline underline-offset-4">
-        ← 외상 장부
+        ← {W.receivable} 장부
       </Link>
       <h1 className="mt-3 text-xl font-bold">거래처 월 정산</h1>
       <p className="mt-1 text-sm text-slate-600">

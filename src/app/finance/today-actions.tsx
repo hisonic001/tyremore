@@ -4,8 +4,8 @@
  * ⭐ 첫 화면 「오늘」 칸의 단추들 (돈관리 개편 1단계, 2026-09-11)
  *
  *   원칙: 한 줄 = 무엇 · 숫자 · 단추 하나. 여기 단추는 전부 **기존 정본 액션**을 부른다 —
- *   잇기는 추적 화면의 TraceLinkButton 그대로, 「개인계좌 / 현금 / 기다림」은 입금 화면과
- *   같은 markSaleSettledAside · fixSaleMethod. 새 논리 없음.
+ *   대사는 추적 화면의 TraceLinkButton 그대로, 「개인계좌 / 현금 / 보류」는 입금 화면과
+ *   같은 markSaleSettledAside · fixSaleMethod. 새 논리 없음. 글자는 fin-words 정본(2026-09-12).
  */
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
@@ -14,12 +14,13 @@ import { fixSaleMethod } from "@/lib/pos-actions";
 import { setInvoiceDeadlineSkip } from "@/lib/invoice-deadline-actions";
 import { useConfirm } from "@/components/ui/confirm";
 import { Notice } from "@/components/ui/notice";
+import { W } from "@/lib/fin-words";
 import { TraceLinkButton } from "./trace/client";
 import type { A1Row } from "@/lib/self-audit";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
 
-/** 안 들어온 이체 한 줄 — [⚡짝][개인계좌][현금][기다림] */
+/** 안 들어온 이체 한 줄 — [⚡짝][개인계좌][현금][보류] */
 export function TransferRow({ t }: { t: A1Row }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -58,7 +59,7 @@ export function TransferRow({ t }: { t: A1Row }) {
           type="button"
           disabled={pending}
           onClick={() =>
-            act("개인 통장으로 받았나요?", `${title} ${won(t.total)}원 — 법인 통장에 안 찍히는 돈이라 확인 끝으로 표시합니다.`, () =>
+            act("개인 통장으로 받았나요?", `${title} ${won(t.total)}원 — 법인 통장에 안 찍히는 돈이라 ${W.excluded}로 표시합니다.`, () =>
               markSaleSettledAside(t.quoteId, false, "개인통장 입금"),
             )
           }
@@ -78,13 +79,13 @@ export function TransferRow({ t }: { t: A1Row }) {
           type="button"
           disabled={pending}
           onClick={() =>
-            act("아직 안 들어온 돈으로 둘까요?", `${title} ${won(t.total)}원 — 목록에서 빠집니다. 들어오면 「최근 한 일」에서 되돌려 이으세요.`, () =>
+            act("아직 안 들어온 돈으로 둘까요?", `${title} ${won(t.total)}원 — 목록에서 빠집니다. 들어오면 「${W.activity}」에서 되돌려 ${W.recon}하세요.`, () =>
               markSaleSettledAside(t.quoteId, false, "아직 안 들어옴"),
             )
           }
           className={`${btn} border-slate-300 bg-white text-slate-600`}
         >
-          기다림
+          {W.hold}
         </button>
       </div>
       {error && <Notice tone="error">{error}</Notice>}

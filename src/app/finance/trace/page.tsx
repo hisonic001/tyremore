@@ -5,6 +5,7 @@ import { kstToday } from "@/lib/ym";
 import Link from "@/lib/link";
 import { FinShell } from "@/components/fin/shell";
 import { Notice } from "@/components/ui/notice";
+import { W } from "@/lib/fin-words";
 import { TraceSearch, TraceLinkButton, TraceAsideButton, TraceAsideUndoButton } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -15,8 +16,8 @@ const won = (n: number) => n.toLocaleString("ko-KR");
  * ⭐ 돈 추적 — "이 돈 어디 갔어?" (돈관리 근본책 1단계-A, 사장님 승인 2026-08-31)
  *
  *   이름 한 조각·금액 하나로 세 장부(판매 · 세금계산서 · 통장/카드)를 한 번에 뒤져
- *   시간순으로 보여준다. 조각마다 연결 상태와 「왜」, 이을 수 있으면 그 자리에서 잇는다.
- *   조회는 lib/money-trace 정본, 잇기는 입금 정리와 같은 정본(trace-actions).
+ *   시간순으로 보여준다. 조각마다 대사 상태와 「왜」, 대사할 수 있으면 그 자리에서 대사한다.
+ *   조회는 lib/money-trace 정본, 대사는 입금 대사와 같은 정본(trace-actions). 글자는 fin-words 정본.
  */
 export default async function TracePage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
   const sp = await searchParams;
@@ -36,7 +37,7 @@ export default async function TracePage({ searchParams }: { searchParams: Promis
     <FinShell tab="trace">
       <p className="mt-2 text-sm text-slate-500">
         이름 한 조각(「미광」·「정미선」)이나 금액(「280000」)만 넣으면 판매·계산서·통장을
-        한 번에 찾아 <strong>어디까지 이어졌는지</strong> 보여 드립니다.
+        한 번에 찾아 <strong>어디까지 {W.recon}됐는지</strong> 보여 드립니다.
       </p>
       {!owner ? (
         <Notice tone="warn">돈 추적은 사장님 계정 전용입니다.</Notice>
@@ -95,19 +96,19 @@ function Row({ row }: { row: TraceRow }) {
 
 /* ============================================================
  * ⭐ 확인할 것 목록 (2026-09-02) — 감사 A1 과 같은 정본. 그 자리에서 처리:
- *   후보가 하나면 ⚡잇기, 통장에 안 찍히는 돈이면 「개인계좌·현금으로 받음」.
+ *   후보가 하나면 ⚡대사, 통장에 안 찍히는 돈이면 「개인계좌·현금으로 받음」.
  * ========================================================== */
 function OpenList({ rows }: { rows: A1Row[] }) {
   if (rows.length === 0) {
-    return <Notice tone="info">확인할 계좌이체 판매가 없습니다 — 최근 45일 전부 입금과 이어져 있습니다 ✅</Notice>;
+    return <Notice tone="info">확인할 계좌이체 판매가 없습니다 — 최근 45일 전부 입금과 {W.recon}돼 있습니다 ✅</Notice>;
   }
   return (
     <section className="mt-4">
       <h2 className="text-sm font-bold text-slate-700">
-        확인할 것 — 계좌이체 판매인데 통장 입금과 안 이어진 {rows.length}건 (최근 45일)
+        확인할 것 — 계좌이체 판매인데 통장 입금과 {W.open} {rows.length}건 (최근 45일)
       </h2>
       <p className="mt-0.5 text-xs text-slate-400">
-        진짜 아직 못 받은 돈(미수)이거나, 개인계좌·현금으로 받았거나, 입금자명이 달라 못 이어진 것입니다.
+        진짜 {W.receivable}(아직 못 받음)이거나, 개인계좌·현금으로 받았거나, 입금자명이 달라 {W.recon} 못 한 것입니다.
       </p>
       <ul className="mt-2 space-y-2">
         {rows.map((a) => (
@@ -122,7 +123,7 @@ function OpenList({ rows }: { rows: A1Row[] }) {
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
               {a.cand ? (
                 <TraceLinkButton
-                  action={{ cashTxnId: a.cand.cashTxnId, quoteId: a.quoteId, label: `${a.cand.label}와 잇기` }}
+                  action={{ cashTxnId: a.cand.cashTxnId, quoteId: a.quoteId, label: `${a.cand.label}와 ${W.recon}` }}
                   title={a.who}
                   amount={a.total}
                 />
@@ -141,7 +142,7 @@ function OpenList({ rows }: { rows: A1Row[] }) {
         ))}
       </ul>
       <p className="mt-2 text-xs text-slate-400">
-        진짜 미수(아직 안 받은 돈)는 그대로 두시면 됩니다 — 입금이 올라오면 ⚡잇기가 나타납니다.
+        진짜 {W.receivable}(아직 안 받은 돈)은 그대로 두시면 됩니다 — 입금이 올라오면 ⚡{W.recon}가 나타납니다.
       </p>
     </section>
   );
@@ -150,7 +151,9 @@ function OpenList({ rows }: { rows: A1Row[] }) {
 /* ============================================================
  * ⭐ 통장 밖에서 정리한 판매 (2026-09-10) — 되돌리기가 사는 곳.
  *   입금 정리 화면의 [개인 통장으로 받음]·[아직 안 들어옴]과 이 화면의 [개인계좌·현금으로 받음]이
- *   남긴 자국은 모두 여기 모인다 (정본 self-audit.asideMarkedSales).
+ *   남긴 대사 내역은 모두 여기 모인다 (정본 self-audit.asideMarkedSales).
+ *   🔴 2단계(2026-09-12): 입금 화면의 같은 표는 「최근 한 일」 링크로 바꿨고, 여기는 추적 화면의
+ *      「확인할 것」과 짝이라 남겼다(없앨 10곳 목록에 없음).
  * ========================================================== */
 function AsideList({ rows }: { rows: AsideRow[] }) {
   return (

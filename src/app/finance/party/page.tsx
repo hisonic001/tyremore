@@ -4,12 +4,13 @@ import { getSession, hasPerm } from "@/lib/auth";
 import { FinShell } from "@/components/fin/shell";
 import { TableWrap, Money } from "@/components/fin/table";
 import { partyListData } from "@/lib/party-ledger";
+import { W } from "@/lib/fin-words";
 
 export const dynamic = "force-dynamic";
 
 /**
  * ⭐ 거래처 목록 (ERP 구조화 배치3, 2026-08-25) — 사장님 전용
- *   거래처별 미지급·외상 잔액 한 표 + 이름을 누르면 원장으로.
+ *   거래처별 미지급금·미수금 잔액 한 표 + 이름을 누르면 원장으로. 글자는 fin-words 정본(2026-09-12).
  */
 export default async function FinancePartyListPage() {
   const session = await getSession();
@@ -32,8 +33,8 @@ export default async function FinancePartyListPage() {
         <thead>
           <tr className="text-xs text-slate-500">
             <th className="py-1.5 text-left">거래처</th>
-            <th className="text-right">줄 돈 (미지급)</th>
-            <th className="text-right">받을 돈 (외상)</th>
+            <th className="text-right">{W.payable}</th>
+            <th className="text-right">{W.receivable}</th>
             <th className="text-right"></th>
           </tr>
         </thead>

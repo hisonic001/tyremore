@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
 import type { DepositReconData, DepositSuggestion } from "@/lib/recon-data";
 import type { DepositBreakdown, DepositTaxBundles, DepositTaxCands, TransferSale } from "@/lib/deposit-tax";
-import type { AsideRow } from "@/lib/self-audit";
 import { clearPosNote, fixSaleMethod } from "@/lib/pos-actions";
 import { markSaleSettledAside } from "@/lib/trace-actions";
 import {
@@ -15,17 +14,16 @@ import {
   linkDepositToQuote,
   markCardSettlements,
   setDepositKind,
-  undoDepositKind,
-  undoDepositLink,
-  unmarkCardSettlement,
 } from "@/lib/fin-deposits";
 import { confirmBankToTaxes, confirmTaxToBank } from "@/lib/recon";
 import { BankSearch } from "../tax/link-parts";
 import { won } from "@/components/fin/money";
 import { useConfirm } from "@/components/ui/confirm";
+import { W, autoReconLabel } from "@/lib/fin-words";
 
 
-/** ⭐ 통장 입금을 카드 정산·이체 판매·외상 수금으로 정리 (ERP 4단계, 2026-08-24) */
+/** ⭐ 통장 입금을 카드 정산·이체 판매·외상 수금으로 정리 (ERP 4단계, 2026-08-24)
+ *   화면 글자는 fin-words 정본(ERP 용어, 2026-09-12) — 잇기→대사, 번 돈→매출. */
 export function DepositsRecon({
   data,
   ym,
@@ -34,7 +32,6 @@ export function DepositsRecon({
   sureIds,
   breakdown,
   transfers,
-  asides,
 }: {
   data: DepositReconData;
   ym: string;
@@ -44,9 +41,7 @@ export function DepositsRecon({
   bundles: DepositTaxBundles;
   /** 앱엔 계좌이체인데 법인 통장에 없는 판매 */
   transfers: TransferSale[];
-  /** 통장 밖(개인계좌·현금·아직 안 들어옴)으로 정리해 둔 판매 — 되돌리기용 (2026-09-10) */
-  asides: AsideRow[];
-  /** 짝이 확실한 입금 id — 한 번에 잇기 */
+  /** 짝이 확실한 입금 id — 한 번에 대사 */
   sureIds: number[];
   breakdown: DepositBreakdown;
 }) {
@@ -79,7 +74,7 @@ export function DepositsRecon({
     if (
       !(await ask({
         title: `${label} 수금으로 등록할까요?`,
-        body: `외상 ${won(take)}원을 오래된 건부터 차례로 채웁니다.${
+        body: `${W.receivable} ${won(take)}원을 오래된 건부터 차례로 채웁니다.${
           s.dep.amount > remain ? `\n입금이 잔액보다 커서 ${won(s.dep.amount - remain)}원이 남습니다.` : ""
         }`,
         confirmLabel: "수금 등록",
@@ -131,10 +126,10 @@ export function DepositsRecon({
           정리할 입금 <strong>{data.openTotal}건</strong>
           {data.openTotal > 0 && (
             <span className="text-xs text-slate-500">
-              {" "}(계산서 짝 {breakdown.tax} · 판매 짝 {breakdown.quote} · 외상 {breakdown.party} · 확인 필요 {breakdown.none})
+              {" "}(계산서 짝 {breakdown.tax} · 판매 짝 {breakdown.quote} · {W.receivable} {breakdown.party} · {W.open} {breakdown.none})
             </span>
           )}
-          {data.openTotal > data.open.length && ` · 최근 ${data.open.length}건 표시`} · 정리됨 {data.doneCount}건 · 무시{" "}
+          {data.openTotal > data.open.length && ` · 최근 ${data.open.length}건 표시`} · {W.done} {data.doneCount}건 · {W.ignore}{" "}
           {data.ignoredCount}건
         </span>
         {/* ⭐ 짝이 확실한 것 한 번에 (사장님 요청 2026-08-26) */}
@@ -146,12 +141,12 @@ export function DepositsRecon({
               act(
                 () => confirmSureDeposits(ym),
                 (r: { tax: number; quote: number; failed: number }) =>
-                  `짝이 확실한 ${r.tax + r.quote}건을 이었습니다 (계산서 ${r.tax} · 판매 ${r.quote})${r.failed > 0 ? ` · ${r.failed}건은 실패` : ""}.`,
+                  `${autoReconLabel(r.tax + r.quote)} 완료 (계산서 ${r.tax} · 판매 ${r.quote})${r.failed > 0 ? ` · ${r.failed}건은 실패` : ""}.`,
               )
             }
             className="shrink-0 rounded-control bg-brand-600 px-3 py-2 text-sm font-semibold text-white active:bg-brand-700 disabled:opacity-40"
           >
-            ✔ 짝이 확실한 {sureIds.length}건 모두 잇기
+            ✔ {autoReconLabel(sureIds.length)}
           </button>
         )}
       </section>
@@ -205,21 +200,21 @@ export function DepositsRecon({
                   onClick={() =>
                     act(
                       () => confirmBankToTaxes(s.dep.id, bundles[s.dep.id].invoiceIds),
-                      (r: { applied: number }) => `계산서 ${r.applied}장을 이 입금 하나에 이었습니다.`,
+                      (r: { applied: number }) => `계산서 ${r.applied}장을 이 입금 하나에 ${W.recon}했습니다.`,
                     )
                   }
                   className="mt-1.5 rounded-control bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white active:bg-brand-700 disabled:opacity-40"
                 >
-                  이 입금으로 {bundles[s.dep.id].invoiceIds.length}장 한꺼번에 잇기
+                  이 입금으로 {bundles[s.dep.id].invoiceIds.length}장 한꺼번에 {W.recon}
                 </button>
               </div>
             )}
-            {/* ⭐ 세금계산서 바로 잇기 (사장님 요청 2026-08-26) — 전엔 "계산서 화면에서 이으세요"만 있고 버튼이 없었다 */}
+            {/* ⭐ 세금계산서 바로 대사 (사장님 요청 2026-08-26) — 전엔 "계산서 화면에서 이으세요"만 있고 버튼이 없었다 */}
             {(taxCands[s.dep.id]?.length ?? 0) > 0 && (
               <div className="mt-2 rounded-lg bg-violet-50 p-2 text-sm">
                 <p className="text-xs text-violet-900">
-                  세금계산서 대금으로 보입니다 — 맞는 계산서와 이으세요
-                  {taxCands[s.dep.id].some((c) => c.direction === "매입") && " (↔ = 수수료를 떼고 받은 정산, 매입 계산서와 상쇄)"}
+                  세금계산서 대금으로 보입니다 — 맞는 계산서와 {W.recon}하세요
+                  {taxCands[s.dep.id].some((c) => c.direction === "매입") && ` (↔ = 수수료를 떼고 받은 정산, 매입 계산서와 ${W.offset})`}
                 </p>
                 <ul className="mt-1 space-y-1">
                   {taxCands[s.dep.id].map((c) => (
@@ -233,17 +228,17 @@ export function DepositsRecon({
                             () => confirmTaxToBank(c.invId, s.dep.id),
                             (r: { remaining: number; shortfall: number }) =>
                               r.shortfall > 0
-                                ? `이었습니다 — 계산서에 ${won(r.shortfall)}원이 남았습니다 (다른 입금을 이어서 잇거나 계산서 화면에서 「확인 끝」)`
+                                ? `${W.recon}했습니다 — 계산서에 ${won(r.shortfall)}원이 남았습니다 (다른 입금을 이어서 ${W.recon}하거나 계산서 화면에서 「${W.done}」)`
                                 : r.remaining > 0
-                                  ? `이었습니다 — 이 입금에 ${won(r.remaining)}원이 남았습니다 (다른 계산서 몫이면 이어서)`
-                                  : "이었습니다 — 금액이 정확히 맞습니다.",
+                                  ? `${W.recon}했습니다 — 이 입금에 ${won(r.remaining)}원이 남았습니다 (다른 계산서 몫이면 이어서)`
+                                  : `${W.recon}했습니다 — 금액이 정확히 맞습니다.`,
                           )
                         }
                         className={`shrink-0 rounded-control px-2.5 py-1.5 text-xs font-semibold disabled:opacity-40 ${
                           c.exact && c.known ? "bg-brand-600 text-white active:bg-brand-700" : "border border-slate-300 bg-white"
                         }`}
                       >
-                        이 계산서와 잇기
+                        이 계산서와 {W.recon}
                       </button>
                     </li>
                   ))}
@@ -257,7 +252,7 @@ export function DepositsRecon({
             )}
             {s.parties.length > 0 && (
               <div className="mt-2 rounded-lg bg-amber-50 p-2 text-sm">
-                <p className="text-xs text-amber-900">이름이 닮은 외상 대상 — 수금이면 바로 등록하세요</p>
+                <p className="text-xs text-amber-900">이름이 닮은 {W.receivable} 상대 — 수금이면 바로 등록하세요</p>
                 <ul className="mt-1 space-y-1">
                   {s.parties.map((p) => (
                     <li key={p.key} className="flex items-center justify-between gap-2">
@@ -292,7 +287,7 @@ export function DepositsRecon({
             {s.quotes.length > 0 && (
               <div className="mt-2 text-sm">
                 <p className="text-xs text-slate-500">
-                  같은 금액의 판매 — 같은 건이면 이으세요 (앱에 카드·현금으로 적혀 있어도 실제 이체였으면 잇기)
+                  같은 금액의 판매 — 같은 건이면 {W.recon}하세요 (앱에 카드·현금으로 적혀 있어도 실제 이체였으면 {W.recon})
                 </p>
                 <ul className="mt-1 space-y-1">
                   {s.quotes.map((q) => (
@@ -302,11 +297,11 @@ export function DepositsRecon({
                         type="button"
                         disabled={pending}
                         onClick={() =>
-                          act(() => linkDepositToQuote(s.dep.id, q.quoteId), () => "이었습니다.")
+                          act(() => linkDepositToQuote(s.dep.id, q.quoteId), () => `${W.recon}했습니다.`)
                         }
                         className="shrink-0 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium"
                       >
-                        잇기
+                        {W.recon}
                       </button>
                     </li>
                   ))}
@@ -316,7 +311,7 @@ export function DepositsRecon({
 
             {s.parties.length === 0 && s.quotes.length === 0 && !(taxCands[s.dep.id]?.length > 0) && (
               <p className="mt-2 text-xs text-slate-400">
-                판매·계산서·외상 짝을 못 찾았습니다 — 계산서가 나중에 올라오면 다시 나타나고, 판매와 무관한 돈이면 아래에서 골라 주세요
+                판매·계산서·{W.receivable} 짝을 못 찾았습니다 — 계산서가 나중에 올라오면 다시 나타나고, 판매와 무관한 돈이면 아래에서 골라 주세요
               </p>
             )}
 
@@ -325,8 +320,8 @@ export function DepositsRecon({
               <button
                 type="button"
                 disabled={pending}
-                onClick={() => act(() => setDepositKind(s.dep.id, "판매입금"), () => "「판매 대금(앱 기록 없음)」으로 정리 — 손익의 번 돈에 들어갑니다.")}
-                title="앱에 판매 기록이 없는 대금 — 손익에 매출로 잡히고, 나중에 정비내역을 등록하면 되돌려 이으면 됩니다"
+                onClick={() => act(() => setDepositKind(s.dep.id, "판매입금"), () => `「판매 대금(앱 기록 없음)」으로 정리 — 손익의 ${W.sales}에 들어갑니다.`)}
+                title={`앱에 판매 기록이 없는 대금 — 손익에 ${W.sales}로 잡히고, 나중에 정비내역을 등록하면 되돌려 ${W.recon}하면 됩니다`}
                 className="rounded-full border border-brand-500 bg-brand-50 px-2.5 py-0.5 font-semibold text-brand-700 active:bg-brand-100 disabled:opacity-40"
               >
                 판매 대금 (앱 기록 없음)
@@ -365,7 +360,7 @@ export function DepositsRecon({
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="tabular min-w-0 truncate text-xs">
                     <span className="text-slate-400">{t.day.slice(5)}</span> {t.quoteNo} · {t.who}
-                    {t.linked > 0 && <span className="ml-1 text-sky-700">· {won(t.linked)}원은 이어짐, 남은 {won(t.amount - t.linked)}원</span>}
+                    {t.linked > 0 && <span className="ml-1 text-sky-700">· {won(t.linked)}원은 {W.recon}됨, 남은 {won(t.amount - t.linked)}원</span>}
                   </span>
                   <strong className="tabular shrink-0">{won(t.amount)}원</strong>
                 </div>
@@ -381,26 +376,26 @@ export function DepositsRecon({
                         <span className="min-w-0 truncate font-semibold text-brand-700">
                           ✔ 나눠 받음 — 입금 {t.bundle.cashIds.length}줄 합({t.bundle.parts.join(" + ")}){t.bundle.diff === 0 ? "이 정확히 맞습니다" : ` · ${won(Math.abs(t.bundle.diff))}원 차이`}
                         </span>
-                        <button type="button" disabled={pending} onClick={() => act(() => linkDepositsToQuote(t.quoteId, t.bundle!.cashIds), (r: { applied: number }) => `입금 ${r.applied}줄을 이 판매에 이었습니다.`)}
-                          className="shrink-0 rounded-control bg-brand-600 px-2.5 py-1 font-semibold text-white active:bg-brand-700 disabled:opacity-40">{t.bundle.cashIds.length}줄 한꺼번에 잇기</button>
+                        <button type="button" disabled={pending} onClick={() => act(() => linkDepositsToQuote(t.quoteId, t.bundle!.cashIds), (r: { applied: number }) => `입금 ${r.applied}줄을 이 판매에 ${W.recon}했습니다.`)}
+                          className="shrink-0 rounded-control bg-brand-600 px-2.5 py-1 font-semibold text-white active:bg-brand-700 disabled:opacity-40">{t.bundle.cashIds.length}줄 한꺼번에 {W.recon}</button>
                       </div>
                     )}
                     {t.cands.map((c) => (
                       <div key={c.cashId} className="flex items-center justify-between gap-2">
                         <span className="min-w-0 truncate">{c.exact ? "같은 금액" : "같은 이름"}: {c.label}</span>
-                        <button type="button" disabled={pending} onClick={() => act(() => linkDepositToQuote(c.cashId, t.quoteId), () => "이었습니다.")}
-                          className={`shrink-0 rounded-control px-2.5 py-1 font-semibold disabled:opacity-40 ${c.exact && c.nameOk ? "bg-brand-600 text-white active:bg-brand-700" : "border border-slate-300 bg-white"}`}>이 입금과 잇기</button>
+                        <button type="button" disabled={pending} onClick={() => act(() => linkDepositToQuote(c.cashId, t.quoteId), () => `${W.recon}했습니다.`)}
+                          className={`shrink-0 rounded-control px-2.5 py-1 font-semibold disabled:opacity-40 ${c.exact && c.nameOk ? "bg-brand-600 text-white active:bg-brand-700" : "border border-slate-300 bg-white"}`}>이 입금과 {W.recon}</button>
                       </div>
                     ))}
                     <details>
                       <summary className="cursor-pointer text-slate-500 underline underline-offset-2">통장에서 찾기 (다른 이름·다른 금액으로 왔을 때)</summary>
                       <div className="mt-1">
-                        <BankSearch direction="매출" pending={pending} onPick={(id) => act(() => linkDepositToQuote(id, t.quoteId), () => "이었습니다.")} anchor={t.day} />
+                        <BankSearch direction="매출" pending={pending} onPick={(id) => act(() => linkDepositToQuote(id, t.quoteId), () => `${W.recon}했습니다.`)} anchor={t.day} />
                       </div>
                     </details>
-                    {/* 🔴 2026-09-10: 이 두 단추는 이제 사유(pos_note)가 아니라 **자국**을 남긴다
+                    {/* 🔴 2026-09-10: 이 두 단추는 이제 사유(pos_note)가 아니라 **대사 내역**을 남긴다
                         (markSaleSettledAside) — 전엔 여기서만 사라지고 감사·홈 인박스·추적 화면엔
-                        영원히 남았다. 되돌리기는 아래 「통장 밖에서 정리한 판매」에 있다. */}
+                        영원히 남았다. 되돌리기는 「최근 한 일」(/finance/activity)에 있다 (2단계, 2026-09-12). */}
                     <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                       <button type="button" disabled={pending}
                         onClick={() => act(() => markSaleSettledAside(t.quoteId, false, "개인통장 입금"), () => "「개인 통장으로 받음」으로 정리했습니다 — 모든 화면에서 빠집니다.")}
@@ -409,7 +404,7 @@ export function DepositsRecon({
                         onClick={() => act(() => fixSaleMethod(t.quoteId, "현금"), () => "결제수단을 현금으로 고쳤습니다.")}
                         className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-slate-600 disabled:opacity-40">현금으로 받음 (수단 고치기)</button>
                       <button type="button" disabled={pending}
-                        onClick={() => act(() => markSaleSettledAside(t.quoteId, false, "아직 안 들어옴"), () => "「아직 안 들어옴」으로 정리했습니다 — 들어오면 아래에서 되돌리고 이으세요.")}
+                        onClick={() => act(() => markSaleSettledAside(t.quoteId, false, "아직 안 들어옴"), () => `「아직 안 들어옴」으로 정리했습니다 — 들어오면 ${W.activity}에서 되돌리고 ${W.recon}하세요.`)}
                         className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-slate-600 disabled:opacity-40">아직 안 들어옴</button>
                     </div>
                   </div>
@@ -420,132 +415,12 @@ export function DepositsRecon({
         </section>
       )}
 
-      {/* ⭐ 2026-09-10 — 통장 밖으로 정리한 판매 되돌리기.
-          정리하면 이 화면·감사·인박스에서 한꺼번에 빠지므로, 되돌릴 자리가 여기 없으면
-          「눌렀더니 통째로 사라졌다」가 된다 (안내문만 있고 부르는 곳이 0곳이던 것). */}
-      {asides.length > 0 && (
-        <details className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-          <summary className="cursor-pointer text-sm font-semibold text-slate-600">
-            통장 밖에서 정리한 판매 {asides.length}건 (이 달 · 개인 통장·현금·아직 안 들어옴) — 잘못 눌렀거나 돈이 들어왔으면 되돌리기
-          </summary>
-          <ul className="mt-2 divide-y divide-slate-100 text-sm">
-            {asides.map((a) => (
-              <li key={a.quoteId} className="flex items-center justify-between gap-2 py-1.5">
-                <span className="tabular min-w-0 truncate text-xs">
-                  {a.d.slice(5)} · {a.who} · {won(a.amount)}원 · {a.reason ?? "사유 없음"}
-                  {a.markedAt && <span className="text-slate-400"> ({a.markedAt} 표시)</span>}
-                </span>
-                <button
-                  type="button"
-                  disabled={pending}
-                  onClick={() =>
-                    act(() => markSaleSettledAside(a.quoteId, true), () => "되돌렸습니다 — 위 목록으로 돌아왔습니다.")
-                  }
-                  className="shrink-0 text-xs text-slate-400 underline"
-                >
-                  되돌리기
-                </button>
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
-
-      {/* 판매와 무관으로 분류한 입금 — 되돌리기 */}
-      {data.kinds.length > 0 && (
-        <details className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-          <summary className="cursor-pointer text-sm font-semibold text-slate-600">
-            분류로 정리한 입금 {data.kinds.length}건 (이 달 · 판매 대금/이자/환불/기타) — 잘못 골랐으면 되돌리기
-          </summary>
-          <ul className="mt-2 divide-y divide-slate-100 text-sm">
-            {data.kinds.map((r) => (
-              <li key={r.id} className="flex items-center justify-between gap-2 py-1.5">
-                <span className="tabular min-w-0 truncate text-xs">
-                  {r.at} · {r.payer} · +{won(r.amount)}원 · {r.category}
-                </span>
-                <button
-                  type="button"
-                  disabled={pending}
-                  onClick={() => act(() => undoDepositKind(r.id), () => "되돌렸습니다 — 정리 목록으로 돌아갔습니다.")}
-                  className="shrink-0 text-xs text-slate-400 underline"
-                >
-                  되돌리기
-                </button>
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
-
-      {/* 🔴 감사 H10 — 카드정산으로 표시된 입금 되돌리기 (우연히 패턴에 걸린 진짜 입금 구제) */}
-      {data.settledCard.length > 0 && (
-        <details className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-          <summary className="cursor-pointer text-sm font-semibold text-slate-600">
-            카드정산으로 표시된 입금 {data.settledCardTotal}건 (이 달{data.settledCardTotal > data.settledCard.length ? ` · 최근 ${data.settledCard.length}건 표시` : ""}) — 잘못 표시됐으면 되돌리기
-          </summary>
-          <ul className="mt-2 divide-y divide-slate-100 text-sm">
-            {data.settledCard.map((r) => (
-              <li key={r.id} className="flex items-center justify-between gap-2 py-1.5">
-                <span className="tabular min-w-0 truncate text-xs">
-                  {r.at} · {r.payer} · +{won(r.amount)}원
-                </span>
-                <button
-                  type="button"
-                  disabled={pending}
-                  onClick={() => act(() => unmarkCardSettlement(r.id), () => "되돌렸습니다 — 정리 목록으로 돌아갔습니다.")}
-                  className="shrink-0 text-xs text-slate-400 underline"
-                >
-                  되돌리기
-                </button>
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
-
-      {/* 🔴 2026 감사 G3 — 판매·수금과 이은 입금 되돌리기 (전에는 되돌릴 길이 없었다) */}
-      {data.linked.length > 0 && (
-        <details className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-          <summary className="cursor-pointer text-sm font-semibold text-slate-600">
-            판매·수금과 이은 입금 {data.linked.length}건 (이 달) — 잘못 이었으면 되돌리기
-          </summary>
-          <ul className="mt-2 divide-y divide-slate-100 text-sm">
-            {data.linked.map((r) => (
-              <li key={r.id} className="flex items-center justify-between gap-2 py-1.5">
-                <span className="tabular min-w-0 truncate text-xs">
-                  {r.at} · {r.payer} · +{won(r.amount)}원 → {r.n}건에 {won(r.used)}원
-                </span>
-                <button
-                  type="button"
-                  disabled={pending}
-                  onClick={async () => {
-                    if (
-                      !(await ask({
-                        title: "이 입금의 연결을 되돌릴까요?",
-                        body: "이 입금으로 등록한 수금 기록도 함께 지워지고, 입금은 정리 목록으로 돌아옵니다.",
-                        tone: "danger",
-                        confirmLabel: "되돌리기",
-                      }))
-                    )
-                      return;
-                    act(
-                      () => undoDepositLink(r.id),
-                      (res: { removed: number; payments: number }) =>
-                        `되돌렸습니다 — 연결 ${res.removed}건${res.payments > 0 ? ` · 수금 기록 ${res.payments}건` : ""} 지움. 입금이 정리 목록으로 돌아왔습니다.`,
-                    );
-                  }}
-                  className="shrink-0 text-xs text-slate-400 underline"
-                >
-                  되돌리기
-                </button>
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
-
+      {/* ⭐ 개편 2단계(2026-09-12) — 이 달에 한 일(통장 밖 정리·분류·카드정산 표시·판매·수금 대사)의
+          되돌리기는 「최근 한 일」 한 곳으로 모았다. 전엔 접힌 표 4개가 여기 있었다(결정 f). */}
       <p className="mt-4 text-xs text-slate-400">
-        잘못 이은 입금은 위 「판매·수금과 이은 입금」에서 되돌리면 수금 기록까지 함께 풀립니다.
+        잘못 {W.recon}한 입금·분류·카드정산 표시는{" "}
+        <Link href="/finance/activity" className="underline underline-offset-2">{W.activityUndoHere}</Link>
+        {" "}— 되돌리면 수금 기록까지 함께 풀립니다.
       </p>
       <p className="mt-2 text-sm">
         다음 단계:{" "}

@@ -3,7 +3,8 @@
 /**
  * ⭐ 할 일 인박스 화면 (돈관리 근본책 2단계, 2026-08-31)
  *   자료는 서버(fin-inbox 정본)가 만들고, 여기는 그리기 + 확실한 두 액션만:
- *   ⚡ 판매↔입금 잇기(traceLinkDeposit) · 지급 잡기(payFromWithdrawal) — 정본 재사용.
+ *   ⚡ 판매↔입금 대사(traceLinkDeposit) · 지급 대사(payFromWithdrawal) — 정본 재사용.
+ *   화면 글자는 fin-words 정본(ERP 용어, 2026-09-12).
  */
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
@@ -12,6 +13,7 @@ import type { FinInbox, InboxEntry } from "@/lib/fin-inbox";
 import { markSaleSettledAside, traceLinkDeposit } from "@/lib/trace-actions";
 import { payFromWithdrawal } from "@/lib/purchase-pay";
 import { useConfirm } from "@/components/ui/confirm";
+import { W } from "@/lib/fin-words";
 
 export function InboxSection({ inbox, ym }: { inbox: FinInbox; ym: string }) {
   const router = useRouter();
@@ -24,26 +26,26 @@ export function InboxSection({ inbox, ym }: { inbox: FinInbox; ym: string }) {
 
   const doLink = async (e: InboxEntry) => {
     const a = e.linkDeposit!;
-    if (!(await ask({ title: "입금과 이을까요?", body: `${e.text}\n↔ ${a.label}`, confirmLabel: "잇기" }))) return;
+    if (!(await ask({ title: `입금과 ${W.recon}할까요?`, body: `${e.text}\n↔ ${a.label}`, confirmLabel: W.recon }))) return;
     start(async () => {
       setMsg(null);
       setError(null);
       const r = await traceLinkDeposit(a.cashTxnId, a.quoteId);
       if (!r.ok) return setError(r.error);
-      setMsg("이었습니다 — 입금자명도 기억했습니다.");
+      setMsg(`${W.recon}했습니다 — 입금자명도 기억했습니다.`);
       router.refresh();
     });
   };
 
-  /* 통장에 안 찍히는 수령(개인계좌·현금) — 확인 끝 표시 (사장님 제보 2026-09-01 나기춘) */
+  /* 통장에 안 찍히는 수령(개인계좌·현금) — 대사 제외 표시 (사장님 제보 2026-09-01 나기춘) */
   const doAside = async (e: InboxEntry) => {
     const a = e.aside!;
     if (
       !(await ask({
         title: "개인계좌·현금으로 받은 판매인가요?",
         body: `${e.text}
-법인 통장에 안 찍히는 돈이라 확인 끝으로 표시합니다. 잘못 표시했으면 돈 추적 화면의 「통장 밖에서 정리한 판매」에서 되돌릴 수 있습니다.`,
-        confirmLabel: "받았음 — 확인 끝",
+법인 통장에 안 찍히는 돈이라 ${W.excluded}로 표시합니다. 잘못 표시했으면 「${W.activity}」에서 되돌릴 수 있습니다.`,
+        confirmLabel: `받았음 — ${W.excluded}`,
       }))
     )
       return;
@@ -52,20 +54,20 @@ export function InboxSection({ inbox, ym }: { inbox: FinInbox; ym: string }) {
       setError(null);
       const r = await markSaleSettledAside(a.quoteId);
       if (!r.ok) return setError(r.error);
-      setMsg("확인 끝으로 표시했습니다.");
+      setMsg(`${W.excluded}로 표시했습니다.`);
       router.refresh();
     });
   };
 
   const doPay = async (e: InboxEntry) => {
     const a = e.payFrom!;
-    if (!(await ask({ title: `「${a.supplier}」 지급으로 잡을까요?`, body: `${e.text} — 오래된 매입부터 채웁니다.`, confirmLabel: "지급 잡기" }))) return;
+    if (!(await ask({ title: `「${a.supplier}」 ${W.reconPay}할까요?`, body: `${e.text} — 오래된 매입부터 채웁니다.`, confirmLabel: W.reconPay }))) return;
     start(async () => {
       setMsg(null);
       setError(null);
       const r = await payFromWithdrawal({ cashTxnId: a.cashTxnId, supplier: a.supplier });
       if (!r.ok) return setError(r.error);
-      setMsg(`지급 ${r.applied.toLocaleString()}원을 이었습니다.`);
+      setMsg(`지급 ${r.applied.toLocaleString()}원을 ${W.recon}했습니다.`);
       router.refresh();
     });
   };

@@ -1,6 +1,7 @@
 import Link from "@/lib/link";
 import { requirePerm } from "@/lib/auth";
 import { receivableBook } from "@/lib/receivable-book";
+import { W } from "@/lib/fin-words";
 import { BookFilter } from "./filter";
 import { BookList } from "./client";
 
@@ -9,15 +10,16 @@ export const dynamic = "force-dynamic";
 const won = (n: number) => n.toLocaleString("ko-KR");
 
 /**
- * ⭐ 외상 장부 (사장님 지시 2026-08-17)
+ * ⭐ 미수금 장부 (사장님 지시 2026-08-17 · 이름 「외상 장부」→「미수금 장부」 2026-09-12 ERP 용어)
  *
  *   "거래처의 경우는 외상이 많은데 거래처별로 내역을 확인하고 한번에 외상을
  *    떨어버릴 수 있는 방법(한꺼번에 입금하는 경우도 있음)도 필요함"
  *
  * 정비 내역과 따로 둔 이유: 거기는 기간 필터·MARS 올리기 판이 붙은 「지나간 정비」
- * 화면이다. 여기는 「못 받은 돈」 하나만 본다.
+ * 화면이다. 여기는 「미수금」 하나만 본다.
  *
- * 개인 손님 외상도 함께 보여 준다 (사장님 결정) — 못 받은 돈을 한 화면에서.
+ * 개인 손님 미수금도 함께 보여 준다 (사장님 결정) — 미수금을 한 화면에서.
+ * 🔴 결제수단 값 '외상'(pay=외상 등)은 DB 값이라 그대로 — 바꾸는 건 화면 글자뿐.
  */
 export default async function ReceivablesPage({
   searchParams,
@@ -40,7 +42,7 @@ export default async function ReceivablesPage({
         ← 정비 내역
       </Link>
       <div className="mt-3 flex items-baseline justify-between gap-2">
-        <h1 className="text-xl font-bold">외상 장부</h1>
+        <h1 className="text-xl font-bold">{W.receivable} 장부</h1>
         {owner && (
           <Link
             href="/receivables/settle"
@@ -51,15 +53,15 @@ export default async function ReceivablesPage({
         )}
       </div>
       <p className="tabular mt-1 text-sm text-slate-600">
-        못 받은 외상 <strong>{book.totalCount}건</strong> · 잔액{" "}
+        {W.receivable} <strong>{book.totalCount}건</strong> · 잔액{" "}
         <strong className="text-amber-800">{won(book.totalRemain)}원</strong> · {book.targets.length}곳
       </p>
-      {/* ⭐ 예약 잔금은 「못 받은 돈」이 아니라 아직 받을 때가 안 된 돈 (2026-09-10) —
+      {/* ⭐ 예약 잔금은 「미수금」이 아니라 아직 받을 때가 안 된 돈 (2026-09-10) —
           위 잔액에 포함돼 있으니 갈라서 보여 준다. 독촉 대상이 아니다 */}
       {book.reserveCount > 0 && (
         <p className="tabular mt-1 text-sm text-violet-800">
-          그중 📌 예약 잔금 <strong>{book.reserveCount}건 · {won(book.reserveRemain)}원</strong> — 시공하러 오시면 받을 돈
-          {" · "}독촉할 외상은 <strong>{won(book.totalRemain - book.reserveRemain)}원</strong>
+          그중 📌 예약 잔금 <strong>{book.reserveCount}건 · {won(book.reserveRemain)}원</strong> — 시공 때 받는 잔금
+          {" · "}{W.receivable}(예약 잔금 제외)은 <strong>{won(book.totalRemain - book.reserveRemain)}원</strong>
         </p>
       )}
 
@@ -73,7 +75,7 @@ export default async function ReceivablesPage({
 
       {book.targets.length === 0 ? (
         <p className="mt-6 rounded-xl border border-dashed border-slate-300 p-8 text-center text-slate-500">
-          못 받은 외상이 없습니다 👍
+          {W.receivable}이 없습니다 👍
         </p>
       ) : (
         <BookList targets={book.targets} owner={owner} />
@@ -81,7 +83,7 @@ export default async function ReceivablesPage({
 
       {!owner && (
         <p className="mt-3 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600">
-          수금 넣기·털기는 <strong>사장님 계정</strong>에서만 됩니다 — 여기서는 못 받은 돈을 보기만 합니다.
+          수금 넣기·털기는 <strong>사장님 계정</strong>에서만 됩니다 — 여기서는 {W.receivable}을 보기만 합니다.
         </p>
       )}
       <p className="mt-8 text-xs leading-relaxed text-slate-400">

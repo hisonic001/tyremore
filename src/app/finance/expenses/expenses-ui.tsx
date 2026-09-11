@@ -5,8 +5,9 @@ import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
 import { EXPENSE_CATS } from "@/lib/expense-cats";
 import type { ExpenseData, ExpenseRow, RelatedTxn } from "@/lib/recon-data";
-import { previewUnset, setExpenseCategory } from "@/lib/fin-expense";
+import { setExpenseCategory } from "@/lib/fin-expense";
 import { won } from "@/components/fin/money";
+import { W } from "@/lib/fin-words";
 
 /**
  * ⭐ 「이게 무슨 돈인가」 단서 (사장님 지적 2026-08-27)
@@ -59,41 +60,8 @@ export function ExpensesUi({ data, ym }: { data: ExpenseData; ym: string }) {
   const [error, setError] = useState<string | null>(null);
   /** 줄마다 고른 분류 (셀렉트) */
   const [pick, setPick] = useState<Record<number, string>>({});
-  /**
-   * ⭐ 해제를 누른 줄 — 「이 줄만 / N건 전부」를 고르는 중 (2회차 수리 A5, 2026-08-28)
-   *
-   * 🔴 전에는 해제가 **말없이 그 한 줄만** 풀었다. 붙일 때는 같은 상대의 전 기간에
-   *    한꺼번에 붙는데도. 그래서 사장님이 "고쳤다"고 생각한 뒤에도 나머지가 그대로 남아
-   *    손익에 계속 들어갔다. 이제 누를 때마다 몇 건인지 세어 물어본다.
-   */
-  const [unset, setUnset] = useState<
-    { id: number; payer: string; category: string; n: number; sum: number } | null
-  >(null);
-
-  /** 해제 눌렀을 때 — 1건뿐이면 바로 풀고, 여러 건이면 물어본다 */
-  const askUnset = (id: number) =>
-    start(async () => {
-      setMsg(null);
-      setError(null);
-      const p = await previewUnset(id);
-      if (!p.ok) return setError(p.error);
-      if (p.n <= 1) return doUnset(id, "one");
-      setUnset({ id, payer: p.payer, category: p.category, n: p.n, sum: p.sum });
-    });
-
-  const doUnset = (id: number, scope: "one" | "all") =>
-    start(async () => {
-      setMsg(null);
-      setError(null);
-      const r = await setExpenseCategory(id, null, { scope });
-      setUnset(null);
-      if (!r.ok) return setError(r.error);
-      setMsg(
-        `「${r.payer}」 분류를 ${r.applied}건 풀었습니다 — 규칙도 지워 앞으로 자동으로 붙지 않습니다.` +
-          (scope === "one" ? " (이 줄만 — 같은 상대의 나머지는 그대로입니다)" : ""),
-      );
-      router.refresh();
-    });
+  /* 🔴 분류 해제(이 줄만 / N건 전부 — 2회차 수리 A5)는 2단계(2026-09-12)에 「최근 한 일」 되돌리기로
+     옮겼다(previewUnset·setExpenseCategory(id,null,{scope}) 를 거기서 부른다). 이 화면엔 링크만. */
 
   const classify = (row: ExpenseRow, category: string) =>
     start(async () => {
@@ -209,7 +177,7 @@ export function ExpensesUi({ data, ym }: { data: ExpenseData; ym: string }) {
           ) : (
             <>
               {Number(ym.slice(5, 7))}월 지출은 모두 분류됐습니다 🎉 — 다음은{" "}
-              <Link href={`/finance/tax?view=money&ym=${ym}`} className="font-semibold underline">세금계산서 돈 확인 →</Link>
+              <Link href={`/finance/tax?view=money&ym=${ym}`} className="font-semibold underline">{W.reconTax} →</Link>
             </>
           )}
         </section>
@@ -301,73 +269,21 @@ export function ExpensesUi({ data, ym }: { data: ExpenseData; ym: string }) {
         </ul>
       )}
 
-      {/* 분류된 지출 보기/해제 — 잘못 붙였으면 여기서 (감사 H10 계열) */}
-      {data.classified.length > 0 && (
-        <details className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-          <summary className="cursor-pointer text-sm font-semibold text-slate-600">
-            분류된 지출 {data.classified.length}건 (이 달) — 잘못 붙였으면 해제
-          </summary>
-          <ul className="mt-2 divide-y divide-slate-100 text-sm">
-            {data.classified.map((row) => (
-              <li key={row.id} className="flex items-center justify-between gap-2 py-1.5">
-                <span className="tabular min-w-0 truncate text-xs">
-                  {row.at} {row.source === "법인카드" ? "💳" : "🏦"} {row.payer} · −{won(row.amount)}원 ·{" "}
-                  <span className="text-violet-700">{row.category}</span>
-                </span>
-                {/* 🔴 2회차 수리 A5: 여러 건이면 「이 줄만 / 전부」를 고른다 (위 unset 주석 참고) */}
-                {unset?.id === row.id ? (
-                  <span className="flex shrink-0 flex-wrap items-center justify-end gap-1">
-                    <span className="text-xs text-slate-500">
-                      같은 상대 {unset.n}건({won(unset.sum)}원)
-                    </span>
-                    <button
-                      type="button"
-                      disabled={pending}
-                      onClick={() => doUnset(row.id, "one")}
-                      className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium disabled:opacity-40"
-                    >
-                      이 줄만
-                    </button>
-                    <button
-                      type="button"
-                      disabled={pending}
-                      onClick={() => doUnset(row.id, "all")}
-                      className="rounded-lg bg-red-600 px-2 py-1 text-xs font-semibold text-white disabled:opacity-40"
-                    >
-                      {unset.n}건 전부
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setUnset(null)}
-                      className="px-1 text-xs text-slate-400 underline"
-                    >
-                      그만
-                    </button>
-                  </span>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={pending}
-                    onClick={() => askUnset(row.id)}
-                    className="shrink-0 text-xs text-slate-400 underline"
-                  >
-                    해제
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
+      {/* ⭐ 개편 2단계(2026-09-12): 「분류된 지출 N건 — 해제」 접힌 표는 「최근 한 일」 한 곳으로(결정 f).
+          해제(이 줄만/전부)는 거기서 되돌리기로 한다. */}
+      <p className="mt-4 text-xs text-slate-400">
+        잘못 분류한 지출{data.classified.length > 0 ? `(이 달 ${data.classified.length}건)` : ""}은{" "}
+        <Link href="/finance/activity" className="underline underline-offset-2">{W.activityUndoHere}</Link>
+      </p>
 
       <p className="mt-4 text-xs text-slate-400">
-        매입대금·카드대금·내부이체로 분류한 지출은 손익의 「쓴 돈」에 다시 넣지 않습니다 — 매입·법인카드
+        매입대금·카드대금·내부이체로 분류한 지출은 손익의 「{W.cost}」에 다시 넣지 않습니다 — 매입·법인카드
         쪽에서 이미 세고 있어 이중 계산이 되기 때문입니다.
       </p>
       <p className="mt-2 text-sm">
         다음 단계:{" "}
         <Link href={`/finance/tax?view=money&ym=${ym}`} className="font-semibold text-brand-700 underline underline-offset-2">
-          세금계산서 돈 확인 →
+          {W.reconTax} →
         </Link>
       </p>
     </>

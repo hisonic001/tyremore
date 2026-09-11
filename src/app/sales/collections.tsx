@@ -1,15 +1,16 @@
 "use client";
 
 /**
- * ⭐ 외상 수금 패널 (사장님 선택 2026-08-11)
+ * ⭐ 미수금 수금 패널 (사장님 선택 2026-08-11 · 제목 「외상 수금」→「미수금 수금」 2026-09-12 ERP 용어)
  * 외상 판매 카드를 펼치면 나온다 — 수금 이력과 입력.
- * 완납돼도 결제수단은 「외상」 그대로 — 실수단으로 바꾸려면 「날짜·결제 고치기」.
+ * 완납돼도 결제수단은 「외상」 그대로(DB 값) — 실수단으로 바꾸려면 「날짜·결제 고치기」.
  */
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { addCollection, removeCollection } from "@/lib/receivable";
 import { COLLECT_METHODS } from "@/lib/payments";
+import { W } from "@/lib/fin-words";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
 /** 수금 수단 = 분할에 섞을 수 있는 수단과 같다 — 정본은 lib/payments.ts (2026-08-29) */
@@ -47,7 +48,7 @@ export function CollectionPanel({
   return (
     <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3">
       <div className="flex items-baseline justify-between">
-        <h3 className="text-sm font-bold text-amber-900">{reserved ? "📌 예약금·잔금 받기" : "외상 수금"}</h3>
+        <h3 className="text-sm font-bold text-amber-900">{reserved ? "📌 예약금·잔금 받기" : `${W.receivable} ${W.collect}`}</h3>
         <span className="tabular text-sm font-semibold text-amber-900">
           {remain > 0 ? `잔액 ${won(remain)}원` : "완납 ✅"}
           <span className="ml-2 font-normal text-amber-700">

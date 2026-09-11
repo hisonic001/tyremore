@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
  * ⭐ 지출 분류 (ERP ⑥, 사장님 지시 2026-08-25) — 사장님 전용
  *
  *   통장 출금·법인카드 지출을 임차료·인건비·공과금… 으로 나눈다.
- *   한 번 나누면 같은 상대는 자동 — 손익의 「쓴 돈」이 이걸로 완성된다.
+ *   한 번 나누면 같은 상대는 자동 — 손익의 「비용」이 이걸로 완성된다.
  */
 export default async function FinanceExpensesPage({
   searchParams,

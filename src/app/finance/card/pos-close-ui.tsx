@@ -4,11 +4,11 @@
  * ⭐ 카드 일마감 화면 (사장님 요청 2026-08-26)
  *
  *   ① 매출리포트 올리기(zip 그대로) ② POS vs 앱 요약 ③ POS에만 있음 / 앱에서 못 채운 것
- *   (각각 버튼 하나) ④ 붙은 자국(접힘, 한 줄씩 풀기) ⑤ [이 날 마감] / 마감 풀기.
+ *   (각각 버튼 하나) ④ 대사 내역(접힘 — 풀기는 「최근 한 일」에서, 2026-09-12) ⑤ [이 날 마감] / 마감 풀기.
  *
  * ⭐ 2026-08-29 (사장님 제보 "카드 일마감시 예외사항들이 많음")
  *   · 카드 옆에 **간편결제**가 나란히 선다 (토스 포스의 QR결제).
- *   · 양쪽 다 「붙은 돈 / 남은 돈」을 보여준다 — 미리 받은 돈·나중에 받은 돈이 눈에 보인다.
+ *   · 양쪽 다 「대사된 돈 / 남은 금액」을 보여준다 — 미리 받은 돈·나중에 받은 돈이 눈에 보인다.
  *   · POS 여러 건에 체크해서 **한 판매에 함께 붙이기** (카드 두 장으로 나눠 긁기).
  *   · 다른 날 후보를 앞뒤 7일까지, 며칠 차이인지 적어서 보여준다.
  *   · 「선결제」로 남긴 건은 판매가 생길 때까지 맨 위에 따라다닌다.
@@ -29,11 +29,12 @@ import {
   moveSaleDate,
   reopenPosDay,
   setPosNote,
-  unlinkMatch,
 } from "@/lib/pos-actions";
 import { applyFinUpload } from "@/lib/fin-upload";
 import { won } from "@/components/fin/money";
 import { useConfirm } from "@/components/ui/confirm";
+// ⭐ 화면 글자는 fin-words 정본 (ERP 용어, 2026-09-12): 붙이기→대사, 붙은 자국→대사 내역
+import { W } from "@/lib/fin-words";
 
 /** POS 에만 있을 때 고를 만한 사유 (「단말기 누락」은 앱 쪽 사유다) */
 const POS_ONLY_REASONS = POS_REASONS.filter((r) => r !== "단말기 누락");
@@ -75,13 +76,13 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
     act(
       () => applyFinUpload(fd),
       (r: { source: string; newCount: number; dupCount: number }) =>
-        `${r.source} 반영 — 새로 ${r.newCount}건 · 이미 있음 ${r.dupCount}건. 자동으로 짝을 맞췄습니다.`,
+        `${r.source} 반영 — 새로 ${r.newCount}건 · 이미 있음 ${r.dupCount}건. 자동으로 ${W.recon}했습니다.`,
     );
     if (fileRef.current) fileRef.current.value = "";
   };
 
   const diff = data.posTotal - data.appTotal;
-  /** 붙일 수 있는 대상 — 그 날 남은 돈이 있는 앱 항목 */
+  /** 대사할 수 있는 대상 — 그 날 남은 금액이 있는 앱 항목 */
   const targets = data.appOpen.filter((a) => a.remain > 0);
   const pickedSum = data.posOpen.filter((p) => picked.includes(p.id)).reduce((s, p) => s + p.remain, 0);
   const toggle = (id: number) => setPicked((v) => (v.includes(id) ? v.filter((x) => x !== id) : [...v, id]));
@@ -105,7 +106,7 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
       </div>
       <p className="mt-1 text-sm text-slate-500">
         토스 포스에서 내려받은 매출리포트(zip 그대로)를 올리면 그 날 <strong>카드·간편결제</strong>를 앱 판매와 자동으로
-        맞춥니다. 남은 것만 아래 카드에서 버튼 하나로 정리하고 [이 날 마감].
+        {W.recon}합니다. 남은 것만 아래 카드에서 버튼 하나로 정리하고 [이 날 마감].
       </p>
 
       {error && <p className="mt-2 rounded-lg bg-red-50 p-2 text-sm text-red-700">⚠ {error}</p>}
@@ -156,7 +157,7 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
       {(data.posOther.length > 0 || data.posCancelled.length > 0) && (
         <p className="tabular mt-1.5 text-xs text-slate-400">
           {data.posOther.length > 0 && `대사 안 하는 POS 결제: ${data.posOther.map((o) => `${o.method} ${o.n}건 ${won(o.sum)}원`).join(" · ")}`}
-          {data.posCancelled.length > 0 && ` · 취소로 상쇄 ${Math.floor(data.posCancelled.length / 2)}건`}
+          {data.posCancelled.length > 0 && ` · 취소로 ${W.offset} ${Math.floor(data.posCancelled.length / 2)}건`}
         </p>
       )}
 
@@ -164,7 +165,7 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
       {data.prepaid.length > 0 && (
         <div className="mt-4 rounded-control border border-violet-300 bg-violet-50 p-2.5">
           <h3 className="text-sm font-semibold text-violet-900">
-            미리 받아 둔 돈 {data.prepaid.length}건 — 아직 판매에 안 붙었습니다
+            미리 받아 둔 돈 {data.prepaid.length}건 — 아직 판매에 {W.recon} 안 됐습니다
           </h3>
           <ul className="tabular mt-1 space-y-1 text-xs text-violet-900">
             {data.prepaid.map((p) => (
@@ -179,7 +180,7 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
                       onChange={(e) => setManualPos((m) => ({ ...m, [p.id]: e.target.value }))}
                       className="rounded-control border border-violet-300 bg-white px-2 py-1"
                     >
-                      <option value="">오늘 판매에 붙이기…</option>
+                      <option value="">오늘 판매에 {W.recon}…</option>
                       {targets.map((a) => (
                         <option key={a.key} value={a.key}>
                           {a.quoteNo} · {a.who} · 남은 {won(a.remain)}원
@@ -189,10 +190,10 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
                     <button
                       type="button"
                       disabled={pending || !manualPos[p.id]}
-                      onClick={() => act(() => linkPos(p.id, manualPos[p.id]), (r: { amount: number }) => `${won(r.amount)}원을 붙였습니다.`)}
+                      onClick={() => act(() => linkPos(p.id, manualPos[p.id]), (r: { amount: number }) => `${won(r.amount)}원을 ${W.recon}했습니다.`)}
                       className="rounded-control bg-violet-700 px-2.5 py-1 font-semibold text-white disabled:opacity-40"
                     >
-                      붙이기
+                      {W.recon}
                     </button>
                   </span>
                 )}
@@ -213,7 +214,7 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
                   고른 {picked.length}건 {won(pickedSum)}원
                 </span>
                 <select value={pickTarget} onChange={(e) => setPickTarget(e.target.value)} className="rounded-control border border-slate-300 bg-white px-2 py-1">
-                  <option value="">함께 붙일 판매…</option>
+                  <option value="">함께 {W.recon}할 판매…</option>
                   {targets.map((a) => (
                     <option key={a.key} value={a.key}>
                       {a.quoteNo} · {a.who} · 남은 {won(a.remain)}원
@@ -223,10 +224,10 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
                 <button
                   type="button"
                   disabled={pending || !pickTarget}
-                  onClick={() => act(() => linkPosMulti(picked, pickTarget), (r: { n: number; amount: number }) => `${r.n}건 ${won(r.amount)}원을 함께 붙였습니다.`)}
+                  onClick={() => act(() => linkPosMulti(picked, pickTarget), (r: { n: number; amount: number }) => `${r.n}건 ${won(r.amount)}원을 함께 ${W.recon}했습니다.`)}
                   className="rounded-control bg-brand-600 px-2.5 py-1 font-semibold text-white disabled:opacity-40"
                 >
-                  함께 붙이기
+                  함께 {W.recon}
                 </button>
               </div>
             )}
@@ -246,7 +247,7 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
                   </label>
                   <strong className="tabular shrink-0">
                     {won(p.remain)}원
-                    {p.linked > 0 && <span className="ml-1 text-xs font-normal text-slate-400">남음 (붙은 돈 {won(p.linked)})</span>}
+                    {p.linked > 0 && <span className="ml-1 text-xs font-normal text-slate-400">남음 ({W.recon}된 돈 {won(p.linked)})</span>}
                   </strong>
                 </div>
                 {p.note ? (
@@ -263,7 +264,7 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
                           <button
                             type="button"
                             disabled={pending}
-                            onClick={() => act(() => fixSaleToPos(c.quoteId, day, c.toMethod), () => `${c.toMethod}로 고치고 짝을 맞췄습니다.`)}
+                            onClick={() => act(() => fixSaleToPos(c.quoteId, day, c.toMethod), () => `${c.toMethod}로 고치고 ${W.recon}했습니다.`)}
                             className="shrink-0 rounded-control bg-brand-600 px-2.5 py-1.5 font-semibold text-white active:bg-brand-700 disabled:opacity-40"
                           >
                             {c.toMethod}로 고치기
@@ -272,7 +273,7 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
                           <button
                             type="button"
                             disabled={pending}
-                            onClick={() => act(() => moveSaleDate(c.quoteId, day), () => "이 날로 옮기고 짝을 맞췄습니다.")}
+                            onClick={() => act(() => moveSaleDate(c.quoteId, day), () => `이 날로 옮기고 ${W.recon}했습니다.`)}
                             className="shrink-0 rounded-control border border-slate-300 bg-white px-2.5 py-1.5 font-medium disabled:opacity-40"
                           >
                             이 날로 옮기기
@@ -281,10 +282,10 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
                           <button
                             type="button"
                             disabled={pending}
-                            onClick={() => act(() => linkPos(p.id, c.appKey), (r: { amount: number }) => `${won(r.amount)}원을 붙였습니다.`)}
+                            onClick={() => act(() => linkPos(p.id, c.appKey), (r: { amount: number }) => `${won(r.amount)}원을 ${W.recon}했습니다.`)}
                             className="shrink-0 rounded-control bg-brand-600 px-2.5 py-1.5 font-semibold text-white active:bg-brand-700 disabled:opacity-40"
                           >
-                            {c.exact ? "그 판매에 붙이기" : `${won(c.amount)}원 붙이기`}
+                            {c.exact ? `그 판매에 ${W.recon}` : `${won(c.amount)}원 ${W.recon}`}
                           </button>
                         )}
                       </div>
@@ -309,7 +310,7 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
                     {targets.length > 0 && (
                       <div className="flex items-center gap-1.5 pt-1">
                         <select value={manualPos[p.id] ?? ""} onChange={(e) => setManualPos((m) => ({ ...m, [p.id]: e.target.value }))} className="rounded-control border border-slate-300 bg-white px-2 py-1">
-                          <option value="">앱 판매 골라서 붙이기…</option>
+                          <option value="">앱 판매 골라서 {W.recon}…</option>
                           {targets.map((a) => (
                             <option key={a.key} value={a.key}>
                               {a.quoteNo} · {a.who} · 남은 {won(a.remain)}원
@@ -319,10 +320,10 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
                         <button
                           type="button"
                           disabled={pending || !manualPos[p.id]}
-                          onClick={() => act(() => linkPos(p.id, manualPos[p.id]), (r: { amount: number }) => `${won(r.amount)}원을 붙였습니다.`)}
+                          onClick={() => act(() => linkPos(p.id, manualPos[p.id]), (r: { amount: number }) => `${won(r.amount)}원을 ${W.recon}했습니다.`)}
                           className="rounded-control border border-slate-300 bg-white px-2.5 py-1 font-medium disabled:opacity-40"
                         >
-                          붙이기
+                          {W.recon}
                         </button>
                       </div>
                     )}
@@ -348,7 +349,7 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
                   </span>
                   <strong className="tabular shrink-0">
                     {won(a.remain)}원
-                    {a.linked > 0 && <span className="ml-1 text-xs font-normal text-slate-400">남음 (붙은 돈 {won(a.linked)})</span>}
+                    {a.linked > 0 && <span className="ml-1 text-xs font-normal text-slate-400">남음 ({W.recon}된 돈 {won(a.linked)})</span>}
                   </strong>
                 </div>
                 {a.note ? (
@@ -367,7 +368,7 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
                           <button
                             type="button"
                             disabled={pending}
-                            onClick={() => act(() => fixSaleToPos(c.quoteId, day, c.toMethod), (r: { matched: number }) => `${c.toMethod}로 고쳤습니다 — ${r.matched}건이 자동으로 맞았습니다.`)}
+                            onClick={() => act(() => fixSaleToPos(c.quoteId, day, c.toMethod), (r: { matched: number }) => `${c.toMethod}로 고쳤습니다 — ${r.matched}건이 자동으로 ${W.recon}됐습니다.`)}
                             className="shrink-0 rounded-control bg-violet-700 px-2.5 py-1.5 font-semibold text-white disabled:opacity-40"
                           >
                             {c.toMethod}로 고치기
@@ -378,12 +379,12 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
                             disabled={pending}
                             onClick={() =>
                               c.kind === "linkPosMulti"
-                                ? act(() => linkPosMulti(c.posIds, a.key), (r: { n: number; amount: number }) => `${r.n}건 ${won(r.amount)}원을 함께 붙였습니다.`)
-                                : act(() => linkPos(c.posId, a.key), (r: { amount: number }) => `${won(r.amount)}원을 붙였습니다.`)
+                                ? act(() => linkPosMulti(c.posIds, a.key), (r: { n: number; amount: number }) => `${r.n}건 ${won(r.amount)}원을 함께 ${W.recon}했습니다.`)
+                                : act(() => linkPos(c.posId, a.key), (r: { amount: number }) => `${won(r.amount)}원을 ${W.recon}했습니다.`)
                             }
                             className="shrink-0 rounded-control bg-brand-600 px-2.5 py-1.5 font-semibold text-white active:bg-brand-700 disabled:opacity-40"
                           >
-                            {c.kind === "linkPosMulti" ? `${c.posIds.length}건 함께 붙이기` : c.exact ? "이 POS 건과 붙이기" : `${won(c.amount)}원만 붙이기`}
+                            {c.kind === "linkPosMulti" ? `${c.posIds.length}건 함께 ${W.recon}` : c.exact ? `이 POS 건과 ${W.recon}` : `${won(c.amount)}원만 ${W.recon}`}
                           </button>
                         )}
                       </div>
@@ -427,23 +428,27 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
         </div>
       )}
 
-      {/* ⑤ 붙은 자국 */}
+      {/* ⑤ 대사 내역 — 목록은 이 화면의 일부라 남기고, 줄마다 있던 「풀기」(unlinkMatch)는
+          2단계(2026-09-12)부터 「최근 한 일」 한 곳에서 되돌린다(결정 f). */}
       {data.matches.length > 0 && (
         <details className="mt-4 rounded-control border border-slate-200 p-2.5">
-          <summary className="cursor-pointer text-sm font-semibold text-slate-600">붙은 자국 {data.matches.length}건 — 잘못 붙었으면 풀기</summary>
+          <summary className="cursor-pointer text-sm font-semibold text-slate-600">{W.reconLog} {data.matches.length}건</summary>
           <ul className="tabular mt-1.5 divide-y divide-slate-100 text-xs">
             {data.matches.map((m) => (
-              <li key={m.id} className="flex items-center justify-between gap-2 py-1.5">
-                <span className="min-w-0 truncate">
+              <li key={m.id} className="py-1.5">
+                <span className="block min-w-0 truncate">
                   {m.pos.day !== day && <span className="text-slate-400">{m.pos.day.slice(5)} </span>}
                   {m.pos.at.slice(0, 5)} {m.pos.cardCo ?? m.pos.appMethod} {won(m.amount)}원 ↔ {m.app.quoteNo} · {m.app.who}
                   {m.app.day !== day && <span className="text-slate-400"> ({m.app.day.slice(5)} 판매)</span>}
                   {m.method === "자동" ? "" : " · 손으로"}
                 </span>
-                <button type="button" disabled={pending} onClick={() => act(() => unlinkMatch(m.id), () => "풀었습니다.")} className="shrink-0 text-slate-400 underline">풀기</button>
               </li>
             ))}
           </ul>
+          <p className="mt-1.5 text-xs text-slate-400">
+            잘못 {W.recon}됐으면{" "}
+            <Link href="/finance/activity" className="underline underline-offset-2">{W.activityUndoHere}</Link>
+          </p>
         </details>
       )}
 
@@ -453,10 +458,10 @@ export function PosCloseUi({ data }: { data: PosDayData }) {
           <button
             type="button"
             disabled={pending}
-            onClick={() => act(() => autoMatchPosDay(day), (r: { matched: number }) => `${r.matched}건을 새로 맞췄습니다.`)}
+            onClick={() => act(() => autoMatchPosDay(day), (r: { matched: number }) => `${r.matched}건을 새로 ${W.recon}했습니다.`)}
             className="text-xs text-slate-500 underline"
           >
-            다시 맞추기
+            다시 {W.recon}
           </button>
           {data.closed ? (
             <div className="flex items-center gap-2 text-sm">

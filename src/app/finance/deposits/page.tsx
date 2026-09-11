@@ -1,10 +1,10 @@
 import { redirect } from "next/navigation";
 import { getSession, hasPerm } from "@/lib/auth";
-import { monthRange, pickYm } from "@/lib/ym";
+import { pickYm } from "@/lib/ym";
 import { FinShell } from "@/components/fin/shell";
 import { depositReconData } from "@/lib/recon-data";
 import { arrangeDeposits, depositSurePicks, depositTaxCandidates, transferSalesMissing } from "@/lib/deposit-tax";
-import { asideMarkedSales } from "@/lib/self-audit";
+import { W } from "@/lib/fin-words";
 import { DepositsRecon } from "./deposits-ui";
 
 export const dynamic = "force-dynamic";
@@ -12,10 +12,10 @@ export const dynamic = "force-dynamic";
 // 감사 L3: 달 계산은 lib/ym 정본
 
 /**
- * ⭐ 통장 입금 대조 (ERP 4단계, 2026-08-24) — 사장님 전용
+ * ⭐ 통장 입금 대사 (ERP 4단계, 2026-08-24) — 사장님 전용
  *
- *   통장에 들어온 돈이 무엇인지 정리한다: 카드 정산 / 계좌이체 판매 / 외상 수금.
- *   외상 수금은 여기서 바로 등록된다 (선입선출 — 외상 장부의 정산 로직 그대로).
+ *   통장에 들어온 돈이 무엇인지 정리한다: 카드 정산 / 계좌이체 판매 / 미수금 수금.
+ *   수금은 여기서 바로 등록된다 (선입선출 — 미수금 장부의 정산 로직 그대로).
  */
 export default async function FinanceDepositsPage({
   searchParams,
@@ -40,18 +40,16 @@ export default async function FinanceDepositsPage({
   const data = { ...raw, open };
   // ⭐ 계좌이체로 적혔는데 법인 통장에 없는 판매 (개인 통장 입금 등, 사장님 제보 2026-08-26)
   const transfers = await transferSalesMissing(ym);
-  /* ⭐ 2026-09-10 — 그중 「통장 밖」으로 정리해 둔 것. 정리하면 위 목록에서 빠지므로
-     되돌릴 자리를 같은 화면에 둔다 (정본 self-audit.asideMarkedSales) */
-  const { start, nextStart } = monthRange(ym);
-  const asides = await asideMarkedSales({ from: start, to: nextStart });
+  /* 🔴 2단계(2026-09-12): 「통장 밖」으로 정리한 판매의 되돌리기 목록(asideMarkedSales)은
+     「최근 한 일」(/finance/activity)로 옮겼다 — 이 화면엔 링크 한 줄만 (결정 f). */
 
   return (
     <FinShell tab="deposits" monthNav={{ ym, basePath: "/finance/deposits" }}>
       <p className="mt-2 text-sm text-slate-500">
-        통장에 들어온 돈이 무엇인지 정리합니다 — 카드 정산 · 세금계산서 대금 · 판매 · 외상 수금 · 판매와 무관(이자·지원금·환불).
+        통장에 들어온 돈이 무엇인지 {W.recon}합니다 — 카드 정산 · 세금계산서 대금 · 판매 · {W.receivable} 수금 · 판매와 무관(이자·지원금·환불).
         짝이 확실한 것은 한 번에, 나머지는 카드마다 고르면 됩니다.
       </p>
-      <DepositsRecon data={data} ym={ym} taxCands={taxCands} bundles={bundles} sureIds={[...sure.keys()]} breakdown={breakdown} transfers={transfers} asides={asides} />
+      <DepositsRecon data={data} ym={ym} taxCands={taxCands} bundles={bundles} sureIds={[...sure.keys()]} breakdown={breakdown} transfers={transfers} />
     </FinShell>
   );
 }
