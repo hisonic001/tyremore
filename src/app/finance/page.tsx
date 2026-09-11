@@ -2,7 +2,7 @@ import Link from "@/lib/link";
 import { redirect } from "next/navigation";
 import { getSession, hasPerm } from "@/lib/auth";
 import { finPL } from "@/lib/fin-pl";
-import { kstToday, pickYm } from "@/lib/ym";
+import { kstToday, pickYm, ymAdd } from "@/lib/ym";
 import { payableTotal } from "@/lib/recon-data";
 import { receivableTotal } from "@/lib/receivable-total";
 import { todayBrief } from "@/lib/today-brief";
@@ -14,6 +14,8 @@ import { InboxSection } from "./inbox-ui";
 import { InvoiceSkipButton, TransferRow } from "./today-actions";
 import { FinShell } from "@/components/fin/shell";
 import { won } from "@/components/fin/money";
+import { W } from "@/lib/fin-words";
+import { closedDelta } from "@/lib/fin-activity";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +28,8 @@ export const dynamic = "force-dynamic";
  *   정합성 A1(안 들어온 이체)·인박스·추적이 세 곳에서 보여 주던 같은 건은 「오늘」 칸 한 곳으로.
  *
  * 🔴 질의는 순차 — Promise.all 금지. 인라인 SQL 없음 — 정본 today-brief·weekly-steps·finPL·
- *    receivable-total·payableTotal 만 부른다.
+ *    receivable-total·payableTotal·closedDelta 만 부른다.
+ * 🔴 화면 글자는 fin-words 의 W — 「번 돈·쓴 돈·남은 돈」 → 매출·비용·이익, 못 받은 돈 → 미수금, 줄 돈 → 미지급금 (2단계, ERP 용어).
  */
 
 const manwon = (n: number) => `${Math.round(n / 10000).toLocaleString("ko-KR")}만`;
@@ -56,6 +59,8 @@ export default async function FinancePage({
   const payable = await payableTotal();
   const audit = await freshAuditRun();
   const inbox = await finInbox(ym);
+  /* ⭐ 마감 뒤 고침 띠 (사장님 결정 15) — 지난달·이번 달 중 마감된 달에 after_close 줄이 있을 때만. 순차 */
+  const delta = (await closedDelta(ymAdd(ym, -1))) ?? (await closedDelta(ym));
 
   const c = brief.card;
   const cardWarn = !c.hasPos || !c.closed || c.open > 0;
@@ -90,7 +95,7 @@ export default async function FinancePage({
                 {c.otherOpenDays > 0 && <span className="tabular ml-1 text-xs text-amber-700">· 안 된 날 {c.otherOpenDays}일</span>}
               </span>
               <Link href={`/finance/card?ym=${today.slice(0, 7)}&d=${today}`} className={cardWarn ? goBtn : okBtn}>
-                {cardWarn ? (c.hasPos ? "맞추기 →" : "올리기 →") : "마감됨"}
+                {cardWarn ? (c.hasPos ? `${W.recon} →` : "올리기 →") : "마감됨"}
               </Link>
             </li>
             <li className="py-1 text-sm">
@@ -119,7 +124,7 @@ export default async function FinancePage({
             <li className="py-1 text-sm">
               <div className="flex items-baseline gap-2">
                 <Mark warn={false} />
-                <span className="font-medium">오늘 받을 돈</span>
+                <span className="font-medium">오늘 생긴 {W.receivable}</span>
                 <span className="tabular text-slate-500">
                   {brief.newReceivables.length > 0 ? `${brief.newReceivables.length}건 · ${manwon(brief.newReceivables.reduce((s, r) => s + r.remain, 0))}` : "오늘 생긴 것 없음"}
                 </span>
@@ -212,37 +217,49 @@ export default async function FinancePage({
         <section className={box}>
           <h2 className="flex items-baseline justify-between font-bold">
             {m}월 돈
-            <Link href={`/finance/ledger?ym=${ym}`} className="text-xs font-normal text-slate-500 underline underline-offset-2">
-              장부 →
-            </Link>
+            <span className="flex gap-2 text-xs font-normal text-slate-500">
+              <Link href={`/finance/ledger?ym=${ym}`} className="underline underline-offset-2">
+                장부 →
+              </Link>
+              <Link href="/finance/activity" className="underline underline-offset-2">
+                {W.activity} →
+              </Link>
+            </span>
           </h2>
+          {delta && (
+            <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800">
+              <Link href={`/finance/activity?ym=${delta.ym}`} className="underline underline-offset-2">
+                ⚠️ {Number(delta.ym.slice(5, 7))}월 마감 뒤 고친 것 {delta.n}건 · {W.profit} {won(delta.closedProfit)} → {won(delta.nowProfit)}원
+              </Link>
+            </div>
+          )}
           <ul className="tabular mt-1 divide-y divide-slate-100 text-sm">
             <li className="flex justify-between py-1">
-              <Link href={`/finance/ledger?ym=${ym}#earned`} className="text-slate-600">번 돈</Link>
+              <Link href={`/finance/ledger?ym=${ym}#earned`} className="text-slate-600">{W.sales}</Link>
               <strong className="text-emerald-700">{won(pl.earnedTotal)}원</strong>
             </li>
             <li className="flex justify-between py-1">
-              <Link href={`/finance/ledger?ym=${ym}#spent`} className="text-slate-600">쓴 돈</Link>
+              <Link href={`/finance/ledger?ym=${ym}#spent`} className="text-slate-600">{W.cost}</Link>
               <strong className="text-red-600">{won(pl.spent)}원</strong>
             </li>
             <li className="flex justify-between py-1 text-base">
-              <Link href={`/finance/ledger?ym=${ym}#profit`} className="font-semibold">남은 돈</Link>
+              <Link href={`/finance/ledger?ym=${ym}#profit`} className="font-semibold">{W.profit}</Link>
               <strong className={pl.profit >= 0 ? "text-emerald-700" : "text-red-600"}>{won(pl.profit)}원</strong>
             </li>
             <li className="flex justify-between py-1 pt-2">
-              <Link href="/receivables" className="text-slate-600">못 받은 돈</Link>
+              <Link href="/receivables" className="text-slate-600">{W.receivable}</Link>
               <span>
                 <strong className="text-amber-800">{won(recv.remain)}원</strong>
                 {recv.reserveCount > 0 && <span className="ml-1 text-xs text-slate-400">(📌예약 {manwon(recv.reserveRemain)})</span>}
               </span>
             </li>
             <li className="flex justify-between py-1">
-              <Link href={`/finance/payables?ym=${ym}`} className="text-slate-600">줄 돈</Link>
+              <Link href={`/finance/payables?ym=${ym}`} className="text-slate-600">{W.payable}</Link>
               <strong className="text-red-700">{won(payable)}원</strong>
             </li>
           </ul>
           {pl.feeEstimated > 0 && <p className="mt-1 text-[11px] text-slate-400">카드 수수료는 정산 자료 전이라 추정값입니다</p>}
-          <p className="mt-1 text-[11px] text-slate-400">「못 받은 돈·줄 돈」은 달과 상관없는 지금 기준입니다. 숫자를 누르면 근거가 나옵니다.</p>
+          <p className="mt-1 text-[11px] text-slate-400">「{W.receivable}·{W.payable}」은 달과 상관없는 지금 기준입니다. 숫자를 누르면 근거가 나옵니다.</p>
         </section>
       </div>
 

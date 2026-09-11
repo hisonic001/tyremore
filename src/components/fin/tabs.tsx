@@ -1,4 +1,5 @@
 import Link from "@/lib/link";
+import { W } from "@/lib/fin-words";
 
 /**
  * ⭐ 돈 관리 탭 바 — 3그룹 + 소탭 2줄 (사장님 선택 2026-09-10 「탭만 3개로 묶기」)
@@ -7,7 +8,7 @@ import Link from "@/lib/link";
  *   탭 이름만 정리」** — 화면 내용은 옮기지 않고, 9개를 세 묶음으로 나눠 1줄째에 묶음,
  *   2줄째에 그 묶음의 화면을 보여 준다. 주소(URL)는 전부 그대로다 — 즐겨찾기·딥링크가 안 깨진다.
  *
- *     [할 일]  현황 · 입금 · 계산서 · 지출
+ *     [할 일]  현황 · 입금 · 계산서 · 지출 · 최근 한 일
  *     [장부]   거래처 · 미지급 · 받을 돈(외상 장부 /receivables) · 추적
  *     [자료]   올리기 · 올린 자료 · 카드 마감
  *
@@ -20,7 +21,9 @@ export type FinTabId =
   /** ⭐ 올린 자료 (2026-09-10) */
   | "files"
   /** ⭐ 장부 첫 화면 — 손익·근거·마감 (2026-09-11 개편 1단계) */
-  | "ledger";
+  | "ledger"
+  /** ⭐ 최근 한 일 — 되돌리기 한 곳 (2026-09-12 개편 2단계, 사장님 결정 14) */
+  | "activity";
 
 type Tab = { id: FinTabId | "receivables"; href: string; label: string; external?: boolean };
 type Group = { id: "todo" | "book" | "data"; label: string; tabs: Tab[] };
@@ -34,6 +37,7 @@ const GROUPS: Group[] = [
       { id: "deposits", href: "/finance/deposits", label: "입금 정리" },
       { id: "tax", href: "/finance/tax", label: "계산서" },
       { id: "expenses", href: "/finance/expenses", label: "지출" },
+      { id: "activity", href: "/finance/activity", label: W.activity },
     ],
   },
   {
@@ -44,7 +48,7 @@ const GROUPS: Group[] = [
       { id: "party", href: "/finance/party", label: "거래처" },
       { id: "payables", href: "/finance/payables", label: "미지급" },
       /* 외상 장부는 돈관리 밖 화면이다 — 「받을 돈」 자리에서 바로 가게 (사장님 모형 그대로) */
-      { id: "receivables", href: "/receivables", label: "받을 돈", external: true },
+      { id: "receivables", href: "/receivables", label: W.receivable, external: true },
       /* ⭐ 돈 추적 (근본책 1단계-A, 2026-08-31) — "이 돈 어디 갔어?" */
       { id: "trace", href: "/finance/trace", label: "추적" },
     ],
@@ -67,6 +71,8 @@ const GROUPS: Group[] = [
 export function FinTabs({ tab, ym }: { tab: FinTabId; ym?: string }) {
   const hrefOf = (t: Tab) => {
     if (!ym || t.external) return t.href;
+    /* 최근 한 일은 기본이 「최근 30일」 — 달을 붙이지 않는다(달 고르기는 그 화면 안에서) */
+    if (t.id === "activity") return t.href;
     if (t.id === "tax") return `${t.href}?view=money&ym=${ym}`;
     return `${t.href}?ym=${ym}`;
   };
