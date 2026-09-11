@@ -62,12 +62,19 @@ export interface A1Row {
 }
 
 export async function a1OpenTransfers(range: { from: string; to?: string }): Promise<A1Row[]> {
+  /* 🔴 혼합은 **계좌이체 몫만** (사장님 제보 2026-09-11 — 김명현 카드 88만 + 현금 8만이 「안 들어온 이체 96만」으로
+     떴다). 전에는 혼합 판매를 통째로 이체 대기로 세어, 이체가 한 푼도 없는 판매까지 올라왔다. */
   const rows = await db.execute<{ id: number; quote_no: string; d: string; total: number; who: string }>(sql`
     SELECT q.id, q.quote_no,
            to_char(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date), 'YYYY-MM-DD') d,
-           q.total_amount total, COALESCE(q.supplier_name, c.name, '?') who
+           x.expected total, COALESCE(q.supplier_name, c.name, '?') who
     FROM quote q LEFT JOIN customer c ON c.id = q.customer_id
-    WHERE q.status = '성사' AND q.payment_method IN ('계좌이체', '혼합') AND q.total_amount > 0
+    CROSS JOIN LATERAL (
+      SELECT CASE WHEN q.payment_method = '계좌이체' THEN q.total_amount
+                  ELSE COALESCE((SELECT SUM(p.amount)::int FROM quote_payment p WHERE p.quote_id = q.id AND p.method = '계좌이체'), 0)
+             END AS expected
+    ) x
+    WHERE q.status = '성사' AND q.payment_method IN ('계좌이체', '혼합') AND q.total_amount > 0 AND x.expected > 0
       AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${range.from}::date
       ${range.to ? sql`AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${range.to}::date` : sql``}
       AND NOT EXISTS (SELECT 1 FROM recon_match m
