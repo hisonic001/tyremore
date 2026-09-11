@@ -19,6 +19,12 @@ import { taxReconV2 } from "./tax-recon";
 import { confirmBankToTaxesCore, confirmMonthlyPartyCore, confirmSureTaxCore, confirmTaxToBankCore, confirmTaxToBanksCore, markTaxFixPairCore } from "./recon-core";
 import { restoreCashLine } from "./cash-restore";
 import { revalidateFinance } from "./fin-revalidate";
+import { logActivity } from "./fin-activity";
+import { howOfMethod, type ActivityEntry, type UndoItem } from "./fin-activity-types";
+import { activityItems } from "./recon-core";
+import { autoReconLabel, W } from "./fin-words";
+
+const won = (n: number) => n.toLocaleString("ko-KR");
 
 export interface MatchRef {
   table: "purchase_invoice" | "quote";
@@ -39,17 +45,21 @@ export async function confirmTaxMatch(input: {
   method: "자동" | "수동";
   /** 확정하면서 이 거래처에 사업자번호를 기억시킨다 (매입만) */
   learnSupplierId?: number | null;
-}): Promise<{ ok: true; warning: string | null } | { ok: false; error: string }> {
+  /** 일괄(autoConfirmTax)이 한 줄 n건으로 접을 때 — 낱장 기록을 막는다 */
+  quiet?: boolean;
+}): Promise<{ ok: true; warning: string | null; activity?: ActivityEntry } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
   const refs = (input.refs ?? []).filter((r) => Number.isInteger(r.id) && r.id > 0).slice(0, 30);
-  if (refs.length === 0) return { ok: false, error: "이을 기록을 골라 주세요" };
+  if (refs.length === 0) return { ok: false, error: `${W.recon}할 기록을 골라 주세요` };
 
   const [inv] = await db.execute<{
     id: number; direction: string; recon_status: string; counterparty_biz_no: string;
-    counterparty_name: string; total: number;
+    counterparty_name: string; total: number; ym: string;
   }>(sql`
-    SELECT id, direction, recon_status, counterparty_biz_no, counterparty_name, total FROM tax_invoice
+    SELECT id, direction, recon_status, counterparty_biz_no, counterparty_name, total,
+           to_char(write_date, 'YYYY-MM') ym
+    FROM tax_invoice
     WHERE id = ${input.taxInvoiceId} AND is_active
   `);
   if (!inv) return { ok: false, error: "세금계산서를 찾을 수 없습니다" };
@@ -60,14 +70,14 @@ export async function confirmTaxMatch(input: {
       AND ref_table IN ('purchase_invoice', 'quote') AND kind IN ('매입계산서', '매출계산서') LIMIT 1
   `);
   if (appTaken.length > 0)
-    return { ok: false, error: "이미 앱 기록과 이어진 계산서입니다 — 먼저 되돌려 주세요" };
+    return { ok: false, error: `이미 앱 기록과 ${W.recon}된 계산서입니다 — 먼저 되돌려 주세요` };
 
   // ref 존재 검증 — FK 가 없으니 여기서 (kind 별로)
   for (const r of refs) {
     if (inv.direction === "매입" && r.table !== "purchase_invoice")
-      return { ok: false, error: "매입 계산서는 매입 기록과만 이을 수 있습니다" };
+      return { ok: false, error: `매입 계산서는 매입 기록과만 ${W.recon}할 수 있습니다` };
     if (inv.direction === "매출" && r.table !== "quote")
-      return { ok: false, error: "매출 계산서는 판매 기록과만 이을 수 있습니다" };
+      return { ok: false, error: `매출 계산서는 판매 기록과만 ${W.recon}할 수 있습니다` };
     const found =
       r.table === "purchase_invoice"
         ? await db.execute<{ id: number }>(sql`SELECT id FROM purchase_invoice WHERE id = ${r.id} AND status <> '취소'`)
@@ -78,7 +88,7 @@ export async function confirmTaxMatch(input: {
       SELECT id FROM recon_match WHERE ref_table = ${r.table} AND ref_id = ${r.id}
         AND kind IN ('매입계산서', '매출계산서') LIMIT 1
     `);
-    if (taken.length > 0) return { ok: false, error: `기록 ${r.table}#${r.id} 은(는) 이미 다른 계산서와 이어져 있습니다` };
+    if (taken.length > 0) return { ok: false, error: `기록 ${r.table}#${r.id} 은(는) 이미 다른 계산서와 ${W.recon}돼 있습니다` };
   }
   // 🔴 감사 L8: 묶음 확정은 배분 합이 계산서 금액과 맞아야 한다
   if (refs.length > 1) {
@@ -153,9 +163,23 @@ export async function confirmTaxMatch(input: {
     // 별명 학습 실패는 확정 자체를 막지 않는다
   }
 
+  /* ⭐ 최근 한 일 — 되돌리기 = undoTaxMatch(taxInvoiceId, '전부') (앱 기록 연결만 푸는 scope 는 없다) */
+  const refWord = inv.direction === "매입" ? "매입" : "판매";
+  const activity: ActivityEntry = {
+    ym: inv.ym,
+    actor: g.uid,
+    how: howOfMethod(input.method),
+    verb: "대사",
+    target: { table: "tax_invoice", id: input.taxInvoiceId },
+    amount: Number(inv.total),
+    label: `계산서 ${inv.counterparty_name} ${won(Number(inv.total))} ↔ 앱 ${refWord} 기록${refs.length > 1 ? ` ${refs.length}건` : ""}`,
+    undo: { kind: "tax", args: { taxInvoiceId: input.taxInvoiceId, scope: "전부" } },
+  };
+  if (!input.quiet) await logActivity(activity);
+
   revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   revalidatePath("/finance");
-  return { ok: true, warning };
+  return { ok: true, warning, activity };
 }
 
 /**
@@ -198,6 +222,14 @@ export async function linkCounterpartyToSupplier(
         party_label = EXCLUDED.party_label, updated_at = now()
     `);
   }
+  /* ⭐ 최근 한 일 — 학습은 되돌리기 없음(별명은 거래처 카드에서 지운다) */
+  await logActivity({
+    actor: g.uid,
+    how: "사람",
+    verb: "규칙",
+    target: { table: "tax_invoice", id: taxInvoiceId },
+    label: `규칙 저장: 계산서 상호 「${inv.counterparty_name}」 = 거래처 ${sup.name}`,
+  });
   revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   return { ok: true, learned: sup.name, warning };
 }
@@ -211,6 +243,7 @@ export async function autoConfirmTax(
   // 🔴 화면이 보낸 목록을 믿지 않는다 — 서버가 같은 규칙으로 다시 계산한다 (보는 달과 같은 범위)
   const data = await taxReconV2(ym);
   let confirmed = 0;
+  const items: UndoItem[] = [];
   for (const s of data.groups.flatMap((g) => g.items)) {
     if (!s.auto) continue;
     const r = await confirmTaxMatch({
@@ -218,8 +251,25 @@ export async function autoConfirmTax(
       refs: [{ table: s.auto.table, id: s.auto.id, amount: s.auto.amount }],
       method: "자동",
       learnSupplierId: s.learnable ? s.supplierId : null,
+      quiet: true,
     });
-    if (r.ok) confirmed++;
+    if (r.ok) {
+      confirmed++;
+      items.push(...activityItems(r.activity));
+    }
+  }
+  /* ⭐ 최근 한 일 — 한 줄 n건 (건별 되돌리기는 items) */
+  if (items.length > 0) {
+    await logActivity({
+      ym,
+      actor: g.uid,
+      how: "자동",
+      verb: "대사",
+      n: items.length,
+      amount: items.reduce((s, i) => s + (i.amount ?? 0), 0),
+      label: `${autoReconLabel(items.length)} · 계산서 ↔ 앱 기록 ${ym}`,
+      undo: { kind: "bulk", args: { items } },
+    });
   }
   revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   return { ok: true, confirmed };
@@ -234,8 +284,9 @@ export async function undoTaxMatch(
   const g = await guard();
   if (!g.ok) return g;
   // 입금·출금과 이어져 있었다면 그 통장 줄도 미대조로 되돌린다 (v2 — 직접 연결)
-  const [invRow] = await db.execute<{ recon_reason: string | null; counterparty_name: string; counterparty_biz_no: string }>(sql`
-    SELECT recon_reason, counterparty_name, counterparty_biz_no FROM tax_invoice WHERE id = ${taxInvoiceId}
+  const [invRow] = await db.execute<{ recon_reason: string | null; counterparty_name: string; counterparty_biz_no: string; total: number; ym: string }>(sql`
+    SELECT recon_reason, counterparty_name, counterparty_biz_no, total, to_char(write_date, 'YYYY-MM') ym
+    FROM tax_invoice WHERE id = ${taxInvoiceId}
   `);
   const gone = await db.execute<{ ref_table: string; ref_id: number }>(sql`
     DELETE FROM recon_match WHERE src_table = 'tax_invoice' AND src_id = ${taxInvoiceId}
@@ -287,6 +338,17 @@ export async function undoTaxMatch(
   } else {
     await db.execute(sql`UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL WHERE id = ${taxInvoiceId}`);
   }
+  /* ⭐ 최근 한 일 — 되돌리기 자체도 한 줄 (되돌리기의 되돌리기는 없다, 결정 c) */
+  await logActivity({
+    ym: invRow?.ym ?? null,
+    actor: g.uid,
+    how: "사람",
+    verb: "되돌리기",
+    target: { table: "tax_invoice", id: taxInvoiceId },
+    n: Math.max(1, gone.length),
+    amount: invRow ? Number(invRow.total) : null,
+    label: `${W.undo}: 계산서 ${invRow?.counterparty_name ?? ""} ${scope === "통장" ? `통장 ${W.recon}` : `${W.recon} 전부`} 풀기 (${gone.length}건)`,
+  });
   revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   revalidatePath("/finance");
   revalidatePath("/finance/deposits");
@@ -316,11 +378,27 @@ export async function ignoreTaxInvoice(
       }
     }
   }
-  await db.execute(sql`
+  const done = await db.execute<{ counterparty_name: string; total: number; ym: string }>(sql`
     UPDATE tax_invoice SET recon_status = ${back ? "미대조" : "무시"},
            recon_reason = ${back ? null : "직접"}
     WHERE id = ${taxInvoiceId} AND recon_status <> '확정'
+    RETURNING counterparty_name, total, to_char(write_date, 'YYYY-MM') ym
   `);
+  /* ⭐ 최근 한 일 — 제외/되살리기. 되돌리기 = ignoreTaxInvoice(id, true) */
+  if (done[0]) {
+    await logActivity({
+      ym: done[0].ym,
+      actor: g.uid,
+      how: "사람",
+      verb: back ? "되돌리기" : "제외",
+      target: { table: "tax_invoice", id: taxInvoiceId },
+      amount: Number(done[0].total),
+      label: back
+        ? `${W.undo}: 계산서 ${done[0].counterparty_name} ${won(Number(done[0].total))} 되살리기`
+        : `${W.ignore}: 계산서 ${done[0].counterparty_name} ${won(Number(done[0].total))}`,
+      undo: back ? null : { kind: "taxRevive", args: { taxInvoiceId } },
+    });
+  }
   revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   return { ok: true };
 }
@@ -356,6 +434,15 @@ export async function setTaxPartyRule(input: {
     `);
     applied = rows.length;
   }
+  /* ⭐ 최근 한 일 — 규칙 저장은 「사람」(결정 g). 되돌리기 = removeTaxPartyRule(bizNo) — 자동 정리분도 되살린다 */
+  await logActivity({
+    actor: g.uid,
+    how: "사람",
+    verb: "규칙",
+    n: Math.max(1, applied),
+    label: `규칙 저장: ${input.nameRaw} = ${input.kind}${applied > 0 ? ` (계산서 ${applied}장 ${W.ignore})` : ""}`,
+    undo: { kind: "rule", args: { bizNo } },
+  });
   revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   revalidatePath("/finance");
   return { ok: true, applied };
@@ -410,7 +497,7 @@ export async function confirmMonthlyParty(
 ): Promise<{ ok: true; applied: number } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  const r = await confirmMonthlyPartyCore(bizNo, ym, direction);
+  const r = await confirmMonthlyPartyCore(bizNo, ym, direction, g.uid, "수동"); // 기록은 코어가 남긴다
   if (r.ok) revalidateFinance();
   return r;
 }
@@ -448,19 +535,33 @@ export async function markTaxWaiting(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  const [inv] = await db.execute<{ id: number; recon_status: string }>(sql`
-    SELECT id, recon_status FROM tax_invoice WHERE id = ${taxInvoiceId} AND is_active
+  const [inv] = await db.execute<{ id: number; recon_status: string; counterparty_name: string; total: number; ym: string }>(sql`
+    SELECT id, recon_status, counterparty_name, total, to_char(write_date, 'YYYY-MM') ym
+    FROM tax_invoice WHERE id = ${taxInvoiceId} AND is_active
   `);
   if (!inv) return { ok: false, error: "세금계산서를 찾을 수 없습니다" };
   if (on && inv.recon_status === "확정")
     return { ok: false, error: "이미 돈 확인이 끝난 계산서입니다 — 먼저 되돌려 주세요" };
-  if (!on && inv.recon_status !== "대기") return { ok: false, error: "미뤄 둔 계산서가 아닙니다" };
+  if (!on && inv.recon_status !== "대기") return { ok: false, error: `${W.hold}한 계산서가 아닙니다` };
   await db.execute(sql`
     UPDATE tax_invoice
     SET recon_status = ${on ? "대기" : "미대조"},
         recon_reason = ${on ? "아직 안 들어옴" : null}
     WHERE id = ${taxInvoiceId}
   `);
+  /* ⭐ 최근 한 일 — 되돌리기 = markTaxWaiting(id, false) */
+  await logActivity({
+    ym: inv.ym,
+    actor: g.uid,
+    how: "사람",
+    verb: on ? "보류" : "되돌리기",
+    target: { table: "tax_invoice", id: taxInvoiceId },
+    amount: Number(inv.total),
+    label: on
+      ? `${W.hold}: 계산서 ${inv.counterparty_name} ${won(Number(inv.total))} — 아직 안 들어옴`
+      : `${W.undo}: 계산서 ${inv.counterparty_name} ${won(Number(inv.total))} ${W.hold} 풀기`,
+    undo: on ? { kind: "taxUnwait", args: { taxInvoiceId } } : null,
+  });
   revalidateFinance();
   return { ok: true };
 }
@@ -488,13 +589,26 @@ export async function setTaxBaseline(
   if (!Number.isInteger(amount) || Math.abs(amount) > 5_000_000_000)
     return { ok: false, error: "시작 잔액은 원 단위 정수로 적어 주세요" };
   const memo = String(note ?? "").trim().slice(0, 200) || null;
+  /* 기록에 이전 값을 남기려고 한 번 읽는다 (수정은 되돌리기 없음 — 이전 값이 label 에 있다) */
+  const [prev] = await db.execute<{ name_raw: string; baseline_amount: number | null; baseline_date: string | null }>(sql`
+    SELECT name_raw, baseline_amount, to_char(baseline_date, 'YYYY-MM-DD') baseline_date
+    FROM tax_party_rule WHERE biz_no = ${biz} AND kind = '월정산'
+  `);
   const rows = await db.execute<{ biz_no: string }>(sql`
     UPDATE tax_party_rule
     SET baseline_date = ${date}::date, baseline_amount = ${amount}, baseline_note = ${memo}, updated_at = now()
     WHERE biz_no = ${biz} AND kind = '월정산'
     RETURNING biz_no
   `);
-  if (rows.length === 0) return { ok: false, error: "월정산으로 지정된 상대가 아닙니다 — 먼저 「월정산」으로 지정해 주세요" };
+  if (rows.length === 0) return { ok: false, error: `${W.monthly}으로 지정된 상대가 아닙니다 — 먼저 「${W.monthly}」으로 지정해 주세요` };
+  await logActivity({
+    ym: date.slice(0, 7),
+    actor: g.uid,
+    how: "사람",
+    verb: "수정",
+    amount,
+    label: `수정: ${prev?.name_raw ?? biz} 시작 잔액 ${prev?.baseline_amount == null ? "없음" : won(Number(prev.baseline_amount))} → ${won(amount)} (기준일 ${prev?.baseline_date ?? "없음"} → ${date})`,
+  });
   revalidatePath("/finance/tax");
   revalidatePath("/finance"); // 현황 「할 일」 수(taxOpenCounts)가 남은 돈에 따라 바뀐다
   return { ok: true };
@@ -509,14 +623,26 @@ export async function undoMonthlyParty(
   const g = await guard();
   if (!g.ok) return g;
   const biz = bizNo.replace(/\D/g, "");
-  const rows = await db.execute<{ id: number }>(sql`
+  const rows = await db.execute<{ id: number; counterparty_name: string; total: number }>(sql`
     UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL
     WHERE is_active AND counterparty_biz_no = ${biz} AND direction = ${direction}
       AND recon_reason = '월정산'
       AND write_date >= (${ym} || '-01')::date
       AND write_date < ((${ym} || '-01')::date + INTERVAL '1 month')
-    RETURNING id
+    RETURNING id, counterparty_name, total
   `);
+  if (rows.length > 0) {
+    await logActivity({
+      ym,
+      actor: g.uid,
+      how: "사람",
+      verb: "되돌리기",
+      target: { table: "tax_invoice", id: Number(rows[0].id) },
+      n: rows.length,
+      amount: rows.reduce((s, r) => s + Number(r.total), 0),
+      label: `${W.undo}: ${W.monthly} ${rows[0].counterparty_name} ${ym} 이 달 맞음 풀기 (계산서 ${rows.length}장)`,
+    });
+  }
   revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   return { ok: true, reverted: rows.length };
 }
@@ -531,8 +657,9 @@ export async function closeTaxShortfall(
 ): Promise<{ ok: true; settled: number } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  const [inv] = await db.execute<{ id: number; direction: string; total: number }>(sql`
-    SELECT id, direction, total FROM tax_invoice WHERE id = ${taxInvoiceId} AND is_active
+  const [inv] = await db.execute<{ id: number; direction: string; total: number; counterparty_name: string; ym: string }>(sql`
+    SELECT id, direction, total, counterparty_name, to_char(write_date, 'YYYY-MM') ym
+    FROM tax_invoice WHERE id = ${taxInvoiceId} AND is_active
   `);
   if (!inv) return { ok: false, error: "세금계산서를 찾을 수 없습니다" };
   const [covRow] = await db.execute<{ s: string; cash_n: number }>(sql`
@@ -543,7 +670,7 @@ export async function closeTaxShortfall(
       AND kind IN ('매입계산서', '매출계산서') AND ref_table IN ('cash_txn', 'adjust')
   `);
   if (Number(covRow.cash_n) === 0)
-    return { ok: false, error: "먼저 통장 출금·입금을 하나 이상 이어 주세요" };
+    return { ok: false, error: `먼저 통장 출금·입금을 하나 이상 ${W.recon}해 주세요` };
   const remain = Number(inv.total) - Number(covRow.s);
   if (remain <= 0) return { ok: false, error: "남은 차액이 없습니다 — 이미 확인이 끝났습니다" };
   const kind = inv.direction === "매출" ? "매출계산서" : "매입계산서";
@@ -551,6 +678,17 @@ export async function closeTaxShortfall(
     INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
     VALUES (${kind}, 'tax_invoice', ${taxInvoiceId}, 'adjust', ${taxInvoiceId}, ${remain}, '확정', '수동', ${g.uid}, now())
   `);
+  /* ⭐ 최근 한 일 — 되돌리기(통장)가 adjust 자국도 함께 지운다 */
+  await logActivity({
+    ym: inv.ym,
+    actor: g.uid,
+    how: "사람",
+    verb: "대사",
+    target: { table: "tax_invoice", id: taxInvoiceId },
+    amount: remain,
+    label: `차액 조정 ${won(remain)} → 계산서 ${inv.counterparty_name} ${won(Number(inv.total))} 확인 끝`,
+    undo: { kind: "tax", args: { taxInvoiceId, scope: "통장" } },
+  });
   revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   return { ok: true, settled: remain };
 }
@@ -566,16 +704,18 @@ export async function markTaxExpense(
   const g = await guard();
   if (!g.ok) return g;
   const [inv] = await db.execute<{
-    id: number; recon_status: string; counterparty_biz_no: string; item_summary: string | null;
+    id: number; recon_status: string; counterparty_biz_no: string; item_summary: string | null; counterparty_name: string; ym: string;
   }>(sql`
-    SELECT id, recon_status, counterparty_biz_no, item_summary FROM tax_invoice
+    SELECT id, recon_status, counterparty_biz_no, item_summary, counterparty_name, to_char(write_date, 'YYYY-MM') ym
+    FROM tax_invoice
     WHERE id = ${taxInvoiceId} AND is_active
   `);
   if (!inv) return { ok: false, error: "세금계산서를 찾을 수 없습니다" };
-  if (inv.recon_status === "확정") return { ok: false, error: "이미 확정된 계산서입니다 — 먼저 되돌려 주세요" };
+  if (inv.recon_status === "확정") return { ok: false, error: `이미 ${W.done}된 계산서입니다 — 먼저 되돌려 주세요` };
 
   const itemKey = normName(inv.item_summary ?? "");
   let applied = 0;
+  let appliedIds: number[] = [taxInvoiceId];
   if (itemKey.length >= 2) {
     await db.execute(sql`
       INSERT INTO tax_item_rule (biz_no, item_key, item_raw, kind)
@@ -595,6 +735,7 @@ export async function markTaxExpense(
         WHERE id IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})
       `);
       applied = ids.length;
+      appliedIds = ids;
     }
   } else {
     await db.execute(sql`
@@ -602,6 +743,22 @@ export async function markTaxExpense(
     `);
     applied = 1;
   }
+  /* ⭐ 최근 한 일 — 건별 되돌리기 = ignoreTaxInvoice(id, true) (품목 규칙도 함께 지운다) */
+  const items: UndoItem[] = appliedIds.map((id) => ({
+    kind: "taxRevive",
+    args: { taxInvoiceId: id },
+    label: `계산서 ${inv.counterparty_name}${id === taxInvoiceId ? "" : ` #${id}`} 되살리기`,
+  }));
+  await logActivity({
+    ym: inv.ym,
+    actor: g.uid,
+    how: "사람",
+    verb: "규칙",
+    target: { table: "tax_invoice", id: taxInvoiceId },
+    n: Math.max(1, applied),
+    label: `규칙 저장: ${inv.counterparty_name}${itemKey.length >= 2 ? ` 「${inv.item_summary}」` : ""} = 경비 (계산서 ${applied}장 ${W.ignore})`,
+    undo: items.length === 1 ? { kind: "taxRevive", args: { taxInvoiceId } } : { kind: "bulk", args: { items } },
+  });
   revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   return { ok: true, applied, item: itemKey.length >= 2 ? inv.item_summary : null };
 }
@@ -614,7 +771,7 @@ export async function removeTaxPartyRule(
   const g = await guard();
   if (!g.ok) return g;
   const biz = bizNo.replace(/\D/g, "");
-  const [r] = await db.execute<{ kind: string }>(sql`SELECT kind FROM tax_party_rule WHERE biz_no = ${biz}`);
+  const [r] = await db.execute<{ kind: string; name_raw: string }>(sql`SELECT kind, name_raw FROM tax_party_rule WHERE biz_no = ${biz}`);
   if (!r) return { ok: false, error: "그 상대의 규칙이 없습니다" };
   await db.execute(sql`DELETE FROM tax_party_rule WHERE biz_no = ${biz}`);
   // 대행정산·월정산은 계산서를 자동 정리한 적이 없어 되살릴 게 없다 (라벨만 지운다)
@@ -628,6 +785,14 @@ export async function removeTaxPartyRule(
     `);
     revived = rows.length;
   }
+  /* ⭐ 최근 한 일 — 규칙 취소(되돌리기 없음: 다시 지정하면 된다) */
+  await logActivity({
+    actor: g.uid,
+    how: "사람",
+    verb: "되돌리기",
+    n: Math.max(1, revived),
+    label: `${W.undo}: 규칙 취소 ${r.name_raw} = ${r.kind}${revived > 0 ? ` (계산서 ${revived}장 되살림)` : ""}`,
+  });
   revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   return { ok: true, revived };
 }
@@ -642,7 +807,7 @@ export async function markTaxFixPair(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  const r = await markTaxFixPairCore(minusId, originId);
+  const r = await markTaxFixPairCore(minusId, originId, false, g.uid); // 기록은 코어가 남긴다
   if (!r.ok) return r;
   revalidateFinance(); // 2026 감사 N9: 현황·원장·입금까지
   return { ok: true };

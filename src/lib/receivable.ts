@@ -16,11 +16,16 @@ import { eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { quote, receivablePayment } from "@/db/schema";
-import { hasPerm } from "./auth";
+import { getSession, hasPerm } from "./auth";
 import { PERM_DENIED } from "./perm-keys";
 import { COLLECT_METHODS } from "./payments";
 import { planSettlement } from "./receivable-plan";
 import { normalizeSettledReservation } from "./reservation-pay";
+import { logActivity } from "./fin-activity";
+import type { UndoItem } from "./fin-activity-types";
+import { W } from "./fin-words";
+
+const won = (n: number) => n.toLocaleString("ko-KR");
 
 function refresh() {
   for (const p of ["/sales", "/", "/receivables"]) {
@@ -67,7 +72,7 @@ export async function addCollection(input: {
   method: string;
   paidOn?: string | null;
   memo?: string | null;
-}): Promise<{ ok: true; remain: number } | { ok: false; error: string }> {
+}): Promise<{ ok: true; remain: number; id: number } | { ok: false; error: string }> {
   if (!(await hasPerm("receivable_view"))) return OWNER_ONLY; // 외상 모듈 권한 (2026-09-02, E1 완화)
   const amount = Math.round(Number(input.amount));
   if (!Number.isFinite(amount) || amount <= 0) return { ok: false, error: "금액이 올바르지 않습니다" };
@@ -76,7 +81,7 @@ export async function addCollection(input: {
   if (paidOn && !/^\d{4}-\d{2}-\d{2}$/.test(paidOn)) return { ok: false, error: "날짜는 2026-08-11 형식입니다" };
 
   const [q] = await db
-    .select({ id: quote.id, status: quote.status, pay: quote.paymentMethod, total: quote.totalAmount })
+    .select({ id: quote.id, status: quote.status, pay: quote.paymentMethod, total: quote.totalAmount, no: quote.quoteNo, sup: quote.supplierName })
     .from(quote)
     .where(eq(quote.id, input.quoteId))
     .limit(1);
@@ -92,19 +97,35 @@ export async function addCollection(input: {
     return { ok: false, error: `잔액(${remainBefore.toLocaleString()}원)보다 많이 받을 수 없습니다` };
   }
 
-  await db.transaction(async (tx) => {
-    await tx.insert(receivablePayment).values({
-      quoteId: q.id,
-      amount,
-      method: input.method,
-      ...(paidOn ? { paidOn } : {}),
-      memo: input.memo?.trim() || null,
-    });
+  const { id, converted } = await db.transaction(async (tx) => {
+    const [ins] = await tx
+      .insert(receivablePayment)
+      .values({
+        quoteId: q.id,
+        amount,
+        method: input.method,
+        ...(paidOn ? { paidOn } : {}),
+        memo: input.memo?.trim() || null,
+      })
+      .returning({ id: receivablePayment.id });
     // ⭐ 예약 잔금까지 다 받았으면 보통 판매로 되돌린다 (2026-09-10, 정본 reservation-pay.ts)
-    await normalizeSettledReservation(q.id, tx);
+    const n = await normalizeSettledReservation(q.id, tx);
+    return { id: ins.id, converted: n.converted };
+  });
+  /* ⭐ 최근 한 일 — 커밋 뒤. 되돌리기 = removeCollection(paymentId).
+     🔴 예약이 완납돼 보통 판매로 정리되면 수금 줄이 quote_payment 로 옮겨져 지울 수 없다 — undo 없이 */
+  await logActivity({
+    ym: paidOn?.slice(0, 7) ?? null,
+    actor: (await getSession())?.uid ?? null,
+    how: "사람",
+    verb: "수금",
+    target: { table: "receivable_payment", id },
+    amount,
+    label: `${W.collect} ${won(amount)} ${input.method} ← ${q.no}${q.sup ? ` ${q.sup}` : ""}${converted ? " (완납 → 보통 판매로 정리됨)" : ""}`,
+    undo: converted ? null : { kind: "collection", args: { paymentId: id } },
   });
   refresh();
-  return { ok: true, remain: remainBefore - amount };
+  return { ok: true, remain: remainBefore - amount, id };
 }
 
 /* ============================================================
@@ -129,8 +150,10 @@ export async function settleReceivables(input: {
   memo?: string | null;
   /** 실제로 받은 총액. 비우면 고른 건들의 잔액 전부 */
   received?: number | null;
+  /** 부르는 쪽이 「최근 한 일」을 제 말로 남길 때(collectFromDeposit·markDeposited) — 여기 기록을 막는다 */
+  quiet?: boolean;
 }): Promise<
-  | { ok: true; settled: number; applied: number; partialQuoteNo: string | null }
+  | { ok: true; settled: number; applied: number; partialQuoteNo: string | null; ids: number[] }
   | { ok: false; error: string }
 > {
   if (!(await hasPerm("receivable_view"))) return OWNER_ONLY; // 외상 모듈 권한 (2026-09-02, E1 완화)
@@ -140,10 +163,10 @@ export async function settleReceivables(input: {
     return { ok: false, error: "날짜는 2026-08-17 형식입니다" };
   }
   const ids = [...new Set(input.quoteIds.filter((n) => Number.isInteger(n) && n > 0))].slice(0, 200);
-  if (ids.length === 0) return { ok: false, error: "털 건을 골라 주세요" };
+  if (ids.length === 0) return { ok: false, error: `${W.collect}할 건을 골라 주세요` };
 
   try {
-    return await db.transaction(async (tx) => {
+    const out = await db.transaction(async (tx) => {
       /**
        * 🔴 `= ANY(배열)` 은 쓰지 않는다 — drizzle 이 JS 배열을 Postgres 배열로 못 묶어
        *    「malformed array literal」로 죽는다 (2026-08-15 실서비스 500).
@@ -191,24 +214,56 @@ export async function settleReceivables(input: {
       const { plan, partialQuoteNo } = planSettlement(open, received);
       if (plan.length === 0) throw new Error("넣을 수금이 없습니다");
 
-      await tx.insert(receivablePayment).values(
-        plan.map((p) => ({
-          quoteId: p.quoteId,
-          amount: p.amount,
-          method: input.method,
-          ...(paidOn ? { paidOn } : {}),
-          memo: input.memo?.trim() || null,
-        })),
-      );
+      const ins = await tx
+        .insert(receivablePayment)
+        .values(
+          plan.map((p) => ({
+            quoteId: p.quoteId,
+            amount: p.amount,
+            method: input.method,
+            ...(paidOn ? { paidOn } : {}),
+            memo: input.memo?.trim() || null,
+          })),
+        )
+        .returning({ id: receivablePayment.id, quoteId: receivablePayment.quoteId, amount: receivablePayment.amount });
       // ⭐ 예약 건이 완납되면 보통 판매로 (2026-09-10) — 예약이 아니면 아무 일도 안 한다
-      for (const p of plan) await normalizeSettledReservation(p.quoteId, tx);
+      const convertedQuotes = new Set<number>();
+      for (const p of plan) {
+        const n = await normalizeSettledReservation(p.quoteId, tx);
+        if (n.converted) convertedQuotes.add(p.quoteId);
+      }
       return {
         ok: true as const,
         settled: plan.length,
         applied: received,
         partialQuoteNo,
+        ids: ins.map((r) => r.id),
+        /** 기록용 — 보통 판매로 정리된 예약의 수금 줄은 지울 수 없어 items 에서 뺀다 */
+        items: ins
+          .filter((r) => !convertedQuotes.has(r.quoteId))
+          .map((r): UndoItem => ({
+            kind: "collection",
+            args: { paymentId: r.id },
+            label: `${open.find((o) => o.quoteId === r.quoteId)?.quoteNo ?? `#${r.quoteId}`} ${won(r.amount)}`,
+            amount: r.amount,
+          })),
       };
     });
+    const { items, ...rest } = out;
+    /* ⭐ 최근 한 일 — 커밋 뒤 한 줄 n건, 건별 되돌리기 = removeCollection(paymentId) */
+    if (!input.quiet) {
+      await logActivity({
+        ym: paidOn?.slice(0, 7) ?? null,
+        actor: (await getSession())?.uid ?? null,
+        how: "사람",
+        verb: "수금",
+        n: out.settled,
+        amount: out.applied,
+        label: `${W.collect} ${won(out.applied)} ${input.method} ← ${W.receivable} ${out.settled}건${input.memo?.trim() ? ` (${input.memo.trim()})` : ""}`,
+        undo: items.length === 0 ? null : items.length === 1 ? { kind: "collection", args: items[0].args } : { kind: "bulk", args: { items } },
+      });
+    }
+    return rest;
   } catch (e) {
     return { ok: false, error: (e as Error).message || "수금을 넣지 못했습니다" };
   } finally {
@@ -227,8 +282,20 @@ export async function settleReceivables(input: {
  */
 export async function removeCollection(id: number): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!(await hasPerm("receivable_view"))) return OWNER_ONLY; // 외상 모듈 권한 (2026-09-02, E1 완화)
-  const gone = await db.delete(receivablePayment).where(eq(receivablePayment.id, id)).returning({ id: receivablePayment.id });
+  const gone = await db
+    .delete(receivablePayment)
+    .where(eq(receivablePayment.id, id))
+    .returning({ id: receivablePayment.id, amount: receivablePayment.amount, quoteId: receivablePayment.quoteId, paidOn: receivablePayment.paidOn });
   if (gone.length === 0) return { ok: false, error: "그 수금 기록이 이미 없습니다 — 새로 고쳐 보세요" };
+  await logActivity({
+    ym: gone[0].paidOn ? String(gone[0].paidOn).slice(0, 7) : null,
+    actor: (await getSession())?.uid ?? null,
+    how: "사람",
+    verb: "되돌리기",
+    target: { table: "receivable_payment", id },
+    amount: gone[0].amount,
+    label: `${W.undo}: ${W.collect} ${won(gone[0].amount)} 지우기 (판매 #${gone[0].quoteId})`,
+  });
   refresh();
   return { ok: true };
 }

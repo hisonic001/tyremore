@@ -22,7 +22,12 @@ import { settleReceivables } from "./receivable";
 import { restoreCashLine } from "./cash-restore";
 import { depositReconData } from "./recon-data";
 import { depositTaxCandidates, depositSurePicks } from "./deposit-tax";
-import { confirmBankToTaxesCore, confirmTaxToBankCore } from "./recon-core";
+import { activityItems, confirmBankToTaxesCore, confirmTaxToBankCore } from "./recon-core";
+import { logActivity } from "./fin-activity";
+import type { UndoItem } from "./fin-activity-types";
+import { autoReconLabel, W } from "./fin-words";
+
+const won = (n: number) => n.toLocaleString("ko-KR");
 
 async function guard(): Promise<{ ok: true; uid: number | null } | { ok: false; error: string }> {
   if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
@@ -39,7 +44,7 @@ export async function markCardSettlements(
   const g = await guard();
   if (!g.ok) return g;
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return { ok: false, error: "달이 올바르지 않습니다" };
-  const marked = await markCardSettlementsCore(ym);
+  const marked = await markCardSettlementsCore(ym, g.uid); // 기록은 코어가 남긴다
   revalidateFinance();
   return { ok: true, marked };
 }
@@ -84,7 +89,7 @@ export async function collectFromDeposit(
   const dep = await getDeposit(cashTxnId);
   if (!dep) return { ok: false, error: "입금 줄을 찾을 수 없습니다" };
   if (dep.recon_status === "확정") return { ok: false, error: "이미 정리된 입금입니다" };
-  if (dep.remain <= 0) return { ok: false, error: "이 입금은 남은 금액이 없습니다 — 계산서 확인이 이미 썼습니다" };
+  if (dep.remain <= 0) return { ok: false, error: `이 입금은 남은 금액이 없습니다 — ${W.reconTax}가 이미 썼습니다` };
 
   /* 대상 조건 — 정본 receivable-key.ts (외상 장부의 열쇠와 같은 규칙, 2026-09-10
      추출). 본사청구(claim_party)도 거래처와 같이 묶여 수금이 된다 */
@@ -118,6 +123,7 @@ export async function collectFromDeposit(
     paidOn: dep.date,
     received: Math.min(dep.remain, planned),
     memo: `통장 입금 대조 (${dep.l} ${dep.date})`,
+    quiet: true, // 기록은 아래서 「수금+대사」 한 줄로 (settleReceivables 의 수금 줄과 이중 기록 금지)
   });
   if (!r.ok) return r;
 
@@ -146,6 +152,18 @@ export async function collectFromDeposit(
       label = c?.name ?? partyKey;
     }
     await learnAlias(payer, partyKey, label);
+    /* ⭐ 최근 한 일 — 되돌리기 = undoDepositLink(cashTxnId) (자국 + 그 자국이 만든 수금 기록을 함께 지운다) */
+    await logActivity({
+      ym: dep.date.slice(0, 7),
+      actor: g.uid,
+      how: "사람",
+      verb: "수금",
+      target: { table: "cash_txn", id: cashTxnId },
+      n: r.settled,
+      amount: r.applied,
+      label: `입금 ${won(r.applied)} ${payer} → ${label} ${W.receivable} ${W.collect} (${r.settled}건)`,
+      undo: { kind: "deposit", args: { cashTxnId } },
+    });
   }
 
   revalidatePath("/finance/deposits");
@@ -172,7 +190,7 @@ export async function undoDepositLink(
     WHERE kind = '이체입금' AND src_table = 'cash_txn' AND src_id = ${cashTxnId} AND status = '확정'
     ORDER BY id LIMIT 100
   `);
-  if (marks.length === 0) return { ok: false, error: "이 입금에 이어진 판매·수금이 없습니다" };
+  if (marks.length === 0) return { ok: false, error: `이 입금에 ${W.recon}된 판매·수금이 없습니다` };
   let payments = 0;
   await db.transaction(async (tx) => {
     for (const m of marks) {
@@ -190,6 +208,16 @@ export async function undoDepositLink(
       await tx.execute(sql`DELETE FROM recon_match WHERE id = ${m.id}`);
     }
     await restoreCashLine(tx, cashTxnId);
+  });
+  await logActivity({
+    ym: dep.date.slice(0, 7),
+    actor: g.uid,
+    how: "사람",
+    verb: "되돌리기",
+    target: { table: "cash_txn", id: cashTxnId },
+    n: marks.length,
+    amount: marks.reduce((s, m) => s + Number(m.amount), 0),
+    label: `${W.undo}: 입금 ${won(dep.in_amount)} ${payerOf(dep.description)} ${W.recon} 풀기 (${marks.length}건${payments > 0 ? ` · 수금 ${payments}건 지움` : ""})`,
   });
   revalidatePath("/finance/deposits");
   revalidatePath("/finance");
@@ -213,10 +241,21 @@ export async function setDepositKind(
   if (!(DEPOSIT_KINDS as readonly string[]).includes(kind)) return { ok: false, error: "분류가 올바르지 않습니다" };
   const dep = await getDeposit(cashTxnId);
   if (!dep) return { ok: false, error: "입금 줄을 찾을 수 없습니다" };
-  if (dep.remain < dep.in_amount) return { ok: false, error: "이미 계산서·판매에 일부 이어진 입금입니다 — 먼저 되돌려 주세요" };
+  if (dep.remain < dep.in_amount) return { ok: false, error: `이미 계산서·판매에 일부 ${W.recon}된 입금입니다 — 먼저 되돌려 주세요` };
   await db.execute(sql`
     UPDATE cash_txn SET category = ${kind}, recon_status = '확정' WHERE id = ${cashTxnId} AND source = '통장'
   `);
+  /* ⭐ 최근 한 일 — 되돌리기 = undoDepositKind(cashTxnId) */
+  await logActivity({
+    ym: dep.date.slice(0, 7),
+    actor: g.uid,
+    how: "사람",
+    verb: "분류",
+    target: { table: "cash_txn", id: cashTxnId },
+    amount: dep.in_amount,
+    label: `분류 → ${kind}: ${dep.date.slice(5)} 입금 ${won(dep.in_amount)} ${payerOf(dep.description)}`,
+    undo: { kind: "depositKind", args: { cashTxnId } },
+  });
   revalidatePath("/finance/deposits");
   revalidatePath("/finance");
   return { ok: true };
@@ -225,11 +264,21 @@ export async function setDepositKind(
 export async function undoDepositKind(cashTxnId: number): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  const rows = await db.execute<{ id: number }>(sql`
+  const rows = await db.execute<{ id: number; in_amount: number; description: string; d: string }>(sql`
     UPDATE cash_txn SET category = NULL, recon_status = '미대조'
-    WHERE id = ${cashTxnId} AND category IN ('판매입금', '이자·지원금', '환불', '기타입금') RETURNING id
+    WHERE id = ${cashTxnId} AND category IN ('판매입금', '이자·지원금', '환불', '기타입금')
+    RETURNING id, in_amount, description, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') d
   `);
   if (rows.length === 0) return { ok: false, error: "판매와 무관으로 분류한 줄이 아닙니다" };
+  await logActivity({
+    ym: rows[0].d.slice(0, 7),
+    actor: g.uid,
+    how: "사람",
+    verb: "되돌리기",
+    target: { table: "cash_txn", id: cashTxnId },
+    amount: Number(rows[0].in_amount),
+    label: `${W.undo}: 입금 분류 해제 ${rows[0].d.slice(5)} ${won(Number(rows[0].in_amount))} ${payerOf(rows[0].description)}`,
+  });
   revalidatePath("/finance/deposits");
   revalidatePath("/finance");
   return { ok: true };
@@ -254,16 +303,33 @@ export async function confirmSureDeposits(
   let tax = 0;
   let quote = 0;
   let failed = 0;
+  const items: UndoItem[] = [];
   for (const [cashId, pick] of sure) {
+    /* 🔴 recon_match.method 는 전과 같이 기본값(수동) — 기록만 quiet 로 모아 아래서 한 줄 n건(how 자동, 결정 g) */
     const r =
       pick.kind === "tax"
-        ? await confirmTaxToBankCore(pick.invId, cashId, g.uid)
+        ? await confirmTaxToBankCore(pick.invId, cashId, g.uid, "수동", { quiet: true })
         : pick.kind === "bundle"
-          ? await confirmBankToTaxesCore(cashId, pick.invoiceIds, g.uid)
-          : await linkDepositToQuoteCore(cashId, pick.quoteId, g.uid);
+          ? await confirmBankToTaxesCore(cashId, pick.invoiceIds, g.uid, "수동", { quiet: true })
+          : await linkDepositToQuoteCore(cashId, pick.quoteId, g.uid, "수동", { quiet: true });
     if (!r.ok) failed++;
-    else if (pick.kind === "quote") quote++;
-    else tax++;
+    else {
+      if (pick.kind === "quote") quote++;
+      else tax++;
+      items.push(...activityItems(r.activity));
+    }
+  }
+  if (items.length > 0) {
+    await logActivity({
+      ym,
+      actor: g.uid,
+      how: "자동",
+      verb: "대사",
+      n: items.length,
+      amount: items.reduce((s, i) => s + (i.amount ?? 0), 0),
+      label: `${autoReconLabel(items.length)} · 입금 ${ym} (계산서 ${tax}·판매 ${quote}${failed > 0 ? `·실패 ${failed}` : ""})`,
+      undo: { kind: "bulk", args: { items } },
+    });
   }
   revalidateFinance();
   return { ok: true, tax, quote, failed };
@@ -276,10 +342,23 @@ export async function ignoreDeposit(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  await db.execute(sql`
+  const rows = await db.execute<{ in_amount: number; description: string; d: string }>(sql`
     UPDATE cash_txn SET recon_status = ${back ? "미대조" : "무시"}
     WHERE id = ${cashTxnId} AND source = '통장' AND recon_status <> '확정'
+    RETURNING in_amount, description, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') d
   `);
+  /* ⭐ 최근 한 일 — 🔴 되돌리기 종류가 없어(ignoreDeposit(id, true)) undo 없이 기록만 (갈래 A 에 알림) */
+  if (rows[0]) {
+    await logActivity({
+      ym: rows[0].d.slice(0, 7),
+      actor: g.uid,
+      how: "사람",
+      verb: back ? "되돌리기" : "제외",
+      target: { table: "cash_txn", id: cashTxnId },
+      amount: Number(rows[0].in_amount),
+      label: `${back ? `${W.undo}: ${W.ignore} 풀기` : W.ignore}: ${rows[0].d.slice(5)} 입금 ${won(Number(rows[0].in_amount))} ${payerOf(rows[0].description)}`,
+    });
+  }
   revalidatePath("/finance/deposits");
   return { ok: true };
 }
@@ -290,11 +369,21 @@ export async function unmarkCardSettlement(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  const rows = await db.execute<{ id: number }>(sql`
+  const rows = await db.execute<{ id: number; in_amount: number; d: string }>(sql`
     UPDATE cash_txn SET category = NULL, recon_status = '미대조'
-    WHERE id = ${cashTxnId} AND category = '카드정산' RETURNING id
+    WHERE id = ${cashTxnId} AND category = '카드정산'
+    RETURNING id, in_amount, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') d
   `);
   if (rows.length === 0) return { ok: false, error: "카드정산으로 표시된 줄이 아닙니다" };
+  await logActivity({
+    ym: rows[0].d.slice(0, 7),
+    actor: g.uid,
+    how: "사람",
+    verb: "되돌리기",
+    target: { table: "cash_txn", id: cashTxnId },
+    amount: Number(rows[0].in_amount),
+    label: `${W.undo}: 카드정산 표시 취소 ${rows[0].d.slice(5)} 입금 ${won(Number(rows[0].in_amount))}`,
+  });
   revalidatePath("/finance/deposits");
   revalidatePath("/finance");
   return { ok: true };

@@ -23,6 +23,8 @@ import { uploadCoverage, coverageStatus } from "./upload-coverage";
 import { cardDaySums } from "./card-recon";
 import { posDaysSummary } from "./pos-close";
 import { zeroTotalInvoiceCount } from "./invoice";
+import { logActivity } from "./fin-activity";
+import { W } from "./fin-words";
 
 export interface CloseCheck {
   /** 항목 이름 — 화면이 순서가 아니라 이름으로 고른다 (2026-09-11 첫 화면 개편) */
@@ -180,6 +182,20 @@ export async function closeMonth(ym: string): Promise<{ ok: true } | { ok: false
   if (bad.length > 0) return { ok: false, error: `아직 남은 일이 있습니다 — ${bad.map((c) => c.text).join(" · ")}` };
 
   const headline = await computeHeadline(ym);
+  /* ⭐ 최근 한 일 — 🔴 INSERT **앞**에 남긴다: 뒤에 남기면 그 달이 이미 마감이라 after_close=true 로 찍혀
+     첫 화면 「마감 뒤 고친 것」에 마감 줄 자신이 세어진다(closedDelta). 이미 마감된 달이면(ON CONFLICT) 안 남긴다 */
+  const already = await monthCloseStatus(ym);
+  if (!already.closed) {
+    await logActivity({
+      ym,
+      actor: session.uid,
+      how: "사람",
+      verb: "마감",
+      amount: headline.profit,
+      label: `월 마감 ${ym} · ${W.profit} ${headline.profit.toLocaleString("ko-KR")}${headline.dataComplete ? "" : " (자료 기준 마감)"}`,
+      undo: { kind: "monthClose", args: { ym } },
+    });
+  }
   await db.execute(sql`
     INSERT INTO month_close (ym, closed_by, headline)
     VALUES (${ym}, ${session.uid}, ${JSON.stringify(headline)}::jsonb)
@@ -192,7 +208,16 @@ export async function closeMonth(ym: string): Promise<{ ok: true } | { ok: false
 export async function reopenMonth(ym: string): Promise<{ ok: true } | { ok: false; error: string }> {
   const session = await getSession();
   if (!session || !(await (await import("./auth")).hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
-  await db.execute(sql`DELETE FROM month_close WHERE ym = ${ym}`);
+  const gone = await db.execute<{ ym: string }>(sql`DELETE FROM month_close WHERE ym = ${ym} RETURNING ym`);
+  if (gone.length > 0) {
+    await logActivity({
+      ym,
+      actor: session.uid,
+      how: "사람",
+      verb: "되돌리기",
+      label: `${W.undo}: 월 마감 풀기 ${ym}`,
+    });
+  }
   revalidateFinance();
   return { ok: true };
 }

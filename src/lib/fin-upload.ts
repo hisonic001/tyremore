@@ -18,6 +18,8 @@ import { getShopInfo } from "@/lib/shop";
 import { parseAnyFin } from "./fin-sheet";
 import { cancelFinUploadBatch, ingestCardDays, ingestCardDeposits, ingestCardTxns, ingestCashTxns, ingestPosTxns, ingestTaxInvoices } from "./fin-ingest";
 import { extractFirst, isOfficeZip, isZip } from "./zip-crypto";
+import { logActivity } from "./fin-activity";
+import { W } from "./fin-words";
 
 const MAX_BYTES = 8 * 1024 * 1024;
 
@@ -310,7 +312,7 @@ function ymOfRows(dates: string[], fallback: string | null): string | null {
 export async function applyFinUpload(
   fd: FormData,
 ): Promise<
-  | { ok: true; source: string; newCount: number; dupCount: number; rowCount: number; ym: string | null }
+  | { ok: true; source: string; newCount: number; dupCount: number; rowCount: number; ym: string | null; uploadId: number }
   | { ok: false; error: string }
 > {
   if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
@@ -337,11 +339,26 @@ export async function applyFinUpload(
       p.periodTo ?? p.periodFrom,
     );
 
+    /* ⭐ 최근 한 일 — 원천마다 반영 함수가 다르지만 기록은 한 곳에서. 되돌리기 = cancelFinUpload(uploadId) */
+    const done = async (r: { uploadId: number; newCount: number; dupCount: number; rowCount: number }) => {
+      await logActivity({
+        ym,
+        actor: session?.uid ?? null,
+        how: "사람",
+        verb: "올리기",
+        target: { table: "fin_upload", id: r.uploadId },
+        n: Math.max(1, r.newCount),
+        label: `올리기: ${p.formatName} ${t.name} — 새 줄 ${r.newCount}${r.dupCount > 0 ? ` · 이미 있던 줄 ${r.dupCount}` : ""}`,
+        undo: { kind: "upload", args: { uploadId: r.uploadId } },
+      });
+      return { ok: true as const, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount, ym, uploadId: r.uploadId };
+    };
+
     if (p.kind === "tax") {
       const r = await ingestTaxInvoices(p, session?.uid ?? null, t.name);
       revalidatePath("/finance");
       revalidatePath("/finance/tax");
-      return { ok: true, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount, ym };
+      return done(r);
     }
 
     if (p.kind === "postxn") {
@@ -349,13 +366,13 @@ export async function applyFinUpload(
       revalidatePath("/finance");
       revalidatePath("/finance/card");
       revalidatePath("/sales");
-      return { ok: true, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount, ym };
+      return done(r);
     }
     if (p.kind === "cardtxn") {
       const r = await ingestCardTxns(p, session?.uid ?? null, t.name);
       revalidatePath("/finance");
       revalidatePath("/finance/card");
-      return { ok: true, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount, ym };
+      return done(r);
     }
     if (p.kind === "cardday" || p.kind === "carddeposit") {
       const r =
@@ -364,14 +381,14 @@ export async function applyFinUpload(
           : await ingestCardDeposits(p, session?.uid ?? null, t.name);
       revalidatePath("/finance");
       revalidatePath("/finance/card");
-      return { ok: true, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount, ym };
+      return done(r);
     }
 
     const label = String(fd.get("label") ?? "").trim();
     if (!label) return { ok: false, error: "어느 통장·카드인지 계정 이름을 적어 주세요 (예: 신한주거래 · 국민법인카드)" };
     const r = await ingestCashTxns(p, label, session?.uid ?? null, t.name);
     revalidatePath("/finance");
-    return { ok: true, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount, ym };
+    return done(r);
   } catch (e) {
     return { ok: false, error: `반영하지 못했습니다: ${e instanceof Error ? e.message : String(e)}` };
   }
@@ -385,6 +402,14 @@ export async function cancelFinUpload(
   if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   if (!Number.isInteger(uploadId) || uploadId <= 0) return { ok: false, error: "배치 번호가 올바르지 않습니다" };
   const hidden = await cancelFinUploadBatch(uploadId);
+  await logActivity({
+    actor: (await getSession())?.uid ?? null,
+    how: "사람",
+    verb: "되돌리기",
+    target: { table: "fin_upload", id: uploadId },
+    n: Math.max(1, hidden),
+    label: `${W.undo}: 올린 자료 #${uploadId} 취소 (${hidden}줄 잠재움)`,
+  });
   revalidatePath("/finance");
   revalidatePath("/finance/tax");
   return { ok: true, hidden };

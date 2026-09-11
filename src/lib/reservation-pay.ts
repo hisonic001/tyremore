@@ -27,9 +27,12 @@
 import { sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { hasPerm } from "./auth";
+import { getSession, hasPerm } from "./auth";
 import { COLLECT_METHODS, SPLITTABLE } from "./payments";
 import { PERM_DENIED } from "./perm-keys";
+import { logActivity } from "./fin-activity";
+
+const won = (n: number) => n.toLocaleString("ko-KR");
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Runner = Tx | typeof db;
@@ -78,9 +81,9 @@ export async function restateReservationPaid(input: {
   try {
     const r = await db.transaction(async (tx) => {
       const [q] = await tx.execute<{
-        id: number; status: string; total: number; reservation_status: string | null; claim_party: string | null;
+        id: number; status: string; total: number; reservation_status: string | null; claim_party: string | null; quote_no: string;
       }>(sql`
-        SELECT id, status, total_amount total, reservation_status, claim_party
+        SELECT id, status, total_amount total, reservation_status, claim_party, quote_no
         FROM quote WHERE id = ${input.quoteId} FOR UPDATE
       `);
       if (!q) throw new Error("판매 기록을 찾을 수 없습니다");
@@ -139,10 +142,19 @@ export async function restateReservationPaid(input: {
         `);
       }
       const n = await normalizeSettledReservation(q.id, tx);
-      return { remain: total - paidSum, converted: n.converted };
+      return { remain: total - paidSum, converted: n.converted, quoteNo: q.quote_no, total };
+    });
+    /* ⭐ 최근 한 일 — 수정은 되돌리기 없음(다시 고치면 된다) */
+    await logActivity({
+      actor: (await getSession())?.uid ?? null,
+      how: "사람",
+      verb: "수정",
+      target: { table: "quote", id: input.quoteId },
+      amount: paidSum,
+      label: `수정: 예약 ${r.quoteNo} 받은 돈 ${won(paidSum)} / ${won(r.total)} (${parts.map((p) => `${p.method} ${won(p.amount)}`).join(" + ") || "아직 없음"})${r.converted ? " → 완납, 보통 판매로" : ""}`,
     });
     refresh();
-    return { ok: true, ...r };
+    return { ok: true, remain: r.remain, converted: r.converted };
   } catch (e) {
     return { ok: false, error: (e as Error).message || "받은 돈을 고치지 못했습니다" };
   }
@@ -199,5 +211,16 @@ export async function normalizeSettledReservation(
   await runner.execute(sql`
     UPDATE quote SET payment_method = '혼합', updated_at = now() WHERE id = ${q.id}
   `);
+  /* ⭐ 최근 한 일 — 앱이 자동으로 한 일(수정·자동). 🔴 runner 가 tx 여도 기록은 db 로(기본값) —
+     기록 INSERT 실패가 수금 트랜잭션을 깨면 안 된다. 여기는 부르는 쪽 tx 의 마지막 단계라 롤백될 일이 거의 없다 */
+  await logActivity({
+    ym: rows[rows.length - 1]?.paid_on?.slice(0, 7) ?? null,
+    how: "자동",
+    verb: "수정",
+    target: { table: "quote", id: q.id },
+    n: rows.length,
+    amount: paid,
+    label: `자동 정리: 예약 판매 #${q.id} 완납 ${won(paid)} → 보통 판매(혼합, ${rows.length}줄)`,
+  });
   return { converted: true, personal: false };
 }

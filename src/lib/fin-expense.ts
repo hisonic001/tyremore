@@ -11,8 +11,12 @@
 import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { hasPerm } from "@/lib/auth";
+import { getSession, hasPerm } from "@/lib/auth";
 import { EXPENSE_CATS, PAYER_KEY_SQL, payerKeyOf } from "./expense-cats";
+import { logActivity } from "./fin-activity";
+import { W } from "./fin-words";
+
+const won = (n: number) => n.toLocaleString("ko-KR");
 
 /**
  * ⭐ 해제하면 몇 건이 풀리나 — 미리 세어 화면이 물어볼 수 있게 (2회차 수리 A5, 2026-08-28)
@@ -55,15 +59,17 @@ export async function setExpenseCategory(
     return { ok: false, error: "분류가 올바르지 않습니다" };
   }
   const [row] = await db.execute<{
-    id: number; source: string; description: string; out_amount: number; category: string | null;
+    id: number; source: string; description: string; out_amount: number; category: string | null; ym: string;
   }>(sql`
-    SELECT id, source, description, out_amount, category FROM cash_txn WHERE id = ${cashTxnId} AND is_active
+    SELECT id, source, description, out_amount, category, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM') ym
+    FROM cash_txn WHERE id = ${cashTxnId} AND is_active
   `);
   if (!row) return { ok: false, error: "지출 줄을 찾을 수 없습니다" };
   if (Number(row.out_amount) <= 0) return { ok: false, error: "지출(출금) 줄이 아닙니다" };
 
   const key = payerKeyOf(row.source, row.description);
   let applied = 1;
+  const uid = (await getSession())?.uid ?? null;
 
   if (category === null) {
     /**
@@ -111,6 +117,23 @@ export async function setExpenseCategory(
       applied += bulk.length;
     }
   }
+
+  /* ⭐ 최근 한 일 — 붙이기는 되돌리기 = setExpenseCategory(id, null, {scope:'all'}) (붙일 때의 거울상: 같은 상대·같은 분류 전부 + 규칙 삭제).
+     해제는 되돌리기 자체(다시 붙이면 같은 규칙으로 전 기간에 붙는다) */
+  await logActivity({
+    ym: row.ym,
+    actor: uid,
+    how: "사람",
+    verb: category === null ? "되돌리기" : "분류",
+    target: { table: "cash_txn", id: cashTxnId },
+    n: Math.max(1, applied),
+    amount: Number(row.out_amount),
+    label:
+      category === null
+        ? `${W.undo}: 분류 「${row.category ?? ""}」 해제 — ${key} ${won(Number(row.out_amount))}${applied > 1 ? ` (같은 상대 ${applied}건)` : ""}`
+        : `분류 → ${category}: ${key} ${won(Number(row.out_amount))}${applied > 1 ? ` (같은 상대 ${applied}건)` : ""}`,
+    undo: category === null ? null : { kind: "expense", args: { cashTxnId, scope: applied > 1 ? "all" : "one" } },
+  });
 
   revalidatePath("/finance/expenses");
   revalidatePath("/finance");

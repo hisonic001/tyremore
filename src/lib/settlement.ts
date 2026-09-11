@@ -11,8 +11,19 @@
 import { sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { hasPerm } from "./auth";
+import { getSession, hasPerm } from "./auth";
 import { settleReceivables } from "./receivable";
+import { logActivity } from "./fin-activity";
+import type { UndoItem } from "./fin-activity-types";
+import { W } from "./fin-words";
+
+const won = (n: number) => n.toLocaleString("ko-KR");
+
+/** 기록 label 용 — 회차의 거래처·달 (한 번 읽는다) */
+async function runInfo(runId: number): Promise<{ supplier: string; ym: string } | null> {
+  const [r] = await db.execute<{ supplier: string; ym: string }>(sql`SELECT supplier, ym FROM settlement_run WHERE id = ${runId}`);
+  return r ?? null;
+}
 import {
   addNewSalesCore,
   applySettlementCore,
@@ -110,6 +121,19 @@ export async function approveRest(runId: number) {
 export async function applySettlement(runId: number) {
   if (!(await hasPerm("finance"))) return OWNER_ONLY;
   const r = await applySettlementCore(runId);
+  /* ⭐ 최근 한 일 — 판매 취소·금액 조정이 섞여 되돌릴 수 없다(label 에 명시, undo 없음) */
+  if (r.ok && r.applied + r.failed > 0) {
+    const info = await runInfo(runId);
+    await logActivity({
+      ym: info?.ym ?? null,
+      actor: (await getSession())?.uid ?? null,
+      how: "사람",
+      verb: "수정",
+      target: { table: "settlement_run", id: runId },
+      n: r.applied,
+      label: `${W.monthly} 반영: ${info?.supplier ?? `회차 #${runId}`} ${info?.ym ?? ""} 판매 ${r.applied}건 조정${r.failed > 0 ? ` · 실패 ${r.failed}` : ""} (되돌릴 수 없음)`,
+    });
+  }
   refresh();
   return r;
 }
@@ -159,6 +183,7 @@ export async function markDeposited(input: {
     paidOn: input.paidOn,
     memo: input.memo ?? null,
     received: input.received ?? null,
+    quiet: true, // 기록은 아래서 회차 이름으로 (settleReceivables 의 수금 줄과 이중 기록 금지)
   });
   if (!r.ok) return r;
 
@@ -169,6 +194,20 @@ export async function markDeposited(input: {
       status = '입금완료', updated_at = now()
     WHERE id = ${input.runId}
   `);
+  /* ⭐ 최근 한 일 — 건별 되돌리기 = removeCollection(paymentId) (r.ids) */
+  const info = await runInfo(input.runId);
+  const items: UndoItem[] = r.ids.map((id) => ({ kind: "collection", args: { paymentId: id }, label: `${W.collect} #${id}` }));
+  await logActivity({
+    ym: info?.ym ?? input.paidOn.slice(0, 7),
+    actor: (await getSession())?.uid ?? null,
+    how: "사람",
+    verb: "수금",
+    target: { table: "settlement_run", id: input.runId },
+    n: r.settled,
+    amount: r.applied,
+    label: `${W.monthly} 입금 ${won(r.applied)} ${input.method} ← ${info?.supplier ?? `회차 #${input.runId}`} ${info?.ym ?? ""} (${r.settled}건)`,
+    undo: items.length === 0 ? null : items.length === 1 ? { kind: "collection", args: items[0].args } : { kind: "bulk", args: { items } },
+  });
   refresh();
   return r;
 }

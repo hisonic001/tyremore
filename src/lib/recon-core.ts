@@ -10,8 +10,27 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { cashUsedSql, normName } from "./recon-data";
 import { nearTolerance, taxCashData, type TaxCashData } from "./tax-recon";
+import { logActivity } from "./fin-activity";
+import { howOfMethod, type ActivityEntry, type UndoArgs, type UndoItem, type UndoKind } from "./fin-activity-types";
+import { autoReconLabel, W } from "./fin-words";
 
 export type CoreResult<T> = ({ ok: true } & T) | { ok: false; error: string };
+
+/**
+ * ⭐ 「최근 한 일」 기록 (개편 2단계, 2026-09-12 — 사장님 결정 14·15)
+ *   코어가 커밋 뒤 한 줄씩 남긴다. 일괄(confirmSureTaxCore 등)은 quiet 로 낱장 기록을 막고
+ *   activity 를 돌려받아 **한 줄 n건**으로 접는다 — 같은 일을 두 줄로 남기지 않는다.
+ */
+export type ActivityOpts = { quiet?: boolean };
+
+/** 낱장 activity → 일괄 줄의 items (bulk 안에 bulk 는 못 넣으니 펼친다) */
+export function activityItems(e: ActivityEntry | null | undefined): UndoItem[] {
+  if (!e?.undo) return [];
+  if (e.undo.kind === "bulk") return (e.undo.args as { items: UndoItem[] }).items ?? [];
+  return [{ kind: e.undo.kind as Exclude<UndoKind, "bulk">, args: e.undo.args as UndoArgs, label: e.label, amount: e.amount ?? null }];
+}
+
+const won = (n: number) => n.toLocaleString("ko-KR");
 
 /**
  * 계산서 ↔ 통장 직접 연결 (사장님 통찰 2026-08-25 — "앱 내역보다 입출금 대조가 정확").
@@ -23,7 +42,8 @@ export async function confirmTaxToBankCore(
   cashTxnId: number,
   uid: number | null,
   method: "수동" | "자동" = "수동",
-): Promise<CoreResult<{ remaining: number; shortfall: number; netted: boolean }>> {
+  opts: ActivityOpts = {},
+): Promise<CoreResult<{ remaining: number; shortfall: number; netted: boolean; activity?: ActivityEntry }>> {
   /**
    * 🔴 **잠금** (2026-08-28) — 왜 트랜잭션 안에서 읽는가
    *
@@ -51,21 +71,26 @@ export async function confirmTaxToBankCore(
         shortfall: number;
         netted: boolean;
         learn: { payer: string; bizNo: string; label: string };
+        /** 기록용 — 이미 읽은 값만 (추가 질의 없음) */
+        note: { name: string; ym: string; linkAmt: number; depDate: string; isCashIn: boolean };
       };
 
   const out: TxOut = await db.transaction(async (tx): Promise<TxOut> => {
     const [inv] = await tx.execute<{
       id: number; direction: string; recon_status: string; total: number;
-      counterparty_biz_no: string; counterparty_name: string;
+      counterparty_biz_no: string; counterparty_name: string; ym: string;
     }>(sql`
-      SELECT id, direction, recon_status, total, counterparty_biz_no, counterparty_name
+      SELECT id, direction, recon_status, total, counterparty_biz_no, counterparty_name,
+             to_char(write_date, 'YYYY-MM') ym
       FROM tax_invoice WHERE id = ${taxInvoiceId} AND is_active
       FOR UPDATE
     `);
     if (!inv) return { ok: false, error: "세금계산서를 찾을 수 없습니다" };
-    if (Number(inv.total) <= 0) return { ok: false, error: "마이너스 계산서는 원본과 상쇄로 정리해 주세요" };
-    const [dep] = await tx.execute<{ id: number; in_amount: number; out_amount: number; description: string }>(sql`
-      SELECT id, in_amount, out_amount, description FROM cash_txn
+    if (Number(inv.total) <= 0) return { ok: false, error: `마이너스 계산서는 원본과 ${W.offset}로 정리해 주세요` };
+    const [dep] = await tx.execute<{ id: number; in_amount: number; out_amount: number; description: string; d: string }>(sql`
+      SELECT id, in_amount, out_amount, description,
+             to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD') d
+      FROM cash_txn
       WHERE id = ${cashTxnId} AND source = '통장' AND is_active
       FOR UPDATE
     `);
@@ -79,7 +104,7 @@ export async function confirmTaxToBankCore(
     `);
     const invRemain = Number(inv.total) - Number(covRow.s);
     if (invRemain <= 0)
-      return { ok: false, error: "이 계산서는 금액이 이미 다 확인됐습니다 — 잘못 이었다면 되돌린 뒤 다시 이으세요" };
+      return { ok: false, error: `이 계산서는 금액이 이미 다 확인됐습니다 — 잘못 ${W.recon}했다면 되돌린 뒤 다시 ${W.recon}하세요` };
     const isCashIn = Number(dep.in_amount) > 0;
     if (Number(dep.in_amount) <= 0 && Number(dep.out_amount) <= 0) return { ok: false, error: "금액이 없는 통장 줄입니다" };
     const netted = (inv.direction === "매출") !== isCashIn;
@@ -90,7 +115,7 @@ export async function confirmTaxToBankCore(
       SELECT ${cashUsedSql("c")} used FROM cash_txn c WHERE c.id = ${cashTxnId}
     `);
     const remain0 = depAmt - Number(usedRow?.used ?? 0);
-    if (remain0 <= 0) return { ok: false, error: "이 통장 줄은 남은 금액이 없습니다 — 이미 다른 연결이 다 썼습니다" };
+    if (remain0 <= 0) return { ok: false, error: `이 통장 줄은 남은 금액이 없습니다 — 이미 다른 ${W.reconLog}이 다 썼습니다` };
     const linkAmt = Math.min(invRemain, remain0);
     const remaining = remain0 - linkAmt;
     const shortfall = invRemain - linkAmt;
@@ -126,9 +151,23 @@ export async function confirmTaxToBankCore(
         bizNo: inv.counterparty_biz_no,
         label: (inv.direction === "매출" ? "정산입금 " : "지급출금 ") + inv.counterparty_name,
       },
+      note: { name: inv.counterparty_name, ym: inv.ym, linkAmt, depDate: dep.d, isCashIn },
     };
   });
   if (!out.ok) return out;
+
+  /* ⭐ 최근 한 일 — 커밋 뒤 한 줄. 되돌리기 = undoTaxMatch(taxInvoiceId, '통장') */
+  const activity: ActivityEntry = {
+    ym: out.note.ym,
+    actor: uid,
+    how: howOfMethod(method),
+    verb: "대사",
+    target: { table: "tax_invoice", id: taxInvoiceId },
+    amount: out.note.linkAmt,
+    label: `계산서 ${out.note.name} ${won(out.note.linkAmt)} ↔ ${out.note.depDate} ${out.note.isCashIn ? "입금" : "출금"}${out.netted ? ` (${W.offset})` : ""}`,
+    undo: { kind: "tax", args: { taxInvoiceId, scope: "통장" } },
+  };
+  if (!opts.quiet) await logActivity(activity);
 
   /* 입금자명 학습 — 「이관우」= 한국타이어 정산 (T:사업자번호).
      🔴 트랜잭션 **밖**에 둔다: 학습 실패가 확정을 되돌리면 안 되고, 잠금을 오래 붙들지도 않는다 */
@@ -145,7 +184,7 @@ export async function confirmTaxToBankCore(
   } catch {
     /* 학습 실패는 확정을 막지 않는다 */
   }
-  return { ok: true, remaining: out.remaining, shortfall: out.shortfall, netted: out.netted };
+  return { ok: true, remaining: out.remaining, shortfall: out.shortfall, netted: out.netted, activity };
 }
 
 /** 여러 통장 줄을 한 계산서에 — 허용 오차 안 잔돈(통장)·차액(계산서)은 자동 정리 */
@@ -154,22 +193,30 @@ export async function confirmTaxToBanksCore(
   cashTxnIds: number[],
   uid: number | null,
   method: "수동" | "자동" = "수동",
-): Promise<CoreResult<{ applied: number; remaining: number; shortfall: number; absorbed: number; settled: number }>> {
+  opts: ActivityOpts = {},
+): Promise<CoreResult<{ applied: number; remaining: number; shortfall: number; absorbed: number; settled: number; activity?: ActivityEntry }>> {
   const ids = [...new Set((cashTxnIds ?? []).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 12);
-  if (ids.length === 0) return { ok: false, error: "이을 통장 줄을 골라 주세요" };
+  if (ids.length === 0) return { ok: false, error: `${W.recon}할 통장 줄을 골라 주세요` };
   let applied = 0;
   let remaining = 0;
   let lastId = 0;
+  let linkedSum = 0;
+  let firstLabel = "";
   for (const id of ids) {
-    const r = await confirmTaxToBankCore(taxInvoiceId, id, uid, method);
+    /* 낱장 기록은 막고(quiet) 아래서 한 줄로 — 되돌리기가 계산서 단위(scope 통장)라 한 줄이 맞다 */
+    const r = await confirmTaxToBankCore(taxInvoiceId, id, uid, method, { quiet: true });
     if (!r.ok) {
-      return applied === 0 ? { ok: false, error: r.error } : { ok: false, error: `${applied}건까지 이었고 그다음에서 멈췄습니다 — ${r.error}` };
+      return applied === 0 ? { ok: false, error: r.error } : { ok: false, error: `${applied}건까지 ${W.recon}했고 그다음에서 멈췄습니다 — ${r.error}` };
     }
     applied++;
     remaining = r.remaining;
     lastId = id;
+    linkedSum += r.activity?.amount ?? 0;
+    if (!firstLabel) firstLabel = r.activity?.label ?? "";
   }
-  const [inv] = await db.execute<{ direction: string; total: number }>(sql`SELECT direction, total FROM tax_invoice WHERE id = ${taxInvoiceId}`);
+  const [inv] = await db.execute<{ direction: string; total: number; counterparty_name: string; ym: string }>(sql`
+    SELECT direction, total, counterparty_name, to_char(write_date, 'YYYY-MM') ym FROM tax_invoice WHERE id = ${taxInvoiceId}
+  `);
   const total = Number(inv?.total ?? 0);
   const tol = nearTolerance(total);
   const kind = inv?.direction === "매출" ? "매출계산서" : "매입계산서";
@@ -204,7 +251,23 @@ export async function confirmTaxToBanksCore(
     absorbed = remaining;
     remaining = 0;
   }
-  return { ok: true, applied, remaining, shortfall, absorbed, settled };
+  /* ⭐ 최근 한 일 — 통장 n줄 + 조정분을 한 줄로 */
+  const adj = settled + absorbed;
+  const activity: ActivityEntry = {
+    ym: inv?.ym ?? null,
+    actor: uid,
+    how: howOfMethod(method),
+    verb: "대사",
+    target: { table: "tax_invoice", id: taxInvoiceId },
+    amount: linkedSum + settled,
+    label:
+      applied === 1 && adj === 0
+        ? firstLabel
+        : `계산서 ${inv?.counterparty_name ?? ""} ${won(Number(inv?.total ?? 0))} ↔ 통장 ${applied}줄${adj > 0 ? ` (조정 ${won(adj)})` : ""}`,
+    undo: { kind: "tax", args: { taxInvoiceId, scope: "통장" } },
+  };
+  if (!opts.quiet) await logActivity(activity);
+  return { ok: true, applied, remaining, shortfall, absorbed, settled, activity };
 }
 
 /** 통장 한 줄 → 계산서 여러 장 (타이어프로 속초점 842,160 = 242,160 + 600,000) */
@@ -213,20 +276,41 @@ export async function confirmBankToTaxesCore(
   taxInvoiceIds: number[],
   uid: number | null,
   method: "수동" | "자동" = "수동",
-): Promise<CoreResult<{ applied: number; remaining: number }>> {
+  opts: ActivityOpts = {},
+): Promise<CoreResult<{ applied: number; remaining: number; activity?: ActivityEntry }>> {
   const ids = [...new Set((taxInvoiceIds ?? []).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 12);
-  if (ids.length === 0) return { ok: false, error: "이을 계산서를 골라 주세요" };
+  if (ids.length === 0) return { ok: false, error: `${W.recon}할 계산서를 골라 주세요` };
   let applied = 0;
   let remaining = 0;
+  const items: UndoItem[] = [];
+  let ym: string | null = null;
   for (const id of ids) {
-    const r = await confirmTaxToBankCore(id, cashTxnId, uid, method);
+    const r = await confirmTaxToBankCore(id, cashTxnId, uid, method, { quiet: true });
     if (!r.ok) {
-      return applied === 0 ? { ok: false, error: r.error } : { ok: false, error: `${applied}장까지 이었고 그다음에서 멈췄습니다 — ${r.error}` };
+      return applied === 0 ? { ok: false, error: r.error } : { ok: false, error: `${applied}장까지 ${W.recon}했고 그다음에서 멈췄습니다 — ${r.error}` };
     }
     applied++;
     remaining = r.remaining;
+    items.push(...activityItems(r.activity));
+    ym ??= r.activity?.ym ?? null;
   }
-  return { ok: true, applied, remaining };
+  /* ⭐ 최근 한 일 — 계산서 장수만큼 items (되돌리기는 계산서 단위) */
+  const activity: ActivityEntry =
+    items.length === 1
+      ? { ym, actor: uid, how: howOfMethod(method), verb: "대사", target: { table: "cash_txn", id: cashTxnId }, amount: items[0].amount ?? null, label: items[0].label, undo: { kind: items[0].kind, args: items[0].args } }
+      : {
+          ym,
+          actor: uid,
+          how: howOfMethod(method),
+          verb: "대사",
+          target: { table: "cash_txn", id: cashTxnId },
+          n: items.length,
+          amount: items.reduce((s, i) => s + (i.amount ?? 0), 0),
+          label: `통장 한 줄 ↔ 계산서 ${items.length}장 ${W.recon}`,
+          undo: { kind: "bulk", args: { items } },
+        };
+  if (!opts.quiet) await logActivity(activity);
+  return { ok: true, applied, remaining, activity };
 }
 
 /** 월정산 상대의 「이 달 맞음」 — 그 달 열린 계산서를 '확정/월정산'으로 */
@@ -234,17 +318,34 @@ export async function confirmMonthlyPartyCore(
   bizNo: string,
   ym: string,
   direction: "매입" | "매출",
+  /** 기록용 — 화면 액션은 (uid, "수동"), 연간 실행기는 기본값(자동) */
+  uid: number | null = null,
+  method: "수동" | "자동" = "자동",
 ): Promise<CoreResult<{ applied: number }>> {
   const biz = bizNo.replace(/\D/g, "");
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return { ok: false, error: "달이 이상합니다" };
-  const rows = await db.execute<{ id: number }>(sql`
+  const rows = await db.execute<{ id: number; counterparty_name: string; total: number }>(sql`
     UPDATE tax_invoice SET recon_status = '확정', recon_reason = '월정산'
     WHERE is_active AND counterparty_biz_no = ${biz} AND direction = ${direction}
       AND recon_status IN ('미대조', '제안')
       AND write_date >= (${ym} || '-01')::date
       AND write_date < ((${ym} || '-01')::date + INTERVAL '1 month')
-    RETURNING id
+    RETURNING id, counterparty_name, total
   `);
+  if (rows.length > 0) {
+    /* ⭐ 최근 한 일 — 되돌리기 = undoMonthlyParty(bizNo, ym, direction) */
+    await logActivity({
+      ym,
+      actor: uid,
+      how: howOfMethod(method),
+      verb: "대사",
+      target: { table: "tax_invoice", id: Number(rows[0].id) },
+      n: rows.length,
+      amount: rows.reduce((s, r) => s + Number(r.total), 0),
+      label: `${W.monthly} ${rows[0].counterparty_name} ${ym} 이 달 맞음 · 계산서 ${rows.length}장`,
+      undo: { kind: "monthly", args: { bizNo: biz, ym, direction } },
+    });
+  }
   return { ok: true, applied: rows.length };
 }
 
@@ -252,23 +353,47 @@ export async function confirmMonthlyPartyCore(
  * ⭐ 수정·마이너스 세금계산서 상쇄 코어 (사장님 제보 2026-08-25) — 마이너스와 원본을 한 쌍으로 「무시」.
  *    auto=true 면 사유를 '수정상쇄(자동)' 으로 남겨 연간 실행 되돌리기가 구분한다.
  */
-export async function markTaxFixPairCore(minusId: number, originId: number, auto = false): Promise<{ ok: true } | { ok: false; error: string }> {
-  const rows = await db.execute<{ id: number; total: number; counterparty_biz_no: string; recon_status: string }>(sql`
-    SELECT id, total, counterparty_biz_no, recon_status FROM tax_invoice
+export async function markTaxFixPairCore(
+  minusId: number,
+  originId: number,
+  auto = false,
+  /** 기록용 */
+  uid: number | null = null,
+  opts: ActivityOpts = {},
+): Promise<{ ok: true; activity?: ActivityEntry } | { ok: false; error: string }> {
+  const rows = await db.execute<{ id: number; total: number; counterparty_biz_no: string; recon_status: string; counterparty_name: string; ym: string }>(sql`
+    SELECT id, total, counterparty_biz_no, recon_status, counterparty_name, to_char(write_date, 'YYYY-MM') ym FROM tax_invoice
     WHERE id IN (${minusId}, ${originId}) AND is_active
   `);
   if (rows.length !== 2) return { ok: false, error: "계산서 두 건을 찾을 수 없습니다" };
   const a = rows.find((x) => Number(x.id) === minusId)!;
   const b = rows.find((x) => Number(x.id) === originId)!;
   if (a.counterparty_biz_no !== b.counterparty_biz_no) return { ok: false, error: "상대가 다른 계산서입니다" };
-  if (Number(a.total) + Number(b.total) !== 0) return { ok: false, error: "두 계산서의 금액이 상쇄되지 않습니다" };
+  if (Number(a.total) + Number(b.total) !== 0) return { ok: false, error: `두 계산서의 금액이 ${W.offset}되지 않습니다` };
   if (a.recon_status === "확정" || b.recon_status === "확정")
-    return { ok: false, error: "이미 확정된 계산서가 있습니다 — 먼저 되돌려 주세요" };
+    return { ok: false, error: `이미 ${W.done}된 계산서가 있습니다 — 먼저 되돌려 주세요` };
   await db.execute(sql`
     UPDATE tax_invoice SET recon_status = '무시', recon_reason = ${auto ? "수정상쇄(자동)" : "수정상쇄"}
     WHERE id IN (${minusId}, ${originId})
   `);
-  return { ok: true };
+  /* ⭐ 최근 한 일 — 되돌리기는 두 장 각각 ignoreTaxInvoice(id, true) (bulk 2건) */
+  const items: UndoItem[] = [
+    { kind: "taxRevive", args: { taxInvoiceId: originId }, label: `원본 계산서 ${b.counterparty_name} ${won(Number(b.total))}`, amount: Number(b.total) },
+    { kind: "taxRevive", args: { taxInvoiceId: minusId }, label: `마이너스 계산서 ${a.counterparty_name} ${won(Number(a.total))}`, amount: Number(a.total) },
+  ];
+  const activity: ActivityEntry = {
+    ym: b.ym,
+    actor: uid,
+    how: auto ? "자동" : "사람",
+    verb: "제외",
+    target: { table: "tax_invoice", id: minusId },
+    n: 2,
+    amount: Number(b.total),
+    label: `${W.offset}: 계산서 ${b.counterparty_name} ${won(Number(b.total))} ↔ 마이너스 ${won(Number(a.total))}`,
+    undo: { kind: "bulk", args: { items } },
+  };
+  if (!opts.quiet) await logActivity(activity);
+  return { ok: true, activity };
 }
 
 /**
@@ -338,17 +463,33 @@ export async function confirmSureTaxCore(
   const picks = await sureTaxPicks(ym, direction);
   let applied = 0;
   let failed = 0;
+  const items: UndoItem[] = [];
   for (const p of picks) {
+    /* 낱장 기록은 quiet 로 막고 아래서 한 줄 n건으로 (사장님 결정 d — 「375줄 폭발」 방지) */
     const r =
       p.kind === "one"
-        ? await confirmTaxToBankCore(p.invId, p.cashId, uid, method)
+        ? await confirmTaxToBankCore(p.invId, p.cashId, uid, method, { quiet: true })
         : p.kind === "combo"
-          ? await confirmTaxToBanksCore(p.invId, p.cashIds, uid, method)
+          ? await confirmTaxToBanksCore(p.invId, p.cashIds, uid, method, { quiet: true })
           : p.kind === "fee"
-            ? await confirmTaxToBanksCore(p.invId, [p.cashId], uid, method)
-            : await markTaxFixPairCore(p.minusId, p.originId, method === "자동");
-    if (r.ok) applied++;
-    else failed++;
+            ? await confirmTaxToBanksCore(p.invId, [p.cashId], uid, method, { quiet: true })
+            : await markTaxFixPairCore(p.minusId, p.originId, method === "자동", uid, { quiet: true });
+    if (r.ok) {
+      applied++;
+      items.push(...activityItems(r.activity));
+    } else failed++;
+  }
+  if (items.length > 0) {
+    await logActivity({
+      ym,
+      actor: uid,
+      how: howOfMethod(method),
+      verb: "대사",
+      n: items.length,
+      amount: items.reduce((s, i) => s + (i.amount ?? 0), 0),
+      label: `${autoReconLabel(items.length)} · ${direction} 계산서 ${ym}${failed > 0 ? ` (실패 ${failed})` : ""}`,
+      undo: { kind: "bulk", args: { items } },
+    });
   }
   return { applied, failed };
 }

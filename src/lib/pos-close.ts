@@ -24,6 +24,9 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { isReconPos, NEARBY_DAYS, POS_TO_APP, PREPAID_REASON, RECON_METHODS, RECON_POS_METHODS } from "./pos-vocab";
+import { logActivity } from "./fin-activity";
+import type { UndoItem } from "./fin-activity-types";
+import { W } from "./fin-words";
 
 /* ------------------------------------------------------------------ */
 /* 어휘 — 낱말은 pos-vocab.ts 가 정본 (화면이 DB 없이 가져다 쓸 수 있게) */
@@ -658,7 +661,12 @@ export async function posDayData(day: string): Promise<PosDayData> {
 /* ------------------------------------------------------------------ */
 /* 쓰기                                                                */
 
-/** 자국 한 줄 — 없으면 넣고 이미 있으면 둔다 (짝 단위 유니크) */
+/**
+ * 자국 한 줄 — 없으면 넣고 이미 있으면 둔다 (짝 단위 유니크).
+ * ⭐ 만든 recon_match.id 를 돌려준다(없으면 null) — 「최근 한 일」 되돌리기(unlinkMatch)가 이 id 를 쓴다 (2026-09-12).
+ *    전엔 boolean — 부르는 곳은 전부 truthy 판정이라 그대로 맞는다. 기록은 여기서 안 남긴다:
+ *    사람이 누른 것은 pos-actions(linkPos·linkPosMulti), 자동은 autoMatchPosDayCore 가 한 줄 n건으로.
+ */
 export async function insertMatch(
   posId: number,
   kind: AppKind,
@@ -666,14 +674,14 @@ export async function insertMatch(
   amount: number,
   method: string,
   uid: number | null,
-): Promise<boolean> {
+): Promise<number | null> {
   const rows = await db.execute<{ id: number }>(sql`
     INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
     VALUES ('포스결제', 'pos_txn', ${posId}, ${REF_TABLE[kind]}, ${refId}, ${amount}, '확정', ${method}, ${uid}, now())
     ON CONFLICT (src_table, src_id, ref_table, ref_id) WHERE kind = '포스결제' DO NOTHING
     RETURNING id
   `);
-  return rows.length > 0;
+  return rows.length > 0 ? Number(rows[0].id) : null;
 }
 
 /**
@@ -684,14 +692,25 @@ export async function insertMatch(
  *    되어 브라우저에서 부를 수 있게 된다.
  */
 export async function forgetMatches(where: SQL, reason: string, uid: number | null): Promise<number> {
-  const rows = await db.execute<{ id: number }>(sql`
+  const rows = await db.execute<{ id: number; amount: number }>(sql`
     WITH d AS (DELETE FROM recon_match WHERE ${where} RETURNING *)
     INSERT INTO recon_match_gone
       (match_id, kind, src_table, src_id, ref_table, ref_id, amount, method, confirmed_at, deleted_by, reason)
     SELECT d.id, d.kind, d.src_table, d.src_id, d.ref_table, d.ref_id, d.amount, d.method, d.confirmed_at,
            ${uid}, ${reason}
-    FROM d RETURNING id
+    FROM d RETURNING id, amount
   `);
+  /* ⭐ 최근 한 일 — 되돌리기 자체도 한 줄 (자국은 recon_match_gone 에 남아 있다) */
+  if (rows.length > 0) {
+    await logActivity({
+      actor: uid,
+      how: "사람",
+      verb: "되돌리기",
+      n: rows.length,
+      amount: rows.reduce((s, r) => s + Number(r.amount), 0),
+      label: `${W.undo}: ${W.reconCard} ${rows.length}건 풀기 (${reason})`,
+    });
+  }
   return rows.length;
 }
 
@@ -755,8 +774,26 @@ export async function autoMatchPosDayCore(day: string, uid: number | null): Prom
   }
 
   let n = 0;
+  const items: UndoItem[] = [];
   for (const l of links) {
-    if (await insertMatch(l.posId, l.app.kind, l.app.refId, l.amount, "자동", uid)) n++;
+    const id = await insertMatch(l.posId, l.app.kind, l.app.refId, l.amount, "자동", uid);
+    if (id) {
+      n++;
+      items.push({ kind: "pos", args: { matchId: id }, label: `${l.app.quoteNo} ${l.app.who} ${won(l.amount)}`, amount: l.amount });
+    }
+  }
+  /* ⭐ 최근 한 일 — 자동 대사는 한 줄 n건, 건별 되돌리기 = unlinkMatch(matchId). 0건이면 안 남긴다 */
+  if (items.length > 0) {
+    await logActivity({
+      ym: day.slice(0, 7),
+      actor: uid,
+      how: "자동",
+      verb: "대사",
+      n: items.length,
+      amount: items.reduce((s, i) => s + (i.amount ?? 0), 0),
+      label: `${W.reconCard} 자동 ${items.length}건 (${day.slice(5)})`,
+      undo: { kind: "bulk", args: { items } },
+    });
   }
   return n;
 }

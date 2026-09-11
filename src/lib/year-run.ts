@@ -38,9 +38,9 @@ export async function runMonth(ym: string, uid: number | null, log: (s: string) 
   log(`── ${ym} 시작: 입금 ${before.dep} · 지출 미분류 ${before.exp} · 계산서 매입 ${before.taxBuy} 매출 ${before.taxSell}`);
 
   // ① 자동 분류
-  const autoCat = await applyAutoCategories({ ym });
+  const autoCat = await applyAutoCategories({ ym }, uid);
   // ② 입금
-  const cardMarked = await markCardSettlementsCore(ym);
+  const cardMarked = await markCardSettlementsCore(ym, uid);
   const depositLinked = { tax: 0, quote: 0, bundle: 0, failed: 0 };
   for (let pass = 0; pass < 2; pass++) {
     const data = await depositReconData(ym);
@@ -82,7 +82,7 @@ export async function runMonth(ym: string, uid: number | null, log: (s: string) 
   const monthly: MonthReport["monthly"] = [];
   const buy = await taxCashData("매입", ym);
   for (const m of buy.monthly) {
-    const r = await confirmMonthlyPartyCore(m.bizNo, ym, "매입");
+    const r = await confirmMonthlyPartyCore(m.bizNo, ym, "매입", uid, "자동");
     monthly.push({ name: m.name, invSum: m.invSum, paidSum: m.paidSum, balance: m.balance, applied: r.ok ? r.applied : 0 });
   }
   // ④ 스냅샷 + 남은 일

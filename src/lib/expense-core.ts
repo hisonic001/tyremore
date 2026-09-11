@@ -10,8 +10,12 @@
  */
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
-import { CARD_SETTLE_PATTERN_SQL, DESC_RULES, descRuleSql, payerKeySql } from "./expense-cats";
+import { CARD_SETTLE_PATTERN_SQL, DESC_RULES, descRuleSql, payerKeyOf, payerKeySql } from "./expense-cats";
 import { monthRange } from "./ym";
+import { logActivity } from "./fin-activity";
+import type { UndoItem } from "./fin-activity-types";
+
+const won = (n: number) => n.toLocaleString("ko-KR");
 
 export interface AutoCatResult {
   rule: number;
@@ -28,8 +32,8 @@ export interface AutoCatResult {
   byDescTotal: number;
 }
 
-/** scope: 업로드 배치 하나 또는 달 하나 */
-export async function applyAutoCategories(scope: { uploadId: number } | { ym: string }): Promise<AutoCatResult> {
+/** scope: 업로드 배치 하나 또는 달 하나. uid 는 기록(최근 한 일)의 actor 용 */
+export async function applyAutoCategories(scope: { uploadId: number } | { ym: string }, uid: number | null = null): Promise<AutoCatResult> {
   let where: SQL;
   if ("uploadId" in scope) where = sql`c.upload_id = ${scope.uploadId}`;
   else {
@@ -103,9 +107,66 @@ export async function applyAutoCategories(scope: { uploadId: number } | { ym: st
       AND (c.description LIKE '%세무서%' OR c.description LIKE '%환급%')
     RETURNING c.id
   `);
-  return {
+  const out: AutoCatResult = {
     rule: rule.length, internal: internal.length, cardSettle: cardSettle.length, localPay: localPay.length,
     shareholder: shareholder.length, interest: interest.length, refund: refund.length,
     byDesc, byDescTotal: byDesc.reduce((s, d) => s + d.n, 0),
   };
+  await logAutoCategories(scope, uid, out);
+  return out;
+}
+
+/**
+ * ⭐ 최근 한 일 — 자동 분류는 **한 줄 n건**(사장님 결정 d), label 에 규칙별 건수.
+ *    건별 되돌리기 = setExpenseCategory(id, null, {scope:'one'}) — 🔴 그 줄의 상대 규칙(expense_rule)도 함께 지운다
+ *    (기존 해제 함수의 동작 그대로 — 새 되돌리기 논리 없음, 결정 c). 0건이면 안 남긴다.
+ *    붙은 줄을 한 번 더 읽는다(질의 1) — RETURNING 을 여덟 군데 고치는 것보다 낫다.
+ */
+async function logAutoCategories(scope: { uploadId: number } | { ym: string }, uid: number | null, r: AutoCatResult): Promise<void> {
+  const total = r.rule + r.internal + r.cardSettle + r.localPay + r.shareholder + r.interest + r.refund + r.byDescTotal;
+  if (total === 0) return;
+  const where = "uploadId" in scope ? sql`c.upload_id = ${scope.uploadId}` : sql`false`;
+  const rows =
+    "uploadId" in scope
+      ? await db.execute<{ id: number; source: string; description: string; amt: number; category: string; d: string }>(sql`
+          SELECT c.id, c.source, c.description, (c.in_amount + c.out_amount)::bigint amt, c.category,
+                 to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') d
+          FROM cash_txn c WHERE ${where} AND c.is_active AND c.category IS NOT NULL
+          ORDER BY c.occurred_at LIMIT 1000
+        `)
+      : [];
+  /* 달 범위 실행(연간 실행기)은 그 달의 「자동으로 붙은 줄」만 골라낼 열쇠가 없다(사장님이 붙인 것과 섞인다) —
+     건별 items 없이 한 줄 n건만 남긴다. 업로드 배치는 그 배치 줄 전부가 이번에 붙은 것이라 items 를 넣는다 */
+  const items: UndoItem[] = rows.map((x) => ({
+    kind: "expense",
+    args: { cashTxnId: Number(x.id), scope: "one" },
+    label: `${x.d.slice(5)} ${payerKeyOf(x.source, x.description).slice(0, 20)} ${won(Number(x.amt))} → ${x.category}`,
+    amount: Number(x.amt),
+  }));
+  const parts = [
+    r.rule > 0 ? `배운 규칙 ${r.rule}` : "",
+    r.internal > 0 ? `내부이체 ${r.internal}` : "",
+    r.cardSettle > 0 ? `카드정산 ${r.cardSettle}` : "",
+    r.localPay > 0 ? `지역화폐 ${r.localPay}` : "",
+    r.shareholder > 0 ? `주주거래 ${r.shareholder}` : "",
+    r.interest > 0 ? `이자 ${r.interest}` : "",
+    r.refund > 0 ? `환급 ${r.refund}` : "",
+    ...r.byDesc.map((d) => `${d.name} ${d.n}`),
+  ].filter(Boolean);
+  const ymOf = (): string | null => {
+    if ("ym" in scope) return scope.ym;
+    const n = new Map<string, number>();
+    for (const x of rows) n.set(x.d.slice(0, 7), (n.get(x.d.slice(0, 7)) ?? 0) + 1);
+    return [...n.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  };
+  await logActivity({
+    ym: ymOf(),
+    actor: uid,
+    how: "자동",
+    verb: "분류",
+    n: total,
+    amount: items.length > 0 ? items.reduce((s, i) => s + (i.amount ?? 0), 0) : null,
+    label: `자동 분류 ${total}건 (${parts.join(" · ")})`,
+    undo: items.length > 0 ? { kind: "bulk", args: { items } } : null,
+  });
 }

@@ -99,7 +99,7 @@ export async function ingestCashTxns(
 
   /* ⭐ 자동 분류 정본 — expense-core.applyAutoCategories (경비 규칙·내부이체·카드정산·지역화폐·주주거래).
      🔴 2026-08-26: 전엔 여기 손 복제 정규식(백슬래시 1개)이라 경비 규칙이 통장 줄에 한 번도 안 붙었다 */
-  await applyAutoCategories({ uploadId });
+  await applyAutoCategories({ uploadId }, userId); // 기록(최근 한 일)의 actor — 누가 올렸는지
 
   const dupCount = parsed.rows.length - newCount;
   await db.execute(sql`

@@ -7,6 +7,12 @@ import { db } from "@/db";
 import { CARD_SETTLE_PATTERN_SQL, payerKeyOf } from "./expense-cats";
 import { monthRange } from "./ym";
 import { cashUsedSql, normName } from "./recon-data";
+import { logActivity } from "./fin-activity";
+import { howOfMethod, type ActivityEntry, type UndoItem } from "./fin-activity-types";
+import { activityItems, type ActivityOpts } from "./recon-core";
+import { W } from "./fin-words";
+
+const won = (n: number) => n.toLocaleString("ko-KR");
 
 /**
  * ⭐ 「계산서 경유로 돈 확인됨」 판정 정본 (사장님 제보 2026-09-04 — 신형호/신아건설)
@@ -57,16 +63,35 @@ export async function getDeposit(id: number) {
 }
 
 /** 이 달의 카드 정산 패턴 입금(FB자금·매출표·카드사 코드)을 한꺼번에 「카드 정산」으로 */
-export async function markCardSettlementsCore(ym: string): Promise<number> {
+export async function markCardSettlementsCore(ym: string, uid: number | null = null): Promise<number> {
   const { start, nextStart } = monthRange(ym);
-  const rows = await db.execute<{ id: number }>(sql`
+  const rows = await db.execute<{ id: number; in_amount: number; d: string }>(sql`
     UPDATE cash_txn SET recon_status = '확정', category = '카드정산'
     WHERE source = '통장' AND is_active AND in_amount > 0 AND recon_status = '미대조' AND category IS NULL
       AND ${sql.raw(CARD_SETTLE_PATTERN_SQL)}
       AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
       AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date
-    RETURNING id
+    RETURNING id, in_amount, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD') d
   `);
+  /* ⭐ 최근 한 일 — 패턴 일괄은 「자동」(결정 g). 건별 되돌리기 = unmarkCardSettlement(cashTxnId) */
+  if (rows.length > 0) {
+    const items: UndoItem[] = rows.map((r) => ({
+      kind: "cardSettle",
+      args: { cashTxnId: Number(r.id) },
+      label: `${r.d} 입금 ${won(Number(r.in_amount))} → 카드정산`,
+      amount: Number(r.in_amount),
+    }));
+    await logActivity({
+      ym,
+      actor: uid,
+      how: "자동",
+      verb: "분류",
+      n: rows.length,
+      amount: rows.reduce((s, r) => s + Number(r.in_amount), 0),
+      label: `분류 → 카드정산 (입금 ${rows.length}건, ${ym})`,
+      undo: { kind: "bulk", args: { items } },
+    });
+  }
   return rows.length;
 }
 
@@ -76,10 +101,11 @@ export async function linkDepositToQuoteCore(
   quoteId: number,
   uid: number | null,
   method: "수동" | "자동" = "수동",
-): Promise<{ ok: true } | { ok: false; error: string }> {
+  opts: ActivityOpts = {},
+): Promise<{ ok: true; activity?: ActivityEntry } | { ok: false; error: string }> {
   const dep = await getDeposit(cashTxnId);
   if (!dep) return { ok: false, error: "입금 줄을 찾을 수 없습니다" };
-  if (dep.remain <= 0) return { ok: false, error: "이 입금은 남은 금액이 없습니다 — 계산서 확인이 이미 썼습니다" };
+  if (dep.remain <= 0) return { ok: false, error: `이 입금은 남은 금액이 없습니다 — ${W.reconTax}가 이미 썼습니다` };
   /* 🔴 「판매입금」(앱에 기록 없는 판매 대금)으로 분류해 두면 recon_status 가 '확정'이 된다.
         그런데 화면은 그 줄을 **일부러 후보에 넣는다** — 나중에 정비내역을 등록하면 잇게 하려고
         (deposit-tax.ts 의 「염대현 425,000·110,000」 주석이 바로 그 사례다).
@@ -96,7 +122,7 @@ export async function linkDepositToQuoteCore(
       ok: false,
       error:
         dep.category && RELINKABLE.includes(dep.category)
-          ? `「${dep.category}」으로 분류해 둔 줄입니다 — 화면에서 손으로 이어 주세요`
+          ? `「${dep.category}」으로 분류해 둔 줄입니다 — 화면에서 손으로 ${W.recon}해 주세요`
           : `이미 정리된 입금입니다${dep.category ? ` (${dep.category})` : ""} — 먼저 되돌려 주세요`,
     };
   }
@@ -107,7 +133,7 @@ export async function linkDepositToQuoteCore(
   `);
   if (!q) return { ok: false, error: "판매를 찾을 수 없습니다" };
   const remainQ = Number(q.total) - Number(q.linked);
-  if (remainQ <= 0) return { ok: false, error: "그 판매는 이미 금액이 다 이어져 있습니다" };
+  if (remainQ <= 0) return { ok: false, error: `그 판매는 이미 금액이 다 ${W.recon}돼 있습니다` };
   const linkAmt = Math.min(dep.remain, remainQ);
   await db.transaction(async (tx) => {
     await tx.execute(sql`
@@ -120,14 +146,26 @@ export async function linkDepositToQuoteCore(
       WHERE id = ${cashTxnId}
     `);
   });
-  const [qp] = await db.execute<{ supplier_name: string | null; customer_id: number | null; cname: string | null }>(sql`
-    SELECT q.supplier_name, q.customer_id, c.name cname
+  const [qp] = await db.execute<{ supplier_name: string | null; customer_id: number | null; cname: string | null; quote_no: string }>(sql`
+    SELECT q.supplier_name, q.customer_id, c.name cname, q.quote_no
     FROM quote q LEFT JOIN customer c ON c.id = q.customer_id WHERE q.id = ${quoteId}
   `);
   const payer = payerKeyOf("통장", dep.description);
   if (qp?.supplier_name) await learnAlias(payer, `S:${qp.supplier_name}`, `거래처 ${qp.supplier_name}`);
   else if (qp?.customer_id) await learnAlias(payer, `C:${qp.customer_id}`, qp.cname ?? `고객 ${qp.customer_id}`);
-  return { ok: true };
+  /* ⭐ 최근 한 일 — 커밋 뒤. 되돌리기 = undoDepositLink(cashTxnId) (그 입금의 판매 연결 전부를 푼다) */
+  const activity: ActivityEntry = {
+    ym: dep.date.slice(0, 7),
+    actor: uid,
+    how: howOfMethod(method),
+    verb: "대사",
+    target: { table: "cash_txn", id: cashTxnId },
+    amount: linkAmt,
+    label: `입금 ${won(linkAmt)} ${payer} ↔ ${qp?.quote_no ?? `#${quoteId}`} ${qp?.supplier_name ?? qp?.cname ?? ""} 판매`.replace(/\s+/g, " ").trim(),
+    undo: { kind: "deposit", args: { cashTxnId } },
+  };
+  if (!opts.quiet) await logActivity(activity);
+  return { ok: true, activity };
 }
 
 export async function linkDepositsToQuoteCore(
@@ -135,14 +173,35 @@ export async function linkDepositsToQuoteCore(
   cashTxnIds: number[],
   uid: number | null,
   method: "수동" | "자동" = "수동",
-): Promise<{ ok: true; applied: number } | { ok: false; error: string }> {
+  opts: ActivityOpts = {},
+): Promise<{ ok: true; applied: number; activity?: ActivityEntry } | { ok: false; error: string }> {
   const ids = [...new Set((cashTxnIds ?? []).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 8);
-  if (ids.length === 0) return { ok: false, error: "이을 입금을 골라 주세요" };
+  if (ids.length === 0) return { ok: false, error: `${W.recon}할 입금을 골라 주세요` };
   let applied = 0;
+  const items: UndoItem[] = [];
+  let ym: string | null = null;
   for (const id of ids) {
-    const r = await linkDepositToQuoteCore(id, quoteId, uid, method);
-    if (!r.ok) return applied === 0 ? r : { ok: false, error: `${applied}줄까지 이었고 그다음에서 멈췄습니다 — ${r.error}` };
+    const r = await linkDepositToQuoteCore(id, quoteId, uid, method, { quiet: true });
+    if (!r.ok) return applied === 0 ? r : { ok: false, error: `${applied}줄까지 ${W.recon}했고 그다음에서 멈췄습니다 — ${r.error}` };
     applied++;
+    items.push(...activityItems(r.activity));
+    ym ??= r.activity?.ym ?? null;
   }
-  return { ok: true, applied };
+  /* ⭐ 최근 한 일 — 입금 줄마다 되돌리기(items), 한 줄 n건 */
+  const activity: ActivityEntry =
+    items.length === 1
+      ? { ym, actor: uid, how: howOfMethod(method), verb: "대사", target: { table: "quote", id: quoteId }, amount: items[0].amount ?? null, label: items[0].label, undo: { kind: items[0].kind, args: items[0].args } }
+      : {
+          ym,
+          actor: uid,
+          how: howOfMethod(method),
+          verb: "대사",
+          target: { table: "quote", id: quoteId },
+          n: items.length,
+          amount: items.reduce((s, i) => s + (i.amount ?? 0), 0),
+          label: `입금 ${items.length}줄 ↔ 판매 한 건 ${W.recon} (나눠 받음)`,
+          undo: { kind: "bulk", args: { items } },
+        };
+  if (!opts.quiet) await logActivity(activity);
+  return { ok: true, applied, activity };
 }

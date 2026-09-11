@@ -13,6 +13,10 @@ import { linkDepositToQuoteCore } from "./deposit-core";
 import { runAndSaveAudit, type AuditItem } from "./self-audit";
 import { POS_REASONS } from "./pos-vocab";
 import { revalidateFinance } from "./fin-revalidate";
+import { logActivity } from "./fin-activity";
+import { W } from "./fin-words";
+
+const won = (n: number) => n.toLocaleString("ko-KR");
 
 export async function traceLinkDeposit(
   cashTxnId: number,
@@ -55,23 +59,31 @@ export async function markSaleSettledAside(
   const s = await getSession();
   const ref = `quote:${quoteId}`;
   if (undo) {
-    const gone = await db.execute<{ id: number }>(sql`
+    const gone = await db.execute<{ id: number; amount: number }>(sql`
       DELETE FROM recon_match WHERE kind = '이체입금' AND src_table = '별도수령'
-        AND ref_table = 'quote' AND ref_id = ${quoteId} RETURNING id
+        AND ref_table = 'quote' AND ref_id = ${quoteId} RETURNING id, amount
     `);
     if (gone.length === 0) return { ok: false, error: "별도 수령 표시가 없습니다" };
     // 사유도 같이 지운다 — 자국만 지우면 사유가 유령으로 남아 화면마다 말이 갈린다
     await db.execute(sql`DELETE FROM pos_note WHERE kind = 'transfer' AND ref = ${ref}`);
+    await logActivity({
+      actor: s?.uid ?? null,
+      how: "사람",
+      verb: "되돌리기",
+      target: { table: "quote", id: quoteId },
+      amount: gone.reduce((a, g) => a + Number(g.amount), 0),
+      label: `${W.undo}: 판매 #${quoteId} 별도 수령 표시 지우기 (${won(gone.reduce((a, g) => a + Number(g.amount), 0))})`,
+    });
   } else {
     if (reason !== undefined && !(POS_REASONS as readonly string[]).includes(reason)) {
       return { ok: false, error: "사유가 올바르지 않습니다" };
     }
-    const [q] = await db.execute<{ id: number; total: number; d: string; linked: string }>(sql`
-      SELECT q.id, q.total_amount total,
+    const [q] = await db.execute<{ id: number; total: number; d: string; linked: string; quote_no: string; who: string }>(sql`
+      SELECT q.id, q.total_amount total, q.quote_no, COALESCE(q.supplier_name, c.name, '손님') who,
              to_char(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date), 'YYYY-MM-DD') d,
              COALESCE((SELECT SUM(m.amount) FROM recon_match m
                WHERE m.kind = '이체입금' AND m.ref_table = 'quote' AND m.ref_id = q.id AND m.status = '확정'), 0)::bigint linked
-      FROM quote q WHERE q.id = ${quoteId} AND q.status = '성사'
+      FROM quote q LEFT JOIN customer c ON c.id = q.customer_id WHERE q.id = ${quoteId} AND q.status = '성사'
     `);
     if (!q) return { ok: false, error: "판매를 찾을 수 없습니다" };
     const dupe = await db.execute<{ id: number }>(sql`
@@ -82,7 +94,7 @@ export async function markSaleSettledAside(
     /* 🔴 남은 돈만 표시한다 (2026-09-10) — 나눠 받은 판매(일부는 통장, 나머지는 개인계좌)에서
        전엔 「이미 입금과 이어졌다」며 거절해 사장님이 정리할 길이 없었다 */
     const remain = Number(q.total) - Number(q.linked);
-    if (remain <= 0) return { ok: false, error: "이미 통장 입금과 다 이어진 판매입니다" };
+    if (remain <= 0) return { ok: false, error: `이미 통장 입금과 다 ${W.recon}된 판매입니다` };
     await db.execute(sql`
       INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
       VALUES ('이체입금', '별도수령', 0, 'quote', ${quoteId}, ${remain}, '확정', '수동', ${s?.uid ?? null}, now())
@@ -97,6 +109,18 @@ export async function markSaleSettledAside(
         WHERE pos_note.kind = 'transfer'
       `);
     }
+    /* ⭐ 최근 한 일 — 「아직 안 들어옴」은 보류, 나머지(개인통장·현금)는 제외. 되돌리기 = markSaleSettledAside(quoteId, true) */
+    const hold = reason === "아직 안 들어옴";
+    await logActivity({
+      ym: q.d.slice(0, 7),
+      actor: s?.uid ?? null,
+      how: "사람",
+      verb: hold ? "보류" : "제외",
+      target: { table: "quote", id: quoteId },
+      amount: remain,
+      label: `${hold ? W.hold : W.ignore}: 판매 ${q.quote_no} ${q.who} ${won(remain)} — ${reason ?? "통장 밖 수령"}`,
+      undo: { kind: "aside", args: { quoteId } },
+    });
   }
   revalidateFinance();
   revalidatePath("/finance/trace");

@@ -19,8 +19,23 @@ import { getSession, hasPerm } from "@/lib/auth";
 import { SPLITTABLE, EXCLUSIVE } from "@/lib/payments";
 import { updateSaleHead } from "./sale-edit";
 import { autoMatchPosDayCore, forgetMatches, insertMatch, parseAppKey, posDayData, type AppKind } from "./pos-close";
-import { POS_REASONS, RECON_METHODS } from "./pos-vocab";
+import { POS_REASONS, PREPAID_REASON, RECON_METHODS } from "./pos-vocab";
 import { revalidateFinance } from "./fin-revalidate";
+import { logActivity } from "./fin-activity";
+import type { UndoItem } from "./fin-activity-types";
+import { W } from "./fin-words";
+
+const won = (n: number) => n.toLocaleString("ko-KR");
+
+/** 기록 label 용 — 판매 번호·이름 (한 번 읽는다) */
+async function saleLabel(quoteId: number): Promise<{ no: string; who: string; pm: string | null; day: string } | null> {
+  const [q] = await db.execute<{ no: string; who: string; pm: string | null; day: string }>(sql`
+    SELECT q.quote_no no, COALESCE(q.supplier_name, c.name, '손님') who, q.payment_method pm,
+           to_char(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date), 'YYYY-MM-DD') AS "day"
+    FROM quote q LEFT JOIN customer c ON c.id = q.customer_id WHERE q.id = ${quoteId}
+  `);
+  return q ?? null;
+}
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const REF_TABLE = { quote: "quote", qp: "quote_payment", rp: "receivable_payment" } as const;
@@ -49,25 +64,25 @@ async function posRemain(posId: number): Promise<{ amount: number; remain: numbe
   return { amount: Number(p.amount), remain: Number(p.amount) - Number(p.linked), day: p.day };
 }
 
-/** 그 앱 항목의 남은 돈 — quote 는 총액, 분할·수금은 그 줄의 금액 */
-async function appRemain(kind: AppKind, id: number): Promise<{ amount: number; remain: number } | null> {
+/** 그 앱 항목의 남은 돈 — quote 는 총액, 분할·수금은 그 줄의 금액 (quoteId 는 기록 label 용) */
+async function appRemain(kind: AppKind, id: number): Promise<{ amount: number; remain: number; quoteId: number } | null> {
   const table = REF_TABLE[kind];
   const linked = sql`(SELECT COALESCE(SUM(rm.amount), 0) FROM recon_match rm
     WHERE rm.kind = '포스결제' AND rm.status = '확정' AND rm.ref_table = ${table} AND rm.ref_id = t.id)`;
   const [r] =
     kind === "quote"
-      ? await db.execute<{ amount: number; linked: string }>(sql`
-          SELECT t.total_amount amount, ${linked} linked FROM quote t WHERE t.id = ${id}
+      ? await db.execute<{ amount: number; linked: string; quote_id: number }>(sql`
+          SELECT t.total_amount amount, ${linked} linked, t.id quote_id FROM quote t WHERE t.id = ${id}
         `)
       : kind === "qp"
-        ? await db.execute<{ amount: number; linked: string }>(sql`
-            SELECT t.amount, ${linked} linked FROM quote_payment t WHERE t.id = ${id}
+        ? await db.execute<{ amount: number; linked: string; quote_id: number }>(sql`
+            SELECT t.amount, ${linked} linked, t.quote_id FROM quote_payment t WHERE t.id = ${id}
           `)
-        : await db.execute<{ amount: number; linked: string }>(sql`
-            SELECT t.amount, ${linked} linked FROM receivable_payment t WHERE t.id = ${id}
+        : await db.execute<{ amount: number; linked: string; quote_id: number }>(sql`
+            SELECT t.amount, ${linked} linked, t.quote_id FROM receivable_payment t WHERE t.id = ${id}
           `);
   if (!r) return null;
-  return { amount: Number(r.amount), remain: Number(r.amount) - Number(r.linked) };
+  return { amount: Number(r.amount), remain: Number(r.amount) - Number(r.linked), quoteId: Number(r.quote_id) };
 }
 
 export async function autoMatchPosDay(day: string): Promise<{ ok: true; matched: number } | { ok: false; error: string }> {
@@ -93,14 +108,26 @@ export async function linkPos(
   if (!k) return { ok: false, error: "판매 항목이 올바르지 않습니다" };
   const p = await posRemain(posId);
   if (!p) return { ok: false, error: "POS 결제 건을 찾을 수 없습니다" };
-  if (p.remain <= 0) return { ok: false, error: "이 POS 결제는 이미 다 붙었습니다 — 먼저 풀어 주세요" };
+  if (p.remain <= 0) return { ok: false, error: `이 POS 결제는 이미 다 ${W.recon}됐습니다 — 먼저 풀어 주세요` };
   const a = await appRemain(k.kind, k.id);
   if (!a) return { ok: false, error: "판매 항목을 찾을 수 없습니다" };
   if (a.remain <= 0) return { ok: false, error: "이 판매는 이미 다 채워졌습니다 — 먼저 풀어 주세요" };
   const amount = Math.min(p.remain, a.remain);
   const made = await insertMatch(posId, k.kind, k.id, amount, "수동", g.uid);
-  if (!made) return { ok: false, error: "이미 이어진 짝입니다 — 먼저 풀어 주세요" };
+  if (!made) return { ok: false, error: `이미 ${W.recon}된 짝입니다 — 먼저 풀어 주세요` };
   await db.execute(sql`DELETE FROM pos_note WHERE ref IN (${"pos:" + posId}, ${appKeyStr})`);
+  /* ⭐ 최근 한 일 — 되돌리기 = unlinkMatch(matchId) */
+  const q = await saleLabel(a.quoteId);
+  await logActivity({
+    ym: p.day.slice(0, 7),
+    actor: g.uid,
+    how: "사람",
+    verb: "대사",
+    target: { table: "recon_match", id: made },
+    amount,
+    label: `POS ${p.day.slice(5)} ${won(amount)} ↔ ${q?.no ?? appKeyStr} ${q?.who ?? ""} (${W.reconCard})`,
+    undo: { kind: "pos", args: { matchId: made } },
+  });
   refresh();
   return { ok: true, amount };
 }
@@ -116,24 +143,43 @@ export async function linkPosMulti(
   if (!k) return { ok: false, error: "판매 항목이 올바르지 않습니다" };
   const ids = [...new Set(posIds.filter((n) => Number.isInteger(n) && n > 0))];
   if (ids.length === 0) return { ok: false, error: "POS 결제 건을 골라 주세요" };
-  if (ids.length > 10) return { ok: false, error: "한 번에 10건까지 붙일 수 있습니다" };
-  let left = (await appRemain(k.kind, k.id))?.remain ?? 0;
+  if (ids.length > 10) return { ok: false, error: `한 번에 10건까지 ${W.recon}할 수 있습니다` };
+  const a0 = await appRemain(k.kind, k.id);
+  let left = a0?.remain ?? 0;
   if (left <= 0) return { ok: false, error: "이 판매는 이미 다 채워졌습니다 — 먼저 풀어 주세요" };
   let n = 0;
   let total = 0;
+  const items: UndoItem[] = [];
+  let day = "";
   for (const posId of ids) {
     if (left <= 0) break;
     const p = await posRemain(posId);
     if (!p || p.remain <= 0) continue;
     const amount = Math.min(p.remain, left);
-    if (!(await insertMatch(posId, k.kind, k.id, amount, "수동", g.uid))) continue;
+    const made = await insertMatch(posId, k.kind, k.id, amount, "수동", g.uid);
+    if (!made) continue;
     await db.execute(sql`DELETE FROM pos_note WHERE ref = ${"pos:" + posId}`);
     left -= amount;
     total += amount;
     n++;
+    day ||= p.day;
+    items.push({ kind: "pos", args: { matchId: made }, label: `POS ${p.day.slice(5)} ${won(amount)}`, amount });
   }
-  if (n === 0) return { ok: false, error: "붙일 수 있는 건이 없습니다 — 이미 이어졌거나 남은 돈이 없습니다" };
+  if (n === 0) return { ok: false, error: `${W.recon}할 수 있는 건이 없습니다 — 이미 ${W.recon}됐거나 남은 돈이 없습니다` };
   await db.execute(sql`DELETE FROM pos_note WHERE ref = ${appKeyStr}`);
+  /* ⭐ 최근 한 일 — POS 여러 건 ↔ 판매 하나: 한 줄 n건, 건별 되돌리기 = unlinkMatch(matchId) */
+  const q = await saleLabel(a0!.quoteId);
+  await logActivity({
+    ym: day.slice(0, 7),
+    actor: g.uid,
+    how: "사람",
+    verb: "대사",
+    target: { table: "quote", id: a0!.quoteId },
+    n,
+    amount: total,
+    label: `POS ${n}건 ${won(total)} ↔ ${q?.no ?? appKeyStr} ${q?.who ?? ""} (${W.reconCard}, 나눠 긁음)`,
+    undo: { kind: "bulk", args: { items } },
+  });
   refresh();
   return { ok: true, n, amount: total };
 }
@@ -142,8 +188,8 @@ export async function linkPosMulti(
 export async function unlinkMatch(matchId: number): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  const rows = await forgetMatches(sql`id = ${matchId} AND kind = '포스결제'`, "한 줄 풀기", g.uid);
-  if (rows === 0) return { ok: false, error: "이어진 자국이 없습니다" };
+  const rows = await forgetMatches(sql`id = ${matchId} AND kind = '포스결제'`, "한 줄 풀기", g.uid); // 기록은 forgetMatches 가
+  if (rows === 0) return { ok: false, error: `${W.recon}된 ${W.reconLog}이 없습니다` };
   refresh();
   return { ok: true };
 }
@@ -157,7 +203,7 @@ export async function unlinkPos(posId: number): Promise<{ ok: true } | { ok: fal
     "POS 건 통째로 풀기",
     g.uid,
   );
-  if (rows === 0) return { ok: false, error: "이어진 자국이 없습니다" };
+  if (rows === 0) return { ok: false, error: `${W.recon}된 ${W.reconLog}이 없습니다` };
   refresh();
   return { ok: true };
 }
@@ -187,6 +233,18 @@ export async function setPosNote(input: {
     VALUES (${input.day}::date, ${input.kind}, ${input.ref}, ${input.reason}, ${input.memo?.trim() || null})
     ON CONFLICT (ref) DO UPDATE SET reason = EXCLUDED.reason, memo = EXCLUDED.memo, day = EXCLUDED.day, kind = EXCLUDED.kind
   `);
+  /* ⭐ 최근 한 일 — 선결제·아직 안 들어옴은 「보류」, 나머지 사유는 「제외」. 되돌리기 = clearPosNote(ref)
+     🔴 args: ref 는 "pos:12" 꼴 그대로(clearPosNote 의 인자), refTable·refId 는 그걸 쪼갠 것 */
+  const [refTable, refIdStr] = input.ref.split(":");
+  const hold = input.reason === PREPAID_REASON || input.reason === "아직 안 들어옴";
+  await logActivity({
+    ym: input.day.slice(0, 7),
+    actor: g.uid,
+    how: "사람",
+    verb: hold ? "보류" : "제외",
+    label: `${hold ? W.hold : W.ignore}: ${input.kind === "pos_only" ? "POS 결제" : "앱 판매"} ${input.ref} — ${input.reason}${input.memo?.trim() ? ` (${input.memo.trim()})` : ""} (${input.day.slice(5)})`,
+    undo: { kind: "note", args: { ref: input.ref, refTable, refId: Number(refIdStr) } },
+  });
   refresh();
   return { ok: true };
 }
@@ -194,7 +252,18 @@ export async function setPosNote(input: {
 export async function clearPosNote(ref: string): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  await db.execute(sql`DELETE FROM pos_note WHERE ref = ${ref}`);
+  const gone = await db.execute<{ reason: string; d: string }>(sql`
+    DELETE FROM pos_note WHERE ref = ${ref} RETURNING reason, to_char(day, 'YYYY-MM-DD') d
+  `);
+  if (gone[0]) {
+    await logActivity({
+      ym: gone[0].d.slice(0, 7),
+      actor: g.uid,
+      how: "사람",
+      verb: "되돌리기",
+      label: `${W.undo}: 사유 지우기 ${ref} — ${gone[0].reason}`,
+    });
+  }
   refresh();
   return { ok: true };
 }
@@ -211,8 +280,18 @@ export async function fixSaleToPos(
   const g = await guard();
   if (!g.ok) return g;
   if (!(RECON_METHODS as readonly string[]).includes(method)) return { ok: false, error: "수단이 올바르지 않습니다" };
+  const before = await saleLabel(quoteId); // 기록에 이전 값을 남기려고
   const r = await updateSaleHead({ quoteId, paymentMethod: method, payments: null });
   if (!r.ok) return r;
+  /* ⭐ 최근 한 일 — 수정은 되돌리기 없음, 이전 값이 label 에 (자동 대사 n건은 autoMatchPosDayCore 가 따로 남긴다) */
+  await logActivity({
+    ym: (before?.day ?? day).slice(0, 7),
+    actor: g.uid,
+    how: "사람",
+    verb: "수정",
+    target: { table: "quote", id: quoteId },
+    label: `수정: 판매 ${before?.no ?? `#${quoteId}`} ${before?.who ?? ""} 결제 ${before?.pm ?? "?"} → ${method} (단말기 기준)`,
+  });
   const matched = DAY_RE.test(day) ? await autoMatchPosDayCore(day, g.uid) : 0;
   refresh();
   return { ok: true, matched };
@@ -224,8 +303,17 @@ export async function fixSaleMethod(quoteId: number, method: string): Promise<{ 
   if (!g.ok) return g;
   const allowed: readonly string[] = [...SPLITTABLE, ...EXCLUSIVE];
   if (!allowed.includes(method)) return { ok: false, error: "수단이 올바르지 않습니다" };
+  const before = await saleLabel(quoteId);
   const r = await updateSaleHead({ quoteId, paymentMethod: method, payments: null });
   if (!r.ok) return r;
+  await logActivity({
+    ym: before?.day.slice(0, 7) ?? null,
+    actor: g.uid,
+    how: "사람",
+    verb: "수정",
+    target: { table: "quote", id: quoteId },
+    label: `수정: 판매 ${before?.no ?? `#${quoteId}`} ${before?.who ?? ""} 결제 ${before?.pm ?? "?"} → ${method}`,
+  });
   refresh();
   return { ok: true };
 }
@@ -235,8 +323,17 @@ export async function moveSaleDate(quoteId: number, day: string): Promise<{ ok: 
   const g = await guard();
   if (!g.ok) return g;
   if (!DAY_RE.test(day)) return { ok: false, error: "날짜가 올바르지 않습니다" };
+  const before = await saleLabel(quoteId);
   const r = await updateSaleHead({ quoteId, workDate: day });
   if (!r.ok) return r;
+  await logActivity({
+    ym: day.slice(0, 7),
+    actor: g.uid,
+    how: "사람",
+    verb: "수정",
+    target: { table: "quote", id: quoteId },
+    label: `수정: 판매 ${before?.no ?? `#${quoteId}`} ${before?.who ?? ""} 작업일 ${before?.day ?? "?"} → ${day}`,
+  });
   const matched = await autoMatchPosDayCore(day, g.uid);
   refresh();
   return { ok: true, matched };
@@ -248,7 +345,7 @@ export async function closePosDay(day: string): Promise<{ ok: true } | { ok: fal
   if (!DAY_RE.test(day)) return { ok: false, error: "날짜가 올바르지 않습니다" };
   const data = await posDayData(day);
   if (!data.hasPos) return { ok: false, error: "이 날 POS 자료가 없습니다 — 매출리포트를 먼저 올려 주세요" };
-  if (data.openN > 0) return { ok: false, error: `아직 남은 건이 ${data.openN}건 있습니다 — 잇거나 사유를 남겨 주세요` };
+  if (data.openN > 0) return { ok: false, error: `아직 남은 건이 ${data.openN}건 있습니다 — ${W.recon}하거나 사유를 남겨 주세요` };
   await db.execute(sql`
     INSERT INTO pos_close (day, closed_by, pos_card_total, app_card_total, matched_n, notes)
     VALUES (${day}::date, ${g.uid}, ${data.posTotal}, ${data.appTotal}, ${data.matches.length},
@@ -257,6 +354,17 @@ export async function closePosDay(day: string): Promise<{ ok: true } | { ok: fal
       pos_card_total = EXCLUDED.pos_card_total, app_card_total = EXCLUDED.app_card_total,
       matched_n = EXCLUDED.matched_n, notes = EXCLUDED.notes
   `);
+  /* ⭐ 최근 한 일 — 되돌리기 = reopenPosDay(day) */
+  await logActivity({
+    ym: day.slice(0, 7),
+    actor: g.uid,
+    how: "사람",
+    verb: "마감",
+    n: Math.max(1, data.matches.length),
+    amount: data.posTotal,
+    label: `카드 일마감 ${day.slice(5)} · ${data.matches.length}건 · 단말기 ${won(data.posTotal)}`,
+    undo: { kind: "posClose", args: { day } },
+  });
   refresh();
   return { ok: true };
 }
@@ -264,7 +372,16 @@ export async function closePosDay(day: string): Promise<{ ok: true } | { ok: fal
 export async function reopenPosDay(day: string): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  await db.execute(sql`DELETE FROM pos_close WHERE day = ${day}::date`);
+  const gone = await db.execute<{ day: string }>(sql`DELETE FROM pos_close WHERE day = ${day}::date RETURNING to_char(day, 'YYYY-MM-DD') AS "day"`);
+  if (gone.length > 0) {
+    await logActivity({
+      ym: day.slice(0, 7),
+      actor: g.uid,
+      how: "사람",
+      verb: "되돌리기",
+      label: `${W.undo}: 카드 일마감 풀기 ${day.slice(5)}`,
+    });
+  }
   refresh();
   return { ok: true };
 }
