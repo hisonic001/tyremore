@@ -18,7 +18,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { payerKeyOf } from "./expense-cats";
-import { cashUsedMap, normName, partyMonthlyCash, partyStrictNames, samePartyName, similarPartyName } from "./recon-data";
+import { cashUsedMap, normName, partyMatchSql, partyMonthlyCash, partyStrictNames, samePartyName, similarPartyName } from "./recon-data";
 import { monthRange } from "./ym";
 
 export interface TaxRow {
@@ -937,21 +937,22 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
   /* 🔴 감사 B3(2026-08-25): 월정산 흐름은 「이 방향·이 달에 계산서가 있는 상대」만 —
      방향 무관 제외는 반대 방향 계산서를 영구 실종시키고(미쉐린 8월 매입 1,045,000원)
      0건짜리 죽은 카드를 만들었다 */
-  /* 🔴 2025 감사 F2(2026-08-26): 월정산은 채무(매입) 장부다. 매출 방향에 적용하면 우리가 준
-     돈이 「못 받은 돈」에 더해져 부호가 뒤집힌다(맥스런 "이 달 입금 −6,907,520"). 매출 계산서는
-     월정산 상대라도 일반 행(상계 후보)으로 본다. */
-  const monthlyRules =
-    direction === "매입"
-      ? await db.execute<{ biz_no: string; name_raw: string }>(sql`
-          SELECT r.biz_no, r.name_raw FROM tax_party_rule r
-          WHERE r.kind = '월정산'
-            AND EXISTS (SELECT 1 FROM tax_invoice t2 WHERE t2.is_active
-                          AND t2.direction = ${direction}
-                          AND t2.counterparty_biz_no = r.biz_no
-                          AND t2.write_date >= ${start}::date AND t2.write_date < ${nextStart}::date)
-          LIMIT 50
-        `)
-      : [];
+  /* 🔴 2025 감사 F2(2026-08-26): 월정산은 채무(매입) 장부다. 매출 방향에 그대로 적용하면 우리가 준
+     돈이 「못 받은 돈」에 더해져 부호가 뒤집힌다(맥스런 "이 달 입금 −6,907,520").
+     → 그래서 한동안 매출은 월정산 규칙을 **아예 안 물었다**. 그런데 화면 안내는 「월정산 거래처 —
+       잔액으로 봅니다」라고 말하면서 실제로는 매출 계산서가 한 장씩 늘어서 있었다 — 안내와 실제가
+       반대였다 (계산서 화면 개편 조사, 2026-09-11).
+     🔴 고침: 매출도 월정산 규칙을 적용한다. 부호 규칙(F2)은 그대로 지킨다 — 아래 paidMonth/paidAll 이
+       매출이면 「들어온 돈 − 나간 돈」으로 세므로 매출 월정산 잔액 = 계산서 합 − 들어온 돈 이다. */
+  const monthlyRules = await db.execute<{ biz_no: string; name_raw: string }>(sql`
+    SELECT r.biz_no, r.name_raw FROM tax_party_rule r
+    WHERE r.kind = '월정산'
+      AND EXISTS (SELECT 1 FROM tax_invoice t2 WHERE t2.is_active
+                    AND t2.direction = ${direction}
+                    AND t2.counterparty_biz_no = r.biz_no
+                    AND t2.write_date >= ${start}::date AND t2.write_date < ${nextStart}::date)
+    LIMIT 50
+  `);
   const monthlyBiz = monthlyRules.map((r) => r.biz_no);
   const notMonthly =
     monthlyBiz.length > 0
@@ -1190,9 +1191,203 @@ export async function taxOpenCount(ym: string): Promise<number> {
   return c.buy + c.sell;
 }
 
-/** 방향별 돈 확인 할 일 — 현황 카드가 "매입 a · 매출 b"로 보여 준다 (2026 감사 N1: 합만 보이면 탭 숫자와 어긋나 보였다) */
+/* ================================================================== */
+/* ⭐ 월정산 거래처 「기준일 이후 누적」 정본 (계산서 화면 개편 결정 7, 2026-09-11)
+ *
+ *   사장님: "실제로 제대로 앱을 운영한 건 8~9월, 과거 자료가 발목" — 미쉐린 「남은 돈」이
+ *   6,239만으로 보이던 건 2025-01 부터 누적한 과거 오차였다.
+ *   → 기준일 2026-08-25 · 시작 잔액 = 세무사 원장(2026-01-01~08-24) 잔액(사장님 8/26 「일치」 회신).
+ *     그 전 계산서·출금은 남은 돈 셈에서 뺀다(원장·검색엔 남음). 8/25 이후 것부터 더하고 뺀다.
+ *
+ *   남은 돈 = 시작 잔액 + Σ계산서(write_date ≥ 기준일, 무시 제외, 보는 달 말까지)
+ *                      − Σ지급(≥ 기준일, partyStrictNames 이름들로 통장 줄, 보는 달 말까지)
+ *   음수면 「그 전 것 갚음」(paidPast) 으로 보여 주고 남은 돈은 0.
+ *   결정 10: 다른 달 발행·다른 달 지급은 누적이라 흡수된다.
+ *
+ * 🔴 tax-book(화면 정본)과 taxOpenCounts(현황·마감)가 **이 하나**를 쓴다 — 숫자가 갈라지지 않게.
+ * 🔴 baseline 칸은 scripts/add-tax-baseline.ts 가 더한다. 아직 안 돌렸으면 기본값(2026-08-25 · 0)으로
+ *    동작한다 — 배포 순서 때문에 화면이 죽으면 안 된다.
+ */
+export const BASELINE_DEFAULT = "2026-08-25";
+
+let baselineColsReady = false;
+/** tax_party_rule 에 baseline_* 칸이 있나 — 있다고 한 번 확인되면 다시 안 묻는다(없으면 매번 확인: 스크립트를 돌린 직후 살아나게) */
+export async function hasBaselineCols(): Promise<boolean> {
+  if (baselineColsReady) return true;
+  const [r] = await db.execute<{ ok: boolean }>(sql`
+    SELECT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name = 'tax_party_rule' AND column_name = 'baseline_date') ok
+  `);
+  baselineColsReady = r?.ok === true;
+  return baselineColsReady;
+}
+
+export interface PartyRule {
+  bizNo: string;
+  nameRaw: string;
+  /** '경비' | '대행정산' | '무시' | '월정산' */
+  kind: string;
+  baselineDate: string;
+  baselineAmount: number;
+  baselineNote: string | null;
+}
+
+/** 상대 유형 사전 전부 (기준일·시작 잔액 포함) — 한 화면에 한 번만 읽는다 */
+export async function partyRules(): Promise<Map<string, PartyRule>> {
+  const hasBase = await hasBaselineCols();
+  const rows = await db.execute<{
+    biz_no: string; name_raw: string; kind: string; bd: string | null; ba: number | null; bn: string | null;
+  }>(
+    hasBase
+      ? sql`SELECT biz_no, name_raw, kind, to_char(baseline_date, 'YYYY-MM-DD') bd, baseline_amount ba, baseline_note bn
+            FROM tax_party_rule LIMIT 1000`
+      : sql`SELECT biz_no, name_raw, kind, NULL::text bd, NULL::int ba, NULL::text bn FROM tax_party_rule LIMIT 1000`,
+  );
+  return new Map(
+    rows.map((r) => [
+      r.biz_no,
+      {
+        bizNo: r.biz_no,
+        nameRaw: r.name_raw,
+        kind: r.kind,
+        baselineDate: r.bd ?? BASELINE_DEFAULT,
+        baselineAmount: Number(r.ba ?? 0),
+        baselineNote: r.bn ?? null,
+      },
+    ]),
+  );
+}
+
+export interface MonthlyRemain {
+  bizNo: string;
+  direction: "매입" | "매출";
+  baselineDate: string;
+  baselineAmount: number;
+  baselineNote: string | null;
+  /** 기준일 이후 ~ 보는 달 말까지 (무시 제외) */
+  invoiced: number;
+  /** 기준일 이후 ~ 보는 달 말까지 — 매입은 「나간 돈 − 들어온 돈」, 매출은 「들어온 돈 − 나간 돈」(F2) */
+  paid: number;
+  /** max(0, 시작 잔액 + invoiced − paid) */
+  remain: number;
+  /** 준 돈이 더 많을 때 그 초과분 — 「그 전 것 갚음」 */
+  paidPast: number;
+  monthInvoiced: number;
+  monthPaid: number;
+  /** 보는 달 열린(미대조·제안) 장 수 — 0이면 그 달은 끝난 것 */
+  openN: number;
+  invoices: { id: number; d: string; total: number; reconStatus: string; reconReason: string | null }[];
+  payments: { cashTxnId: number; d: string; amount: number; description: string }[];
+}
+
+export async function monthlyRemain(
+  bizNo: string,
+  ym: string,
+  direction: "매입" | "매출",
+  /** partyRules() 로 미리 읽었으면 넘긴다 — 상대마다 다시 안 읽게 */
+  rule?: PartyRule | null,
+): Promise<MonthlyRemain> {
+  const { start, nextStart } = monthRange(ym);
+  const biz = bizNo.replace(/\D/g, "");
+  const r = rule === undefined ? ((await partyRules()).get(biz) ?? null) : rule;
+  const baselineDate = r?.baselineDate ?? BASELINE_DEFAULT;
+  const baselineAmount = r?.baselineAmount ?? 0;
+
+  /* 계산서 — 기준일부터 보는 달 말까지, 이 방향. 「무시」는 채무에서 뺀다(수정상쇄·경비 규칙) */
+  const invs = await db.execute<{ id: number; d: string; total: number; recon_status: string; recon_reason: string | null }>(sql`
+    SELECT id, to_char(write_date, 'YYYY-MM-DD') d, total, recon_status, recon_reason
+    FROM tax_invoice
+    WHERE is_active AND counterparty_biz_no = ${biz} AND direction = ${direction}
+      AND write_date >= ${baselineDate}::date AND write_date < ${nextStart}::date
+    ORDER BY write_date, id LIMIT 400
+  `);
+  let invoiced = 0;
+  let monthInvoiced = 0;
+  let openN = 0;
+  for (const i of invs) {
+    const t = Number(i.total);
+    const inMonth = i.d >= start;
+    if (i.recon_status !== "무시") {
+      invoiced += t;
+      if (inMonth) monthInvoiced += t;
+    }
+    if (inMonth && (i.recon_status === "미대조" || i.recon_status === "제안")) openN++;
+  }
+
+  /* 지급 — 원장·월정산 카드와 같은 이름 정본(partyStrictNames + partyMatchSql). 감사 B5 그대로:
+     짧은 약칭은 안 쓴다(미쉐린로열 혼입 방지). 기준일부터 보는 달 말까지 날짜로 자른다 —
+     partyMonthlyCash 는 달 단위라 8/25 같은 달 중간 기준일을 못 자른다. */
+  const strict = await partyStrictNames(biz);
+  const isIn = direction === "매출";
+  const pays =
+    strict.length === 0
+      ? []
+      : await db.execute<{ id: number; d: string; in_amount: number; out_amount: number; description: string }>(sql`
+          SELECT id, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') d, in_amount, out_amount, description
+          FROM cash_txn
+          WHERE source = '통장' AND is_active AND (${partyMatchSql(strict)})
+            AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${baselineDate}::date
+            AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date
+          ORDER BY occurred_at, id LIMIT 400
+        `);
+  let paid = 0;
+  let monthPaid = 0;
+  const payments = pays.map((p) => {
+    const amount = isIn ? Number(p.in_amount) - Number(p.out_amount) : Number(p.out_amount) - Number(p.in_amount);
+    paid += amount;
+    if (p.d >= start) monthPaid += amount;
+    return { cashTxnId: Number(p.id), d: p.d, amount, description: p.description };
+  });
+
+  const raw = baselineAmount + invoiced - paid;
+  return {
+    bizNo: biz,
+    direction,
+    baselineDate,
+    baselineAmount,
+    baselineNote: r?.baselineNote ?? null,
+    invoiced,
+    paid,
+    remain: Math.max(0, raw),
+    paidPast: Math.max(0, -raw),
+    monthInvoiced,
+    monthPaid,
+    openN,
+    invoices: invs.map((i) => ({
+      id: Number(i.id),
+      d: i.d,
+      total: Number(i.total),
+      reconStatus: i.recon_status,
+      reconReason: i.recon_reason,
+    })),
+    payments,
+  };
+}
+
+/**
+ * 방향별 돈 확인 할 일 — 현황 카드가 "매입 a · 매출 b"로 보여 준다 (2026 감사 N1: 합만 보이면 탭 숫자와 어긋나 보였다)
+ *
+ * 🔴 계산서 화면 개편(2026-09-11, 결정 2·6): 월정산 거래처는 장 단위로 안 센다 — **거래처 1건**.
+ *    그 달 열린 계산서가 있고 남은 돈(monthlyRemain) > 0 일 때만 1. 남은 돈이 0이면 화면(taxBook)이
+ *    그 달 계산서를 알아서 끝내므로 여기서도 0 이어야 첫 화면·마감 숫자가 화면과 같다.
+ *    미쉐린 계산서 3장이 「할 일 3」로 보이던 것이 「미쉐린 1」이 된다.
+ */
 export async function taxOpenCounts(ym: string): Promise<{ buy: number; sell: number }> {
   const { start, nextStart } = monthRange(ym);
+  // 이 달 계산서가 있는 월정산 거래처 (방향별) — 열린 장 수까지 한 번에
+  const monthlyParties = await db.execute<{ biz_no: string; direction: "매입" | "매출"; open_n: number }>(sql`
+    SELECT r.biz_no, t.direction, count(*) FILTER (WHERE t.recon_status IN ('미대조', '제안'))::int open_n
+    FROM tax_party_rule r
+    JOIN tax_invoice t ON t.counterparty_biz_no = r.biz_no AND t.is_active
+    WHERE r.kind = '월정산'
+      AND t.write_date >= ${start}::date AND t.write_date < ${nextStart}::date
+    GROUP BY 1, 2 LIMIT 100
+  `);
+  const monthlyBiz = [...new Set(monthlyParties.map((m) => m.biz_no))];
+  const notMonthly =
+    monthlyBiz.length > 0
+      ? sql`AND t.counterparty_biz_no NOT IN (${sql.join(monthlyBiz.map((b) => sql`${b}`), sql`, `)})`
+      : sql``;
   const [r] = await db.execute<{ b: number; s: number }>(sql`
     SELECT count(*) FILTER (WHERE t.direction = '매입')::int b,
            count(*) FILTER (WHERE t.direction = '매출')::int s
@@ -1200,6 +1395,20 @@ export async function taxOpenCounts(ym: string): Promise<{ buy: number; sell: nu
     -- 🔴 2026-08-28: 손으로 적던 「무시만 제외」를 정본 LIVE 로 — 「대기」가 여기서만 세이던 문제
     WHERE t.is_active AND ${LIVE} AND NOT ${DONE}
       AND t.write_date >= ${start}::date AND t.write_date < ${nextStart}::date
+      ${notMonthly}
   `);
-  return { buy: Number(r?.b ?? 0), sell: Number(r?.s ?? 0) };
+  let buy = Number(r?.b ?? 0);
+  let sell = Number(r?.s ?? 0);
+  const open = monthlyParties.filter((m) => Number(m.open_n) > 0);
+  if (open.length > 0) {
+    const rules = await partyRules();
+    for (const m of open) {
+      const mr = await monthlyRemain(m.biz_no, ym, m.direction, rules.get(m.biz_no) ?? null);
+      if (mr.remain > 0) {
+        if (m.direction === "매입") buy++;
+        else sell++;
+      }
+    }
+  }
+  return { buy, sell };
 }

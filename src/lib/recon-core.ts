@@ -9,7 +9,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { cashUsedSql, normName } from "./recon-data";
-import { nearTolerance, taxCashData } from "./tax-recon";
+import { nearTolerance, taxCashData, type TaxCashData } from "./tax-recon";
 
 export type CoreResult<T> = ({ ok: true } & T) | { ok: false; error: string };
 
@@ -288,6 +288,14 @@ export type SureTaxPick =
 
 export async function sureTaxPicks(ym: string, direction: "매입" | "매출"): Promise<SureTaxPick[]> {
   const data = await taxCashData(direction, ym);
+  return sureTaxPicksFrom(data, direction);
+}
+
+/**
+ * 같은 판정을 **이미 읽어 둔** taxCashData 로 — 계산서 화면 정본(tax-book)이 매입·매출 자료를 한 번씩만
+ * 읽고 확실 후보까지 얻으려고 나눴다 (2026-09-11). 규칙은 위 한 벌 그대로, 질의만 안 겹친다.
+ */
+export async function sureTaxPicksFrom(data: TaxCashData, direction: "매입" | "매출"): Promise<SureTaxPick[]> {
   const picks: SureTaxPick[] = [];
   for (const r of data.rows) {
     if (r.fixFirst) continue;

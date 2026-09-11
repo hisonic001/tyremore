@@ -1243,7 +1243,8 @@ export const taxInvoice = pgTable(
   (t) => [
     uniqueIndex("tax_invoice_approval_no_key").on(t.approvalNo),
     check("tax_invoice_direction", sql`${t.direction} IN ('매출','매입')`),
-    check("tax_invoice_recon", sql`${t.reconStatus} IN ('미대조','제안','확정','무시')`),
+    /* '대기' = 「아직 안 들어옴」(markTaxWaiting, 2026-08-27). 실DB 는 그때 넓혀졌고 선언만 낡아 있었다 (2026-09-11 반영) */
+    check("tax_invoice_recon", sql`${t.reconStatus} IN ('미대조','제안','확정','무시','대기')`),
     index("idx_tax_invoice_biz").on(t.counterpartyBizNo),
   ],
 );

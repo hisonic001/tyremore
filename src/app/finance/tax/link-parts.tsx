@@ -1,10 +1,11 @@
 "use client";
 
 /**
- * ⭐ 잇기 공통 조각 (tax 재설계 배치2, 2026-08-25)
+ * ⭐ 맞추기 공통 조각 (tax 재설계 배치2, 2026-08-25 · 문구 쉬운 말로 2026-09-11)
  *
- *   tax-ui 에 2벌씩 복제돼 있던 후보 목록·통장 후보·통장 검색 렌더의 수렴.
- *   돈 확인 뷰(money-view)와 계산서 정리 뷰(tax-ui)가 같이 쓴다.
+ *   후보 목록·통장 후보·통장 검색 렌더의 단일 지점.
+ *   계산서 화면(tax-book-ui)과 입금 화면(deposits-ui)이 같이 쓴다 — 🔴 시그니처는 바꾸지 말 것.
+ *   말: 「잇기」→「맞추기」, 「자국」→「맞춘 기록」.
  */
 import { useState, useTransition } from "react";
 import { searchBankLines, type BankHit } from "@/lib/recon";
@@ -13,18 +14,18 @@ export interface PickItem {
   key: string | number;
   label: string;
   onPick: () => void;
-  /** 통장 줄 남은 금액 — 「골라서 잇기」 합계용 */
+  /** 통장 줄 남은 금액 — 「골라서 맞추기」 합계용 */
   amount?: number;
 }
 
-/** 골라서 잇기 — 체크 상태 (통장 줄 id → 남은 금액) */
+/** 골라서 맞추기 — 체크 상태 (통장 줄 id → 남은 금액) */
 export type Picked = Record<number, number>;
 export const pickedSum = (p: Picked) => Object.values(p).reduce((s, n) => s + n, 0);
 const won = (n: number) => n.toLocaleString("ko-KR");
 
 /**
- * ⭐ 골라서 잇기 막대 (사장님 요청 2026-08-26 — 규칙이 못 잡는 모든 합산 계산서의 최종 수단)
- *   체크한 줄 합 vs 계산서 남은 금액을 실시간으로 보여주고 버튼 하나로 잇는다.
+ * ⭐ 골라서 맞추기 막대 (사장님 요청 2026-08-26 — 규칙이 못 잡는 모든 합산 계산서의 최종 수단)
+ *   체크한 줄 합 vs 계산서 남은 금액을 실시간으로 보여주고 버튼 하나로 맞춘다.
  *   차이가 몇백 원(허용 오차)이면 서버가 잔돈·차액을 자동 정리한다.
  */
 export function MultiPickBar({
@@ -67,20 +68,20 @@ export function MultiPickBar({
           onClick={onLink}
           className="rounded-control bg-brand-600 px-3 py-1.5 font-semibold text-white active:bg-brand-700 disabled:opacity-40"
         >
-          고른 {n}줄 한 번에 잇기
+          고른 {n}줄 한 번에 맞추기
         </button>
       </span>
     </div>
   );
 }
 
-/** 후보 목록 — hint 한 줄 + [잇기] 버튼들. strong 이면 채움 버튼(확실한 추천) */
+/** 후보 목록 — hint 한 줄 + [맞추기] 버튼들. strong 이면 채움 버튼(확실한 추천) */
 export function PickList({
   hint,
   items,
   pending,
   strong,
-  buttonLabel = "잇기",
+  buttonLabel = "맞추기",
   picked,
   onToggle,
 }: {
@@ -89,7 +90,7 @@ export function PickList({
   pending: boolean;
   strong?: boolean;
   buttonLabel?: string;
-  /** 주면 줄마다 체크칸이 생긴다 (골라서 잇기) */
+  /** 주면 줄마다 체크칸이 생긴다 (골라서 맞추기) */
   picked?: Picked;
   onToggle?: (it: PickItem) => void;
 }) {
@@ -105,7 +106,7 @@ export function PickList({
                 type="checkbox"
                 checked={Number(it.key) in picked}
                 onChange={() => onToggle(it)}
-                aria-label="골라서 잇기"
+                aria-label="골라서 맞추기"
                 className="size-4 shrink-0 accent-brand-600"
               />
             )}
@@ -193,8 +194,8 @@ export function BankSearch({
         <p className="mt-1 rounded bg-amber-50 px-1.5 py-1 text-amber-800">
           <strong>↔ 표시</strong>는 반대 방향입니다 —{" "}
           {direction === "매입"
-            ? "수수료를 정산 입금에서 떼는 곳(온라인몰 정산사 등)이면 이어도 됩니다"
-            : "받을 돈을 매입 대금과 상계한 곳이면 이어도 됩니다"}
+            ? "수수료를 정산 입금에서 떼는 곳(온라인몰 정산사 등)이면 맞춰도 됩니다"
+            : "받을 돈을 매입 대금과 서로 지운 곳이면 맞춰도 됩니다"}
         </p>
       )}
       {hits !== null && hits.length > 0 && (

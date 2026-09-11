@@ -465,6 +465,41 @@ export async function markTaxWaiting(
   return { ok: true };
 }
 
+/**
+ * ⭐ 월정산 거래처 「시작 잔액 고치기」 (계산서 화면 개편 결정 7, 2026-09-11)
+ *
+ *   기준일(기본 2026-08-25)과 그날의 시작 잔액(세무사 원장 잔액 — 사장님 8/26 「일치」 회신)을 상대별로 둔다.
+ *   남은 돈 = 시작 잔액 + 기준일 이후 계산서 − 기준일 이후 지급 (정본 monthlyRemain, tax-recon.ts).
+ *   세무사 표에 없는 곳은 앱 추정을 넣어 두었으니(scripts/add-tax-baseline.ts) 명세서를 받으면 여기서 고친다.
+ *   음수도 허용 — 선급(딜러타이어 페이머니)이면 잔액이 마이너스일 수 있다.
+ */
+export async function setTaxBaseline(
+  bizNo: string,
+  date: string,
+  amount: number,
+  note: string | null,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const g = await guard();
+  if (!g.ok) return g;
+  const biz = String(bizNo ?? "").replace(/\D/g, "");
+  if (biz.length < 5) return { ok: false, error: "사업자번호가 올바르지 않습니다" };
+  if (!/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(date) || Number.isNaN(Date.parse(date)))
+    return { ok: false, error: "기준일은 2026-08-25 처럼 적어 주세요" };
+  if (!Number.isInteger(amount) || Math.abs(amount) > 5_000_000_000)
+    return { ok: false, error: "시작 잔액은 원 단위 정수로 적어 주세요" };
+  const memo = String(note ?? "").trim().slice(0, 200) || null;
+  const rows = await db.execute<{ biz_no: string }>(sql`
+    UPDATE tax_party_rule
+    SET baseline_date = ${date}::date, baseline_amount = ${amount}, baseline_note = ${memo}, updated_at = now()
+    WHERE biz_no = ${biz} AND kind = '월정산'
+    RETURNING biz_no
+  `);
+  if (rows.length === 0) return { ok: false, error: "월정산으로 지정된 상대가 아닙니다 — 먼저 「월정산」으로 지정해 주세요" };
+  revalidatePath("/finance/tax");
+  revalidatePath("/finance"); // 현황 「할 일」 수(taxOpenCounts)가 남은 돈에 따라 바뀐다
+  return { ok: true };
+}
+
 /** 월정산 「이 달 맞음」 되돌리기 */
 export async function undoMonthlyParty(
   bizNo: string,
