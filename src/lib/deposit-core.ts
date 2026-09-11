@@ -87,12 +87,16 @@ export async function linkDepositToQuoteCore(
         (사장님 제보 2026-08-29, /finance/deposits?ym=2026-07 · MARS-002944 염대현 535,000원).
         → 손으로 이을 때는 통과시키고, 아래 UPDATE 가 category 를 지워 손익에 두 번 안 잡히게 한다.
         🔴 자동(연간 실행기)은 그대로 막는다 — 사장님이 손수 분류해 둔 것을 기계가 뒤집으면 안 된다. */
-  if (dep.recon_status === "확정" && !(method === "수동" && dep.category === "판매입금")) {
+  /* ⭐ 「기타입금」도 손으로는 이을 수 있다 (사장님 제보 2026-09-11 — 김승래 예약금 10만원이 8/19 먼저 들어와
+        판매가 없던 때 「기타입금」으로 정리됐고, 8/21 판매를 등록하자 후보에서 빠져 「안 들어온 이체」로 남았다).
+        판매입금과 같은 이치 — 잇는 순간 아래 UPDATE 가 분류를 지운다. */
+  const RELINKABLE = ["판매입금", "기타입금"];
+  if (dep.recon_status === "확정" && !(method === "수동" && dep.category && RELINKABLE.includes(dep.category))) {
     return {
       ok: false,
       error:
-        dep.category === "판매입금"
-          ? "「판매입금」으로 분류해 둔 줄입니다 — 화면에서 손으로 이어 주세요"
+        dep.category && RELINKABLE.includes(dep.category)
+          ? `「${dep.category}」으로 분류해 둔 줄입니다 — 화면에서 손으로 이어 주세요`
           : `이미 정리된 입금입니다${dep.category ? ` (${dep.category})` : ""} — 먼저 되돌려 주세요`,
     };
   }
@@ -112,7 +116,7 @@ export async function linkDepositToQuoteCore(
     `);
     await tx.execute(sql`
       UPDATE cash_txn SET recon_status = ${linkAmt === dep.remain ? "확정" : "제안"},
-             category = CASE WHEN category = '판매입금' THEN NULL ELSE category END
+             category = CASE WHEN category IN ('판매입금', '기타입금') THEN NULL ELSE category END
       WHERE id = ${cashTxnId}
     `);
   });

@@ -85,11 +85,16 @@ export async function a1OpenTransfers(range: { from: string; to?: string }): Pro
   `);
   const out: A1Row[] = [];
   for (const r of rows) {
-    const cand = await db.execute<{ id: number; d: string; description: string }>(sql`
-      SELECT x.id, to_char(x.occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD') d, x.description
+    /* ⭐ 「기타입금」으로 정리된 줄도 후보 (사장님 제보 2026-09-11 — 예약금이 판매보다 먼저 들어오면 그때는 짝이 없어
+       기타입금으로 넘기게 되고, 판매를 등록한 뒤엔 후보에서 빠져 영영 「안 들어온 이체」로 남았다). 이으면 분류가 풀린다
+       (deposit-core.linkDepositToQuoteCore). 연결 자국이 이미 있는 줄은 제외 */
+    const cand = await db.execute<{ id: number; d: string; description: string; category: string | null }>(sql`
+      SELECT x.id, to_char(x.occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD') d, x.description, x.category
       FROM cash_txn x
       WHERE x.source = '통장' AND x.is_active AND x.in_amount = ${Number(r.total)}
-        AND x.recon_status IN ('미대조', '제안') AND x.category IS NULL
+        AND ((x.recon_status IN ('미대조', '제안') AND x.category IS NULL)
+             OR (x.category IN ('기타입금', '판매입금')
+                 AND NOT EXISTS (SELECT 1 FROM recon_match m WHERE m.src_table = 'cash_txn' AND m.src_id = x.id)))
         AND (x.occurred_at AT TIME ZONE 'Asia/Seoul')::date BETWEEN ${r.d}::date - 3 AND ${r.d}::date + 5
       LIMIT 2
     `);
@@ -100,7 +105,13 @@ export async function a1OpenTransfers(range: { from: string; to?: string }): Pro
       total: Number(r.total),
       who: r.who,
       candCount: cand.length,
-      cand: cand.length === 1 ? { cashTxnId: Number(cand[0].id), label: `${cand[0].d} 입금 「${cand[0].description.slice(0, 24)}」` } : null,
+      cand:
+        cand.length === 1
+          ? {
+              cashTxnId: Number(cand[0].id),
+              label: `${cand[0].d} 입금 「${cand[0].description.slice(0, 24)}」${cand[0].category ? ` (${cand[0].category}으로 정리돼 있음 — 이으면 풀림)` : ""}`,
+            }
+          : null,
     });
   }
   return out;

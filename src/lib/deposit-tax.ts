@@ -223,7 +223,9 @@ export async function transferSalesMissing(ym: string): Promise<TransferSale[]> 
            extract(epoch FROM c.occurred_at)::bigint ts,
            c.description, (c.in_amount - ${cashUsedSql("c")})::bigint remain
     FROM cash_txn c
-    WHERE c.source = '통장' AND c.is_active AND c.in_amount > 0 AND (c.category IS NULL OR c.category = '판매입금')
+    -- ⭐ 「기타입금」도 후보 (사장님 제보 2026-09-11 — 예약금이 판매보다 먼저 들어와 기타입금으로 넘긴 김승래 10만원).
+    --    이으면 분류가 풀린다 (deposit-core.linkDepositToQuoteCore)
+    WHERE c.source = '통장' AND c.is_active AND c.in_amount > 0 AND (c.category IS NULL OR c.category IN ('판매입금', '기타입금'))
       AND c.in_amount > ${cashUsedSql("c")}
       AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date - ${sql.raw(String(WIN))}
       AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date <= ${nextStart}::date + ${sql.raw(String(WIN))}
