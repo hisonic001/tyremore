@@ -18,8 +18,11 @@ import { Notice } from "@/components/ui/notice";
  *   파는 값은 줄마다 바로 고친다(`setListPrice` 정본). 고친 값은 화면 상태로만 갱신하고
  *   `router.refresh()` 를 부르지 않는다 — 열 줄 고치면 열 번 재질의가 되기 때문(풀 max 3).
  */
-export function BatteryTable({ view }: { view: BatteryPriceView }) {
-  const [brand, setBrand] = useState<string>(BATTERY_BRANDS[0]);
+export function BatteryTable({ view, initialBrand }: { view: BatteryPriceView; initialBrand?: string }) {
+  /** `?b=로케트` 로 바로 열 수 있다 — 즐겨찾기·공유용 */
+  const [brand, setBrand] = useState<string>(
+    initialBrand && (BATTERY_BRANDS as readonly string[]).includes(initialBrand) ? initialBrand : BATTERY_BRANDS[0],
+  );
   const [q, setQ] = useState("");
   /**
    * 🔴 기본은 **표 전체**다 (2026-09-12 운영 확인 뒤 바꿈).

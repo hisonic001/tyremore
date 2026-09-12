@@ -14,14 +14,19 @@ export const dynamic = "force-dynamic";
  *
  * 🔴 정본 함수 하나(`batteryPriceTable`)만 부른다. 화면 인라인 SQL 없음.
  */
-export default async function BatteryPricePage() {
+export default async function BatteryPricePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ b?: string }>;
+}) {
   await requirePerm("stock");
+  const { b } = await searchParams;
   const view = await batteryPriceTable();
 
   return (
     <PageShell width="lg">
       <PageHeader title="배터리 단가표" back={{ href: "/stock", label: "재고" }} />
-      <BatteryTable view={view} />
+      <BatteryTable view={view} initialBrand={b} />
     </PageShell>
   );
 }
