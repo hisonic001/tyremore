@@ -1057,6 +1057,37 @@ D-08 의 「채워 넣기」를 4단계로 다시 지었다.
   「날짜·결제 고치기」 저장은 자국을 지우고 새로 넣으므로 POS 짝이 풀리지만, 다음에 일마감을 열면
   자동 대조(1:1 정확)가 다시 붙인다 — 짝을 옮기는 방식(`reservation-pay.ts:205`)이 더 좋고 별건.
 
+### D-37. 「이번 주 정리」 한 줄 흐름 `/finance/weekly?step=N` — 돈관리 개편 3단계 ⭐ (2026-09-12)
+
+사장님 결정 11(한 줄로 이어진 흐름)·7(확실하면 앱이 붙이고 되돌리기만 · 후보 체크해서 한 번에)·14(되돌리기는
+「최근 한 일」 한 곳). 설계서 `~/.claude/plans/…distributed-orbit.md` 3-2, 실행 계획 `…enchanted-plotting-candy.md`.
+**같은 날 추가 결정**: 7단계 그대로(카드 마감을 흐름에 남김) · 한 번에 배포 · **PC 전용**.
+
+- **단계 목록·상태·남은 수의 정본은 `weekly-steps.ts` 하나** — 첫 화면 칸·흐름 진행막대·**마감 체크리스트**
+  (`closeChecklist` → `weekly-close.ts closeChecksOf`)가 전부 이걸 쓴다. 전엔 마감 목록이 9줄을 따로 만들어
+  **두 벌**이었다(계산서 `taxOpenCount` vs `taxOpenCounts`, 미지급 `payablesData` vs `payableTotal`).
+  🔴 마감 판정 불변 — hard 3항목(입금·지출·계산서)은 같은 함수. `posclose` 항목은 카드 단계에 흡수.
+- **각 단계는 3층**(`W.tierAuto`·`tierSure`·`tierCheck`·`tierHand`) — 어댑터 `weekly-deposits.ts`·`weekly-expenses.ts`·
+  `weekly-payables.ts` 는 **정본 판정 결과를 층으로 나눠 담기만** 한다(순수 `partitionDeposits`·`flipExact`, 시험 있음).
+  🔴 확실 3조건(`depositSurePicks`)·`exactPlan`·`resolve` 의 임계는 손대지 않았다. ⑤ 계산서는 `taxBook` 이 이미 3층.
+  「앱이 자동으로 한 것」 층은 **`fin_activity` 되읽기**(`autoActivity(ym, verb)`) — `cash_txn` 에 「누가 분류했나」가
+  없어 다른 길은 새 판정이 된다.
+- **일괄은 서버가 다시 계산한다** — `confirmSureDeposits(ym, ids?)`·`confirmSureWithdrawals(ym, ids?)`: 화면이 보낸
+  id 를 믿지 않고 `sure` 를 재계산해 **그 안에 있는 것만**(없으면 `skipped`). 낱장은 `quiet`, 끝에 **bulk 한 줄**
+  (`how:"자동"`, items 로 낱건 되돌리기). `autoLinkExact` 는 코어(`purchase-pay-core.ts`)를 떼어 동작·기록 불변.
+  🔴 기록은 코어 안에서만 — 액션·화면이 따로 남기면 두 줄. 새 `verb` 없음. 「이 단계 끝 ✓ · 다음 →」은 **링크일 뿐**
+  서버에 안 남긴다. 마지막 「이번 주 정리 끝 ✓」만 `app_setting.weekly_done_at`(공용 `app-setting.ts` 신설).
+- **`?back=weekly&step=N`** — 흐름 밖으로 나가는 링크는 「정비 내역에 등록하러」 하나. `/sales` 가 `back==="weekly"`
+  ∧ step 1~7 ∧ ym 온전할 때만 돌아가는 띠(화이트리스트). 이 저장소 최초의 `?step=` 화면 — `parseStep`(1~7 아니면
+  첫 미완 단계, 없으면 7). 탭 링크는 `?ym=` 만 붙어 **탭 클릭 = 첫 미완 단계**(의도).
+- 기존 화면은 URL·모양 그대로 — `deposits/page.tsx` 만 조립 4줄을 어댑터 한 줄로. ui 파일은 부품 **export 승격**만.
+  `month-close ↔ weekly-steps` 가 서로 import 하게 되어 읽기 `monthCloseStatusRead` 를 `month-close-status.ts` 로 뗐다.
+  `revalidatePath` 직접 부르던 액션 12곳은 `revalidateFinance()` 로 통일(전부 force-dynamic 이라 과잉 무해).
+- **안 한 것(4단계 몫)**: 규칙 학습 · 「올릴 때 자동 대조」 훅 · 카드 마감 인라인. 폰은 숨김만. 기존 4화면 3층 재배치는 5단계.
+- 🟡 `weekly-steps` 카드 문구가 판정과 어긋나 「🟡 인데 N일 다 됨」이 마감 목록에 떴다(2026-09-12 실DB 확인) → 문구를
+  cardWarn 과 같은 순서로 고침. 사용량 한도(429)로 갈래 넷이 한 번 죽었다 — 갈래는 **작은 단위로 저장**하며 진행할 것,
+  파일에 제어문자(NUL)를 넣지 말 것(git 이 바이너리로 본다).
+
 ---
 
 ## 미결 사항  *(2026-09-12 사장님과 함께 정리)*
