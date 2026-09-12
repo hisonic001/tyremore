@@ -174,20 +174,16 @@ export async function confirmTaxToBankCore(
   if (!opts.quiet) await logActivity(activity);
 
   /* 입금자명 학습 — 「이관우」= 한국타이어 정산 (T:사업자번호).
-     🔴 트랜잭션 **밖**에 둔다: 학습 실패가 확정을 되돌리면 안 되고, 잠금을 오래 붙들지도 않는다 */
-  try {
-    const key = normName(out.learn.payer);
-    if (key.length >= 2) {
-      await db.execute(sql`
-        INSERT INTO party_alias (alias_key, alias_raw, party_key, party_label)
-        VALUES (${key + "@" + out.learn.bizNo}, ${out.learn.payer}, ${"T:" + out.learn.bizNo}, ${out.learn.label})
-        ON CONFLICT (alias_key) DO UPDATE SET party_key = EXCLUDED.party_key,
-          party_label = EXCLUDED.party_label, updated_at = now()
-      `);
-    }
-  } catch {
-    /* 학습 실패는 확정을 막지 않는다 */
-  }
+     🔴 트랜잭션 **밖**에 둔다: 학습 실패가 확정을 되돌리면 안 되고, 잠금을 오래 붙들지도 않는다.
+     개편 4단계(2026-09-12): 손으로 심던 INSERT 를 정본 learnAlias 로 — 「☑ 다음부터 자동으로」를
+     끄면(learn:false) 안 배운다. 계산서 상대의 열쇠는 「이름@사업자번호」라 keyOverride 를 준다 */
+  const { learnAlias } = await import("./deposit-core");
+  await learnAlias(out.learn.payer, `T:${out.learn.bizNo}`, out.learn.label, {
+    uid,
+    learn: opts.learn,
+    quiet: opts.quiet,
+    keyOverride: normName(out.learn.payer) + "@" + out.learn.bizNo,
+  });
   return { ok: true, remaining: out.remaining, shortfall: out.shortfall, netted: out.netted, activity };
 }
 
@@ -208,7 +204,7 @@ export async function confirmTaxToBanksCore(
   let firstLabel = "";
   for (const id of ids) {
     /* 낱장 기록은 막고(quiet) 아래서 한 줄로 — 되돌리기가 계산서 단위(scope 통장)라 한 줄이 맞다 */
-    const r = await confirmTaxToBankCore(taxInvoiceId, id, uid, method, { quiet: true });
+    const r = await confirmTaxToBankCore(taxInvoiceId, id, uid, method, { quiet: true, learn: opts.learn });
     if (!r.ok) {
       return applied === 0 ? { ok: false, error: r.error } : { ok: false, error: `${applied}건까지 ${W.recon}했고 그다음에서 멈췄습니다 — ${r.error}` };
     }
@@ -289,7 +285,7 @@ export async function confirmBankToTaxesCore(
   const items: UndoItem[] = [];
   let ym: string | null = null;
   for (const id of ids) {
-    const r = await confirmTaxToBankCore(id, cashTxnId, uid, method, { quiet: true });
+    const r = await confirmTaxToBankCore(id, cashTxnId, uid, method, { quiet: true, learn: opts.learn });
     if (!r.ok) {
       return applied === 0 ? { ok: false, error: r.error } : { ok: false, error: `${applied}장까지 ${W.recon}했고 그다음에서 멈췄습니다 — ${r.error}` };
     }
@@ -398,6 +394,91 @@ export async function markTaxFixPairCore(
   };
   if (!opts.quiet) await logActivity(activity);
   return { ok: true, activity };
+}
+
+/* ==================================================================
+ * ⭐ 계산서 상대 유형 규칙 — 코어 (개편 4단계, 2026-09-12)
+ *
+ *   recon.ts:414 setTaxPartyRule · :768 removeTaxPartyRule 의 **본문 그대로**를 코어로 뗀 것이다
+ *   (계산서 되살리기 논리도 그대로). 「자동 규칙」 화면의 끄기·되살리기(party-rule.ts)가 같은
+ *   함수를 써야 규칙이 두 벌로 갈라지지 않는다. 액션은 권한 → 여기 → revalidate 만 한다.
+ *
+ * 🔴 quiet 면 기록을 안 남긴다 — 부르는 쪽(규칙 화면)이 「규칙 끄기/켜기」 한 줄을 대신 남긴다.
+ *    두 줄이 남으면 안 된다.
+ * ================================================================== */
+export type TaxPartyKind = "경비" | "대행정산" | "무시" | "월정산";
+
+export async function setTaxPartyRuleCore(
+  bizNoRaw: string,
+  nameRaw: string,
+  kind: TaxPartyKind,
+  uid: number | null,
+  opts: ActivityOpts = {},
+): Promise<{ ok: true; applied: number } | { ok: false; error: string }> {
+  const bizNo = String(bizNoRaw ?? "").replace(/\D/g, "");
+  if (bizNo.length < 5) return { ok: false, error: "사업자번호가 올바르지 않습니다" };
+  await db.execute(sql`
+    INSERT INTO tax_party_rule (biz_no, name_raw, kind)
+    VALUES (${bizNo}, ${nameRaw}, ${kind})
+    ON CONFLICT (biz_no) DO UPDATE SET kind = EXCLUDED.kind, name_raw = EXCLUDED.name_raw, updated_at = now()
+  `);
+  let applied = 0;
+  if (kind === "경비" || kind === "무시") {
+    const rows = await db.execute<{ id: number }>(sql`
+      UPDATE tax_invoice SET recon_status = '무시', recon_reason = ${kind}
+      WHERE is_active AND recon_status IN ('미대조', '제안') AND counterparty_biz_no = ${bizNo}
+      RETURNING id
+    `);
+    applied = rows.length;
+  }
+  /* ⭐ 최근 한 일 — 규칙 저장은 「사람」(결정 g). 되돌리기 = removeTaxPartyRule(bizNo) — 자동 정리분도 되살린다 */
+  if (!opts.quiet) {
+    await logActivity({
+      actor: uid,
+      how: "사람",
+      verb: "규칙",
+      n: Math.max(1, applied),
+      label: `${W.ruleSaved}: ${nameRaw} = ${kind}${applied > 0 ? ` (계산서 ${applied}장 ${W.ignore})` : ""}`,
+      undo: { kind: "rule", args: { bizNo } },
+    });
+  }
+  return { ok: true, applied };
+}
+
+/** 상대 유형 규칙 취소 — 자동 정리분을 **모든 달** 되살린다 (🔴 2025 감사 F7 그대로) */
+export async function removeTaxPartyRuleCore(
+  bizNoRaw: string,
+  uid: number | null,
+  opts: ActivityOpts = {},
+): Promise<{ ok: true; revived: number; kind: string; nameRaw: string } | { ok: false; error: string }> {
+  const biz = String(bizNoRaw ?? "").replace(/\D/g, "");
+  const [r] = await db.execute<{ kind: string; name_raw: string }>(sql`
+    SELECT kind, name_raw FROM tax_party_rule WHERE biz_no = ${biz}
+  `);
+  if (!r) return { ok: false, error: "그 상대의 규칙이 없습니다" };
+  await db.execute(sql`DELETE FROM tax_party_rule WHERE biz_no = ${biz}`);
+  // 대행정산·월정산은 계산서를 자동 정리한 적이 없어 되살릴 게 없다 (라벨만 지운다)
+  let revived = 0;
+  if (r.kind === "경비" || r.kind === "무시") {
+    const rows = await db.execute<{ id: number }>(sql`
+      UPDATE tax_invoice SET recon_status = '미대조', recon_reason = NULL
+      WHERE is_active AND counterparty_biz_no = ${biz} AND recon_status = '무시'
+        AND recon_reason = ${r.kind}
+      RETURNING id
+    `);
+    revived = rows.length;
+  }
+  /* ⭐ 최근 한 일 — 규칙 취소(되돌리기 없음: 다시 지정하면 된다) */
+  if (!opts.quiet) {
+    await logActivity({
+      actor: uid,
+      how: "사람",
+      verb: "되돌리기",
+      n: Math.max(1, revived),
+      label: `${W.undo}: 규칙 취소 ${r.name_raw} = ${r.kind}${revived > 0 ? ` (계산서 ${revived}장 되살림)` : ""}`,
+    });
+  }
+  return { ok: true, revived, kind: r.kind, nameRaw: r.name_raw };
 }
 
 /**

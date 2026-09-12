@@ -13,12 +13,14 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { cashUsedSql, normName } from "./recon-data";
+import { cashUsedSql } from "./recon-data";
 import { exactPlan } from "./payables-plan";
+import { learnAlias } from "./deposit-core";
 import { logActivity } from "./fin-activity";
-import type { ActivityEntry } from "./fin-activity-types";
-import type { ActivityOpts } from "./recon-core";
-import { W } from "./fin-words";
+import type { ActivityEntry, UndoItem } from "./fin-activity-types";
+import { activityItems, type ActivityOpts } from "./recon-core";
+import { weeklyPayableStep } from "./weekly-payables";
+import { autoReconLabel, W } from "./fin-words";
 
 export const won = (n: number) => n.toLocaleString("ko-KR");
 /** 통장 적요의 머리표(「[이체] 」)를 뗀 상대명 — purchase-pay 의 기록 글자가 쓴다 */
@@ -84,24 +86,19 @@ export async function autoLinkExactCore(
         UPDATE cash_txn SET recon_status = '확정', category = COALESCE(category, '매입대금')
         WHERE id = ${cashTxnId}
       `);
-      // 별명 학습 — payFromWithdrawal 과 같은 규칙
-      try {
-        const payer = payerOf(dep.description);
-        const key = normName(payer);
-        if (key.length >= 2) {
-          await tx.execute(sql`
-            INSERT INTO party_alias (alias_key, alias_raw, party_key, party_label)
-            VALUES (${key}, ${payer}, ${"S:" + supplier}, ${"거래처 " + supplier})
-            ON CONFLICT (alias_key) DO UPDATE SET party_key = EXCLUDED.party_key,
-              party_label = EXCLUDED.party_label, updated_at = now()
-          `);
-        }
-      } catch {
-        /* 학습 실패는 지급을 막지 않는다 */
-      }
       return { ok: true as const, n: plan.ids.length, amount: total };
     });
     if (!out.ok) return out;
+    /* 별명 학습 — payFromWithdrawal 과 같은 규칙. 개편 4단계(2026-09-12): 손 INSERT 를 정본
+       learnAlias 로 바꾸고 **트랜잭션 밖**으로 옮겼다(위 커밋 뒤). 전에는 트랜잭션 안에 있어서
+       학습 INSERT 가 실패하면 그 트랜잭션이 통째로 깨져 지급까지 되돌아갈 수 있었다
+       (Postgres 는 오류 뒤 같은 트랜잭션의 다음 질의를 전부 거부한다 — try/catch 로도 못 막는다).
+       「☑ 다음부터 자동으로」를 끄면 안 배우고, 일괄(quiet)이면 규칙 줄도 접는다 */
+    await learnAlias(payerOf(dep.description), `S:${supplier}`, `거래처 ${supplier}`, {
+      uid,
+      learn: opts.learn,
+      quiet: opts.quiet,
+    });
     /* ⭐ 최근 한 일 — 원단위 자동은 「자동」. 되돌리기 = undoPayFromWithdrawal(cashTxnId).
        quiet 면 안 남기고 activity 만 돌려준다 — 일괄(confirmSureWithdrawals)이 한 줄 n건으로 접는다 */
     const activity: ActivityEntry = {
@@ -120,4 +117,63 @@ export async function autoLinkExactCore(
   } catch (e) {
     return { ok: false, error: `${W.recon}하지 못했습니다: ${e instanceof Error ? e.message : String(e)}` };
   }
+}
+
+/**
+ * ⭐ 「짝 확실 N건 한 번에」 — 코어 (개편 3단계 2026-09-12; 4단계 2026-09-12 에 purchase-pay 에서 분리)
+ *
+ *   서버가 weeklyPayableStep(ym).sure(= payablesCardInfo.exact 를 flipExact 로 뒤집은 것)를 **다시
+ *   계산**하고, ids 가 오면 그 안에 있는 것만(없는 건 skipped — 화면이 열려 있던 사이 바뀐 것) 순차로
+ *   autoLinkExactCore(quiet) 를 돌린다 — 코어가 FOR UPDATE 안에서 exactPlan 을 재검사하므로 안 맞으면
+ *   그 건만 실패. 기록은 끝에 **bulk 한 줄**(how 자동·verb 지급, items = kind "pay" → undoPayFromWithdrawal 로
+ *   되돌리기 — fin-activity-types 의 undo 표 그대로). 🔴 낱장 기록은 quiet 로 막아 두 줄이 안 남는다.
+ *
+ *   왜 코어로 뗐나(4단계): 「올린 직후 자동 대조」(auto-recon.ts)가 입금·계산서와 나란히 준 돈까지
+ *   돌려야 하는데, 준 돈만 액션(권한 검사 + revalidate 포함)이라 한 요청 안에서 부르는 모양이
+ *   어긋났다. 본문은 **그대로** 옮겼다 — 판정·기록 불변.
+ *
+ * 🔴 "use server" 아님. 권한 검사 없음 — 부르는 쪽이 책임진다. revalidate 도 액션이 한다.
+ */
+export async function confirmSureWithdrawalsCore(
+  ym: string,
+  uid: number | null,
+  ids?: number[],
+  /** learn 만 본다 — 낱장 기록은 어차피 quiet(아래 한 줄로 접는다). 기본은 배움(결정 7③) */
+  opts: ActivityOpts = {},
+): Promise<{ ok: true; n: number; amount: number; failed: number; skipped: number }> {
+  let picked = (await weeklyPayableStep(ym)).sure;
+  let skipped = 0;
+  if (ids) {
+    const want = new Set(ids.filter((n) => Number.isInteger(n) && n > 0));
+    picked = picked.filter((s) => want.has(s.cashTxnId));
+    skipped = want.size - picked.length;
+  }
+  let n = 0;
+  let amount = 0;
+  let failed = 0;
+  const items: UndoItem[] = [];
+  for (const s of picked) {
+    // 🔴 순차 — 풀 max 3. 코어가 FOR UPDATE 로 다시 검사한다(안 맞으면 그 건만 실패)
+    const r = await autoLinkExactCore(s.cashTxnId, s.supplier, uid, { quiet: true, learn: opts.learn });
+    if (!r.ok) {
+      failed++;
+      continue;
+    }
+    n++;
+    amount += r.amount;
+    items.push(...activityItems(r.activity));
+  }
+  if (items.length > 0) {
+    await logActivity({
+      ym,
+      actor: uid,
+      how: "자동",
+      verb: "지급",
+      n: items.length,
+      amount: items.reduce((s, i) => s + (i.amount ?? 0), 0),
+      label: `${autoReconLabel(items.length)} · 지급 ${ym}${failed > 0 ? ` (실패 ${failed})` : ""}`,
+      undo: { kind: "bulk", args: { items } },
+    });
+  }
+  return { ok: true, n, amount, failed, skipped };
 }

@@ -190,6 +190,37 @@ export async function autoActivity(ym: string, verb: ActivityVerb): Promise<Auto
 }
 
 /**
+ * ⭐ 「최근 끈 규칙」 회색 목록 (개편 4단계 「자동 규칙」 화면, 2026-09-12)
+ *
+ *   끄기 = 그 줄을 지우는 것이라(party-rule-types.ts 머리말) 목록에서 사라진다. 그래서
+ *   「내가 뭘 껐더라」를 볼 곳이 없다 — fin_activity 를 **되읽어** 보여 준다.
+ *   되살리기 단추는 여기 두지 않는다(결정 14: 되돌리기는 「최근 한 일」 한 곳) — 링크만.
+ *
+ *   조건: verb='규칙' ∧ undo_kind='ruleOn'(= 끈 줄. 켠 줄은 'ruleOff' 라 안 걸린다)
+ *        ∧ undone_at IS NULL(이미 되살린 것은 목록에서 빠져야 한다).
+ * 🔴 이 표의 SQL 은 이 파일에만(머리말 원칙). LIMIT 50 — 회색 접힌 목록이라 그 이상은 안 읽힌다.
+ */
+export async function recentRuleOffs(
+  days = 30,
+): Promise<{ id: number; at: string; label: string; args: Record<string, unknown> | null }[]> {
+  const d = Math.max(1, Math.round(days));
+  const rows = await db.execute<{ id: number; at: string; label: string; undo_args: unknown }>(sql`
+    SELECT a.id, to_char(a.at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at, a.label, a.undo_args
+    FROM fin_activity a
+    WHERE a.verb = '규칙' AND a.undo_kind = 'ruleOn' AND a.undone_at IS NULL
+      AND a.at >= now() - (${d} || ' days')::interval
+    ORDER BY a.at DESC, a.id DESC
+    LIMIT 50
+  `);
+  return rows.map((r) => ({
+    id: Number(r.id),
+    at: r.at,
+    label: r.label,
+    args: parseUndoArgs(r.undo_args),
+  }));
+}
+
+/**
  * 마감 뒤 고침 띠 — 사장님 결정 15 「마감 뒤 고치면 기록에 남고 마감 때 숫자와의 차이를 보여 줌」.
  *   month_close 에 그 달이 없으면 null · after_close 줄(되돌린 것 제외)이 0이면 null(띠 안 띄움).
  *   closedProfit = 마감 때 headline.profit · nowProfit = 지금 finPL(ym).profit — 같은 식(computeHeadline 도 finPL).

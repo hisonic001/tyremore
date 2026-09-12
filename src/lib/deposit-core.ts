@@ -36,19 +36,108 @@ export const taxChainCoveredSql = sql`EXISTS (SELECT 1 FROM recon_match mq
   WHERE mq.kind = '매출계산서' AND mq.src_table = 'tax_invoice'
     AND mq.ref_table = 'quote' AND mq.ref_id = q.id AND mq.status = '확정')`;
 
-/** ⭐ 이름 별명 학습 (사장님 요청 2026-08-24) — 한 번 이어준 입금자명은 다음부터 바로 알아본다 */
-export async function learnAlias(aliasRaw: string, partyKey: string, partyLabel: string): Promise<void> {
-  const key = normName(aliasRaw);
-  if (key.length < 2) return;
+/**
+ * ⭐ 이름 별명 학습 정본 (사장님 요청 2026-08-24; 개편 4단계 2026-09-12 에 스위치·기록 추가)
+ *
+ *   한 번 이어준 입금자명은 다음부터 바로 알아본다. 전에는 **여섯 곳이 같은 INSERT 를 손으로
+ *   복제**하고 있었고 전부 「조용히·무조건」이라, 사장님이 「이번만 맞추고 규칙은 안 배우기」를
+ *   고를 길이 없었다(결정 7③ 「☑ 다음부터 자동으로」, 기본 켜짐).
+ *
+ *   · learn === false  → 아무것도 안 한다 (체크를 끈 것)
+ *   · 값이 이미 같으면 → 아무것도 안 한다 (같은 상대를 열 번 맞춰도 규칙 줄은 한 줄)
+ *   · 새로 배우거나 바뀌었을 때만 「최근 한 일」에 규칙 한 줄 — 되돌리기 = 그 규칙 끄기(ruleOff)
+ *   · quiet           → 규칙 줄 생략 (일괄이 한 줄로 접거나, 부르는 쪽이 제 규칙 줄을 이미 남길 때)
+ *   · keyOverride     → 계산서 상대(T:)는 열쇠가 「이름@사업자번호」다
+ *
+ * 🔴 **트랜잭션 밖**에서 부른다 (recon-core.ts:172 원칙) — 학습 실패가 본 일을 되돌리면 안 되고,
+ *    잠금을 오래 붙들지도 않는다.
+ */
+export async function learnAlias(
+  aliasRaw: string,
+  partyKey: string,
+  partyLabel: string,
+  opts: { uid?: number | null; learn?: boolean; quiet?: boolean; keyOverride?: string } = {},
+): Promise<void> {
+  if (opts.learn === false) return;
+  if (normName(aliasRaw).length < 2) return;
+  const key = opts.keyOverride ?? normName(aliasRaw);
   try {
+    /* 이미 같은 값이면 아무것도 안 한다 — updated_at 만 바뀌는 「배운 날」 되밀림도 막는다 */
+    const [prev] = await db.execute<{ party_key: string; party_label: string }>(sql`
+      SELECT party_key, party_label FROM party_alias WHERE alias_key = ${key}
+    `);
+    if (prev && prev.party_key === partyKey && prev.party_label === partyLabel) return;
     await db.execute(sql`
       INSERT INTO party_alias (alias_key, alias_raw, party_key, party_label)
       VALUES (${key}, ${aliasRaw}, ${partyKey}, ${partyLabel})
       ON CONFLICT (alias_key) DO UPDATE SET party_key = EXCLUDED.party_key,
         party_label = EXCLUDED.party_label, updated_at = now()
     `);
+    if (!opts.quiet) {
+      await logActivity({
+        actor: opts.uid ?? null,
+        how: "사람",
+        verb: "규칙",
+        label: `${W.ruleSaved}: 통장 이름 「${aliasRaw}」 = ${partyLabel}`,
+        undo: { kind: "ruleOff", args: { ruleKind: "alias", key } },
+      });
+    }
   } catch {
     // 학습 실패는 본 동작을 막지 않는다
+  }
+}
+
+/**
+ * ⭐ 입금 성격 목록 정본 (2026-09-12 개편 4단계에 fin-deposits 에서 옮김)
+ *
+ *   전엔 fin-deposits.ts 안의 모듈 상수라 다른 곳이 못 읽었다 — 그 파일은 "use server" 여서
+ *   상수를 내보낼 수 없다(서버 액션 파일은 async 함수만 내보낸다). deposit_rule 표의 CHECK 값과
+ *   「자동 규칙」 화면의 검사가 같은 목록을 봐야 하므로 코어로 옮긴다.
+ * 🔴 scripts/add-deposit-rule.ts 의 CHECK 와 같은 네 값이어야 한다.
+ */
+export const DEPOSIT_KINDS = ["판매입금", "이자·지원금", "환불", "기타입금"] as const;
+
+/**
+ * ⭐ 입금 성격 규칙 학습 정본 (개편 4단계, 2026-09-12 — 사장님 결정 7③)
+ *
+ *   지금까지 setDepositKind 는 **그 줄만** 고치고 입금자를 안 외웠다. 그래서 같은 상대가
+ *   다음 달에 또 들어와도 사장님이 처음부터 성격을 고르셔야 했다(계획서 §1-1).
+ *
+ * 🔴 **과거분 일괄 적용은 안 한다.** 입금은 판매와 이어질 수 있어, 조용히 「판매입금」으로
+ *    확정해 버리면 나중에 정비내역을 등록해도 후보에서 빠진다 — 다음 자료부터만 붙인다
+ *    (소비는 expense-core.applyAutoCategories 의 ①′ 단계).
+ * 🔴 learnAlias 와 같은 규칙: learn===false 면 안 배우고, 값이 같으면 아무것도 안 하고,
+ *    새로 배우거나 바뀔 때만 규칙 한 줄(되돌리기 = 그 규칙 끄기).
+ */
+export async function learnDepositRule(
+  payerKey: string,
+  kind: string,
+  opts: { uid?: number | null; learn?: boolean; quiet?: boolean } = {},
+): Promise<void> {
+  if (opts.learn === false) return;
+  const key = (payerKey ?? "").trim();
+  if (key.length < 2) return;
+  if (!(DEPOSIT_KINDS as readonly string[]).includes(kind)) return;
+  try {
+    const [prev] = await db.execute<{ kind: string }>(sql`
+      SELECT kind FROM deposit_rule WHERE key = ${key}
+    `);
+    if (prev?.kind === kind) return;
+    await db.execute(sql`
+      INSERT INTO deposit_rule (key, kind) VALUES (${key}, ${kind})
+      ON CONFLICT (key) DO UPDATE SET kind = EXCLUDED.kind, updated_at = now()
+    `);
+    if (!opts.quiet) {
+      await logActivity({
+        actor: opts.uid ?? null,
+        how: "사람",
+        verb: "규칙",
+        label: `${W.ruleSaved}: 입금자 「${key}」 = ${kind}`,
+        undo: { kind: "ruleOff", args: { ruleKind: "deposit", key } },
+      });
+    }
+  } catch {
+    // 학습 실패는 본 동작(성격 고르기)을 막지 않는다 — learnAlias 와 같은 정신
   }
 }
 
@@ -154,8 +243,11 @@ export async function linkDepositToQuoteCore(
     FROM quote q LEFT JOIN customer c ON c.id = q.customer_id WHERE q.id = ${quoteId}
   `);
   const payer = payerKeyOf("통장", dep.description);
-  if (qp?.supplier_name) await learnAlias(payer, `S:${qp.supplier_name}`, `거래처 ${qp.supplier_name}`);
-  else if (qp?.customer_id) await learnAlias(payer, `C:${qp.customer_id}`, qp.cname ?? `고객 ${qp.customer_id}`);
+  /* ⭐ 「다음부터 자동으로」 (개편 4단계, 2026-09-12) — 체크를 끄면 learn:false 로 와서 안 배운다.
+     🔴 트랜잭션 밖이다(위 커밋 뒤). 일괄(quiet)이면 규칙 줄도 접는다 */
+  const learnOpts = { uid, learn: opts.learn, quiet: opts.quiet };
+  if (qp?.supplier_name) await learnAlias(payer, `S:${qp.supplier_name}`, `거래처 ${qp.supplier_name}`, learnOpts);
+  else if (qp?.customer_id) await learnAlias(payer, `C:${qp.customer_id}`, qp.cname ?? `고객 ${qp.customer_id}`, learnOpts);
   /* ⭐ 최근 한 일 — 커밋 뒤. 되돌리기 = undoDepositLink(cashTxnId) (그 입금의 판매 연결 전부를 푼다) */
   const activity: ActivityEntry = {
     ym: dep.date.slice(0, 7),
@@ -185,6 +277,8 @@ export async function confirmSureDepositsCore(
   ym: string,
   uid: number | null,
   ids?: number[],
+  /** ⭐ learn 만 본다 — 낱장 기록은 어차피 quiet(아래 한 줄로 접는다). 기본은 배움(결정 7③) */
+  opts: ActivityOpts = {},
 ): Promise<{ ok: true; tax: number; quote: number; failed: number; skipped: number }> {
   const data = await depositReconData(ym);
   const { cands, bundles } = await depositTaxCandidates(
@@ -205,12 +299,13 @@ export async function confirmSureDepositsCore(
   const items: UndoItem[] = [];
   for (const [cashId, pick] of picked) {
     /* 🔴 recon_match.method 는 전과 같이 기본값(수동) — 기록만 quiet 로 모아 아래서 한 줄 n건(how 자동, 결정 g) */
+    const sub: ActivityOpts = { quiet: true, learn: opts.learn };
     const r =
       pick.kind === "tax"
-        ? await confirmTaxToBankCore(pick.invId, cashId, uid, "수동", { quiet: true })
+        ? await confirmTaxToBankCore(pick.invId, cashId, uid, "수동", sub)
         : pick.kind === "bundle"
-          ? await confirmBankToTaxesCore(cashId, pick.invoiceIds, uid, "수동", { quiet: true })
-          : await linkDepositToQuoteCore(cashId, pick.quoteId, uid, "수동", { quiet: true });
+          ? await confirmBankToTaxesCore(cashId, pick.invoiceIds, uid, "수동", sub)
+          : await linkDepositToQuoteCore(cashId, pick.quoteId, uid, "수동", sub);
     if (!r.ok) failed++;
     else {
       if (pick.kind === "quote") quote++;
@@ -246,7 +341,7 @@ export async function linkDepositsToQuoteCore(
   const items: UndoItem[] = [];
   let ym: string | null = null;
   for (const id of ids) {
-    const r = await linkDepositToQuoteCore(id, quoteId, uid, method, { quiet: true });
+    const r = await linkDepositToQuoteCore(id, quoteId, uid, method, { quiet: true, learn: opts.learn });
     if (!r.ok) return applied === 0 ? r : { ok: false, error: `${applied}줄까지 ${W.recon}했고 그다음에서 멈췄습니다 — ${r.error}` };
     applied++;
     items.push(...activityItems(r.activity));

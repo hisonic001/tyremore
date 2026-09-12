@@ -15,9 +15,11 @@ import { db } from "@/db";
 import { getSession, hasPerm } from "@/lib/auth";
 import { payerKeyOf } from "./expense-cats";
 import {
+  DEPOSIT_KINDS,
   confirmSureDepositsCore,
   getDeposit,
   learnAlias,
+  learnDepositRule,
   linkDepositToQuoteCore,
   linkDepositsToQuoteCore,
   markCardSettlementsCore,
@@ -52,14 +54,25 @@ export async function markCardSettlements(
   return { ok: true, marked };
 }
 
+/**
+ * ⭐ 「☑ 다음부터 자동으로」 (개편 4단계, 2026-09-12 — 사장님 결정 7③, **기본 켜짐**)
+ *
+ *   맞추기 단추 옆 작은 체크칸이 이 `learn` 을 끈다 — 그러면 그 건만 맞추고
+ *   입금자 별명(party_alias)은 안 배운다.
+ * 🔴 **맨 끝 선택 인자**다. 이 인자를 안 주는 기존 호출(연간 실행기·되돌리기 라우팅 등)은
+ *    전과 똑같이 배운다 — 시그니처를 바꾸면서 동작을 조용히 바꾸지 않는다.
+ */
+type LearnOpts = { learn?: boolean };
+
 /** 입금 한 건 ↔ 판매 한 건 (부분 연결 가능) — 규칙은 deposit-core */
 export async function linkDepositToQuote(
   cashTxnId: number,
   quoteId: number,
+  opts?: LearnOpts,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  const r = await linkDepositToQuoteCore(cashTxnId, quoteId, g.uid);
+  const r = await linkDepositToQuoteCore(cashTxnId, quoteId, g.uid, "수동", { learn: opts?.learn });
   if (r.ok) revalidateFinance();
   return r;
 }
@@ -68,10 +81,11 @@ export async function linkDepositToQuote(
 export async function linkDepositsToQuote(
   quoteId: number,
   cashTxnIds: number[],
+  opts?: LearnOpts,
 ): Promise<{ ok: true; applied: number } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
-  const r = await linkDepositsToQuoteCore(quoteId, cashTxnIds, g.uid);
+  const r = await linkDepositsToQuoteCore(quoteId, cashTxnIds, g.uid, "수동", { learn: opts?.learn });
   if (r.ok) revalidateFinance();
   return r;
 }
@@ -83,6 +97,7 @@ export async function linkDepositsToQuote(
 export async function collectFromDeposit(
   cashTxnId: number,
   partyKey: string,
+  opts?: LearnOpts,
 ): Promise<
   | { ok: true; applied: number; settled: number; leftover: number }
   | { ok: false; error: string }
@@ -154,7 +169,9 @@ export async function collectFromDeposit(
       `);
       label = c?.name ?? partyKey;
     }
-    await learnAlias(payer, partyKey, label);
+    /* 개편 4단계(2026-09-12): 체크를 끄면(learn:false) 안 배운다. 🔴 quiet 아님 —
+       규칙을 새로 배웠으면 「최근 한 일」에 규칙 한 줄이 남아야 되돌릴 길이 생긴다 */
+    await learnAlias(payer, partyKey, label, { uid: g.uid, learn: opts?.learn });
     /* ⭐ 최근 한 일 — 되돌리기 = undoDepositLink(cashTxnId) (자국 + 그 자국이 만든 수금 기록을 함께 지운다) */
     await logActivity({
       ym: dep.date.slice(0, 7),
@@ -228,12 +245,14 @@ export async function undoDepositLink(
 
 /** 판매와 무관한 입금 분류 — 이자·지원금·환불·기타 (사장님 요청 2026-08-26: 「무시」로 매출 입금을 접지 않게) */
 /* 🔴 사장님 지적(2026-08-26): 「판매와 무관」으로 뺀 것 대부분이 실은 **앱에 기록이 없는 판매 대금**이었다 —
-   따로 분류해 손익의 번 돈에 넣고, 나중에 정비내역을 등록하면 되돌려 잇는다 */
-const DEPOSIT_KINDS = ["판매입금", "이자·지원금", "환불", "기타입금"] as const;
+   따로 분류해 손익의 번 돈에 넣고, 나중에 정비내역을 등록하면 되돌려 잇는다
+   개편 4단계(2026-09-12): 목록은 코어(deposit-core.DEPOSIT_KINDS)로 옮겼다 — deposit_rule 표의
+   CHECK 값과 「자동 규칙」 화면의 검사가 같은 한 벌을 봐야 한다 */
 
 export async function setDepositKind(
   cashTxnId: number,
   kind: string,
+  opts?: LearnOpts,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
@@ -244,6 +263,13 @@ export async function setDepositKind(
   await db.execute(sql`
     UPDATE cash_txn SET category = ${kind}, recon_status = '확정' WHERE id = ${cashTxnId} AND source = '통장'
   `);
+  /* ⭐ 입금 성격 규칙 학습 (개편 4단계, 2026-09-12 — 계획서 §1-1)
+     전엔 이 줄만 고치고 입금자를 안 외웠다. 이제 「☑ 다음부터 자동으로」가 켜져 있으면 기억해 두고
+     **다음 통장 파일부터** 같은 입금자에 이 성격을 자동으로 붙인다.
+     🔴 과거분 일괄 적용은 안 한다 — 입금은 판매와 이어질 수 있어 조용히 확정하면 위험하다.
+     🔴 규칙 줄은 learnDepositRule 이 남긴다(코어 안에서만 기록) — 아래 분류 줄과 별개다:
+        분류 되돌리기(depositKind)와 규칙 끄기(ruleOff)는 되돌릴 대상이 서로 다르다 */
+  await learnDepositRule(payerOf(dep.description), kind, { uid: g.uid, learn: opts?.learn });
   /* ⭐ 최근 한 일 — 되돌리기 = undoDepositKind(cashTxnId) */
   await logActivity({
     ym: dep.date.slice(0, 7),
@@ -290,11 +316,13 @@ export async function undoDepositKind(cashTxnId: number): Promise<{ ok: true } |
 export async function confirmSureDeposits(
   ym: string,
   ids?: number[],
+  /** 「☐ 이번 일괄은 규칙 학습 안 함」(일괄은 머리에 체크 하나) — 기본은 배움 */
+  opts?: LearnOpts,
 ): Promise<{ ok: true; tax: number; quote: number; failed: number; skipped: number } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return { ok: false, error: "달이 올바르지 않습니다" };
-  const r = await confirmSureDepositsCore(ym, g.uid, ids);
+  const r = await confirmSureDepositsCore(ym, g.uid, ids, { learn: opts?.learn });
   revalidateFinance();
   return r;
 }

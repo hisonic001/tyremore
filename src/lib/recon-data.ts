@@ -327,10 +327,14 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
   const endPad = new Date(new Date(nextStart + "T00:00:00Z").getTime() + 3 * 86400000).toISOString().slice(0, 10);
   const transfers = await db.execute<{
     id: number; quote_no: string; total: number; d: string; who: string; plate_no: string | null; pm: string | null;
+    /* ⭐ 개편 4단계(2026-09-12): 별명(S:거래처·C:고객id)과 맞춰 보려면 **판정에 쓰는 열쇠 그대로**가
+       필요하다 — `who` 는 세 값을 COALESCE 한 표시용 이름이라 「어느 쪽이 맞았나」를 못 가린다 */
+    supplier_name: string | null; customer_id: number | null;
   }>(sql`
     SELECT q.id, q.quote_no, q.total_amount total,
            to_char(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date), 'YYYY-MM-DD') d,
-           COALESCE(q.supplier_name, c.name, '손님') who, v.plate_no, q.payment_method pm
+           COALESCE(q.supplier_name, c.name, '손님') who, v.plate_no, q.payment_method pm,
+           q.supplier_name, q.customer_id
     FROM quote q
     LEFT JOIN customer c ON c.id = q.customer_id
     LEFT JOIN vehicle  v ON v.id = q.vehicle_id
@@ -366,9 +370,24 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
     // 「[적요] 내용」 → 내용 부분이 대개 입금자명이다
     const payerName = payerKeyOf("통장", r.description); // 감사 L2: 추출 규칙 정본
     const pn = norm(payerName);
+    const aliasParty = aliasMap.get(pn) ?? null;
+    /**
+     * ⭐ 「이름 맞음」에 **별명도 넣는다** (개편 4단계, 2026-09-12 — 계획서 §3)
+     *
+     *   전엔 `samePartyName` 글자 비교뿐이라, 사장님이 「이관우 = 한국타이어」를 한 번 이어 줘도
+     *   **판매 후보에는 그 배움이 안 닿았다**(★ 가 안 붙고 sure 로도 안 잡혔다). 계산서 후보는
+     *   처음부터 별명 ★ 를 쓰고 있었는데(depositTaxCandidates.known) 판매만 빠져 있었다.
+     *
+     * 🔴 이것은 「식별 확실」의 **입력원을 넓히는 것**이지 임계를 바꾸는 게 아니다 —
+     *    금액 일치·날짜 ±3일·후보 유일이라는 depositSurePicks 의 세 조건은 그대로다.
+     */
+    const aliasHit = (q: { supplier_name: string | null; customer_id: number | null }): boolean =>
+      !!aliasParty &&
+      ((!!q.supplier_name && aliasParty === `S:${q.supplier_name}`) ||
+        (q.customer_id != null && aliasParty === `C:${Number(q.customer_id)}`));
     const quotes = freeTransfers
       .filter((q) => Number(q.total) === Number(r.in_amount) && dayDiff3(q.d, r.date))
-      .map((q) => ({ q, nameOk: samePartyName(payerName, q.who) }))
+      .map((q) => ({ q, nameOk: samePartyName(payerName, q.who) || aliasHit(q) }))
       .sort((a, b) => Number(b.nameOk) - Number(a.nameOk))
       .slice(0, 5)
       .map(({ q, nameOk }) => ({
@@ -381,7 +400,6 @@ export async function depositReconData(ym: string): Promise<DepositReconData> {
         pm: q.pm,
         nameOk,
       }));
-    const aliasParty = aliasMap.get(pn) ?? null;
     // 한 입금자가 여러 계산서 상대로 기억될 수 있다 (카랑 → 현대캐피탈·쏘카)
     const tLabels = [
       ...new Set(

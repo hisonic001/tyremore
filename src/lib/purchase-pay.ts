@@ -17,12 +17,21 @@ import { restoreCashLine } from "./cash-restore";
 import { revalidateFinance } from "./fin-revalidate";
 import { logActivity } from "./fin-activity";
 import type { UndoItem } from "./fin-activity-types";
-import { activityItems } from "./recon-core";
-import { autoLinkExactCore, payerOf, won } from "./purchase-pay-core";
-import { weeklyPayableStep } from "./weekly-payables";
-import { autoReconLabel, W } from "./fin-words";
+/* 개편 4단계(2026-09-12): 별명 학습은 정본 한 곳(deposit-core.learnAlias) — 손 INSERT 복제를 없앴다 */
+import { learnAlias } from "./deposit-core";
+/* 별명 끄기도 정본 하나 — 기록(규칙 끄기 + 되살리기 정보)이 「자동 규칙」 화면과 같아진다 */
+import { disableRuleCore } from "./party-rule";
+import { autoLinkExactCore, confirmSureWithdrawalsCore, payerOf, won } from "./purchase-pay-core";
+import { W } from "./fin-words";
 
 const METHODS = ["계좌이체", "현금", "카드", "기타"];
+
+/**
+ * ⭐ 「☑ 다음부터 자동으로」 (개편 4단계, 2026-09-12 — 사장님 결정 7③, **기본 켜짐**)
+ *   맞추기 단추 옆 작은 체크칸이 이 learn 을 끈다 — 그 건만 맞추고 상대명 별명을 안 배운다.
+ * 🔴 **맨 끝 선택 인자**다 — 안 주는 기존 호출은 전과 똑같이 배운다.
+ */
+type LearnOpts = { learn?: boolean };
 
 /** 거래처에 준 돈을 오래된 매입부터 채운다 */
 export async function payToSupplier(input: {
@@ -198,13 +207,13 @@ export async function undoPayFromWithdrawal(
  *   3단계(2026-09-12): 본문은 purchase-pay-core.autoLinkExactCore — 여기는 권한 + 코어 + revalidate.
  *   기록(한 줄, how 자동)은 코어가 남긴다 — 동작·기록 전과 같다.
  */
-export async function autoLinkExact(input: {
-  cashTxnId: number;
-  supplier: string;
-}): Promise<{ ok: true; n: number; amount: number } | { ok: false; error: string }> {
+export async function autoLinkExact(
+  input: { cashTxnId: number; supplier: string },
+  opts?: LearnOpts,
+): Promise<{ ok: true; n: number; amount: number } | { ok: false; error: string }> {
   if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const session = await getSession();
-  const r = await autoLinkExactCore(input.cashTxnId, input.supplier, session?.uid ?? null);
+  const r = await autoLinkExactCore(input.cashTxnId, input.supplier, session?.uid ?? null, { learn: opts?.learn });
   if (!r.ok) return r;
   revalidateFinance();
   return { ok: true, n: r.n, amount: r.amount };
@@ -222,46 +231,18 @@ export async function autoLinkExact(input: {
 export async function confirmSureWithdrawals(
   ym: string,
   ids?: number[],
+  /** 「☐ 이번 일괄은 규칙 학습 안 함」(일괄은 머리에 체크 하나) — 기본은 배움 */
+  opts?: LearnOpts,
 ): Promise<{ ok: true; n: number; amount: number; failed: number; skipped: number } | { ok: false; error: string }> {
   if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return { ok: false, error: "달이 올바르지 않습니다" };
   const uid = (await getSession())?.uid ?? null;
-  let picked = (await weeklyPayableStep(ym)).sure;
-  let skipped = 0;
-  if (ids) {
-    const want = new Set(ids.filter((n) => Number.isInteger(n) && n > 0));
-    picked = picked.filter((s) => want.has(s.cashTxnId));
-    skipped = want.size - picked.length;
-  }
-  let n = 0;
-  let amount = 0;
-  let failed = 0;
-  const items: UndoItem[] = [];
-  for (const s of picked) {
-    // 🔴 순차 — 풀 max 3. 코어가 FOR UPDATE 로 다시 검사한다(안 맞으면 그 건만 실패)
-    const r = await autoLinkExactCore(s.cashTxnId, s.supplier, uid, { quiet: true });
-    if (!r.ok) {
-      failed++;
-      continue;
-    }
-    n++;
-    amount += r.amount;
-    items.push(...activityItems(r.activity));
-  }
-  if (items.length > 0) {
-    await logActivity({
-      ym,
-      actor: uid,
-      how: "자동",
-      verb: "지급",
-      n: items.length,
-      amount: items.reduce((s, i) => s + (i.amount ?? 0), 0),
-      label: `${autoReconLabel(items.length)} · 지급 ${ym}${failed > 0 ? ` (실패 ${failed})` : ""}`,
-      undo: { kind: "bulk", args: { items } },
-    });
-  }
+  /* 개편 4단계(2026-09-12): 본문은 purchase-pay-core.confirmSureWithdrawalsCore — 「올린 직후
+     자동 대조」(auto-recon.ts)가 입금·계산서와 같은 모양으로 부를 수 있게 코어로 뗐다.
+     기록(bulk 한 줄)은 코어가 남긴다 — 동작·기록 전과 같다 */
+  const r = await confirmSureWithdrawalsCore(ym, uid, ids, { learn: opts?.learn });
   revalidateFinance();
-  return { ok: true, n, amount, failed, skipped };
+  return r;
 }
 
 /** ④ 통장 이름 별명 — 거래처 카드에서 직접 관리 (2026-08-31 "맨날 알려줘야 하는 것은 문제") */
@@ -275,17 +256,17 @@ export async function addSupplierAlias(
   if (!sup) return { ok: false, error: "거래처가 없습니다" };
   const key = normName(name);
   if (key.length < 2) return { ok: false, error: "통장에 찍히는 이름을 2자 이상 적어 주세요" };
-  await db.execute(sql`
-    INSERT INTO party_alias (alias_key, alias_raw, party_key, party_label)
-    VALUES (${key}, ${name}, ${"S:" + sup}, ${"거래처 " + sup})
-    ON CONFLICT (alias_key) DO UPDATE SET party_key = EXCLUDED.party_key,
-      party_label = EXCLUDED.party_label, updated_at = now()
-  `);
+  /* 개편 4단계(2026-09-12): 마지막 손 INSERT 복제를 정본 learnAlias 로. 🔴 quiet — 이 액션은
+     **일부러 규칙을 만드는** 것이라 아래에 제 규칙 줄을 남긴다(두 줄이 되면 안 된다).
+     체크칸은 없다 — 규칙 만들기 자체가 목적이라 항상 배운다 */
+  await learnAlias(name, `S:${sup}`, `거래처 ${sup}`, { uid: (await getSession())?.uid ?? null, quiet: true });
+  /* ⭐ 최근 한 일 — 되돌리기 = 그 별명 규칙 끄기(개편 4단계 — 전엔 되돌릴 길이 없었다) */
   await logActivity({
     actor: (await getSession())?.uid ?? null,
     how: "사람",
     verb: "규칙",
-    label: `규칙 저장: 통장 이름 「${name}」 = 거래처 ${sup}`,
+    label: `${W.ruleSaved}: 통장 이름 「${name}」 = 거래처 ${sup}`,
+    undo: { kind: "ruleOff", args: { ruleKind: "alias", key } },
   });
   revalidateFinance(); // 3단계(2026-09-12): 목록 통일
   return { ok: true };
@@ -296,17 +277,17 @@ export async function removeSupplierAlias(
   aliasKey: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
-  const done = await db.execute<{ alias_key: string }>(sql`
-    DELETE FROM party_alias WHERE alias_key = ${aliasKey} AND party_key = ${"S:" + supplier.trim()}
-    RETURNING alias_key
+  /* 🔴 거래처 카드에서 지우는 것이니 **그 거래처의 별명인지** 먼저 확인한다 — 남의 별명을
+     열쇠만 알고 지우면 안 된다(전에는 DELETE 의 WHERE 가 이 일을 했다). 지우기 자체는
+     개편 4단계(2026-09-12)부터 정본 disableRuleCore — 기록이 「규칙 끄기」로 통일되고
+     「최근 한 일」에서 되살릴 수 있게 된다(전엔 되돌릴 길이 없었다) */
+  const [mine] = await db.execute<{ alias_key: string }>(sql`
+    SELECT alias_key FROM party_alias
+    WHERE alias_key = ${aliasKey} AND party_key = ${"S:" + supplier.trim()}
   `);
-  if (done.length === 0) return { ok: false, error: "그 별명을 찾을 수 없습니다" };
-  await logActivity({
-    actor: (await getSession())?.uid ?? null,
-    how: "사람",
-    verb: "되돌리기",
-    label: `${W.undo}: 통장 이름 규칙 지우기 「${aliasKey}」 ≠ 거래처 ${supplier.trim()}`,
-  });
+  if (!mine) return { ok: false, error: "그 별명을 찾을 수 없습니다" };
+  const r = await disableRuleCore("alias", aliasKey, (await getSession())?.uid ?? null);
+  if (!r.ok) return r;
   revalidateFinance(); // 3단계(2026-09-12): 목록 통일
   return { ok: true };
 }
@@ -366,10 +347,10 @@ export async function skipWithdrawal(
  *   거래처 미지급을 선입선출로 턴다. 지급 기록 + 연결 자국('매입지급') + 출금 확정 + 별명 학습.
  *   미지급 장부가 "이미 준 돈"을 알게 되는 핵심 고리.
  */
-export async function payFromWithdrawal(input: {
-  cashTxnId: number;
-  supplier: string;
-}): Promise<
+export async function payFromWithdrawal(
+  input: { cashTxnId: number; supplier: string },
+  opts?: LearnOpts,
+): Promise<
   | { ok: true; applied: number; settled: number; leftover: number }
   | { ok: false; error: string }
 > {
@@ -443,26 +424,19 @@ export async function payFromWithdrawal(input: {
       const applied = plan.plan.reduce((s, p) => s + p.amount, 0);
       const settled = plan.plan.filter((p) => p.amount === open.find((o) => o.quoteId === p.quoteId)?.remain).length;
 
-      // 별명 학습 — 이 출금 상대명 = 이 거래처 (다음부터 자동 제안)
-      try {
-        const payer = dep.description.replace(/^\[[^\]]*\]\s*/, "").trim();
-        const key = normName(payer);
-        if (key.length >= 2) {
-          await tx.execute(sql`
-            INSERT INTO party_alias (alias_key, alias_raw, party_key, party_label)
-            VALUES (${key}, ${payer}, ${"S:" + supplier}, ${"거래처 " + supplier})
-            ON CONFLICT (alias_key) DO UPDATE SET party_key = EXCLUDED.party_key,
-              party_label = EXCLUDED.party_label, updated_at = now()
-          `);
-        }
-      } catch {
-        // 학습 실패는 지급을 막지 않는다
-      }
-
       revalidateFinance(); // 3단계(2026-09-12): 목록 통일 — /finance/tax(CASH_LAT 간접 확인, 감사 N9)·party 포함
       return { ok: true as const, applied, settled, leftover: Number(dep.out_amount) - applied };
     });
     if (out.ok) {
+      /* 별명 학습 — 이 출금 상대명 = 이 거래처 (다음부터 자동 제안).
+         개편 4단계(2026-09-12): 손 INSERT 를 정본 learnAlias 로 바꾸고 **트랜잭션 밖**(커밋 뒤)으로
+         옮겼다 — 전에는 트랜잭션 안이라, 학습 INSERT 가 실패하면 Postgres 가 그 트랜잭션의
+         나머지를 전부 거부해 지급까지 되돌아갈 수 있었다(try/catch 로도 못 막는다).
+         「☑ 다음부터 자동으로」를 끄면(learn:false) 안 배운다 */
+      await learnAlias(payerOf(dep.description), `S:${supplier}`, `거래처 ${supplier}`, {
+        uid: session?.uid ?? null,
+        learn: opts?.learn,
+      });
       /* ⭐ 최근 한 일 — 커밋 뒤. 되돌리기 = undoPayFromWithdrawal(cashTxnId) */
       await logActivity({
         ym: dep.date.slice(0, 7),

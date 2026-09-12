@@ -51,8 +51,19 @@ export async function previewUnset(
 export async function setExpenseCategory(
   cashTxnId: number,
   category: string | null,
-  /** 해제할 때만 본다 — 'one' 이 줄만 · 'all' 같은 상대·같은 분류 전부 (2회차 수리 A5) */
-  opts?: { scope?: "one" | "all" },
+  opts?: {
+    /** 해제할 때만 본다 — 'one' 이 줄만 · 'all' 같은 상대·같은 분류 전부 (2회차 수리 A5) */
+    scope?: "one" | "all";
+    /**
+     * ⭐ 「☑ 다음부터 자동으로」 (개편 4단계, 2026-09-12 — 사장님 결정 7③, **기본 켜짐**)
+     *
+     *   🔴 지출은 이 체크가 **전파까지** 가른다. 붙이기는 원래 「규칙 저장 + 같은 상대 전 기간
+     *      일괄」이 한 몸이었다 — 체크를 끄면 규칙도 안 만들고 과거분도 안 건드리고 **그 줄만**
+     *      붙인다. 「이 한 건만 이렇게」를 고를 길이 없어 사장님이 잘못 붙은 과거분을 다시
+     *      풀어야 했던 것이 근본 원인이다(2026-08-28 실측: 한 번에 375줄 13.7억).
+     */
+    learn?: boolean;
+  },
 ): Promise<{ ok: true; applied: number; payer: string } | { ok: false; error: string }> {
   if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   if (category !== null && !(EXPENSE_CATS as readonly string[]).includes(category)) {
@@ -102,7 +113,8 @@ export async function setExpenseCategory(
     });
   } else {
     await db.execute(sql`UPDATE cash_txn SET category = ${category} WHERE id = ${cashTxnId}`);
-    if (key.length >= 2) {
+    /* 개편 4단계(2026-09-12): 체크를 끄면(learn === false) 규칙 저장·전파를 건너뛰고 **그 줄만** */
+    if (key.length >= 2 && opts?.learn !== false) {
       await db.execute(sql`
         INSERT INTO expense_rule (key, category) VALUES (${key}, ${category})
         ON CONFLICT (key) DO UPDATE SET category = EXCLUDED.category, updated_at = now()

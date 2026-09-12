@@ -24,12 +24,19 @@ import { setExpenseCategory } from "./fin-expense";
 import { removeCollection } from "./receivable";
 import { reopenMonth } from "./month-close";
 import { cancelFinUpload } from "./fin-upload";
+/* 개편 4단계(2026-09-12): 규칙 켜기·끄기는 정본 코어를 직접 부른다 — 액션(party-rule-actions)은
+   권한을 또 보고 화면을 또 그릴 뿐이고, 권한은 아래 undoActivity 가 이미 봤다 */
+import { disableRuleCore, enableRuleCore } from "./party-rule";
+import type { RuleKind } from "./party-rule-types";
 
 type Result = { ok: true } | { ok: false; error: string };
 type Args = Record<string, unknown>;
 
 const num = (v: unknown): number => (typeof v === "number" ? v : Number(v));
 const str = (v: unknown): string => (v == null ? "" : String(v));
+/** 코어가 값을 더 얹어 돌려줘도 되돌리기엔 성공·실패만 필요하다 */
+const okOf = (r: { ok: true; [k: string]: unknown } | { ok: false; error: string }): Result =>
+  r.ok ? { ok: true } : r;
 
 /**
  * 종류 하나 → 기존 함수 하나. 시그니처는 실제 파일 기준(표와 다른 곳은 여기서 맞춘다):
@@ -37,7 +44,7 @@ const str = (v: unknown): string => (v == null ? "" : String(v));
  *   · expense 는 해제(null) + scope 'one'|'all' (기본 one — 이 줄만).
  *   · note 는 clearPosNote(ref) 의 ref = `${refTable}:${refId}` (pos-actions 의 'pos:'·'quote:' 관례).
  */
-async function undoOne(kind: Exclude<UndoKind, "bulk">, a: Args): Promise<Result> {
+async function undoOne(kind: Exclude<UndoKind, "bulk">, a: Args, uid: number | null): Promise<Result> {
   switch (kind) {
     case "tax": {
       const scope = a.scope === "통장" ? "통장" : "전부";
@@ -79,6 +86,23 @@ async function undoOne(kind: Exclude<UndoKind, "bulk">, a: Args): Promise<Result
       return skipWithdrawal(num(a.cashTxnId), true);
     case "note":
       return clearPosNote(`${str(a.refTable)}:${str(a.refId)}`);
+    /* ⭐ 규칙 켜기·끄기 (개편 4단계, 2026-09-12) — 정본 party-rule.ts 의 쓰기 함수 **그 자체**다.
+       「규칙 저장」을 되돌리면 끄기(ruleOff), 「규칙 끄기」를 되돌리면 켜기(ruleOn).
+       🔴 새 되돌리기 논리가 아니다(2단계 결정 c). 액션(disableRule)이 아니라 코어를 부른다 —
+          권한은 이 파일 맨 위에서 이미 봤고, 코어가 기록 한 줄을 남긴다 */
+    case "ruleOn":
+      return okOf(
+        await enableRuleCore(
+          str(a.ruleKind) as RuleKind,
+          str(a.key),
+          str(a.value),
+          str(a.label),
+          uid,
+          { raw: a.raw == null ? undefined : str(a.raw), partyKey: a.partyKey == null ? undefined : str(a.partyKey) },
+        ),
+      );
+    case "ruleOff":
+      return okOf(await disableRuleCore(str(a.ruleKind) as RuleKind, str(a.key), uid));
     default:
       return { ok: false, error: `되돌릴 수 없는 종류입니다 (${String(kind)})` };
   }
@@ -135,7 +159,7 @@ export async function undoActivity(id: number, itemIndex?: number): Promise<Resu
     let doneN = 0;
     for (const i of targets) {
       const it: UndoItem = items[i];
-      const r = await undoOne(it.kind, it.args as Args);
+      const r = await undoOne(it.kind, it.args as Args, uid);
       if (r.ok) {
         it.undone = now;
         doneN += 1;
@@ -158,7 +182,7 @@ export async function undoActivity(id: number, itemIndex?: number): Promise<Resu
     return { ok: true };
   }
 
-  const r = await undoOne(row.undo_kind as Exclude<UndoKind, "bulk">, args);
+  const r = await undoOne(row.undo_kind as Exclude<UndoKind, "bulk">, args, uid);
   if (!r.ok) return r;
   await db.execute(sql`
     UPDATE fin_activity SET undone_at = now(), undone_by = ${uid} WHERE id = ${id} AND undone_at IS NULL
@@ -172,4 +196,6 @@ function revalidateActivity() {
   revalidatePath("/finance/activity");
   revalidatePath("/finance");
   revalidatePath("/finance/ledger");
+  /* 개편 4단계(2026-09-12): ruleOn·ruleOff 를 되돌리면 「자동 규칙」 목록이 달라진다 */
+  revalidatePath("/settings/rules");
 }
