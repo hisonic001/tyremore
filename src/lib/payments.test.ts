@@ -15,7 +15,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { ALL_METHODS, EXCLUSIVE, SPLITTABLE } from "./payments";
+import { ALL_METHODS, EXCLUSIVE, SPLITTABLE, checkSplitPayments } from "./payments";
 
 const SRC = join(process.cwd(), "src");
 const schema = readFileSync(join(SRC, "db", "schema.ts"), "utf8");
@@ -95,5 +95,40 @@ describe("② 결제수단 목록을 payments.ts 밖에서 또 적지 않았나"
       "결제수단 목록이 정본 밖에 또 있습니다 — lib/payments.ts 의 SPLITTABLE·EXCLUSIVE·ALL_METHODS 를 쓰세요:\n" +
         offenders.join("\n"),
     );
+  });
+});
+
+/**
+ * ⭐ 같은 수단 두 줄 (2026-09-12, 사장님 제보 Q26-0910-002)
+ *
+ *   예약금을 카드로 받고 잔금을 또 카드로 받으면 reservation-pay.ts 가 **받은 날을 살리려고**
+ *   수금 줄을 합치지 않고 한 줄씩 quote_payment 로 옮긴다. 그렇게 앱이 스스로 만든 자료를
+ *   checkSplitPayments 가 「『카드』가 두 번」이라며 거부해, 그 판매는 「고치기」 저장이
+ *   영영 막혀 있었다. 막는 규칙을 없앴다 — 틀린 금액은 합계 검사가 잡는다.
+ */
+describe("같은 수단 두 줄", () => {
+  test("카드 3장으로 나눠 받은 것을 막지 않는다", () => {
+    const r = checkSplitPayments(
+      [
+        { method: "카드", amount: 200_000, paidOn: "2026-09-10" },
+        { method: "카드", amount: 854_000, paidOn: "2026-09-10" },
+        { method: "카드", amount: 200_000, paidOn: "2026-09-12" },
+      ],
+      1_254_000,
+    );
+    assert.equal(r.ok, true, "같은 수단이 여러 줄이어도 통과해야 한다");
+    assert.equal(r.ok && r.split?.length, 3, "합치지 않고 3줄 그대로 둬야 받은 날이 산다");
+  });
+
+  test("🔴 합계가 안 맞으면 여전히 막는다", () => {
+    const r = checkSplitPayments(
+      [
+        { method: "카드", amount: 200_000 },
+        { method: "카드", amount: 200_000 },
+        { method: "카드", amount: 200_000 },
+      ],
+      1_254_000,
+    );
+    assert.equal(r.ok, false, "중복을 허용해도 합계 검사는 풀리면 안 된다");
   });
 });

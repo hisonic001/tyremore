@@ -181,7 +181,12 @@ export function EditableLine({ line: l, onMessage }: { line: SaleLine; onMessage
   );
 }
 
-/** 품목 추가 — 타이어(상품 검색) 또는 공임(서비스 검색) */
+/**
+ * 품목 추가 — 타이어·부품(상품 검색) 또는 공임(서비스 검색)
+ *
+ * 🔴 여기는 **추가 전용**이다 (줄을 다른 상품으로 「교체」하는 길은 아직 없다).
+ *    교체가 생기면 그 검색은 **타이어만** 이어야 한다 — 2026-08-14 「검색 분리」의 뜻이다.
+ */
 export function AddLine({
   quoteId,
   onMessage,
@@ -197,6 +202,14 @@ export function AddLine({
   const [open, setOpen] = useState<null | "tire" | "service" | "custom">(null);
   const [q, setQ] = useState("");
   const [tires, setTires] = useState<ProductHit[]>([]);
+  /**
+   * ⭐ 부품(배터리·필터류)도 여기서 담는다 (사장님 제보 2026-09-12 — Q26-0912-001
+   *    「고치기」에서 부품이 하나도 안 나옴). 버튼 이름은 「타이어·부품 추가」인데
+   *    검색이 타이어로 막혀 있어 **고치기 화면에는 부품을 담을 길이 아예 없었다.**
+   *    타이어와 **한 목록에 섞지는 않는다** — 2026-08-14 「검색 분리」의 뜻은 지키고,
+   *    묶음 머리글로 갈라 보여 준다.
+   */
+  const [parts, setParts] = useState<ProductHit[]>([]);
   const [svcs, setSvcs] = useState<Awaited<ReturnType<typeof findServices>>>([]);
   /** ⭐ 직접 입력 (사장님 요청 2026-08-06) — 목록에 없는 내용도 자유롭게 적는다 */
   const [cDesc, setCDesc] = useState("");
@@ -209,9 +222,16 @@ export function AddLine({
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
       if (open === "tire") {
-        if (!q.trim()) return setTires([]);
-        // 타이어 줄 추가·교체이므로 타이어만 (2026-08-14 검색 분리)
+        if (!q.trim()) {
+          setTires([]);
+          setParts([]);
+          return;
+        }
+        /* 줄 **추가**이므로 타이어와 부품을 둘 다 찾는다 (2026-09-12).
+           서버에 두 번 따로 물어 화면에서도 따로 쌓는다 — 한 목록에 섞으면
+           2026-08-14 에 사장님이 「복잡해짐」이라 하신 그 모양이 된다. */
         void searchProducts(q, { itemType: "tire" }).then((r) => setTires(r.slice(0, 6)));
+        void searchProducts(q, { itemType: "part" }).then((r) => setParts(r.slice(0, 6)));
       } else {
         void findServices(q).then((r) => setSvcs(r.slice(0, 6)));
       }
@@ -320,14 +340,19 @@ export function AddLine({
       <input
         value={q}
         onChange={(e) => setQ(e.target.value)}
-        placeholder={open === "tire" ? "규격·모델명  예: 2454518" : "공임 이름  예: 펑크"}
+        placeholder={open === "tire" ? "규격·모델명·부품  예: 2454518 · 오일필터" : "공임 이름  예: 펑크"}
         autoFocus
         className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
       />
       <ul className="mt-1.5 space-y-1">
-        {open === "tire"
-          ? tires.map((h) => (
-              <li key={h.productId}>
+        {open === "tire" ? (
+          <>
+            {/* ── 타이어 ── 묶음 머리글로 갈라 놓는다 (2026-09-12) — 한 목록에 섞지 않는다 */}
+            {tires.length > 0 && (
+              <li className="px-1 pt-0.5 text-xs font-semibold text-slate-500">타이어</li>
+            )}
+            {tires.map((h) => (
+              <li key={`t-${h.productId}`}>
                 <button
                   type="button"
                   disabled={pending}
@@ -349,8 +374,45 @@ export function AddLine({
                   </span>
                 </button>
               </li>
-            ))
-          : svcs.map((s) => (
+            ))}
+            {/* ── 부품 ──
+                🔴 판매 등록의 「쓴 부품 담기」와 **똑같이** 담는다 (사장님 확인 2026-08-11 / D-25):
+                   line_type='use', 금액은 파는 값(기표가)이 있으면 그 값·없으면 0원(재고만 차감).
+                   재고는 서버(addSaleLine → sellFromStock)가 정상 경로로 뺀다 (D-26). */}
+            {parts.length > 0 && (
+              <li className="px-1 pt-1 text-xs font-semibold text-slate-500">
+                부품 <span className="font-normal">— 파는 값을 적어 둔 것은 그 값, 아니면 0원(재고만 차감)</span>
+              </li>
+            )}
+            {parts.map((p) => (
+              <li key={`p-${p.productId}`}>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() =>
+                    add({
+                      quoteId,
+                      kind: "use",
+                      productId: p.productId,
+                      description: p.model,
+                      qty: 1,
+                      unitPrice: p.listPrice ?? 0,
+                    })
+                  }
+                  className="w-full rounded-lg bg-white px-3 py-1.5 text-left text-sm active:bg-slate-100"
+                >
+                  <span className="font-medium">{p.model}</span>
+                  {p.partNo && <span className="tabular ml-1 text-xs text-slate-400">{p.partNo}</span>}
+                  <span className="tabular ml-2 text-xs text-slate-500">
+                    {p.stockTracked ? `재고 ${p.stockQty}개` : "재고 미등록"} ·{" "}
+                    {p.listPrice ? `${won(p.listPrice)}원` : "0원"}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </>
+        ) : (
+          svcs.map((s) => (
               <li key={s.id}>
                 <button
                   type="button"
@@ -371,7 +433,8 @@ export function AddLine({
                   {s.price !== null && <span className="tabular ml-2 text-xs text-slate-500">{won(s.price)}원</span>}
                 </button>
               </li>
-            ))}
+          ))
+        )}
       </ul>
       {/* ⭐ 목록에 없으면 즉석에서 만든다 (사장님 요청 2026-08-31) — 새 탭, 만들면 검색에 바로 뜬다 */}
       {open === "service" && owner && (

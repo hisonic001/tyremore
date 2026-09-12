@@ -54,6 +54,15 @@ export interface PaymentPart {
  *    quote_payment 를 아예 안 쓰고 「외상 + 받은 몫 수금(receivable_payment)」으로
  *    간다 (정본 sale.ts `prepaid`). 여기를 느슨하게 풀면 합이 안 맞는 분할 결제가
  *    quote_payment 에 남아, 그 표를 합계로 믿는 카드 일마감·정산이 조용히 어긋난다.
+ *
+ * ⭐ **같은 수단이 두 줄 이상인 것은 막지 않는다** (2026-09-12, 사장님 제보로 발견).
+ *    전에는 「『카드』가 두 번 들어 있습니다」로 거부했는데, 이 앱이 **스스로 그런 줄을
+ *    만든다**: 예약금을 받고 잔금을 또 카드로 받으면 `reservation-pay.ts` 가 받은 날을
+ *    살리려고 수금 줄을 **합치지 않고 한 줄씩** `quote_payment` 로 옮긴다. 그래서
+ *    「카드 200,000(9/10) + 카드 854,000(9/10) + 카드 200,000(9/12)」 같은 정상 자료가
+ *    생기는데, 규칙이 그걸 불법이라 해서 **그 판매는 「고치기」 저장이 영영 막혀 있었다.**
+ *    🔴 합치는 쪽으로 풀면 **받은 날이 사라져** 카드 일마감이 어긋난다(D-18) — 그래서
+ *    막는 규칙을 없애고 **줄 단위 그대로** 둔다. 틀린 금액은 아래 **합계 검사**가 잡는다.
  */
 export function checkSplitPayments(
   payments: PaymentPart[] | null | undefined,
@@ -62,13 +71,11 @@ export function checkSplitPayments(
   const parts = (payments ?? []).filter((p) => p.amount !== 0);
   if (parts.length <= 1) return { ok: true, split: null };
 
-  const seen = new Set<string>();
   for (const p of parts) {
     if (!(SPLITTABLE as readonly string[]).includes(p.method)) {
       return { ok: false, error: `「${p.method}」 는 분할 결제에 섞을 수 없습니다` };
     }
-    if (seen.has(p.method)) return { ok: false, error: `「${p.method}」 가 두 번 들어 있습니다` };
-    seen.add(p.method);
+    /* 같은 수단 중복은 정상이다 — 위 ⭐ 설명 참조 (카드 두 장, 예약금+잔금) */
     if (!Number.isInteger(p.amount) || p.amount === 0) {
       return { ok: false, error: `「${p.method}」 금액이 올바르지 않습니다` };
     }

@@ -91,6 +91,19 @@ export async function updateSaleHead(input: {
       })
       .where(eq(quote.id, input.quoteId));
     // 분할 내역은 통째로 갈아 끼운다 — 단일 수단으로 바꾸면 이전 분할 줄이 남으면 안 된다
+    /**
+     * 🔴 지우기 전에 **카드 일마감 자국부터 치운다** (2026-09-12).
+     *    `recon_match` 는 `quote_payment.id` 를 가리키는데, 줄을 지우고 새로 넣으면 id 가
+     *    바뀌어 **없어진 줄을 가리키는 유령 자국**이 남는다. 그러면 그 판매는 화면에서
+     *    「미대조」인데 자국은 어딘가에 남아 셈이 어긋난다.
+     *    `reservation-pay.ts` 는 이미 같은 순서로 치우고 있었다 — 여기만 빠져 있었다.
+     *    전에는 같은 수단 두 줄이 검사에서 막혀 이 길로 잘 오지 않았는데, 그 검사를
+     *    푼 이상(payments.ts) 실제로 지나가게 되므로 함께 막는다.
+     */
+    await tx.execute(sql`
+      DELETE FROM recon_match WHERE ref_table = 'quote_payment'
+        AND ref_id IN (SELECT id FROM quote_payment WHERE quote_id = ${input.quoteId})
+    `);
     await tx.delete(quotePayment).where(eq(quotePayment.quoteId, input.quoteId));
     if (split) {
       await tx.insert(quotePayment).values(
@@ -621,10 +634,16 @@ export async function removeSaleLine(
   return { ok: true, restored, warning };
 }
 
-/** 줄 더하기 — 상품이면 재고에서 빠진다 */
+/**
+ * 줄 더하기 — 상품이면 재고에서 빠진다
+ *
+ * ⭐ `use` = 정비에 쓴 부품 (2026-09-12). 판매 등록의 「쓴 부품 담기」(2026-08-11)와
+ *    같은 줄 종류다. 「고치기」 화면에서도 부품을 담을 수 있어야 해서 받는다 —
+ *    금액이 0원이면 종전처럼 재고만 차감되고 MARS 대기열에서도 빠진다.
+ */
 export async function addSaleLine(input: {
   quoteId: number;
-  kind: "tire" | "service" | "custom";
+  kind: "tire" | "service" | "custom" | "use";
   productId?: number | null;
   serviceItemId?: number | null;
   description: string;

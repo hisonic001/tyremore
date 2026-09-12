@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { cancelSale, convertToReservation, fulfillReservation, updateSaleHead, updateSaleMemo } from "@/lib/sale-edit";
 import Link from "@/lib/link";
@@ -18,6 +18,30 @@ import { ReassignPanel } from "./reassign";
 const won = (n: number) => n.toLocaleString("ko-KR");
 /** ⭐ 혼합은 이제 직접 고르지 않는다 — 수단을 2개 이상 고르면 자동으로 혼합이 된다 (2026-08-10) */
 const PAYS = [...SPLITTABLE, ...EXCLUSIVE] as readonly string[];
+
+/**
+ * ⭐ 결제 한 줄 (버그 수정 2026-09-12 — 사장님 제보 Q26-0910-002).
+ *
+ *    전에는 금액을 `{ 카드: "200000" }` 처럼 **수단 이름을 열쇠로** 담았다.
+ *    카드로 세 번 나눠 받은 건(200,000 + 854,000 + 200,000)은 열쇠가 겹쳐
+ *    마지막 값만 남고, 저장할 때 줄 수만큼 그 값이 복제돼 세 칸이 전부
+ *    200,000 이 되고 「654,000원 차이」가 떴다.
+ *    이제 줄마다 제 금액·제 날짜를 든다 — 같은 수단이 여러 줄이어도 서로 독립이다.
+ */
+type PayLine = {
+  /** 화면 열쇠 — 수단 이름은 겹칠 수 있어 열쇠로 못 쓴다 */
+  key: number;
+  method: string;
+  /** 입력칸 글자 그대로 (마이너스 입력 중인 "-" 도 담아야 해서 문자열) */
+  amount: string;
+  /**
+   * ⭐ 받은 날 — 화면엔 안 내보내고 **저장할 때 그대로 돌려보내기만** 한다 (2026-09-12).
+   *    서버(sale-edit.ts)는 quote_payment 를 전부 지우고 다시 넣는다. 화면이 paidOn 을
+   *    안 실어 보내던 탓에 「고치기」만 눌러도 받은 날이 전부 null 이 됐고, 다른 날 받은
+   *    잔금이 카드 일마감 대조(card-recon·pos-close)에서 사라졌다.
+   */
+  paidOn: string | null;
+};
 
 /**
  * 정비 한 건 — 펼치면 품목과 고치기·취소가 나온다.
@@ -66,17 +90,28 @@ export function SaleCard({
   /**
    * ⭐ 결제수단 여러 개 + 수단별 금액 (사장님 요청 2026-08-10).
    *    옛 「혼합」 건(분할 내역 없음)은 아무것도 안 골린 채 시작한다 — 새로 고르면 된다.
+   *
+   *    ⭐ 2026-09-12: 수단 이름을 열쇠로 쓰던 Record 를 **줄 배열(PayLine)** 로 바꿨다.
+   *       같은 수단이 여러 줄인 건(예약금·잔금이 자동 전환된 판매 — reservation-pay.ts)이
+   *       한 칸으로 뭉개지던 버그. 자세한 사정은 PayLine 주석 참고.
    */
-  const [payM, setPayM] = useState<string[]>(
+  /** 줄 열쇠 발급기 — 값이 뭐든 상관없고 겹치지만 않으면 된다 */
+  const payKey = useRef(0);
+  const newPayLine = (method: string, amount = "", paidOn: string | null = null): PayLine => ({
+    key: payKey.current++,
+    method,
+    amount,
+    paidOn,
+  });
+  const [payLines, setPayLines] = useState<PayLine[]>(() =>
     s.payments.length
-      ? s.payments.map((p) => p.method)
+      ? s.payments.map((p) => newPayLine(p.method, String(p.amount), p.paidOn))
       : s.paymentMethod && s.paymentMethod !== "혼합"
-        ? [s.paymentMethod]
+        ? [newPayLine(s.paymentMethod)]
         : [],
   );
-  const [payA, setPayA] = useState<Record<string, string>>(
-    Object.fromEntries(s.payments.map((p) => [p.method, String(p.amount)])),
-  );
+  /** 고른 수단 목록 — 단추 표시·저장 판단은 전과 같이 이것만 본다 */
+  const payM = payLines.map((l) => l.method);
   const [memo, setMemo] = useState(s.paymentMemo ?? "");
   /** ⭐ 주행거리 (2026-08-17) — 없으면 MARS 체크가 막히니 여기서 채운다 */
   const [km, setKm] = useState(s.mileage !== null ? String(s.mileage) : "");
@@ -88,21 +123,25 @@ export function SaleCard({
     (s.supplierName ? `거래처 ${s.supplierName}` : null) ?? s.customerName ?? s.walkIn ?? "손님 미지정";
 
   const splitPay = SPLITTABLE as readonly string[];
-  const paySum = payM.reduce((sum, m) => sum + Number(payA[m] || "0"), 0);
+  // 줄마다 제 금액을 들고 있으니 그냥 더하면 된다 (전에는 수단 이름으로 금액을 찾다가 겹쳤다)
+  const paySum = payLines.reduce((sum, l) => sum + Number(l.amount || "0"), 0);
   /** 복합결제 스위치 — 켰을 때만 2개 이상 (사장님 요청 2026-08-10). 분할 건은 켠 채로 시작 */
   const [combo, setCombo] = useState(s.payments.length >= 2);
   const toggleCombo = () => {
     setError(null);
     setCombo((on) => {
       if (on) {
-        setPayM((prev) => {
-          const first = prev.find((m) => splitPay.includes(m));
-          return first ? [first] : prev;
+        setPayLines((prev) => {
+          const first = prev.find((l) => splitPay.includes(l.method));
+          // 끄면 수단 하나만 남는다 — 금액칸이 사라지므로 금액은 비운다 (전과 같다).
+          // 받은 날은 굳이 안 지운다 — 다시 켤 때 그 줄의 날짜가 살아 있는 편이 낫다
+          return first ? [{ ...first, amount: "" }] : prev.map((l) => ({ ...l, amount: "" }));
         });
-        setPayA({});
         return false;
       }
-      setPayM((prev) => (prev.every((m) => splitPay.includes(m)) && prev.length ? prev : ["카드"]));
+      setPayLines((prev) =>
+        prev.length && prev.every((l) => splitPay.includes(l.method)) ? prev : [newPayLine("카드")],
+      );
       return true;
     });
   };
@@ -110,40 +149,31 @@ export function SaleCard({
     setError(null);
     if ((EXCLUSIVE as readonly string[]).includes(p)) {
       setCombo(false);
-      setPayM((prev) => (prev.length === 1 && prev[0] === p ? [] : [p]));
-      setPayA({});
+      setPayLines((prev) =>
+        prev.length === 1 && prev[0].method === p ? [] : [newPayLine(p)],
+      );
       return;
     }
     // 복합결제가 꺼져 있으면 하나만 — 누르면 바뀐다
     if (!combo) {
-      setPayM([p]);
-      setPayA({});
+      setPayLines([newPayLine(p)]);
       return;
     }
-    setPayM((prev) => {
-      const cur = prev.filter((m) => splitPay.includes(m));
-      if (cur.includes(p)) {
-        const next = cur.filter((m) => m !== p);
-        setPayA((a) => {
-          const rest = { ...a };
-          delete rest[p];
-          return rest;
-        });
-        return next;
-      }
+    setPayLines((prev) => {
+      const cur = prev.filter((l) => splitPay.includes(l.method));
+      // 켜져 있던 수단을 다시 누르면 그 수단 줄을 뺀다 — 같은 수단이 여러 줄이면 함께 빠진다
+      // (단추가 수단마다 하나뿐이라 전부터 그랬다. 줄 하나만 빼는 기능은 여기 없다)
+      if (cur.some((l) => l.method === p)) return cur.filter((l) => l.method !== p);
       // 새 수단을 고르는 순간 나머지 금액이 자동으로 (사장님 요청 2026-08-10)
-      setPayA((a) => {
-        const used = cur.reduce((sum, m) => sum + Number(a[m] || "0"), 0);
-        return cur.length === 0
-          ? { [p]: String(s.totalAmount) }
-          : { ...a, [p]: String(s.totalAmount - used) }; // 마이너스 판매면 나머지도 마이너스 (2026-08-21)
-      });
-      return [...cur, p];
+      const used = cur.reduce((sum, l) => sum + Number(l.amount || "0"), 0);
+      // 마이너스 판매면 나머지도 마이너스 (2026-08-21)
+      const rest = cur.length === 0 ? s.totalAmount : s.totalAmount - used;
+      return [...cur, newPayLine(p, String(rest))];
     });
   };
 
   function saveHead() {
-    if (payM.length >= 2 && paySum !== s.totalAmount) {
+    if (payLines.length >= 2 && paySum !== s.totalAmount) {
       setError(
         `분할 금액 합계(${won(paySum)}원)가 판매 합계(${won(s.totalAmount)}원)와 다릅니다 — 금액을 맞춰 주세요`,
       );
@@ -154,8 +184,13 @@ export function SaleCard({
       const r = await updateSaleHead({
         quoteId: s.quoteId,
         workDate,
-        paymentMethod: payM.length === 1 ? payM[0] : null,
-        payments: payM.length >= 2 ? payM.map((m) => ({ method: m, amount: Number(payA[m] || "0") })) : null,
+        paymentMethod: payLines.length === 1 ? payLines[0].method : null,
+        // ⭐ 받은 날(paidOn)까지 그대로 돌려보낸다 (2026-09-12) — 서버가 quote_payment 를
+        //    지우고 다시 넣으므로, 안 보내면 손 안 댄 줄의 받은 날까지 null 이 된다
+        payments:
+          payLines.length >= 2
+            ? payLines.map((l) => ({ method: l.method, amount: Number(l.amount || "0"), paidOn: l.paidOn }))
+            : null,
         paymentMemo: memo || null,
         // 비워 두면 안 건드린다 — 지우는 기능은 일부러 없다 (MARS 가 주행거리 없는 전기를 막는다)
         mileage: km === "" ? undefined : Number(km),
@@ -596,14 +631,19 @@ export function SaleCard({
                       복합결제
                     </button>
                   </div>
-                  {combo && payM.length >= 2 && (
+                  {combo && payLines.length >= 2 && (
                     <div className="space-y-1.5">
-                      {payM.map((m) => (
-                        <label key={m} className="flex items-center gap-2">
-                          <span className="w-16 shrink-0 text-xs text-slate-600">{m}</span>
+                      {/* 줄 열쇠는 순번(key) — 수단 이름으로 묶으면 카드 3장 건이 한 칸으로 뭉갠다 (2026-09-12) */}
+                      {payLines.map((l, i) => (
+                        <label key={l.key} className="flex items-center gap-2">
+                          <span className="w-16 shrink-0 text-xs text-slate-600">{l.method}</span>
                           <input
-                            value={showSigned(payA[m] ?? "")}
-                            onChange={(e) => setPayA((a) => ({ ...a, [m]: signedStr(e.target.value) }))}
+                            value={showSigned(l.amount)}
+                            onChange={(e) =>
+                              setPayLines((prev) =>
+                                prev.map((x, j) => (j === i ? { ...x, amount: signedStr(e.target.value) } : x)),
+                              )
+                            }
                             inputMode="numeric"
                             className="tabular min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-right text-sm"
                           />
