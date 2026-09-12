@@ -7,6 +7,7 @@
  *   · logActivity()     — 코어 함수·액션 본문에서 한 줄. 실패해도 본 일을 막지 않는다(throw 안 함).
  *   · recentActivity()  — 최근 30일 또는 고른 달, 날짜별 묶음.
  *   · closedDelta()     — 마감된 달의 「마감 뒤 고친 것 N건 · 이익 X → Y」.
+ *   · autoActivity()    — 「이번 주 정리」 단계의 「앱이 자동 대조한 것」 층 (대상 달·동사, 3단계 2026-09-12).
  *   · undoActivity()    — "use server" 라 fin-activity-actions.ts 에 (코어가 이 파일을 import 하므로 여기는 서버 액션 아님).
  *
  * 🔴 "use server" 아님. 코어(recon-core·deposit-core·pos-close…)가 import 한다.
@@ -16,6 +17,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import type { ActivityDay, ActivityEntry, ActivityHow, ActivityRow, ActivityVerb, ClosedDelta, UndoItem, UndoKind } from "./fin-activity-types";
+import type { AutoLine } from "./weekly-types";
 import { finPL } from "./fin-pl";
 import { monthRange } from "./ym";
 
@@ -159,6 +161,32 @@ export async function recentActivity(
     else days_.push({ d: r.d, rows: [row] });
   }
   return days_;
+}
+
+/**
+ * ⭐ 「앱이 자동 대조한 것」 층 재료 (개편 3단계 「이번 주 정리」, 2026-09-12)
+ *
+ *   단계 ③④⑥의 첫 층은 「앱이 자동으로 한 것」을 접어 보여 준다. cash_txn 엔 「누가 분류했나」가
+ *   없어 다른 길로 세면 새 판정이 된다 — 그래서 fin_activity 를 **되읽는다**(대상 달·동사 기준,
+ *   how 는 recentActivity 의 「자동」 묶음과 같은 넷, 되돌린 줄 제외). 되돌리기는 「최근 한 일」 한 곳.
+ *   🔴 이 표의 SQL 은 이 파일에만(머리말 원칙). LIMIT 50 — 접힌 층이라 그 이상은 안 읽힌다.
+ */
+export async function autoActivity(ym: string, verb: ActivityVerb): Promise<AutoLine[]> {
+  const rows = await db.execute<{ id: number; at: string; label: string; n: number; amount: string | number | null }>(sql`
+    SELECT a.id, to_char(a.at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD HH24:MI') at, a.label, a.n, a.amount
+    FROM fin_activity a
+    WHERE a.ym = ${ym} AND a.verb = ${verb}
+      AND a.how IN ('자동','조정','cron','연간실행') AND a.undone_at IS NULL
+    ORDER BY a.at DESC, a.id DESC
+    LIMIT 50
+  `);
+  return rows.map((r) => ({
+    id: Number(r.id),
+    at: r.at,
+    label: r.label,
+    n: Number(r.n ?? 1),
+    amount: r.amount == null ? null : Number(r.amount),
+  }));
 }
 
 /**

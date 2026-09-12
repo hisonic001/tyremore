@@ -11,6 +11,8 @@ import { receivableTotal } from "@/lib/receivable-total";
 import { PeriodFilter } from "@/components/ui/period-filter";
 import { PayFilter } from "./filter";
 import { SalesList } from "./mars-upload";
+import { W } from "@/lib/fin-words";
+import { stepMark } from "@/lib/weekly-pure";
 
 export const dynamic = "force-dynamic";
 
@@ -39,9 +41,15 @@ export default async function SalesPage({
     pay?: string;
     reserved?: string;
     mars?: string;
+    /** ⭐ 「이번 주 정리」에서 「정비 내역에 등록하러」 왔을 때 돌아가는 길 (3단계, 2026-09-12) — 허용값은 weekly 뿐 */
+    back?: string;
+    step?: string;
+    ym?: string;
   }>;
 }) {
   const sp = await searchParams;
+  /* 돌아가는 띠 — back=weekly 이고 step 1~7·ym 이 온전할 때만. 다른 값은 조용히 무시(주소로 들어오는 값이라 화이트리스트) */
+  const backStep = sp.back === "weekly" && /^[1-7]$/.test(sp.step ?? "") && /^\d{4}-\d{2}$/.test(sp.ym ?? "") ? Number(sp.step) : null;
   const customerId = sp.customer ? Number(sp.customer) : undefined;
   const vehicleId = sp.vehicle ? Number(sp.vehicle) : undefined;
   const supplierName = sp.supplier?.trim() || undefined;
@@ -167,6 +175,14 @@ export default async function SalesPage({
   // ⭐ 한 줄 행 개편(2026-09-04)으로 2열 격자가 사라져 PC 폭을 좁혔다 — 넓으면 이름↔금액 시선 이동이 길다
   return (
     <main className="mx-auto min-h-dvh max-w-2xl px-4 py-6 lg:max-w-3xl">
+      {backStep !== null && (
+        <Link
+          href={`/finance/weekly?step=${backStep}&ym=${sp.ym}`}
+          className="mb-3 flex items-center gap-2 rounded-lg bg-brand-50 px-3 py-2 text-sm font-medium text-brand-700"
+        >
+          ← {W.backToWeekly} ({stepMark(backStep)})
+        </Link>
+      )}
       <div className="flex items-center justify-between">
         <Link href="/" className="text-sm text-slate-500 underline underline-offset-4">
           ← 검색으로

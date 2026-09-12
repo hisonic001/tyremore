@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
 import type { PayLinkRow, PayablesData, PayableSupplier } from "@/lib/recon-data";
@@ -14,47 +14,50 @@ import {
 } from "@/lib/purchase-pay";
 import type { SupplierCardInfo } from "@/lib/payables-view";
 import { won } from "@/components/fin/money";
-import { useConfirm } from "@/components/ui/confirm";
+import { useConfirm, type ConfirmOpts } from "@/components/ui/confirm";
 import { W } from "@/lib/fin-words";
 
 const kstToday = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
 const METHODS = ["계좌이체", "현금", "카드", "기타"];
 
-/** ⭐ 미지급금 장부 — 거래처별 잔액 + 지급 등록 (ERP ⑦, 2026-08-25)
- *   화면 글자는 fin-words 정본(ERP 용어, 2026-09-12): 지급 잡기→지급 대조, 도장 찍기→지급 확인, 예치금→선급금.
- *   되돌리기 표(접어둔 출금·출금에서 대조한 지급·최근 지급)는 「최근 한 일」로 옮겼다. */
-export function PayablesUi({
-  data,
-  cards,
-  payerOptions,
-  links,
-  supplierNames,
-  cashSummary,
-}: {
-  data: PayablesData;
-  /** ⭐ 리모델링(2026-08-31) — 거래처마다 세 장부(준 돈·계산서·선급금·자동 대조)를 합친 카드 정보 */
-  cards: Record<string, SupplierCardInfo>;
-  /** 별명 추가할 때 고를 이 달 통장 이름 후보 (검색) */
-  payerOptions: string[];
-  links: PayLinkRow[];
-  supplierNames: string[];
-  cashSummary: { ym: string; n: number; sum: number };
-}) {
+/* ───────────────────────── 공통 손잡이 (개편 3단계, 2026-09-12 — 조각으로 승격) ─────────────────────────
+   PayablesUi 안에 있던 진행 상태·출금→지급 대조·접기·줄 밑 알림을 훅으로 빼서, 기존 화면과
+   「이번 주 정리」 흐름(⑥)이 같은 출금 줄(WithdrawalRow)을 쓴다. 동작은 전과 같다. */
+
+export interface PayCtx {
+  pending: boolean;
+  /** 진행 상태 묶음 — 거래처 카드(지급 확인·별명·손 지급)도 같은 start/setMsg/setError 를 쓴다 */
+  start: (fn: () => Promise<void>) => void;
+  setMsg: (m: string | null) => void;
+  setError: (m: string | null) => void;
+  ask: (opts: ConfirmOpts) => Promise<boolean>;
+  confirmDialog: ReactNode;
+  msg: string | null;
+  error: string | null;
+  /** 출금 → 거래처로 지급 대조 (확인 시트 → payFromWithdrawal) */
+  linkPay: (row: PayLinkRow, supplier: string) => Promise<void>;
+  /** 「대조 제외 — 접기」 (확인 시트 → skipWithdrawal) */
+  skipRow: (row: PayLinkRow) => Promise<void>;
+  /** 출금 → 거래처 직접 선택 (제안이 없거나 다를 때) */
+  linkPick: Record<number, string>;
+  setLinkPick: (id: number, v: string) => void;
+  /** 줄 밑 알림 (거절 이유) */
+  rowNote: Record<number, string>;
+  /** 거래처별 미지급 잔액 — 0원인 곳은 누르기 전에 알려 준다 */
+  remainBySup: Map<string, number>;
+}
+
+export function usePayCtx({ remainBySup }: { remainBySup: Map<string, number> }): PayCtx {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ask, confirmDialog] = useConfirm(); // 배치5 — 브라우저 confirm() 대체
-  /** 거래처별 지급 폼 상태 */
-  const [form, setForm] = useState<Record<string, { amount: string; method: string; paidOn: string }>>({});
-
-  /** 출금 → 거래처 직접 선택 (제안이 없거나 다를 때) */
-  const [linkPick, setLinkPick] = useState<Record<number, string>>({});
+  const [linkPick, setLinkPickState] = useState<Record<number, string>>({});
   /* 🔴 결과를 누른 줄 바로 밑에 보여준다 (사장님 제보 2026-08-31 — "지급 클릭 →
      아무일도 안일어남"). 실은 「미지급이 없습니다」 거절이 위쪽 배너에만 떠서 안 보였다. */
   const [rowNote, setRowNote] = useState<Record<number, string>>({});
-  /** 거래처별 미지급 잔액 — 0원인 곳은 누르기 전에 알려 준다 */
-  const remainBySup = new Map(data.suppliers.map((x) => [x.supplier, x.remain]));
+
   const linkPay = async (row: PayLinkRow, supplier: string) => {
     if (
       !(await ask({
@@ -79,6 +82,138 @@ export function PayablesUi({
       router.refresh();
     });
   };
+
+  /* ⭐ 「대조 제외 — 접기」 (2026-08-31) — 앱 이전 기간 대금은 대조할 인보이스가 없다.
+     되살리기(skipWithdrawal(id,true))는 2단계부터 「최근 한 일」에서. */
+  const skipRow = async (row: PayLinkRow) => {
+    if (
+      !(await ask({
+        title: "이 출금을 접을까요?",
+        body: `${row.at} ${row.payer} ${won(row.amount)}원 — 앱에 ${W.recon}할 인보이스가 없는 출금(지난달 대금 등)을 목록에서 접습니다.
+분류(매입대금)와 손익은 그대로이고, 「${W.activity}」에서 언제든 되돌립니다.`,
+        confirmLabel: "접기",
+      }))
+    )
+      return;
+    start(async () => {
+      setMsg(null);
+      setError(null);
+      const r = await skipWithdrawal(row.id, false);
+      if (!r.ok) return setError(r.error);
+      setMsg(`접었습니다 — 「${W.activity}」에서 되돌릴 수 있습니다.`);
+      router.refresh();
+    });
+  };
+
+  const setLinkPick = (id: number, v: string) => setLinkPickState((p) => ({ ...p, [id]: v }));
+
+  return { pending, start, setMsg, setError, ask, confirmDialog, msg, error, linkPay, skipRow, linkPick, setLinkPick, rowNote, remainBySup };
+}
+
+/** 안내 띠 — 실패·성공 한 줄 */
+export function PayBanner({ ctx }: { ctx: PayCtx }) {
+  return (
+    <>
+      {ctx.error && <p className="mt-3 rounded-lg bg-red-50 p-2 text-sm text-red-700">⚠️ {ctx.error}</p>}
+      {ctx.msg && <p className="mt-3 rounded-lg bg-emerald-50 p-2 text-sm text-emerald-800">✅ {ctx.msg}</p>}
+    </>
+  );
+}
+
+/** 출금 한 줄 — 제안 거래처로 지급 / 거래처 검색해서 지급 / 접기. `<li>` 를 그린다.
+ *  🔴 거래처 검색 입력은 `<datalist id="pay-supplier-names">` 를 찾는다 — 부르는 화면이 한 번 그려야 한다 */
+export function WithdrawalRow({ row, ctx, supplierNames }: { row: PayLinkRow; ctx: PayCtx; supplierNames: string[] }) {
+  const { pending, linkPay, skipRow, linkPick, setLinkPick, rowNote, remainBySup } = ctx;
+  return (
+    <li className="flex flex-wrap items-center justify-between gap-1.5">
+      <span className="tabular min-w-0 truncate text-xs">
+        {row.at} · {row.payer} · <strong>−{won(row.amount)}원</strong>
+      </span>
+      {row.suggest ? (
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => linkPay(row, row.suggest!.supplier)}
+          className="shrink-0 rounded-lg bg-sky-700 px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-40"
+        >
+          → {row.suggest.supplier} 지급 (잔액 {won(row.suggest.remain)})
+        </button>
+      ) : (
+        <span className="flex shrink-0 items-center gap-1">
+          <input
+            value={linkPick[row.id] ?? ""}
+            onChange={(e) => setLinkPick(row.id, e.target.value)}
+            list="pay-supplier-names"
+            placeholder="거래처 검색…"
+            className="w-28 rounded-lg border border-slate-300 px-1.5 py-1 text-xs"
+          />
+          <button
+            type="button"
+            disabled={
+              pending ||
+              !supplierNames.includes((linkPick[row.id] ?? "").trim()) ||
+              !remainBySup.has((linkPick[row.id] ?? "").trim())
+            }
+            onClick={() => linkPay(row, (linkPick[row.id] ?? "").trim())}
+            className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium disabled:opacity-40"
+          >
+            지급
+          </button>
+        </span>
+      )}
+      {/* ⭐ 대조할 인보이스가 없는 출금(지난달 대금 등)은 접는다 (2026-08-31) */}
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() => skipRow(row)}
+        className="shrink-0 rounded-lg px-1.5 py-1 text-xs text-slate-400 underline underline-offset-2 active:bg-slate-100"
+        title={`앱에 ${W.recon}할 인보이스가 없으면 접습니다 — ${W.activity}에서 되돌릴 수 있어요`}
+      >
+        {W.excluded}
+      </button>
+      {/* 미지급 0원 거래처를 골랐을 때 — 서버까지 안 가고 바로 알려 준다 */}
+      {(() => {
+        const picked = (linkPick[row.id] ?? "").trim();
+        const zero = !row.suggest && supplierNames.includes(picked) && !remainBySup.has(picked);
+        const note = rowNote[row.id];
+        if (!zero && !note) return null;
+        return (
+          <p className="w-full rounded-lg bg-amber-50 p-1.5 text-xs text-amber-800">
+            {note ||
+              `「${picked}」는 지금 ${W.payable}이 0원입니다 — 인보이스가 아직 앱에 안 들어온 ${W.prepaid}이면 입고 뒤에 ${W.recon}하고, 그동안은 「${W.excluded}」로 접어 두세요.`}
+          </p>
+        );
+      })()}
+    </li>
+  );
+}
+
+/** ⭐ 미지급금 장부 — 거래처별 잔액 + 지급 등록 (ERP ⑦, 2026-08-25)
+ *   화면 글자는 fin-words 정본(ERP 용어, 2026-09-12): 지급 잡기→지급 대조, 도장 찍기→지급 확인, 예치금→선급금.
+ *   되돌리기 표(접어둔 출금·출금에서 대조한 지급·최근 지급)는 「최근 한 일」로 옮겼다.
+ *   🔴 개편 3단계(2026-09-12): 출금 줄·손잡이는 위 조각(usePayCtx·WithdrawalRow)으로 — 모양·동작은 전과 같다. */
+export function PayablesUi({
+  data,
+  cards,
+  payerOptions,
+  links,
+  supplierNames,
+  cashSummary,
+}: {
+  data: PayablesData;
+  /** ⭐ 리모델링(2026-08-31) — 거래처마다 세 장부(준 돈·계산서·선급금·자동 대조)를 합친 카드 정보 */
+  cards: Record<string, SupplierCardInfo>;
+  /** 별명 추가할 때 고를 이 달 통장 이름 후보 (검색) */
+  payerOptions: string[];
+  links: PayLinkRow[];
+  supplierNames: string[];
+  cashSummary: { ym: string; n: number; sum: number };
+}) {
+  const router = useRouter();
+  const ctx = usePayCtx({ remainBySup: new Map(data.suppliers.map((x) => [x.supplier, x.remain])) });
+  const { pending, start, setMsg, setError, ask, confirmDialog } = ctx;
+  /** 거래처별 지급 폼 상태 */
+  const [form, setForm] = useState<Record<string, { amount: string; method: string; paidOn: string }>>({});
 
   /* ⚡ 원단위 자동 대조 (리모델링 ②) — 출금이 인보이스(묶음)와 정확히 일치할 때 한 번에 */
   const autoLink = async (supplier: string, e: { cashTxnId: number; day: string; amount: number; invoiceNos: string[] }) => {
@@ -148,28 +283,6 @@ export function PayablesUi({
       router.refresh();
     });
 
-  /* ⭐ 「대조 제외 — 접기」 (2026-08-31) — 앱 이전 기간 대금은 대조할 인보이스가 없다.
-     되살리기(skipWithdrawal(id,true))는 2단계부터 「최근 한 일」에서. */
-  const skipRow = async (row: PayLinkRow) => {
-    if (
-      !(await ask({
-        title: "이 출금을 접을까요?",
-        body: `${row.at} ${row.payer} ${won(row.amount)}원 — 앱에 ${W.recon}할 인보이스가 없는 출금(지난달 대금 등)을 목록에서 접습니다.
-분류(매입대금)와 손익은 그대로이고, 「${W.activity}」에서 언제든 되돌립니다.`,
-        confirmLabel: "접기",
-      }))
-    )
-      return;
-    start(async () => {
-      setMsg(null);
-      setError(null);
-      const r = await skipWithdrawal(row.id, false);
-      if (!r.ok) return setError(r.error);
-      setMsg(`접었습니다 — 「${W.activity}」에서 되돌릴 수 있습니다.`);
-      router.refresh();
-    });
-  };
-
   const getForm = (s: PayableSupplier) =>
     form[s.supplier] ?? { amount: String(s.remain), method: "계좌이체", paidOn: kstToday() };
 
@@ -199,8 +312,7 @@ export function PayablesUi({
 
   return (
     <>
-      {error && <p className="mt-3 rounded-lg bg-red-50 p-2 text-sm text-red-700">⚠️ {error}</p>}
-      {msg && <p className="mt-3 rounded-lg bg-emerald-50 p-2 text-sm text-emerald-800">✅ {msg}</p>}
+      <PayBanner ctx={ctx} />
 
       <section className="mt-4 rounded-2xl border-2 border-slate-800 bg-white p-4 text-center">
         <p className="text-xs text-slate-500">{W.payable} (잔액 전체)</p>
@@ -236,66 +348,7 @@ export function PayablesUi({
           </p>
           <ul className="mt-2 space-y-1.5 text-sm">
             {links.map((row) => (
-              <li key={row.id} className="flex flex-wrap items-center justify-between gap-1.5">
-                <span className="tabular min-w-0 truncate text-xs">
-                  {row.at} · {row.payer} · <strong>−{won(row.amount)}원</strong>
-                </span>
-                {row.suggest ? (
-                  <button
-                    type="button"
-                    disabled={pending}
-                    onClick={() => linkPay(row, row.suggest!.supplier)}
-                    className="shrink-0 rounded-lg bg-sky-700 px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-40"
-                  >
-                    → {row.suggest.supplier} 지급 (잔액 {won(row.suggest.remain)})
-                  </button>
-                ) : (
-                  <span className="flex shrink-0 items-center gap-1">
-                    <input
-                      value={linkPick[row.id] ?? ""}
-                      onChange={(e) => setLinkPick((p) => ({ ...p, [row.id]: e.target.value }))}
-                      list="pay-supplier-names"
-                      placeholder="거래처 검색…"
-                      className="w-28 rounded-lg border border-slate-300 px-1.5 py-1 text-xs"
-                    />
-                    <button
-                      type="button"
-                      disabled={
-                        pending ||
-                        !supplierNames.includes((linkPick[row.id] ?? "").trim()) ||
-                        !remainBySup.has((linkPick[row.id] ?? "").trim())
-                      }
-                      onClick={() => linkPay(row, (linkPick[row.id] ?? "").trim())}
-                      className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium disabled:opacity-40"
-                    >
-                      지급
-                    </button>
-                  </span>
-                )}
-                {/* ⭐ 대조할 인보이스가 없는 출금(지난달 대금 등)은 접는다 (2026-08-31) */}
-                <button
-                  type="button"
-                  disabled={pending}
-                  onClick={() => skipRow(row)}
-                  className="shrink-0 rounded-lg px-1.5 py-1 text-xs text-slate-400 underline underline-offset-2 active:bg-slate-100"
-                  title={`앱에 ${W.recon}할 인보이스가 없으면 접습니다 — ${W.activity}에서 되돌릴 수 있어요`}
-                >
-                  {W.excluded}
-                </button>
-                {/* 미지급 0원 거래처를 골랐을 때 — 서버까지 안 가고 바로 알려 준다 */}
-                {(() => {
-                  const picked = (linkPick[row.id] ?? "").trim();
-                  const zero = !row.suggest && supplierNames.includes(picked) && !remainBySup.has(picked);
-                  const note = rowNote[row.id];
-                  if (!zero && !note) return null;
-                  return (
-                    <p className="w-full rounded-lg bg-amber-50 p-1.5 text-xs text-amber-800">
-                      {note ||
-                        `「${picked}」는 지금 ${W.payable}이 0원입니다 — 인보이스가 아직 앱에 안 들어온 ${W.prepaid}이면 입고 뒤에 ${W.recon}하고, 그동안은 「${W.excluded}」로 접어 두세요.`}
-                    </p>
-                  );
-                })()}
-              </li>
+              <WithdrawalRow key={row.id} row={row} ctx={ctx} supplierNames={supplierNames} />
             ))}
           </ul>
         </section>

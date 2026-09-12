@@ -25,3 +25,36 @@ export function exactPlan(
   }
   return null;
 }
+
+/**
+ * ⭐ 거래처 축 → 출금 축 뒤집기 (개편 3단계 ⑥, 2026-09-12)
+ *
+ *   payablesCardInfo(ym, suppliers)[sup].exact 는 「이 거래처의 어느 출금이 어느 인보이스와 원단위로
+ *   맞는가」(거래처 카드용). 「이번 주 정리」 흐름은 출금 한 줄씩 체크하므로 출금 축으로 뒤집는다.
+ *   🔴 판정은 exactPlan 그대로 — 여기서는 모양만 바꾼다. 같은 출금이 두 거래처에, 같은 인보이스가
+ *      두 출금에 가는 일은 payablesCardInfo 가 이미 막지만(remain=0 처리), 순수 함수 쪽에서도
+ *      한 번 더 거른다(먼저 온 것이 이긴다) — 실행은 어차피 autoLinkExactCore 가 FOR UPDATE 로 재검사.
+ *   · day: ExactSuggest.day 는 'MM-DD'(payables-view 의 to_char) — ym 의 연도를 붙여 'YYYY-MM-DD' 로.
+ *   · 순서: 날짜 → cashTxnId (화면이 날짜순으로 보이게).
+ */
+export function flipExact(
+  cards: Record<string, { exact: { cashTxnId: number; day: string; amount: number; invoiceNos: string[] }[] }>,
+  ym: string,
+): { cashTxnId: number; day: string; amount: number; supplier: string; invoiceNos: string[] }[] {
+  const year = ym.slice(0, 4);
+  const seenCash = new Set<number>();
+  const seenInv = new Set<string>();
+  const out: { cashTxnId: number; day: string; amount: number; supplier: string; invoiceNos: string[] }[] = [];
+  for (const [supplier, info] of Object.entries(cards)) {
+    for (const e of info.exact ?? []) {
+      if (seenCash.has(e.cashTxnId)) continue;
+      const keys = e.invoiceNos.map((no) => `${supplier}|${no}`);
+      if (keys.some((k) => seenInv.has(k))) continue;
+      seenCash.add(e.cashTxnId);
+      for (const k of keys) seenInv.add(k);
+      const day = /^\d{2}-\d{2}$/.test(e.day) ? `${year}-${e.day}` : e.day;
+      out.push({ cashTxnId: e.cashTxnId, day, amount: e.amount, supplier, invoiceNos: [...e.invoiceNos] });
+    }
+  }
+  return out.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.cashTxnId - b.cashTxnId));
+}

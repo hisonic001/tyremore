@@ -3,6 +3,7 @@ import { getSession, hasPerm } from "@/lib/auth";
 import Link from "@/lib/link";
 import { FinShell } from "@/components/fin/shell";
 import { SectionCard } from "@/components/fin/section";
+import { CoverageGrid } from "@/components/fin/coverage-grid";
 import { pickYm } from "@/lib/ym";
 import { uploadCoverage, coverageStatus } from "@/lib/upload-coverage";
 import { uploadLedger, findUploadOfLine } from "@/lib/upload-ledger";
@@ -39,7 +40,6 @@ export default async function FinanceFilesPage({
   const q = typeof sp.q === "string" ? sp.q.trim() : "";
   const cov = await uploadCoverage();
   const st = coverageStatus(cov, ym);
-  const lag = new Set(st.lagging.map((r) => r.key));
   const uploads = await uploadLedger({ q: q || null, limit: q ? 100 : 60 });
   const lines = q ? await findUploadOfLine(q) : null;
   const openTotal = uploads.filter((u) => u.status === "반영").reduce((s, u) => s + (u.open ?? 0), 0);
@@ -63,22 +63,8 @@ export default async function FinanceFilesPage({
           </>
         }
       >
-        <ul className="mt-2 grid grid-cols-1 gap-1.5 text-sm sm:grid-cols-2 lg:grid-cols-3">
-          {cov.map((r) => (
-            <li
-              key={r.key}
-              className={`tabular flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 ${
-                lag.has(r.key) ? "bg-amber-50 text-amber-900" : "bg-slate-50 text-slate-600"
-              }`}
-            >
-              <span className="min-w-0 truncate">{r.label}</span>
-              <span className="shrink-0 text-xs">
-                {r.last ? `~${r.granularity === "month" ? r.last : r.last.slice(5)}` : "없음"}
-                {lag.has(r.key) && " ⚠ 비었음"}
-              </span>
-            </li>
-          ))}
-        </ul>
+        {/* 칩 격자는 공용 CoverageGrid(올리기·「이번 주 정리」① 과 같은 부품, 2026-09-12) — 머리·꼬리는 이 화면 문구 그대로 */}
+        <CoverageGrid rows={cov} status={st} heading={false} foot={false} lagMark=" ⚠ 비었음" />
         <p className="mt-1.5 text-xs text-slate-400">
           기준일 {st.endShown.slice(5)} 3일 전까지 안 온 자료에 ⚠ — 비었으면{" "}
           <Link href={`/finance/upload?ym=${ym}`} className="underline">올리기</Link>로.

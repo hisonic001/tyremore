@@ -18,7 +18,7 @@ import { W } from "@/lib/fin-words";
  * 거의 언제나 「받았던 돈을 돌려줬다」이다 — 사장님이 말로 알려주셔야 했던
  * 박성준(제이) 예약금 반환이 정확히 이 모양이었다(07-21 입금 → 07-26 출금).
  */
-function Clues({ row }: { row: ExpenseRow }) {
+export function Clues({ row }: { row: ExpenseRow }) {
   const mirror = row.related.find((x) => x.amount === row.amount);
   if (!row.what && !row.taxParty && row.related.length === 0) return null;
   return (
@@ -52,18 +52,31 @@ function Clues({ row }: { row: ExpenseRow }) {
 }
 
 
-/** ⭐ 지출 분류 화면 (ERP ⑥, 2026-08-25) — 제안 원터치 + 분류 고르기 */
-export function ExpensesUi({ data, ym }: { data: ExpenseData; ym: string }) {
+/* ───────────────────────── 공통 손잡이 (개편 3단계, 2026-09-12 — 조각으로 승격) ─────────────────────────
+   ExpensesUi 안에 있던 진행 상태·분류 실행·안내·셀렉트 상태를 훅으로 빼서, 기존 화면과
+   「이번 주 정리」 흐름(④)이 같은 줄 카드(ExpenseRowCard)를 쓴다. 동작은 전과 같다. */
+
+export interface ExpenseCtx {
+  pending: boolean;
+  /** 한 줄(또는 묶음 대표 id)에 분류 붙이기 — setExpenseCategory 가 같은 상대에 전파한다 */
+  classify: (row: Pick<ExpenseRow, "id" | "payer">, category: string) => void;
+  /** 줄마다 고른 분류 (셀렉트) */
+  pick: Record<number, string>;
+  setPick: (id: number, category: string) => void;
+  msg: string | null;
+  error: string | null;
+}
+
+export function useExpenseCtx(): ExpenseCtx {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  /** 줄마다 고른 분류 (셀렉트) */
-  const [pick, setPick] = useState<Record<number, string>>({});
+  const [pick, setPickState] = useState<Record<number, string>>({});
   /* 🔴 분류 해제(이 줄만 / N건 전부 — 2회차 수리 A5)는 2단계(2026-09-12)에 「최근 한 일」 되돌리기로
      옮겼다(previewUnset·setExpenseCategory(id,null,{scope}) 를 거기서 부른다). 이 화면엔 링크만. */
 
-  const classify = (row: ExpenseRow, category: string) =>
+  const classify: ExpenseCtx["classify"] = (row, category) =>
     start(async () => {
       setMsg(null);
       setError(null);
@@ -74,11 +87,118 @@ export function ExpensesUi({ data, ym }: { data: ExpenseData; ym: string }) {
       );
       router.refresh();
     });
+  const setPick = (id: number, category: string) => setPickState((p) => ({ ...p, [id]: category }));
+
+  return { pending, classify, pick, setPick, msg, error };
+}
+
+/** 안내 띠 — 실패·성공 한 줄 */
+export function ExpenseBanner({ ctx }: { ctx: ExpenseCtx }) {
+  return (
+    <>
+      {ctx.error && <p className="mt-3 rounded-lg bg-red-50 p-2 text-sm text-red-700">⚠️ {ctx.error}</p>}
+      {ctx.msg && <p className="mt-3 rounded-lg bg-emerald-50 p-2 text-sm text-emerald-800">✅ {ctx.msg}</p>}
+    </>
+  );
+}
+
+/** 분류 안 된 지출 한 줄 — 단서(Clues) + 제안 원터치 + 분류 고르기 + 접힌 원문. `<li>` 를 그린다 */
+export function ExpenseRowCard({ row, ctx }: { row: ExpenseRow; ctx: ExpenseCtx }) {
+  const { pending, classify, pick, setPick } = ctx;
+  return (
+    <li className="rounded-2xl border border-slate-200 bg-white p-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="min-w-0">
+          <span className="tabular text-xs text-slate-400">{row.at}</span>{" "}
+          <span className="text-xs text-slate-400">{row.source === "법인카드" ? "💳" : "🏦"}</span>{" "}
+          {row.via && (
+            <span className="mr-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
+              {row.via}
+            </span>
+          )}
+          <span className="font-medium">{row.payer}</span>
+          {row.place && <span className="ml-1 text-xs text-slate-400">{row.place}</span>}
+        </span>
+        <span className="tabular shrink-0 font-bold text-red-600">−{won(row.amount)}원</span>
+      </div>
+
+      <Clues row={row} />
+
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {row.suggest && (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => classify(row, row.suggest!)}
+            className="rounded-lg bg-emerald-700 px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
+          >
+            제안: {row.suggest} ✓
+          </button>
+        )}
+        <select
+          value={pick[row.id] ?? ""}
+          onChange={(e) => setPick(row.id, e.target.value)}
+          className="rounded-lg border border-slate-300 px-2 py-1.5 text-xs"
+        >
+          <option value="">분류 고르기…</option>
+          {EXPENSE_CATS.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          disabled={pending || !pick[row.id]}
+          onClick={() => classify(row, pick[row.id])}
+          className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium disabled:opacity-40"
+        >
+          붙이기
+        </button>
+      </div>
+
+      {/*
+        원문을 접어 둔다 — 이름만으로 모를 때 여는 곳이다.
+        사업자번호가 있으면 홈택스·검색으로 확인할 수 있어 가장 확실한 단서다.
+      */}
+      <details className="mt-1.5">
+        <summary className="cursor-pointer text-xs text-slate-400">자세히</summary>
+        <dl className="tabular mt-1 space-y-0.5 text-xs text-slate-500">
+          <div>
+            <dt className="inline text-slate-400">어디서 </dt>
+            <dd className="inline">{row.label}</dd>
+          </div>
+          <div>
+            <dt className="inline text-slate-400">원문 </dt>
+            <dd className="inline break-all">{row.description}</dd>
+          </div>
+          {row.bizNo && (
+            <div>
+              <dt className="inline text-slate-400">사업자번호 </dt>
+              <dd className="inline">{row.bizNo}</dd>
+            </div>
+          )}
+          {row.approvalNo && (
+            <div>
+              <dt className="inline text-slate-400">승인번호 </dt>
+              <dd className="inline">{row.approvalNo}</dd>
+            </div>
+          )}
+        </dl>
+      </details>
+    </li>
+  );
+}
+
+/** ⭐ 지출 분류 화면 (ERP ⑥, 2026-08-25) — 제안 원터치 + 분류 고르기
+ *   🔴 개편 3단계(2026-09-12): 위 조각(useExpenseCtx·ExpenseRowCard)으로 재조립 — 모양·동작은 전과 같다. */
+export function ExpensesUi({ data, ym }: { data: ExpenseData; ym: string }) {
+  const ctx = useExpenseCtx();
+  const { pending, classify, pick, setPick } = ctx;
 
   return (
     <>
-      {error && <p className="mt-3 rounded-lg bg-red-50 p-2 text-sm text-red-700">⚠️ {error}</p>}
-      {msg && <p className="mt-3 rounded-lg bg-emerald-50 p-2 text-sm text-emerald-800">✅ {msg}</p>}
+      <ExpenseBanner ctx={ctx} />
 
       {/* 분류별 합계 */}
       {data.sums.length > 0 && (
@@ -133,7 +253,7 @@ export function ExpensesUi({ data, ym }: { data: ExpenseData; ym: string }) {
                   )}
                   <select
                     value={pick[g.anyId] ?? ""}
-                    onChange={(e) => setPick((p) => ({ ...p, [g.anyId]: e.target.value }))}
+                    onChange={(e) => setPick(g.anyId, e.target.value)}
                     className="rounded-lg border border-slate-300 px-1.5 py-1 text-xs"
                   >
                     <option value="">분류…</option>
@@ -184,87 +304,7 @@ export function ExpensesUi({ data, ym }: { data: ExpenseData; ym: string }) {
       ) : (
         <ul className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-2 lg:items-start">
           {data.unclassified.map((row) => (
-            <li key={row.id} className="rounded-2xl border border-slate-200 bg-white p-3">
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="min-w-0">
-                  <span className="tabular text-xs text-slate-400">{row.at}</span>{" "}
-                  <span className="text-xs text-slate-400">{row.source === "법인카드" ? "💳" : "🏦"}</span>{" "}
-                  {row.via && (
-                    <span className="mr-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
-                      {row.via}
-                    </span>
-                  )}
-                  <span className="font-medium">{row.payer}</span>
-                  {row.place && <span className="ml-1 text-xs text-slate-400">{row.place}</span>}
-                </span>
-                <span className="tabular shrink-0 font-bold text-red-600">−{won(row.amount)}원</span>
-              </div>
-
-              <Clues row={row} />
-
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                {row.suggest && (
-                  <button
-                    type="button"
-                    disabled={pending}
-                    onClick={() => classify(row, row.suggest!)}
-                    className="rounded-lg bg-emerald-700 px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
-                  >
-                    제안: {row.suggest} ✓
-                  </button>
-                )}
-                <select
-                  value={pick[row.id] ?? ""}
-                  onChange={(e) => setPick((p) => ({ ...p, [row.id]: e.target.value }))}
-                  className="rounded-lg border border-slate-300 px-2 py-1.5 text-xs"
-                >
-                  <option value="">분류 고르기…</option>
-                  {EXPENSE_CATS.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  disabled={pending || !pick[row.id]}
-                  onClick={() => classify(row, pick[row.id])}
-                  className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium disabled:opacity-40"
-                >
-                  붙이기
-                </button>
-              </div>
-
-              {/*
-                원문을 접어 둔다 — 이름만으로 모를 때 여는 곳이다.
-                사업자번호가 있으면 홈택스·검색으로 확인할 수 있어 가장 확실한 단서다.
-              */}
-              <details className="mt-1.5">
-                <summary className="cursor-pointer text-xs text-slate-400">자세히</summary>
-                <dl className="tabular mt-1 space-y-0.5 text-xs text-slate-500">
-                  <div>
-                    <dt className="inline text-slate-400">어디서 </dt>
-                    <dd className="inline">{row.label}</dd>
-                  </div>
-                  <div>
-                    <dt className="inline text-slate-400">원문 </dt>
-                    <dd className="inline break-all">{row.description}</dd>
-                  </div>
-                  {row.bizNo && (
-                    <div>
-                      <dt className="inline text-slate-400">사업자번호 </dt>
-                      <dd className="inline">{row.bizNo}</dd>
-                    </div>
-                  )}
-                  {row.approvalNo && (
-                    <div>
-                      <dt className="inline text-slate-400">승인번호 </dt>
-                      <dd className="inline">{row.approvalNo}</dd>
-                    </div>
-                  )}
-                </dl>
-              </details>
-            </li>
+            <ExpenseRowCard key={row.id} row={row} ctx={ctx} />
           ))}
         </ul>
       )}

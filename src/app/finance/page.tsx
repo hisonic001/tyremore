@@ -7,6 +7,7 @@ import { payableTotal } from "@/lib/recon-data";
 import { receivableTotal } from "@/lib/receivable-total";
 import { todayBrief } from "@/lib/today-brief";
 import { weeklySteps } from "@/lib/weekly-steps";
+import { weeklyDoneAt } from "@/lib/app-setting";
 import { freshAuditRun } from "@/lib/self-audit";
 import { finInbox } from "@/lib/fin-inbox";
 import { AuditBanner } from "./audit-banner";
@@ -54,6 +55,7 @@ export default async function FinancePage({
 
   const brief = await todayBrief();
   const weekly = await weeklySteps(ym);
+  const lastDone = await weeklyDoneAt(); // 「이번 주 정리 끝 ✓」 마지막 날 (3단계, 2026-09-12)
   const pl = await finPL(ym);
   const recv = await receivableTotal();
   const payable = await payableTotal();
@@ -180,9 +182,13 @@ export default async function FinancePage({
         {/* ── ② 이번 주 정리 (폰에서는 숨김 — PC 에서 하는 일) ── */}
         <section className={`${box} hidden lg:block`}>
           <h2 className="flex items-baseline justify-between font-bold">
-            이번 주 정리
+            {W.weekly}
             <span className="tabular text-sm font-normal text-slate-400">
               {weekly.done}/{weekly.total} 끝
+              <span className="ml-2 text-slate-300">·</span>
+              <span className="ml-2">
+                {W.lastDone} {lastDone ? `${Number(lastDone.slice(5, 7))}/${Number(lastDone.slice(8, 10))}` : "아직 없음"}
+              </span>
             </span>
           </h2>
           <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
@@ -196,21 +202,22 @@ export default async function FinancePage({
                   <span className="text-slate-400">{s.no}</span> <span className="font-medium">{s.title}</span>
                   <span className={`tabular ml-1.5 ${s.warn ? "text-amber-800" : "text-slate-500"}`}>{s.status}</span>
                 </span>
+                {/* ⭐ 3단계(2026-09-12): 기존 화면 대신 한 줄 흐름의 그 단계로 — 결정 11 */}
                 {s.warn ? (
-                  <Link href={s.href} className={goBtn}>
+                  <Link href={`/finance/weekly?step=${s.no}&ym=${ym}`} className={goBtn}>
                     하기 →
                   </Link>
                 ) : (
-                  <Link href={s.href} className="ml-auto shrink-0 text-xs text-slate-400 underline underline-offset-2">
+                  <Link href={`/finance/weekly?step=${s.no}&ym=${ym}`} className="ml-auto shrink-0 text-xs text-slate-400 underline underline-offset-2">
                     보기
                   </Link>
                 )}
               </li>
             ))}
           </ul>
-          <p className="mt-2 text-[11px] text-slate-400">
-            위에서부터 차례로. 다 되면 지난달 마감까지. (다음 개편에서 한 줄 흐름으로 이어집니다)
-          </p>
+          <Link href={`/finance/weekly?ym=${ym}`} className="mt-2 inline-block text-xs font-medium text-brand-700 underline underline-offset-2">
+            한 줄로 정리하기 →
+          </Link>
         </section>
 
         {/* ── ③ 이번 달 돈 — 숫자만, 근거는 장부 ── */}

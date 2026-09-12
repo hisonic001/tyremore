@@ -16,7 +16,8 @@ import { posDaysSummary } from "./pos-close";
 import { cardDaySums } from "./card-recon";
 import { depositOpenCount, expenseOpen, payableTotal } from "./recon-data";
 import { taxOpenCounts } from "./tax-recon";
-import { monthCloseStatus } from "./month-close";
+/* 읽기 전용 파일에서 가져온다 — month-close.ts 가 이 파일을 쓰게 되어(마감 체크리스트 통일, 2026-09-12) 고리를 끊음 */
+import { monthCloseStatusRead as monthCloseStatus } from "./month-close-status";
 
 export type WeeklyStepKey = "upload" | "card" | "deposits" | "expenses" | "tax" | "payables" | "close";
 
@@ -77,15 +78,17 @@ export async function weeklySteps(ym: string): Promise<WeeklySteps> {
           ? `오늘 마감 · 안 된 날 ${posOpenDays}일`
           : "오늘 마감"
         : `오늘 남은 ${posToday.open}건`
-    : posDays.length > 0
-      ? posOpenDays > 0
-        ? `안 된 날 ${posOpenDays}일`
-        : `${posDays.length}일 다 됨`
+    : /* 지난 달 — 문구는 cardWarn 과 같은 순서로 판정한다 (2026-09-12: 전엔 POS 가 다 마감됐으면
+         여신협회 자료가 없어도 「N일 다 됨」이라 적혀, 🟡 인데 「다 됨」이라는 거짓 글자가 마감 목록에 떴다) */
+      posOpenDays > 0
+      ? `안 된 날 ${posOpenDays}일`
       : !cardSum.assocLast
         ? "여신협회 자료 없음"
         : cardSum.diffDays > 0
           ? `차이 난 날 ${cardSum.diffDays}일`
-          : "다 맞음";
+          : posDays.length > 0
+            ? `${posDays.length}일 다 됨`
+            : "다 맞음";
 
   const steps: WeeklyStep[] = [
     {

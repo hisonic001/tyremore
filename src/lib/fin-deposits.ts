@@ -14,18 +14,21 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, hasPerm } from "@/lib/auth";
 import { payerKeyOf } from "./expense-cats";
-import { getDeposit, learnAlias, linkDepositToQuoteCore, linkDepositsToQuoteCore, markCardSettlementsCore } from "./deposit-core";
+import {
+  confirmSureDepositsCore,
+  getDeposit,
+  learnAlias,
+  linkDepositToQuoteCore,
+  linkDepositsToQuoteCore,
+  markCardSettlementsCore,
+} from "./deposit-core";
 import { revalidateFinance } from "./fin-revalidate";
 import { receivableKeyCond } from "./receivable-key";
 import { planSettlement } from "./receivable-plan";
 import { settleReceivables } from "./receivable";
 import { restoreCashLine } from "./cash-restore";
-import { depositReconData } from "./recon-data";
-import { depositTaxCandidates, depositSurePicks } from "./deposit-tax";
-import { activityItems, confirmBankToTaxesCore, confirmTaxToBankCore } from "./recon-core";
 import { logActivity } from "./fin-activity";
-import type { UndoItem } from "./fin-activity-types";
-import { autoReconLabel, W } from "./fin-words";
+import { W } from "./fin-words";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
 
@@ -166,8 +169,7 @@ export async function collectFromDeposit(
     });
   }
 
-  revalidatePath("/finance/deposits");
-  revalidatePath("/finance");
+  revalidateFinance(); // 3단계(2026-09-12): 돈관리 화면 목록은 fin-revalidate 하나 — /finance/weekly 포함
   revalidatePath("/receivables");
   revalidatePath("/sales");
   return { ok: true, applied: r.applied, settled: r.settled, leftover: plan.leftover };
@@ -219,11 +221,8 @@ export async function undoDepositLink(
     amount: marks.reduce((s, m) => s + Number(m.amount), 0),
     label: `${W.undo}: 입금 ${won(dep.in_amount)} ${payerOf(dep.description)} ${W.recon} 풀기 (${marks.length}건${payments > 0 ? ` · 수금 ${payments}건 지움` : ""})`,
   });
-  revalidatePath("/finance/deposits");
-  revalidatePath("/finance");
-  revalidatePath("/finance/tax");
+  revalidateFinance(); // 3단계(2026-09-12): 목록 통일
   revalidatePath("/receivables");
-  revalidatePath("/sales");
   return { ok: true, removed: marks.length, payments };
 }
 
@@ -256,8 +255,7 @@ export async function setDepositKind(
     label: `분류 → ${kind}: ${dep.date.slice(5)} 입금 ${won(dep.in_amount)} ${payerOf(dep.description)}`,
     undo: { kind: "depositKind", args: { cashTxnId } },
   });
-  revalidatePath("/finance/deposits");
-  revalidatePath("/finance");
+  revalidateFinance(); // 3단계(2026-09-12): 목록 통일
   return { ok: true };
 }
 
@@ -279,60 +277,26 @@ export async function undoDepositKind(cashTxnId: number): Promise<{ ok: true } |
     amount: Number(rows[0].in_amount),
     label: `${W.undo}: 입금 분류 해제 ${rows[0].d.slice(5)} ${won(Number(rows[0].in_amount))} ${payerOf(rows[0].description)}`,
   });
-  revalidatePath("/finance/deposits");
-  revalidatePath("/finance");
+  revalidateFinance(); // 3단계(2026-09-12): 목록 통일
   return { ok: true };
 }
 
 /**
  * ⭐ 짝이 확실한 입금 모두 잇기 (사장님 요청 2026-08-26) — 정확 일치 + 아는 상대 하나뿐인 계산서,
  *    또는 이름 맞는 판매 하나뿐인 것. 서버가 같은 규칙으로 다시 계산한다(화면 목록을 믿지 않음).
+ *    3단계(2026-09-12): 본문은 deposit-core.confirmSureDepositsCore — 「이번 주 정리」 ③의 체크 일괄이
+ *    ids 를 넘긴다(재계산 맵에 있는 것만, 없으면 skipped). ids 없이 부르면 전과 같다. 기록은 코어가 한 줄.
  */
 export async function confirmSureDeposits(
   ym: string,
-): Promise<{ ok: true; tax: number; quote: number; failed: number } | { ok: false; error: string }> {
+  ids?: number[],
+): Promise<{ ok: true; tax: number; quote: number; failed: number; skipped: number } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return { ok: false, error: "달이 올바르지 않습니다" };
-  const data = await depositReconData(ym);
-  const { cands, bundles } = await depositTaxCandidates(
-    ym,
-    data.open.map((s) => ({ id: s.dep.id, date: s.dep.date, amount: s.dep.amount, payerName: s.dep.payerName })),
-  );
-  const sure = depositSurePicks(data.open, cands, bundles);
-  let tax = 0;
-  let quote = 0;
-  let failed = 0;
-  const items: UndoItem[] = [];
-  for (const [cashId, pick] of sure) {
-    /* 🔴 recon_match.method 는 전과 같이 기본값(수동) — 기록만 quiet 로 모아 아래서 한 줄 n건(how 자동, 결정 g) */
-    const r =
-      pick.kind === "tax"
-        ? await confirmTaxToBankCore(pick.invId, cashId, g.uid, "수동", { quiet: true })
-        : pick.kind === "bundle"
-          ? await confirmBankToTaxesCore(cashId, pick.invoiceIds, g.uid, "수동", { quiet: true })
-          : await linkDepositToQuoteCore(cashId, pick.quoteId, g.uid, "수동", { quiet: true });
-    if (!r.ok) failed++;
-    else {
-      if (pick.kind === "quote") quote++;
-      else tax++;
-      items.push(...activityItems(r.activity));
-    }
-  }
-  if (items.length > 0) {
-    await logActivity({
-      ym,
-      actor: g.uid,
-      how: "자동",
-      verb: "대사",
-      n: items.length,
-      amount: items.reduce((s, i) => s + (i.amount ?? 0), 0),
-      label: `${autoReconLabel(items.length)} · 입금 ${ym} (계산서 ${tax}·판매 ${quote}${failed > 0 ? `·실패 ${failed}` : ""})`,
-      undo: { kind: "bulk", args: { items } },
-    });
-  }
+  const r = await confirmSureDepositsCore(ym, g.uid, ids);
   revalidateFinance();
-  return { ok: true, tax, quote, failed };
+  return r;
 }
 
 /** 무시 / 무시 해제 */
@@ -359,7 +323,7 @@ export async function ignoreDeposit(
       label: `${back ? `${W.undo}: ${W.ignore} 풀기` : W.ignore}: ${rows[0].d.slice(5)} 입금 ${won(Number(rows[0].in_amount))} ${payerOf(rows[0].description)}`,
     });
   }
-  revalidatePath("/finance/deposits");
+  revalidateFinance(); // 3단계(2026-09-12): 목록 통일
   return { ok: true };
 }
 
@@ -384,7 +348,6 @@ export async function unmarkCardSettlement(
     amount: Number(rows[0].in_amount),
     label: `${W.undo}: 카드정산 표시 취소 ${rows[0].d.slice(5)} 입금 ${won(Number(rows[0].in_amount))}`,
   });
-  revalidatePath("/finance/deposits");
-  revalidatePath("/finance");
+  revalidateFinance(); // 3단계(2026-09-12): 목록 통일
   return { ok: true };
 }

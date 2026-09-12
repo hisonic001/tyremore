@@ -8,11 +8,11 @@
  *
  * 🔴 사장님 전용. 분류 목록·상대명 규칙은 recon-data(EXPENSE_CATS·payerKeyOf) 한 곳.
  */
-import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, hasPerm } from "@/lib/auth";
 import { EXPENSE_CATS, PAYER_KEY_SQL, payerKeyOf } from "./expense-cats";
+import { revalidateFinance } from "./fin-revalidate";
 import { logActivity } from "./fin-activity";
 import { W } from "./fin-words";
 
@@ -135,7 +135,6 @@ export async function setExpenseCategory(
     undo: category === null ? null : { kind: "expense", args: { cashTxnId, scope: applied > 1 ? "all" : "one" } },
   });
 
-  revalidatePath("/finance/expenses");
-  revalidatePath("/finance");
+  revalidateFinance(); // 3단계(2026-09-12): 돈관리 화면 목록은 fin-revalidate 하나 — /finance/weekly 포함
   return { ok: true, applied, payer: key };
 }

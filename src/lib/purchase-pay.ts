@@ -8,20 +8,19 @@
  *
  * 🔴 사장님 전용. 트랜잭션 + FOR UPDATE + IN(sql.join) 관용구 (receivable.ts 계보).
  */
-import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, hasPerm } from "@/lib/auth";
 import { cashUsedSql, normName } from "./recon-data";
 import { planSettlement } from "./receivable-plan";
-import { exactPlan } from "./payables-plan";
 import { restoreCashLine } from "./cash-restore";
+import { revalidateFinance } from "./fin-revalidate";
 import { logActivity } from "./fin-activity";
 import type { UndoItem } from "./fin-activity-types";
-import { W } from "./fin-words";
-
-const won = (n: number) => n.toLocaleString("ko-KR");
-const payerOf = (description: string) => description.replace(/^\[[^\]]*\]\s*/, "").trim();
+import { activityItems } from "./recon-core";
+import { autoLinkExactCore, payerOf, won } from "./purchase-pay-core";
+import { weeklyPayableStep } from "./weekly-payables";
+import { autoReconLabel, W } from "./fin-words";
 
 const METHODS = ["계좌이체", "현금", "카드", "기타"];
 
@@ -85,8 +84,7 @@ export async function payToSupplier(input: {
       const applied = plan.plan.reduce((s, p) => s + p.amount, 0);
       const settled = plan.plan.filter((p) => p.amount === open.find((o) => o.quoteId === p.quoteId)?.remain).length;
 
-      revalidatePath("/finance/payables");
-      revalidatePath("/finance");
+      revalidateFinance(); // 3단계(2026-09-12): 돈관리 화면 목록은 fin-revalidate 하나 — /finance/weekly 포함
       return { ok: true as const, applied, settled, leftover: plan.leftover, items };
     });
     if (out.ok) {
@@ -146,10 +144,7 @@ export async function removePurchasePayment(
     amount: Number(pp.amount),
     label: `${W.undo}: ${pp.supplier ?? ""} 지급 ${won(Number(pp.amount))} 지우기${pp.paid_on ? ` (${pp.paid_on.slice(5)})` : ""}`,
   });
-  revalidatePath("/finance/payables");
-  revalidatePath("/finance");
-  revalidatePath("/finance/tax");
-  revalidatePath("/finance/expenses");
+  revalidateFinance(); // 3단계(2026-09-12): 목록 통일
   return { ok: true };
 }
 
@@ -190,11 +185,7 @@ export async function undoPayFromWithdrawal(
     amount: marks.reduce((s, m) => s + Number(m.amount), 0),
     label: `${W.undo}: 출금 ${won(marks.reduce((s, m) => s + Number(m.amount), 0))} ${W.reconPay} 풀기 (지급 ${marks.length}건 지움)`,
   });
-  revalidatePath("/finance/payables");
-  revalidatePath("/finance");
-  revalidatePath("/finance/tax");
-  revalidatePath("/finance/expenses");
-  revalidatePath("/finance/party");
+  revalidateFinance(); // 3단계(2026-09-12): 목록 통일
   return { ok: true, removed: marks.length };
 }
 
@@ -204,6 +195,8 @@ export async function undoPayFromWithdrawal(
  *   출금 남은 돈이 그 거래처 인보이스(하나 또는 같은 작성일 묶음)와 **정확히 일치**할 때
  *   한 번에 잇는다. 제안은 payables-view.exactPlan 이 만들지만, 🔴 실행 시점에 서버가
  *   같은 계산을 다시 한다 — 화면이 열려 있던 사이 잔액이 바뀌었으면 거절되는 게 맞다.
+ *   3단계(2026-09-12): 본문은 purchase-pay-core.autoLinkExactCore — 여기는 권한 + 코어 + revalidate.
+ *   기록(한 줄, how 자동)은 코어가 남긴다 — 동작·기록 전과 같다.
  */
 export async function autoLinkExact(input: {
   cashTxnId: number;
@@ -211,97 +204,64 @@ export async function autoLinkExact(input: {
 }): Promise<{ ok: true; n: number; amount: number } | { ok: false; error: string }> {
   if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const session = await getSession();
-  const supplier = input.supplier?.trim();
-  if (!supplier) return { ok: false, error: "거래처가 없습니다" };
+  const r = await autoLinkExactCore(input.cashTxnId, input.supplier, session?.uid ?? null);
+  if (!r.ok) return r;
+  revalidateFinance();
+  return { ok: true, n: r.n, amount: r.amount };
+}
 
-  const [dep] = await db.execute<{ id: number; out_amount: number; date: string; l: string; description: string }>(sql`
-    SELECT id, out_amount, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') date,
-           account_label l, description
-    FROM cash_txn WHERE id = ${input.cashTxnId} AND source = '통장' AND is_active AND out_amount > 0
-  `);
-  if (!dep) return { ok: false, error: "출금 줄을 찾을 수 없습니다" };
-  const dupe = await db.execute<{ id: number }>(sql`
-    SELECT id FROM recon_match WHERE src_table = 'cash_txn' AND src_id = ${input.cashTxnId} AND kind = '매입지급' LIMIT 1
-  `);
-  if (dupe.length > 0) return { ok: false, error: `이미 지급으로 ${W.recon}된 출금입니다` };
-  const [usedRow] = await db.execute<{ s: string }>(sql`
-    SELECT ${cashUsedSql("c")}::bigint s FROM cash_txn c WHERE c.id = ${input.cashTxnId}
-  `);
-  const avail = Number(dep.out_amount) - Number(usedRow?.s ?? 0);
-  if (avail <= 0) return { ok: false, error: "이 출금은 남은 금액이 없습니다" };
-
-  try {
-    const out = await db.transaction(async (tx) => {
-      const rows = await tx.execute<{ id: number; no: string; d: string | null; remain: string }>(sql`
-        SELECT pi.id, pi.invoice_no no, pi.issued_at d,
-               (pi.total - COALESCE((SELECT SUM(amount)::int FROM purchase_payment pp WHERE pp.invoice_id = pi.id), 0))::bigint remain
-        FROM purchase_invoice pi
-        WHERE pi.status <> '취소' AND pi.supplier = ${supplier} AND pi.total > 0
-        ORDER BY pi.issued_at LIMIT 100
-        FOR UPDATE OF pi
-      `);
-      const plan = exactPlan(
-        avail,
-        rows.map((r) => ({ id: Number(r.id), no: r.no, d: r.d, remain: Number(r.remain) })),
-      );
-      if (!plan) return { ok: false as const, error: "지금은 금액이 정확히 맞지 않습니다 — 잔액이 바뀌었으면 새로고침해 주세요" };
-
-      let total = 0;
-      for (const id of plan.ids) {
-        const r = rows.find((x) => Number(x.id) === id)!;
-        const amt = Number(r.remain);
-        await tx.execute(sql`
-          INSERT INTO purchase_payment (invoice_id, amount, method, paid_on, memo, created_by)
-          VALUES (${id}, ${amt}, '계좌이체', ${dep.date},
-                  ${"통장 출금 연결 (" + dep.l + " " + dep.date + ") — 원단위 자동"}, ${session?.uid ?? null})
-        `);
-        await tx.execute(sql`
-          INSERT INTO recon_match (kind, src_table, src_id, ref_table, ref_id, amount, status, method, confirmed_by, confirmed_at)
-          VALUES ('매입지급', 'cash_txn', ${input.cashTxnId}, 'purchase_invoice', ${id}, ${amt}, '확정', '자동', ${session?.uid ?? null}, now())
-        `);
-        total += amt;
-      }
-      await tx.execute(sql`
-        UPDATE cash_txn SET recon_status = '확정', category = COALESCE(category, '매입대금')
-        WHERE id = ${input.cashTxnId}
-      `);
-      // 별명 학습 — payFromWithdrawal 과 같은 규칙
-      try {
-        const payer = dep.description.replace(/^\[[^\]]*\]\s*/, "").trim();
-        const key = normName(payer);
-        if (key.length >= 2) {
-          await tx.execute(sql`
-            INSERT INTO party_alias (alias_key, alias_raw, party_key, party_label)
-            VALUES (${key}, ${payer}, ${"S:" + supplier}, ${"거래처 " + supplier})
-            ON CONFLICT (alias_key) DO UPDATE SET party_key = EXCLUDED.party_key,
-              party_label = EXCLUDED.party_label, updated_at = now()
-          `);
-        }
-      } catch {
-        /* 학습 실패는 지급을 막지 않는다 */
-      }
-      revalidatePath("/finance/payables");
-      revalidatePath("/finance");
-      return { ok: true as const, n: plan.ids.length, amount: total };
-    });
-    if (out.ok) {
-      /* ⭐ 최근 한 일 — 원단위 자동은 「자동」. 되돌리기 = undoPayFromWithdrawal(cashTxnId) */
-      await logActivity({
-        ym: dep.date.slice(0, 7),
-        actor: session?.uid ?? null,
-        how: "자동",
-        verb: "지급",
-        target: { table: "cash_txn", id: input.cashTxnId },
-        n: out.n,
-        amount: out.amount,
-        label: `출금 ${won(out.amount)} ${payerOf(dep.description)} → ${supplier} 지급 (매입 ${out.n}건, 원단위 자동)`,
-        undo: { kind: "pay", args: { cashTxnId: input.cashTxnId } },
-      });
-    }
-    return out;
-  } catch (e) {
-    return { ok: false, error: `${W.recon}하지 못했습니다: ${e instanceof Error ? e.message : String(e)}` };
+/**
+ * ⭐ 「짝 확실 N건 한 번에」 — 「이번 주 정리」 ⑥ (개편 3단계, 2026-09-12; 결정 7 ①②)
+ *
+ *   서버가 weeklyPayableStep(ym).sure(= payablesCardInfo.exact 를 flipExact 로 뒤집은 것)를 **다시
+ *   계산**하고, ids 가 오면 그 안에 있는 것만(없는 건 skipped — 화면이 열려 있던 사이 바뀐 것) 순차로
+ *   autoLinkExactCore(quiet) 를 돌린다 — 코어가 FOR UPDATE 안에서 exactPlan 을 재검사하므로 안 맞으면
+ *   그 건만 실패. 기록은 끝에 **bulk 한 줄**(how 자동·verb 지급, items = kind "pay" → undoPayFromWithdrawal 로
+ *   되돌리기 — fin-activity-types 의 undo 표 그대로). 🔴 낱장 기록은 quiet 로 막아 두 줄이 안 남는다.
+ */
+export async function confirmSureWithdrawals(
+  ym: string,
+  ids?: number[],
+): Promise<{ ok: true; n: number; amount: number; failed: number; skipped: number } | { ok: false; error: string }> {
+  if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return { ok: false, error: "달이 올바르지 않습니다" };
+  const uid = (await getSession())?.uid ?? null;
+  let picked = (await weeklyPayableStep(ym)).sure;
+  let skipped = 0;
+  if (ids) {
+    const want = new Set(ids.filter((n) => Number.isInteger(n) && n > 0));
+    picked = picked.filter((s) => want.has(s.cashTxnId));
+    skipped = want.size - picked.length;
   }
+  let n = 0;
+  let amount = 0;
+  let failed = 0;
+  const items: UndoItem[] = [];
+  for (const s of picked) {
+    // 🔴 순차 — 풀 max 3. 코어가 FOR UPDATE 로 다시 검사한다(안 맞으면 그 건만 실패)
+    const r = await autoLinkExactCore(s.cashTxnId, s.supplier, uid, { quiet: true });
+    if (!r.ok) {
+      failed++;
+      continue;
+    }
+    n++;
+    amount += r.amount;
+    items.push(...activityItems(r.activity));
+  }
+  if (items.length > 0) {
+    await logActivity({
+      ym,
+      actor: uid,
+      how: "자동",
+      verb: "지급",
+      n: items.length,
+      amount: items.reduce((s, i) => s + (i.amount ?? 0), 0),
+      label: `${autoReconLabel(items.length)} · 지급 ${ym}${failed > 0 ? ` (실패 ${failed})` : ""}`,
+      undo: { kind: "bulk", args: { items } },
+    });
+  }
+  revalidateFinance();
+  return { ok: true, n, amount, failed, skipped };
 }
 
 /** ④ 통장 이름 별명 — 거래처 카드에서 직접 관리 (2026-08-31 "맨날 알려줘야 하는 것은 문제") */
@@ -327,7 +287,7 @@ export async function addSupplierAlias(
     verb: "규칙",
     label: `규칙 저장: 통장 이름 「${name}」 = 거래처 ${sup}`,
   });
-  revalidatePath("/finance/payables");
+  revalidateFinance(); // 3단계(2026-09-12): 목록 통일
   return { ok: true };
 }
 
@@ -347,7 +307,7 @@ export async function removeSupplierAlias(
     verb: "되돌리기",
     label: `${W.undo}: 통장 이름 규칙 지우기 「${aliasKey}」 ≠ 거래처 ${supplier.trim()}`,
   });
-  revalidatePath("/finance/payables");
+  revalidateFinance(); // 3단계(2026-09-12): 목록 통일
   return { ok: true };
 }
 
@@ -397,8 +357,7 @@ export async function skipWithdrawal(
       : `${W.excluded}: 출금 ${c.d.slice(5)} ${won(Number(c.out_amount))} ${payerOf(c.description)} 접음`,
     undo: restore ? null : { kind: "skip", args: { cashTxnId } },
   });
-  revalidatePath("/finance/payables");
-  revalidatePath("/finance");
+  revalidateFinance(); // 3단계(2026-09-12): 목록 통일
   return { ok: true };
 }
 
@@ -500,11 +459,7 @@ export async function payFromWithdrawal(input: {
         // 학습 실패는 지급을 막지 않는다
       }
 
-      revalidatePath("/finance/payables");
-      revalidatePath("/finance/expenses");
-      revalidatePath("/finance/tax"); // CASH_LAT 의 간접 확인(ind)이 바뀐다 (2026 감사 N9)
-      revalidatePath("/finance/party");
-      revalidatePath("/finance");
+      revalidateFinance(); // 3단계(2026-09-12): 목록 통일 — /finance/tax(CASH_LAT 간접 확인, 감사 N9)·party 포함
       return { ok: true as const, applied, settled, leftover: Number(dep.out_amount) - applied };
     });
     if (out.ok) {

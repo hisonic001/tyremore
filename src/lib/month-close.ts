@@ -15,20 +15,21 @@ import { db } from "@/db";
 import { getSession } from "./auth";
 import { finHealth } from "./fin-health";
 import { kstToday, monthRange } from "./ym";
-import { depositOpenCount, expenseOpen, payablesData } from "./recon-data";
-import { taxOpenCount } from "./tax-recon";
 import { finPL } from "./fin-pl";
 import { revalidateFinance } from "./fin-revalidate";
-import { uploadCoverage, coverageStatus } from "./upload-coverage";
-import { cardDaySums } from "./card-recon";
-import { posDaysSummary } from "./pos-close";
 import { zeroTotalInvoiceCount } from "./invoice";
 import { logActivity } from "./fin-activity";
 import { W } from "./fin-words";
+import { weeklySteps } from "./weekly-steps";
+import { closeChecksOf } from "./weekly-close";
+import { monthCloseStatusRead, type MonthCloseInfo } from "./month-close-status";
+
+export type { MonthCloseInfo };
 
 export interface CloseCheck {
-  /** 항목 이름 — 화면이 순서가 아니라 이름으로 고른다 (2026-09-11 첫 화면 개편) */
-  key: "upload" | "card" | "deposits" | "expenses" | "tax" | "posclose" | "payables" | "zero" | "health";
+  /** 항목 이름 — 화면이 순서가 아니라 이름으로 고른다 (2026-09-11 첫 화면 개편).
+   *  posclose 는 2026-09-12 에 뺐다 — 카드 단계 status 에 「안 된 날 N일」이 이미 있고 soft 였다. */
+  key: "upload" | "card" | "deposits" | "expenses" | "tax" | "payables" | "zero" | "health";
   ok: boolean;
   text: string;
   href: string;
@@ -36,124 +37,41 @@ export interface CloseCheck {
   soft?: boolean;
 }
 
-export interface MonthCloseInfo {
-  closed: boolean;
-  closedAt: string | null;
-  profit: number | null;
-  /** 앱 판매·매입 기록이 있는 달인가 — 없으면(2025) 손익은 의미가 없어 「자료 기준 마감」으로 표시 */
-  dataComplete: boolean;
-}
-
+/** 읽기는 month-close-status.ts (weekly-steps 와의 import 고리를 끊으려고 뗌, 2026-09-12) — 호출처는 그대로 여기서 */
 export async function monthCloseStatus(ym: string): Promise<MonthCloseInfo> {
-  const r = await db.execute<{ d: string; headline: unknown }>(sql`
-    SELECT to_char(closed_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') d, headline
-    FROM month_close WHERE ym = ${ym} LIMIT 1
-  `);
-  if (!r[0]) return { closed: false, closedAt: null, profit: null, dataComplete: true };
-  const h = r[0].headline as { profit?: number; dataComplete?: boolean } | null;
-  return {
-    closed: true,
-    closedAt: r[0].d,
-    profit: typeof h?.profit === "number" ? h.profit : null,
-    dataComplete: h?.dataComplete !== false,
-  };
+  return monthCloseStatusRead(ym);
 }
 
-/** 마감 조건 체크리스트 — 미충족 항목은 그 화면으로 가는 링크가 된다 */
+/**
+ * 마감 조건 체크리스트 — 미충족 항목은 그 화면으로 가는 링크가 된다
+ *
+ * ⭐ 2026-09-12 (개편 3단계): 「이번 주 정리」 정본 weeklySteps **한 벌**에서 뽑는다 (weekly-close.closeChecksOf).
+ *    전엔 여기서 9줄을 다시 만들어 목록이 두 벌이었다 — 계산서 taxOpenCount vs taxOpenCounts,
+ *    미지급 payablesData vs payableTotal 로 미세하게 갈렸다.
+ * 🔴 마감 판정 불변: 마감을 막는 hard 3항목(입금·지출·계산서)은 weeklySteps 가 같은 함수
+ *    (depositOpenCount·expenseOpen·taxOpenCounts = taxOpenCount 의 buy+sell)로 센다.
+ *    2026 감사 N1·N2·N3(각 화면과 같은 함수) · 2025 F6(모든 달 같은 기준) 원칙 그대로.
+ *    바뀌는 것은 글자(단계 status 문구)뿐. posclose 항목은 카드 단계에 흡수(soft 였다).
+ */
 export async function closeChecklist(ym: string, healthOk?: boolean): Promise<CloseCheck[]> {
-  /* 🔴 2026 감사 N1·N2·N3: 세 항목 전부 각 화면·현황 카드와 **같은 함수**로 센다 — 전엔 입금은
-     '미대조'만(입금 화면은 미대조+제안·잔액>0), 계산서는 recon_status(돈 확인 뷰는 bank_ok)라
-     같은 달에 타일 "다 맞춰짐 ✓"와 마감 줄 "확인 안 됨 5건"이 동시에 떴다 */
-  const depN = await depositOpenCount(ym);
-  const exp = await expenseOpen(ym);
-  /* 🔴 2025 감사 F6(2026-08-26): 「대조 도입 전 달이라 건너뜀」 분기 삭제 — 모든 달이 같은 기준 */
-  const taxN = await taxOpenCount(ym);
-  const dep = { n: depN };
-  const taxCheck: CloseCheck = {
-    key: "tax",
-    ok: taxN === 0,
-    text: taxN === 0 ? "계산서 대조 다 됨" : `계산서 미대조 ${taxN}건`,
-    href: `/finance/tax?view=money&ym=${ym}`,
-  };
+  const w = await weeklySteps(ym);
   const hOk = healthOk ?? (await finHealth()).allOk;
   /* 🔴 2025 감사 F6: 자료 검증은 「최근 60일·최근 3달」 기준이라 지난 달(특히 2025) 마감과
      무관하다 — 지난 달은 경고만 보이고 마감을 막지 않는다 */
   const past = ym < kstToday().slice(0, 7);
-  /* 🔴 2026 감사 R2·R3: 사장님 루틴 8단계 중 체크리스트가 3단계만 봤다 — 자료 올림·카드 매출·미지급·
-     0원 매입을 참고(soft) 항목으로 추가. 막지는 않고 ⚠ 만 */
-  const cov = coverageStatus(await uploadCoverage(), ym);
-  const card = await cardDaySums(ym);
-  const pay = await payablesData();
+  /* 🔴 2026 감사 R3: 0원 매입은 참고(soft) — 막지는 않고 ⚠ 만 */
   const zeroN = await zeroTotalInvoiceCount();
-  const softChecks: CloseCheck[] = [
-    {
-      key: "upload",
-      ok: cov.ok,
-      soft: true,
-      text: cov.ok ? "자료 다 올라옴" : `안 올라온 자료 — ${cov.lagging.map((l) => `${l.label} ~${l.last ? l.last.slice(5) : "없음"}`).join(" · ")}`,
-      href: `/finance/upload?ym=${ym}`,
-    },
-    {
-      key: "card",
-      ok: !!card.assocLast && card.diffDays === 0,
-      soft: true,
-      text: !card.assocLast
-        ? "여신협회 카드 자료 없음"
-        : card.diffDays === 0
-          ? "카드 매출 다 맞음"
-          : `카드 매출 차이 난 날 ${card.diffDays}일`,
-      href: `/finance/card?ym=${ym}`,
-    },
-  ];
-  const posDays = await posDaysSummary(ym);
-  const posOpen = posDays.filter((d) => !d.closed);
-  const softTail: CloseCheck[] = [
-    ...(posDays.length > 0
-      ? [
-          {
-            key: "posclose" as const,
-            ok: posOpen.length === 0,
-            soft: true,
-            text: posOpen.length === 0 ? `카드 일마감 ${posDays.length}일 다 됨` : `카드 일마감 안 된 날 ${posOpen.length}일`,
-            href: `/finance/card?ym=${ym}&d=${posOpen[0]?.day ?? ym + "-01"}`,
-          },
-        ]
-      : []),
-    {
-      key: "payables" as const,
-      ok: pay.suppliers.length === 0,
-      soft: true,
-      text: pay.suppliers.length === 0 ? "미지급 없음" : `미지급금 확인 — ${pay.suppliers.length}곳 ${pay.totalRemain.toLocaleString("ko-KR")}원`,
-      href: `/finance/payables?ym=${ym}`,
-    },
-    ...(zeroN > 0
-      ? [{ key: "zero" as const, ok: false, soft: true, text: `금액 없는 매입 장부 ${zeroN}건 — 단가를 채워 주세요`, href: "/receiving" }]
-      : []),
-  ];
-
-  return [
-    ...softChecks,
-    {
-      key: "deposits",
-      ok: Number(dep.n) === 0,
-      text: Number(dep.n) === 0 ? "입금 다 정리됨" : `정리 안 된 입금 ${dep.n}건`,
-      href: `/finance/deposits?ym=${ym}`,
-    },
-    {
-      key: "expenses",
-      ok: Number(exp.n) === 0,
-      text: Number(exp.n) === 0 ? "지출 다 분류됨" : `분류 안 된 지출 ${exp.n}건`,
-      href: `/finance/expenses?ym=${ym}`,
-    },
-    taxCheck,
-    ...softTail,
-    {
-      key: "health",
-      ok: hOk || past,
-      text: hOk ? "자료 검증 ✓" : past ? "자료 검증 경고 있음 (최근 자료 기준 — 지난 달 마감은 막지 않음)" : "자료 검증 경고 있음",
-      href: `/finance?ym=${ym}`,
-    },
-  ];
+  const zero: CloseCheck | null =
+    zeroN > 0
+      ? { key: "zero", ok: false, soft: true, text: `금액 없는 매입 장부 ${zeroN}건 — 단가를 채워 주세요`, href: "/receiving" }
+      : null;
+  const health: CloseCheck = {
+    key: "health",
+    ok: hOk || past,
+    text: hOk ? "자료 검증 ✓" : past ? "자료 검증 경고 있음 (최근 자료 기준 — 지난 달 마감은 막지 않음)" : "자료 검증 경고 있음",
+    href: `/finance?ym=${ym}`,
+  };
+  return closeChecksOf(w, { zero, health });
 }
 
 /** 마감 당시 손익 머리숫자 — 🔴 2026 감사 N5: 현황과 **같은 함수**(fin-pl.finPL). 추정 수수료 여부도 함께 남긴다 */

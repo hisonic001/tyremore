@@ -3,6 +3,7 @@ import { getSession, hasPerm } from "@/lib/auth";
 import { uploadLedger } from "@/lib/upload-ledger";
 import Link from "@/lib/link";
 import { FinShell } from "@/components/fin/shell";
+import { CoverageGrid } from "@/components/fin/coverage-grid";
 import { pickYm } from "@/lib/ym";
 import { uploadCoverage, coverageStatus } from "@/lib/upload-coverage";
 import { cancelFinUpload } from "@/lib/fin-upload";
@@ -34,7 +35,6 @@ export default async function FinanceUploadPage({
   const ym = pickYm(sp.ym);
   const cov = await uploadCoverage();
   const st = coverageStatus(cov, ym);
-  const lag = new Set(st.lagging.map((r) => r.key));
   // ⭐ 정본 하나 (2026-09-10, upload-ledger.ts) — 「올린 자료」 화면과 같은 목록·같은 상태
   const uploads = await uploadLedger({ limit: 8 });
 
@@ -45,35 +45,10 @@ export default async function FinanceUploadPage({
         세금계산서 엑셀을 그대로 올리시면 됩니다. 같은 파일을 또 올려도 두 번 계산되지 않습니다.
       </p>
 
-      {/* ⭐ 어디까지 올렸나 — 원천별 마지막 자료 날짜 (현황 체크리스트와 같은 정본) */}
+      {/* ⭐ 어디까지 올렸나 — 원천별 마지막 자료 날짜 (현황 체크리스트와 같은 정본).
+          칩 격자는 공용 CoverageGrid(올린 자료·「이번 주 정리」① 과 같은 부품, 2026-09-12) */}
       <section className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
-        <h2 className="font-semibold">
-          {Number(ym.slice(5, 7))}월 자료, 어디까지 올라왔나{" "}
-          {st.ok ? (
-            <span className="text-sm font-normal text-emerald-700">— 다 올라왔습니다 ✓</span>
-          ) : (
-            <span className="text-sm font-normal text-amber-700">— {st.lagging.length}곳이 아직입니다</span>
-          )}
-        </h2>
-        <ul className="mt-2 grid grid-cols-1 gap-1.5 text-sm sm:grid-cols-2 lg:grid-cols-3">
-          {cov.map((r) => (
-            <li
-              key={r.key}
-              className={`tabular flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 ${
-                lag.has(r.key) ? "bg-amber-50 text-amber-900" : "bg-slate-50 text-slate-600"
-              }`}
-            >
-              <span className="min-w-0 truncate">{r.label}</span>
-              <span className="shrink-0 text-xs">
-                {r.last ? `~${r.granularity === "month" ? r.last : r.last.slice(5)}` : "없음"}
-                {lag.has(r.key) && " ⚠"}
-              </span>
-            </li>
-          ))}
-        </ul>
-        <p className="mt-1.5 text-xs text-slate-400">
-          기준일 {st.endShown.slice(5)} 3일 전까지 안 온 자료에 ⚠ — 은행·카드사는 하루이틀 늦게 나옵니다.
-        </p>
+        <CoverageGrid rows={cov} status={st} />
       </section>
 
       <FinUpload ym={ym} />

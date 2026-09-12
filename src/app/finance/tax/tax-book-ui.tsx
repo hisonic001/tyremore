@@ -34,6 +34,7 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { StatusPill } from "@/components/ui/badge";
 import { won } from "@/components/fin/money";
+import { CheckRunList } from "@/components/fin/check-run-list";
 import { W } from "@/lib/fin-words";
 import { BankSearch, MultiPickBar, PickList, pickedSum, type Picked, type PickItem } from "./link-parts";
 
@@ -114,7 +115,8 @@ function NoteFor({ ctx, k }: { ctx: Ctx; k: string }) {
 
 /* ───────────────────────── 화면 ───────────────────────── */
 
-export function TaxBookView({ book, ym }: { book: TaxBook; ym: string }) {
+/** @param flow 「이번 주 정리」 흐름 안(⑤)에서 쓸 때 — 머리(제목·요약·안내)만 숨긴다 (개편 3단계, 2026-09-12). 나머지는 그대로 */
+export function TaxBookView({ book, ym, flow }: { book: TaxBook; ym: string; flow?: boolean }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [notes, setNotes] = useState<NoteMap>({});
@@ -151,24 +153,28 @@ export function TaxBookView({ book, ym }: { book: TaxBook; ym: string }) {
 
   return (
     <div className="mt-3">
-      {/* ── 머리 ── */}
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <h2 className="text-lg font-bold">
-          계산서 {m}월 — 남은 곳 <span className="tabular">{book.counts.partiesOpen}</span> / 상대{" "}
-          <span className="tabular">{parties.length}</span>곳
-        </h2>
-        <span className="text-xs text-slate-500">
-          <span className="font-semibold text-red-600">● 매입</span> · <span className="font-semibold text-brand-700">● 매출</span>
-          <span className="ml-2">
-            {MARK.hand.icon} {MARK.hand.label} {book.counts.hand} · {MARK.confirm.icon} {MARK.confirm.label} {book.counts.confirm} ·{" "}
-            {MARK.done.icon} {MARK.done.label} {book.counts.done}
-          </span>
-        </span>
-      </div>
-      <p className="mt-1 text-sm text-slate-500">
-        상대를 누르면 그 상대의 계산서가 펼쳐집니다. 한 장마다 <strong>누구</strong>(어느 거래처인지)와{" "}
-        <strong>돈</strong>(통장에서 실제로 오갔는지) 두 칸입니다.
-      </p>
+      {/* ── 머리 (흐름 안에서는 page.tsx 헤더가 대신하므로 숨김) ── */}
+      {!flow && (
+        <>
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+            <h2 className="text-lg font-bold">
+              계산서 {m}월 — 남은 곳 <span className="tabular">{book.counts.partiesOpen}</span> / 상대{" "}
+              <span className="tabular">{parties.length}</span>곳
+            </h2>
+            <span className="text-xs text-slate-500">
+              <span className="font-semibold text-red-600">● 매입</span> · <span className="font-semibold text-brand-700">● 매출</span>
+              <span className="ml-2">
+                {MARK.hand.icon} {MARK.hand.label} {book.counts.hand} · {MARK.confirm.icon} {MARK.confirm.label} {book.counts.confirm} ·{" "}
+                {MARK.done.icon} {MARK.done.label} {book.counts.done}
+              </span>
+            </span>
+          </div>
+          <p className="mt-1 text-sm text-slate-500">
+            상대를 누르면 그 상대의 계산서가 펼쳐집니다. 한 장마다 <strong>누구</strong>(어느 거래처인지)와{" "}
+            <strong>돈</strong>(통장에서 실제로 오갔는지) 두 칸입니다.
+          </p>
+        </>
+      )}
 
       <AutoDoneList book={book} />
 
@@ -301,90 +307,39 @@ function pickText(p: BankPick) {
   return `${p.d} ${p.description} ${won(p.amount)}${diff} · ${p.why}`;
 }
 
+/** 체크·순차 실행·결과 뼈대는 공용 CheckRunList(components/fin/check-run-list.tsx, 2026-09-12)로 —
+ *  여기는 「무엇을 보여 주고 무엇을 부를지」(planFor)만 댄다. 모양·동작은 옮기기 전과 같다. */
 function ConfirmLayer({ items, ctx }: { items: { card: InvoiceCard; party: PartyRow }[]; ctx: Ctx }) {
-  const router = useRouter();
-  const [busy, start] = useTransition();
-  const [checked, setChecked] = useState<Record<number, boolean>>({});
-  const [result, setResult] = useState<{ tone: "success" | "error"; text: string } | null>(null);
-  const isOn = (id: number) => checked[id] !== false; // 기본 ON
-  const rows = items.map((it) => ({ ...it, plan: planFor(it.card) })).filter((r) => r.plan !== null);
-  const n = rows.filter((r) => isOn(r.card.id)).length;
-
-  const runAll = () =>
-    start(async () => {
-      setResult(null);
-      let done = 0;
-      const errs: string[] = [];
-      const seen = new Set<string>();
-      // 🔴 순차 — 풀 max 3. 같은 묶음(통장 한 줄 = N장)·같은 상계 쌍은 한 번만 부른다.
-      for (const r of rows) {
-        if (!isOn(r.card.id) || !r.plan) continue;
-        if (r.plan.dedupe) {
-          if (seen.has(r.plan.dedupe)) {
-            done += 1;
-            continue;
-          }
-          seen.add(r.plan.dedupe);
-        }
-        const x = await r.plan.run();
-        if (x.ok) done += 1;
-        else errs.push(`${r.party.name} ${md(r.card.d)} ${won(r.card.total)} — ${x.error}`);
-      }
-      setResult(
-        errs.length === 0
-          ? { tone: "success", text: `${done}장을 ${W.recon}했습니다.` }
-          : { tone: "error", text: `${done}장은 ${W.recon}했고 ${errs.length}장은 못 했습니다: ${errs.join(" / ")}` },
-      );
-      router.refresh();
-    });
-
+  const rows = items.flatMap((it) => {
+    const plan = planFor(it.card);
+    return plan ? [{ ...it, plan }] : [];
+  });
   if (rows.length === 0) return null;
   return (
-    <section className="mt-4 rounded-card border border-amber-300 bg-amber-50 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="font-semibold">
+    <CheckRunList
+      title={
+        <>
           {MARK.confirm.icon} {W.tierCheck} <span className="tabular">{rows.length}</span>장 — 체크해서 한 번에
-        </h3>
-        <span className="flex items-center gap-3 text-xs">
-          <button type="button" onClick={() => setChecked({})} className="text-slate-500 underline underline-offset-4">
-            모두 켜기
-          </button>
-          <button
-            type="button"
-            onClick={() => setChecked(Object.fromEntries(rows.map((r) => [r.card.id, false])))}
-            className="text-slate-500 underline underline-offset-4"
-          >
-            모두 끄기
-          </button>
-        </span>
-      </div>
-      <p className="mt-1 text-xs text-amber-900">앱이 통장 줄을 하나씩 찾아 뒀습니다. 맞으면 그대로, 아니면 체크를 끄고 아래 상대 줄에서 직접 {W.recon}하세요.</p>
-      <ul className="mt-2 divide-y divide-amber-200/70">
-        {rows.map((r) => (
-          <li key={r.card.id} className="py-2">
-            <label className="flex cursor-pointer items-start gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={isOn(r.card.id)}
-                onChange={(e) => setChecked((c) => ({ ...c, [r.card.id]: e.target.checked }))}
-                className="mt-1 size-4 shrink-0 accent-brand-600"
-              />
-              <span className="min-w-0 flex-1">
-                <span className="font-medium">{r.party.name}</span>{" "}
-                <span className="text-slate-500">{md(r.card.d)}</span> · <DirAmount direction={r.card.direction} total={r.card.total} />
-                <span className="block text-xs text-slate-600">← {r.plan!.text}</span>
-              </span>
-            </label>
-          </li>
-        ))}
-      </ul>
-      <div className="mt-3">
-        <Button onClick={runAll} pending={busy || ctx.pending} disabled={n === 0} size="lg">
-          체크한 {n}장 {W.recon}
-        </Button>
-      </div>
-      {result && <Notice tone={result.tone}>{result.text}</Notice>}
-    </section>
+        </>
+      }
+      hint={`앱이 통장 줄을 하나씩 찾아 뒀습니다. 맞으면 그대로, 아니면 체크를 끄고 아래 상대 줄에서 직접 ${W.recon}하세요.`}
+      items={rows.map((r) => ({
+        key: String(r.card.id),
+        text: (
+          <>
+            <span className="font-medium">{r.party.name}</span>{" "}
+            <span className="text-slate-500">{md(r.card.d)}</span> · <DirAmount direction={r.card.direction} total={r.card.total} />
+          </>
+        ),
+        sub: `← ${r.plan.text}`,
+        run: r.plan.run,
+        dedupeKey: r.plan.dedupe,
+        errLabel: `${r.party.name} ${md(r.card.d)} ${won(r.card.total)}`,
+      }))}
+      buttonLabel={(n) => `체크한 ${n}장 ${W.recon}`}
+      unit="장"
+      pending={ctx.pending}
+    />
   );
 }
 

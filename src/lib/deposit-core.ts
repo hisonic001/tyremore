@@ -6,11 +6,14 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { CARD_SETTLE_PATTERN_SQL, payerKeyOf } from "./expense-cats";
 import { monthRange } from "./ym";
-import { cashUsedSql, normName } from "./recon-data";
+import { cashUsedSql, depositReconData, normName } from "./recon-data";
+/* 🔴 deposit-tax 가 이 파일의 taxChainCoveredSql 을 import 한다(순환) — 그쪽은 함수 안에서만 쓰고
+   여기도 함수 안에서만 부르므로 모듈 평가 순서에 안 걸린다 (2026-09-12) */
+import { depositSurePicks, depositTaxCandidates } from "./deposit-tax";
 import { logActivity } from "./fin-activity";
 import { howOfMethod, type ActivityEntry, type UndoItem } from "./fin-activity-types";
-import { activityItems, type ActivityOpts } from "./recon-core";
-import { W } from "./fin-words";
+import { activityItems, confirmBankToTaxesCore, confirmTaxToBankCore, type ActivityOpts } from "./recon-core";
+import { autoReconLabel, W } from "./fin-words";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
 
@@ -166,6 +169,68 @@ export async function linkDepositToQuoteCore(
   };
   if (!opts.quiet) await logActivity(activity);
   return { ok: true, activity };
+}
+
+/**
+ * ⭐ 짝이 확실한 입금 모두 잇기 — 코어 (사장님 요청 2026-08-26, 3단계 2026-09-12 에 fin-deposits 에서 옮김)
+ *
+ *   정확 일치 + 아는 상대 하나뿐인 계산서 / 묶음 / 이름 맞는 판매 하나뿐인 것. 🔴 서버가 같은 규칙
+ *   (depositSurePicks)으로 **다시 계산한다** — 화면 목록을 믿지 않는다.
+ *   · ids 를 주면(「이번 주 정리」 흐름의 체크) 그중 **재계산 맵에 있는 것만** 잇고, 없는 것은 skipped
+ *     (화면이 열려 있던 사이 짝이 바뀐 것 — 조용히 건너뛴다). ids 없이 부르면 전과 동작이 같다.
+ *   · 낱장은 quiet, 끝에 bulk 한 줄(how 자동·verb 대사, 결정 g) — 되돌리기는 「최근 한 일」에서 건별.
+ *   🔴 recon_match.method 는 전과 같이 기본값(수동).
+ */
+export async function confirmSureDepositsCore(
+  ym: string,
+  uid: number | null,
+  ids?: number[],
+): Promise<{ ok: true; tax: number; quote: number; failed: number; skipped: number }> {
+  const data = await depositReconData(ym);
+  const { cands, bundles } = await depositTaxCandidates(
+    ym,
+    data.open.map((s) => ({ id: s.dep.id, date: s.dep.date, amount: s.dep.amount, payerName: s.dep.payerName })),
+  );
+  const sure = depositSurePicks(data.open, cands, bundles);
+  let picked = [...sure.entries()];
+  let skipped = 0;
+  if (ids) {
+    const want = new Set(ids.filter((n) => Number.isInteger(n) && n > 0));
+    picked = picked.filter(([cashId]) => want.has(cashId));
+    skipped = want.size - picked.length;
+  }
+  let tax = 0;
+  let quote = 0;
+  let failed = 0;
+  const items: UndoItem[] = [];
+  for (const [cashId, pick] of picked) {
+    /* 🔴 recon_match.method 는 전과 같이 기본값(수동) — 기록만 quiet 로 모아 아래서 한 줄 n건(how 자동, 결정 g) */
+    const r =
+      pick.kind === "tax"
+        ? await confirmTaxToBankCore(pick.invId, cashId, uid, "수동", { quiet: true })
+        : pick.kind === "bundle"
+          ? await confirmBankToTaxesCore(cashId, pick.invoiceIds, uid, "수동", { quiet: true })
+          : await linkDepositToQuoteCore(cashId, pick.quoteId, uid, "수동", { quiet: true });
+    if (!r.ok) failed++;
+    else {
+      if (pick.kind === "quote") quote++;
+      else tax++;
+      items.push(...activityItems(r.activity));
+    }
+  }
+  if (items.length > 0) {
+    await logActivity({
+      ym,
+      actor: uid,
+      how: "자동",
+      verb: "대사",
+      n: items.length,
+      amount: items.reduce((s, i) => s + (i.amount ?? 0), 0),
+      label: `${autoReconLabel(items.length)} · 입금 ${ym} (계산서 ${tax}·판매 ${quote}${failed > 0 ? `·실패 ${failed}` : ""})`,
+      undo: { kind: "bulk", args: { items } },
+    });
+  }
+  return { ok: true, tax, quote, failed, skipped };
 }
 
 export async function linkDepositsToQuoteCore(
