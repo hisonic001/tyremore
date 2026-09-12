@@ -11,6 +11,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "@/lib/link";
 import { setDotQty } from "@/lib/stock";
 import { searchPartStock, setMinQty, type PartStockRow } from "@/lib/part-stock";
 
@@ -145,17 +146,29 @@ export function PartStockList({ parts }: { parts: PartStockRow[] }) {
                 const on = open.includes(g);
                 return (
                   <div key={g}>
-                    <button
-                      type="button"
-                      onClick={() => toggle(g)}
-                      className="flex w-full items-center justify-between py-3 text-left active:bg-slate-50"
-                    >
-                      <span className="font-semibold">
-                        {g} <span className="ml-1 font-normal text-slate-400">{rows.length}종</span>
-                        {gLow > 0 && <strong className="ml-2 text-sm text-red-600">부족 {gLow}</strong>}
-                      </span>
-                      <span className="text-slate-400">{on ? "▼" : "▶"}</span>
-                    </button>
+                    {/* ⭐ 배터리는 단가표가 따로 있다 (2026-09-12) — 토글 button 안에 링크를 넣으면
+                        중첩 인터랙티브가 되므로 형제로 둔다 */}
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => toggle(g)}
+                        className="flex min-w-0 flex-1 items-center justify-between py-3 text-left active:bg-slate-50"
+                      >
+                        <span className="font-semibold">
+                          {g} <span className="ml-1 font-normal text-slate-400">{rows.length}종</span>
+                          {gLow > 0 && <strong className="ml-2 text-sm text-red-600">부족 {gLow}</strong>}
+                        </span>
+                        <span className="text-slate-400">{on ? "▼" : "▶"}</span>
+                      </button>
+                      {g === "배터리" && (
+                        <Link
+                          href="/stock/battery"
+                          className="shrink-0 rounded-control px-2 py-2 text-sm font-medium text-brand-700 underline underline-offset-4 active:bg-slate-100"
+                        >
+                          단가표 →
+                        </Link>
+                      )}
+                    </div>
                     {on && (
                       <ul className="divide-y divide-slate-100 pb-2">
                         {rows.map((p) => (

@@ -716,7 +716,10 @@ export function SaleForm({
         }
       />
 
-      {/* ⭐ 정비에 쓴 부품 — 기본 0원(재고만 차감), 금액도 쓸 수 있다 (2026-08-24) */}
+      {/* ⭐ 정비에 쓴 부품 — 기본 0원(재고만 차감), 금액도 쓸 수 있다 (2026-08-24)
+          🔴 2026-09-12: **기표가를 적어 둔 부품은 그 값으로 담는다**(배터리 단가표). 기표가가 없는
+             필터·패드는 그대로 0원 — 「기본 0원」 결정을 뒤집지 않고, 값을 적어 둔 것만 저절로 채운다.
+             서버(sale.ts)가 use 줄의 list_price·할인율은 어차피 비우므로 금액만 실린다. */}
       <UsedPartsPick
         onAdd={(p) =>
           setRows((rs) => [
@@ -728,7 +731,7 @@ export function SaleForm({
               description: p.model,
               marsName: p.marsName,
               qty: 1,
-              unitPrice: 0,
+              unitPrice: p.listPrice ?? 0,
               listPrice: null,
               salesRate: null,
             },
@@ -1359,7 +1362,7 @@ function UsedPartsPick({ onAdd }: { onAdd: (p: ProductHit) => void }) {
   return (
     <section className="rounded-2xl border border-slate-300 bg-white p-3">
       <h2 className="font-bold">
-        쓴 부품 담기 <span className="text-sm font-normal text-slate-500">— 기본 0원 (재고만 차감) · 금액도 쓸 수 있음</span>
+        쓴 부품 담기 <span className="text-sm font-normal text-slate-500">— 파는 값을 적어 둔 것은 그 값, 아니면 0원(재고만 차감)</span>
       </h2>
       <input
         value={q}
