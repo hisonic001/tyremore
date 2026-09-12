@@ -4,6 +4,8 @@ import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
 import { applyFinUpload, previewFinUpload, type FinPreview } from "@/lib/fin-upload";
+import { autoReconAfterUpload } from "@/lib/auto-recon";
+import { autoReconSummary, totalOf, ZERO_COUNTS, type AutoReconCounts } from "@/lib/auto-recon-pure";
 import { W } from "@/lib/fin-words";
 
 /**
@@ -68,7 +70,49 @@ export function FinUpload({ ym, multiple, showNext = true }: { ym: string; multi
   const [results, setResults] = useState<FileResult[]>([]);
   const isMulti = cursor.n > 1;
 
-  /** 큐의 다음 파일로 — 끝이면 입력을 비운다 (파일 하나일 때의 「반영 뒤 비우기」와 같은 자리) */
+  /* ⭐ 올린 직후 자동 대조 (개편 4단계, 2026-09-12; 사장님 결정 2 — 단추 없이 「올리면 자동」)
+     반영에 성공한 파일마다 원천 → 달들을 모아 두었다가, **큐가 끝나는 자리**에서 한 번에 돈다.
+     🔴 올리기와 같은 요청에 얹지 않는다 — 파일 하나가 이미 질의 ~37개, 연결 자리는 3개뿐이다. */
+  const pendingRecon = useRef<Map<string, Set<string>>>(new Map());
+  const [reconBusy, setReconBusy] = useState(false);
+  const [reconMsg, setReconMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function runAutoRecon() {
+    const jobs = [...pendingRecon.current.entries()].map(([source, set]) => ({ source, yms: [...set] }));
+    pendingRecon.current = new Map();
+    if (jobs.length === 0) return;
+    setReconBusy(true);
+    setReconMsg(null);
+    const counts: AutoReconCounts = { ...ZERO_COUNTS };
+    let failed = false;
+    for (const job of jobs) {
+      // 🔴 원천마다 순차 — 서버도 달마다 순차로 돈다(풀 3)
+      try {
+        const r = await autoReconAfterUpload(job.source, job.yms);
+        if (!r.ok) {
+          failed = true;
+          continue;
+        }
+        counts.cardSettle += r.counts.cardSettle;
+        counts.deposits += r.counts.deposits;
+        counts.withdrawals += r.counts.withdrawals;
+        counts.tax += r.counts.tax;
+        if (r.errors.length > 0) failed = true;
+      } catch {
+        failed = true;
+      }
+    }
+    setReconBusy(false);
+    /* 반영 성공 메시지(위 띠)는 그대로 두고, 자동 대조는 **다른 줄**로 말한다 */
+    setReconMsg(
+      failed && totalOf(counts) === 0
+        ? { ok: false, text: `${W.autoRecon}는 못 했습니다 — 이번 주 정리에서 이어서` }
+        : { ok: true, text: autoReconSummary(counts) + (failed ? " · 일부는 못 했습니다" : "") },
+    );
+    router.refresh();
+  }
+
+  /** 큐의 다음 파일로 — 끝이면 입력을 비우고 **자동 대조**를 돌린다 (파일 하나일 때도 같은 길) */
   function advance() {
     const i = at.current + 1;
     at.current = i;
@@ -81,6 +125,7 @@ export function FinUpload({ ym, multiple, showNext = true }: { ym: string; multi
     setPreview(null);
     setFile(null);
     if (input.current) input.current.value = ""; // 계정 이름은 남긴다 — 다음 파일에 이어 쓰게
+    void runAutoRecon();
   }
 
   /** 못 읽은 파일 — 여러 파일이면 결과에 남기고 건너뛴다, 하나면 전처럼 그 자리에 오류만 */
@@ -119,6 +164,8 @@ export function FinUpload({ ym, multiple, showNext = true }: { ym: string; multi
     setDoneMsg(null);
     setPreview(null);
     setResults([]);
+    setReconMsg(null);
+    pendingRecon.current = new Map();
     queue.current = files;
     at.current = 0;
     setCursor({ i: 0, n: files.length });
@@ -146,6 +193,12 @@ export function FinUpload({ ym, multiple, showNext = true }: { ym: string; multi
           (r.ym && r.ym !== ym ? ` (자료는 ${Number(r.ym.slice(5, 7))}월입니다)` : "");
         setDoneMsg(text);
         setNext(nextStepOf(r.source, fileYm));
+        /* 자동 대조는 큐가 끝난 뒤 — 여기선 「무엇을·어느 달을」만 담아 둔다 */
+        if (r.yms.length > 0) {
+          const set = pendingRecon.current.get(r.source) ?? new Set<string>();
+          for (const y of r.yms) set.add(y);
+          pendingRecon.current.set(r.source, set);
+        }
         if (queue.current.length > 1) setResults((p) => [...p, { name: f.name, ok: true, text }]);
         router.refresh();
         advance();
@@ -198,6 +251,24 @@ export function FinUpload({ ym, multiple, showNext = true }: { ym: string; multi
             {showNext && next && (
               <Link href={next.href} className="shrink-0 rounded-control bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white">
                 {next.label}
+              </Link>
+            )}
+          </div>
+        )}
+        {/* ⭐ 자동 대조 — 반영 띠와 **다른 줄**. 사장님 눈엔 단추 없이 「올리면 자동」 (2026-09-12) */}
+        {reconBusy && <p className="mt-2 text-sm text-slate-500">{W.autoRecon} 중…</p>}
+        {!reconBusy && reconMsg && (
+          <div
+            className={`mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg p-2 text-sm ${
+              reconMsg.ok ? "bg-sky-50 text-sky-800" : "bg-amber-50 text-amber-800"
+            }`}
+          >
+            <span>
+              {reconMsg.ok ? "🔗" : "⚠️"} {reconMsg.text}
+            </span>
+            {reconMsg.ok && (
+              <Link href="/finance/activity" className="shrink-0 text-xs font-semibold underline">
+                {W.activity} →
               </Link>
             )}
           </div>

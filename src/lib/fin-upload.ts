@@ -18,6 +18,7 @@ import { getShopInfo } from "@/lib/shop";
 import { parseAnyFin } from "./fin-sheet";
 import { cancelFinUploadBatch, ingestCardDays, ingestCardDeposits, ingestCardTxns, ingestCashTxns, ingestPosTxns, ingestTaxInvoices } from "./fin-ingest";
 import { extractFirst, isOfficeZip, isZip } from "./zip-crypto";
+import { ymsOfRows } from "./fin-upload-pure";
 import { logActivity } from "./fin-activity";
 import { W } from "./fin-words";
 
@@ -286,33 +287,15 @@ export async function previewFinUpload(
 }
 
 /**
- * ⭐ 이 파일이 말하는 달 (2026-09-10) — 반영 뒤 「다음 화면」이 어느 달을 보여줄지.
+ * 미리보기에서 본 대로 반영한다 — ym 은 「파일이 말하는 달」(다음 화면이 쓴다).
  *
- * 🔴 **조회기간(periodTo)이 아니라 줄이 가장 많은 달**을 쓴다. 월초에 지난달 통장을 받으면
- *    조회기간 끝은 이번 달(예: 09-03)인데 내용은 전부 지난달이라, 기간으로 데려가면
- *    빈 화면이 나온다 (전엔 아예 「보고 있던 달」로 데려가 같은 증상이었다).
- *    같은 수면 늦은 달 — 달을 걸친 파일은 새 달을 정리하러 가는 게 자연스럽다.
+ * ⭐ 4단계(2026-09-12): 「올린 직후 자동 대조」가 **파일이 건드린 달 전부**를 돌아야 해서
+ *    yms 도 함께 돌려준다. 셈은 순수 파일 fin-upload-pure.ymsOfRows 한 곳(예전 ymOfRows 를 옮겼다).
  */
-function ymOfRows(dates: string[], fallback: string | null): string | null {
-  const n = new Map<string, number>();
-  for (const d of dates) {
-    const ym = String(d ?? "").slice(0, 7);
-    if (/^\d{4}-\d{2}$/.test(ym)) n.set(ym, (n.get(ym) ?? 0) + 1);
-  }
-  let best: string | null = null;
-  for (const [ym, c] of n) {
-    if (best === null || c > (n.get(best) ?? 0) || (c === n.get(best) && ym > best)) best = ym;
-  }
-  if (best) return best;
-  const f = String(fallback ?? "").slice(0, 7);
-  return /^\d{4}-\d{2}$/.test(f) ? f : null;
-}
-
-/** 미리보기에서 본 대로 반영한다 — ym 은 「파일이 말하는 달」(다음 화면이 쓴다) */
 export async function applyFinUpload(
   fd: FormData,
 ): Promise<
-  | { ok: true; source: string; newCount: number; dupCount: number; rowCount: number; ym: string | null; uploadId: number }
+  | { ok: true; source: string; newCount: number; dupCount: number; rowCount: number; ym: string | null; yms: string[]; uploadId: number }
   | { ok: false; error: string }
 > {
   if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
@@ -324,7 +307,7 @@ export async function applyFinUpload(
     if (p.rows.length === 0) return { ok: false, error: "읽을 수 있는 줄이 없습니다 — 파일을 확인해 주세요" };
     const session = await getSession();
     /* 원천마다 날짜 칸 이름이 다르다 — 「파일이 말하는 달」은 한 곳에서 정한다 */
-    const ym = ymOfRows(
+    const { best: ym, yms } = ymsOfRows(
       p.kind === "tax"
         ? p.rows.map((r) => r.writeDate)
         : p.kind === "cardday"
@@ -351,7 +334,7 @@ export async function applyFinUpload(
         label: `올리기: ${p.formatName} ${t.name} — 새 줄 ${r.newCount}${r.dupCount > 0 ? ` · 이미 있던 줄 ${r.dupCount}` : ""}`,
         undo: { kind: "upload", args: { uploadId: r.uploadId } },
       });
-      return { ok: true as const, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount, ym, uploadId: r.uploadId };
+      return { ok: true as const, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount, ym, yms, uploadId: r.uploadId };
     };
 
     if (p.kind === "tax") {

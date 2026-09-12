@@ -10,14 +10,55 @@
  *
  * 🔴 판정은 전부 기존 정본(depositSurePicks·exactPlan·sureTaxPicks) — 임계를 풀지 않는다.
  * 🔴 기록은 코어가 각자 bulk 한 줄씩 — 이 액션은 아무것도 안 남긴다(이중 기록 금지).
- *
- * ⚠️ 껍데기 (주 세션 0단계) — 갈래 B 가 채운다.
  */
-import type { AutoReconCounts } from "./auto-recon-pure";
+import { getSession, hasPerm } from "@/lib/auth";
+import { confirmSureDepositsCore, markCardSettlementsCore } from "./deposit-core";
+import { confirmSureTaxCore } from "./recon-core";
+import { confirmSureWithdrawalsCore } from "./purchase-pay-core";
+import { revalidateFinance } from "./fin-revalidate";
+import { autoReconPlan, cleanYms, ZERO_COUNTS, type AutoReconCounts } from "./auto-recon-pure";
 
 export async function autoReconAfterUpload(
-  _source: string,
-  _yms: string[],
+  source: string,
+  yms: string[],
 ): Promise<{ ok: true; counts: AutoReconCounts; errors: string[] } | { ok: false; error: string }> {
-  throw new Error("todo: 갈래 B — autoReconAfterUpload");
+  if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
+
+  const counts: AutoReconCounts = { ...ZERO_COUNTS };
+  const errors: string[] = [];
+
+  /* 🔴 달은 형식·중복·개수(최대 3)를 순수 파일에서 거른다 — 화면이 보낸 값을 그대로 믿지 않는다 */
+  const months = cleanYms(yms);
+  /* 원천마다 「더 해야 할 것」이 다르다 — 법인카드·토스포스 등은 빈 표라 질의 0 */
+  const steps = autoReconPlan(source);
+  if (months.length === 0 || steps.length === 0) return { ok: true, counts, errors };
+
+  const uid = (await getSession())?.uid ?? null;
+
+  /* 🔴 순차 — 연결 자리 3개뿐이라 Promise.all 금지. 한 단계가 터져도 다음 단계·다음 달은 돈다 */
+  for (const ym of months) {
+    for (const step of steps) {
+      try {
+        if (step === "cardSettle") {
+          counts.cardSettle += await markCardSettlementsCore(ym, uid);
+        } else if (step === "deposits") {
+          const r = await confirmSureDepositsCore(ym, uid);
+          counts.deposits += r.tax + r.quote;
+        } else if (step === "withdrawals") {
+          /* 코어를 바로 부른다 — 권한은 이 액션 머리에서 이미 봤고, 코어가 FOR UPDATE 로 재검사한다 */
+          const r = await confirmSureWithdrawalsCore(ym, uid);
+          counts.withdrawals += r.n;
+        } else {
+          const direction = step === "tax:매입" ? "매입" : "매출";
+          const r = await confirmSureTaxCore(ym, direction, uid, "자동");
+          counts.tax += r.applied;
+        }
+      } catch (e) {
+        errors.push(`${ym} ${step}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+  }
+
+  revalidateFinance();
+  return { ok: true, counts, errors };
 }
