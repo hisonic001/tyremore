@@ -7,13 +7,16 @@
  */
 import Link from "@/lib/link";
 import { posDaysSummary } from "@/lib/pos-close";
+import { sortOpenDays } from "@/lib/pos-close-pure";
 import { won } from "@/components/fin/money";
 import { kstToday } from "@/lib/ym";
 
 export async function CardStep({ ym, status }: { ym: string; status: string }) {
   const days = await posDaysSummary(ym);
   const today = kstToday();
-  const open = days.filter((d) => !d.closed).sort((a, b) => (a.day === today ? -1 : b.day === today ? 1 : a.day < b.day ? -1 : 1));
+  /* ⭐ 4단계(2026-09-12): 손으로 하던 정렬(안 된 날 · 오늘 먼저 · 날짜순)을 순수 정본으로 —
+     첫 화면 「안 된 날 →」·카드 화면 「다음 안 된 날 →」과 같은 순서를 본다. 동작은 그대로. */
+  const open = sortOpenDays(days, today);
   return (
     <section className="mt-4">
       <p className="text-sm text-slate-600">{status}</p>

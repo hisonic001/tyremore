@@ -10,8 +10,10 @@ import { weeklySteps } from "@/lib/weekly-steps";
 import { weeklyDoneAt } from "@/lib/app-setting";
 import { freshAuditRun } from "@/lib/self-audit";
 import { finInbox } from "@/lib/fin-inbox";
+import { posDayData } from "@/lib/pos-close";
 import { AuditBanner } from "./audit-banner";
 import { InboxSection } from "./inbox-ui";
+import { TodayCardInline } from "./today-card";
 import { InvoiceSkipButton, TransferRow } from "./today-actions";
 import { FinShell } from "@/components/fin/shell";
 import { won } from "@/components/fin/money";
@@ -29,7 +31,9 @@ export const dynamic = "force-dynamic";
  *   정합성 A1(안 들어온 이체)·인박스·추적이 세 곳에서 보여 주던 같은 건은 「오늘」 칸 한 곳으로.
  *
  * 🔴 질의는 순차 — Promise.all 금지. 인라인 SQL 없음 — 정본 today-brief·weekly-steps·finPL·
- *    receivable-total·payableTotal·closedDelta 만 부른다.
+ *    receivable-total·payableTotal·closedDelta·posDayData 만 부른다.
+ * 🔴 posDayData 는 순차 12~19질의라 **조건부로만** 부른다 (4단계, 2026-09-12) — 오늘 POS 자료가
+ *    있고 · 아직 마감 안 했고 · 남은 건이 있을 때. 그 세 가지는 today-brief 가 이미 읽은 값이다.
  * 🔴 화면 글자는 fin-words 의 W — 「번 돈·쓴 돈·남은 돈」 → 매출·비용·이익, 못 받은 돈 → 미수금, 줄 돈 → 미지급금 (2단계, ERP 용어).
  */
 
@@ -65,6 +69,8 @@ export default async function FinancePage({
   const delta = (await closedDelta(ymAdd(ym, -1))) ?? (await closedDelta(ym));
 
   const c = brief.card;
+  /* ⭐ 카드 마감 인라인 (4단계) — 남은 건을 첫 화면에서 바로 정리한다. 무거운 조회라 조건부·순차 */
+  const pos = c.hasPos && !c.closed && c.open > 0 ? await posDayData(today) : null;
   const cardWarn = !c.hasPos || !c.closed || c.open > 0;
   const cardText = !c.hasPos
     ? "오늘 POS 자료 없음"
@@ -89,16 +95,31 @@ export default async function FinancePage({
             오늘 <span className="text-sm font-normal text-slate-400">{todayLabel}</span>
           </h2>
           <ul className="mt-1 divide-y divide-slate-100">
-            <li className={row}>
-              <Mark warn={cardWarn} />
-              <span className="min-w-0">
-                <span className="font-medium">카드 마감</span>
-                <span className="tabular ml-1.5 text-slate-500">{cardText}</span>
-                {c.otherOpenDays > 0 && <span className="tabular ml-1 text-xs text-amber-700">· 안 된 날 {c.otherOpenDays}일</span>}
-              </span>
-              <Link href={`/finance/card?ym=${today.slice(0, 7)}&d=${today}`} className={cardWarn ? goBtn : okBtn}>
-                {cardWarn ? (c.hasPos ? `${W.recon} →` : "올리기 →") : "마감됨"}
-              </Link>
+            <li className="py-1 text-sm">
+              <div className="flex items-baseline gap-2">
+                <Mark warn={cardWarn} />
+                <span className="min-w-0">
+                  <span className="font-medium">카드 마감</span>
+                  <span className="tabular ml-1.5 text-slate-500">{cardText}</span>
+                  {/* ⭐ 4단계(2026-09-12): 안 된 날이 있으면 그 중 **다음 날로 바로** 간다 (정본 nextOpenDay) */}
+                  {c.otherOpenDays > 0 &&
+                    (c.nextOpenDay ? (
+                      <Link
+                        href={`/finance/card?ym=${c.nextOpenDay.slice(0, 7)}&d=${c.nextOpenDay}`}
+                        className="tabular ml-1 text-xs text-amber-700 underline underline-offset-2"
+                      >
+                        · 안 된 날 {c.otherOpenDays}일 →
+                      </Link>
+                    ) : (
+                      <span className="tabular ml-1 text-xs text-amber-700">· 안 된 날 {c.otherOpenDays}일</span>
+                    ))}
+                </span>
+                <Link href={`/finance/card?ym=${today.slice(0, 7)}&d=${today}`} className={cardWarn ? goBtn : okBtn}>
+                  {cardWarn ? (c.hasPos ? `${W.recon} →` : "올리기 →") : "마감됨"}
+                </Link>
+              </div>
+              {/* ⭐ 올리기 · 남은 건 대조 · 마감을 이 자리에서 (사장님 결정 4) */}
+              <TodayCardInline today={today} card={c} data={pos} />
             </li>
             <li className="py-1 text-sm">
               <div className="flex items-baseline gap-2">

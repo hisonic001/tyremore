@@ -9,7 +9,8 @@ import { FinShell } from "@/components/fin/shell";
 import { won } from "@/components/fin/money";
 import { TableWrap } from "@/components/fin/table";
 import { cardDaySums, cardDiff } from "@/lib/card-recon";
-import { posDayData, WORK_DAY, PAID_DAY } from "@/lib/pos-close";
+import { posDayData, posDaysSummary, WORK_DAY, PAID_DAY } from "@/lib/pos-close";
+import { nextOpenDay } from "@/lib/pos-close-pure";
 import { kstToday } from "@/lib/ym";
 import { W } from "@/lib/fin-words";
 import { PosCloseUi } from "./pos-close-ui";
@@ -45,6 +46,10 @@ export default async function FinanceCardPage({
   const dRaw = typeof sp.d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(sp.d) ? sp.d : null;
   const day = dRaw ?? (ym === today.slice(0, 7) ? today : `${ym}-${String(new Date(Date.UTC(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0)).getUTCDate()).padStart(2, "0")}`);
   const pos = await posDayData(day);
+  /* ⭐ 4단계(2026-09-12) 「다음 안 된 날 →」 — 이 날을 끝내면 다음 날로 바로 건너뛰게.
+     cardDaySums 에는 마감 여부가 없어 posDaysSummary(집계 3질의)를 한 번 더 부른다. 순차. */
+  const posDays = await posDaysSummary(ym);
+  const nextOpen = nextOpenDay(posDays, day, today);
   const start = `${ym}-01`;
   const nextStart = `${ymAdd(ym, 1)}-01`;
   /** 앱 판매의 「판 날」 — 리포트와 같은 기준. 정본 조각은 pos-close.ts (2026-09-12) */
@@ -140,7 +145,7 @@ export default async function FinanceCardPage({
   return (
     <FinShell tab="card" monthNav={{ ym, basePath: "/finance/card" }}>
       {/* ⭐ 카드 일마감 (사장님 요청 2026-08-26) — 토스 포스 매출리포트 ↔ 앱 판매 */}
-      <PosCloseUi data={pos} />
+      <PosCloseUi data={pos} nextOpenDay={nextOpen} />
 
       <h2 className="mt-6 text-lg font-bold">{W.reconCard} (달)</h2>
       <p className="mt-1 text-sm text-slate-500">

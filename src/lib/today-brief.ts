@@ -16,6 +16,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { kstToday } from "./ym";
 import { posDaysSummary, type PosDaySummary } from "./pos-close";
+import { nextOpenDay } from "./pos-close-pure";
 import { a1OpenTransfers, type A1Row } from "./self-audit";
 import { receivablePartySql } from "./receivable-key";
 import { invoiceDeadline, type InvoiceDeadline } from "./invoice-deadline";
@@ -30,6 +31,13 @@ export interface TodayCard {
   open: number;
   /** 이 달에 마감 안 된 다른 날 수 (오늘 제외) */
   otherOpenDays: number;
+  /**
+   * 오늘 말고 **다음으로 마감할 날** — 첫 화면 「안 된 날 N일 →」이 바로 그 날로 간다
+   * (개편 4단계, 2026-09-12). 질의는 안 늘었다 — 위 posDays 를 그대로 쓴다.
+   * 🔴 오늘은 뺀다 — 옆의 「카드 마감」 단추가 이미 오늘로 가므로, 오늘을 가리키면 같은 곳이다
+   *    (그래서 otherOpenDays > 0 일 때만 값이 있다).
+   */
+  nextOpenDay: string | null;
 }
 
 export interface TodayReceivable {
@@ -63,6 +71,7 @@ export async function todayBrief(): Promise<TodayBrief> {
     appCard: t?.appCard ?? 0,
     open: t?.open ?? 0,
     otherOpenDays: posDays.filter((d) => d.day !== today && !d.closed).length,
+    nextOpenDay: nextOpenDay(posDays, today, today),
   };
 
   /* 최근 45일 — 정합성 A1 과 같은 창. 「그날 바로」 띄운다(사장님) */
