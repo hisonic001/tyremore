@@ -21,13 +21,18 @@ import { Notice } from "@/components/ui/notice";
 export function BatteryTable({ view }: { view: BatteryPriceView }) {
   const [brand, setBrand] = useState<string>(BATTERY_BRANDS[0]);
   const [q, setQ] = useState("");
-  const [showAll, setShowAll] = useState(false);
+  /**
+   * 🔴 기본은 **표 전체**다 (2026-09-12 운영 확인 뒤 바꿈).
+   *    취급하는 것만 보이게 했더니 델코 일반 22종 중 2종만 떠서 「단가표」 구실을 못 했다 —
+   *    사장님이 원한 건 사진 대신 볼 값 목록이다. 안 받는 것은 회색으로만 갈라 놓는다.
+   */
+  const [onlyHandled, setOnlyHandled] = useState(false);
   /** 방금 고친 파는 값 — 서버를 다시 안 부르고 화면만 맞춘다 */
   const [edited, setEdited] = useState<Record<number, number | null>>({});
 
   const term = q.trim().toUpperCase();
   const keep = (r: BatteryPriceRow) =>
-    (showAll || r.isActive || r.qty > 0) &&
+    (!onlyHandled || r.isActive || r.qty > 0) &&
     (term === "" || r.name.toUpperCase().includes(term) || (r.displayName ?? "").toUpperCase().includes(term));
 
   const groups = useMemo(
@@ -37,10 +42,10 @@ export function BatteryTable({ view }: { view: BatteryPriceView }) {
         .map((g) => ({ ...g, rows: g.rows.filter(keep) }))
         .filter((g) => g.rows.length > 0),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [view.groups, brand, term, showAll],
+    [view.groups, brand, term, onlyHandled],
   );
   const others = useMemo(() => view.others.filter(keep), // eslint-disable-next-line react-hooks/exhaustive-deps
-    [view.others, term, showAll]);
+    [view.others, term, onlyHandled]);
 
   const priceOf = (r: BatteryPriceRow) => (r.productId !== null && r.productId in edited ? edited[r.productId] : r.price);
 
@@ -72,8 +77,8 @@ export function BatteryTable({ view }: { view: BatteryPriceView }) {
           className="min-h-11 min-w-0 flex-1 rounded-control border border-slate-300 px-3 text-sm"
         />
         <label className="flex min-h-11 shrink-0 items-center gap-2 text-sm text-slate-600">
-          <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} className="size-4" />
-          안 받는 것도 보기
+          <input type="checkbox" checked={onlyHandled} onChange={(e) => setOnlyHandled(e.target.checked)} className="size-4" />
+          받는 것만 보기
         </label>
       </div>
       {term !== "" && <p className="mt-2 text-sm text-slate-500">「{q.trim()}」 찾은 결과 — 브랜드 전부에서</p>}
@@ -141,7 +146,7 @@ function Rows({
               {r.displayName && r.displayName !== r.name && (
                 <span className="ml-1 text-xs text-slate-400">{r.displayName}</span>
               )}
-              {!r.isActive && r.productId !== null && <span className="ml-1"><StatusPill tone="neutral">안 받음</StatusPill></span>}
+              {!r.isActive && r.productId !== null && <span className="ml-1 text-xs text-slate-400">안 받음</span>}
               {r.productId === null && <span className="ml-1"><StatusPill tone="warn">앱에 없음</StatusPill></span>}
             </td>
             {view.costShown && (
