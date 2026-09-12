@@ -9,7 +9,7 @@ import { FinShell } from "@/components/fin/shell";
 import { won } from "@/components/fin/money";
 import { TableWrap } from "@/components/fin/table";
 import { cardDaySums, cardDiff } from "@/lib/card-recon";
-import { posDayData } from "@/lib/pos-close";
+import { posDayData, WORK_DAY, PAID_DAY } from "@/lib/pos-close";
 import { kstToday } from "@/lib/ym";
 import { W } from "@/lib/fin-words";
 import { PosCloseUi } from "./pos-close-ui";
@@ -47,20 +47,31 @@ export default async function FinanceCardPage({
   const pos = await posDayData(day);
   const start = `${ym}-01`;
   const nextStart = `${ymAdd(ym, 1)}-01`;
-  /** 앱 판매의 「판 날」 — 리포트와 같은 기준 */
-  const D = sql`COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)`;
+  /** 앱 판매의 「판 날」 — 리포트와 같은 기준. 정본 조각은 pos-close.ts (2026-09-12) */
+  const D = WORK_DAY;
 
   // ①② 여신협회 일별 승인 vs 앱 카드 매출 — 정본 함수 (현황·마감 체크리스트와 같은 식, 2026 감사 R4)
   const cd = await cardDaySums(ym);
 
   /* ⭐ 차이 난 날 펼쳐보기 (사장님 승인 2026-08-25) — 그날 카드·혼합 판매와
-   *    「차이와 같은 금액」의 다른 수단 판매(수단 착오 후보)를 바로 보여준다 */
-  const monthQuotes = await db.execute<{ d: string; quote_no: string; total: number; pm: string | null; who: string | null }>(sql`
+   *    「차이와 같은 금액」의 다른 수단 판매(수단 착오 후보)를 바로 보여준다
+   * ⭐ 혼합(분할) 판매는 판매 한 줄이 아니라 **결제 줄마다 받은 날로** 싣는다 (2026-09-12).
+   *    이틀에 걸친 카드(권미선 9/10 두 장 + 9/12 잔금)를 작업일 한 줄로 실으면 9/10 펼침 합이
+   *    정본(cardDaySums, paid_on 기준)보다 20만원 크고 9/12 펼침엔 판매가 없다. 그래서 혼합은
+   *    본 질의에서 빼고 결제 줄로 대신 넣는다 — 둘 다 넣으면 이중이다. */
+  const monthQuotes = await db.execute<{ d: string; quote_no: string; total: number; pm: string | null; who: string | null; split: boolean }>(sql`
     SELECT to_char(${D}, 'YYYY-MM-DD') d, q.quote_no, q.total_amount total, q.payment_method pm,
-           COALESCE(q.supplier_name, c.name) who
+           COALESCE(q.supplier_name, c.name) who, false split
     FROM quote q LEFT JOIN customer c ON c.id = q.customer_id
-    WHERE q.status = '성사' AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
-    ORDER BY ${D} ASC LIMIT 1200 -- 감사 M18: 금액순 600 컷이 가짜 ● 누락 표시를 만들었다
+    WHERE q.status = '성사' AND q.payment_method <> '혼합'
+      AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
+    UNION ALL
+    SELECT to_char(${PAID_DAY}, 'YYYY-MM-DD') d, q.quote_no, pm.amount total, pm.method pm,
+           COALESCE(q.supplier_name, c.name) who, true split
+    FROM quote_payment pm JOIN quote q ON q.id = pm.quote_id LEFT JOIN customer c ON c.id = q.customer_id
+    WHERE q.status = '성사' AND q.payment_method = '혼합' AND pm.amount > 0
+      AND ${PAID_DAY} >= ${start}::date AND ${PAID_DAY} < ${nextStart}::date
+    ORDER BY d ASC LIMIT 1200 -- 감사 M18: 금액순 600 컷이 가짜 ● 누락 표시를 만들었다
   `);
 
   // 건별 승인 (세부내역이 올라온 달) — 차이 난 날 펼침에 그날 승인 목록까지 (2026-08-25)
@@ -117,7 +128,7 @@ export default async function FinanceCardPage({
     arr.push(x);
     txnsByDay.set(x.d, arr);
   }
-  const quotesByDay = new Map<string, { quote_no: string; total: number; pm: string | null; who: string | null }[]>();
+  const quotesByDay = new Map<string, { quote_no: string; total: number; pm: string | null; who: string | null; split: boolean }[]>();
   for (const q of monthQuotes) {
     const arr = quotesByDay.get(q.d) ?? [];
     arr.push(q);
@@ -301,9 +312,10 @@ export default async function FinanceCardPage({
                             </p>
                           ))}
                           {cardQ.length > 0 ? (
-                            cardQ.map((q) => (
-                              <p key={q.quote_no} className="text-slate-600">
+                            cardQ.map((q, i) => (
+                              <p key={`${q.quote_no}-${i}`} className="text-slate-600">
                                 {q.quote_no} · {won(Number(q.total))}원 · {q.pm}
+                                {q.split ? " (분할)" : ""}
                                 {q.who ? ` · ${q.who}` : ""}
                               </p>
                             ))

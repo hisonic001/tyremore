@@ -102,9 +102,17 @@ export interface DayCollection {
  */
 export interface DayEcho {
   sale: SaleRow;
-  kind: "시공" | "수금";
-  /** 배지 뒷글 — 「09-03 예약분」 · 「+100,000원 · 09-03 정비분」(그날 받은 금액) */
-  note: string;
+  /**
+   * ⭐ 배지가 여러 개 (사장님 결정 2026-09-12 — "시공완료된 내역과 수금 내역의 카드가
+   *    동시에 뜨면 안되니 한개의 카드에 같이 뜨게만").
+   *    전에는 `kind: "시공"|"수금"` 하나에 note 하나라, 같은 판매가 같은 날 시공도 하고
+   *    수금도 하면(권미선 Q26-0910-002 — 9/12 잔금 카드 + 시공 마무리) 카드가 두 장 떴다.
+   *    이제 그 날 그 판매의 카드는 한 장이고, 해당하는 배지만 채워진다.
+   */
+  /** 시공 배지 뒷글 — 「09-10 예약분」 */
+  fulfilled?: string;
+  /** 수금 배지 뒷글 — 「+200,000원 · 09-10 정비분」(그날 받은 금액) */
+  collected?: string;
 }
 
 export interface SaleDay {
@@ -232,6 +240,9 @@ export async function saleHistory(opts: {
      기간 필터는 그 「두 번째 날」 기준으로 건다. 예약중 필터에선 생략. */
   let fulfillEchoes: { id: number; fd: string; wd: string }[] = [];
   let colls: {
+    /** 어느 표에서 왔나 — 'rp' 외상 수금(receivable_payment) · 'qp' 분할 결제(quote_payment).
+        두 표의 id 가 겹칠 수 있어 항목 id·열쇠를 가를 때 쓴다 (2026-09-12) */
+    src: "rp" | "qp";
     id: number; quote_id: number; quote_no: string; amount: number; method: string;
     paid_on: string; memo: string | null; who: string; plate_no: string | null; work_date: string;
   }[] = [];
@@ -254,25 +265,56 @@ export async function saleHistory(opts: {
       `)
     ).map((r) => ({ id: Number(r.id), fd: r.fd, wd: r.wd }));
     /* 외상 수금 (받은 날 기준) — 2026-09-03 부터 있던 질의를 앞으로 당겼다:
-       재등장 카드를 만들려면 이 판매들의 상세(SaleRow)가 필요해서다 */
+       재등장 카드를 만들려면 이 판매들의 상세(SaleRow)가 필요해서다
+
+       ⭐ 2026-09-12 두 번째 재료(UNION ALL 아래쪽) — 완납된 예약의 「다른 날 받은 분할 줄」.
+          권미선 Q26-0910-002: 작업일 9/10, 예약금·중도금 카드 2장은 9/10, 잔금 200,000 은
+          9/12 에 아들분이 와서 카드 결제. 완납 처리(reservation-pay.ts normalizeSettledReservation)가
+          수금 줄을 receivable_payment → quote_payment 로 옮기면서 payment_method 가 '외상' → '혼합'
+          이 되니, 위 질의(외상만)로는 9/12 잔금이 정비 내역 어디에도 안 떴다(재등장 카드도
+          collectedSum 도 0). 옮겨진 줄도 「받은 날」에 보이도록 여기서 함께 뽑는다.
+       🔴 작업일과 **같은 날** 분할 줄은 넣지 않는다 — 보통 분할 결제(카드+현금 당일)까지
+          collectedSum 에 들어가 「그날 받은 돈」의 뜻이 바뀐다. 다른 날 줄만이
+          「받은 날에 따로 보여 줄 돈」이다. (아래 sameDayAsSale 과 같은 정신, 단 SQL 에서 미리 거른다)
+       🔴 두 표의 id 가 겹칠 수 있어 src 열로 가른다. quote_payment 에는 memo 가 없다. */
     colls = [
       ...(await db.execute<(typeof colls)[number]>(sql`
-        SELECT rp.id, q.id quote_id, q.quote_no, rp.amount, rp.method,
-               to_char(rp.paid_on, 'YYYY-MM-DD') paid_on, rp.memo,
-               COALESCE(q.supplier_name, c.name, '손님') who, v.plate_no,
-               to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM-DD') work_date
-        FROM receivable_payment rp
-        JOIN quote q ON q.id = rp.quote_id
-        LEFT JOIN customer c ON c.id = q.customer_id
-        LEFT JOIN vehicle v ON v.id = q.vehicle_id
-        WHERE q.status = '성사' AND q.payment_method = '외상'
-          ${m ? sql`AND to_char(rp.paid_on, 'YYYY-MM') = ${m}` : sql``}
-          ${from ? sql`AND rp.paid_on >= ${from}::date` : sql``}
-          ${to ? sql`AND rp.paid_on <= ${to}::date` : sql``}
-          ${opts.customerId ? sql`AND q.customer_id = ${opts.customerId}` : sql``}
-          ${opts.vehicleId ? sql`AND q.vehicle_id = ${opts.vehicleId}` : sql``}
-          ${opts.supplierName ? sql`AND q.supplier_name = ${opts.supplierName}` : sql``}
-        ORDER BY rp.paid_on DESC, rp.id DESC
+        SELECT u.* FROM (
+          SELECT 'rp'::text src, rp.id, q.id quote_id, q.quote_no, rp.amount, rp.method,
+                 to_char(rp.paid_on, 'YYYY-MM-DD') paid_on, rp.memo,
+                 COALESCE(q.supplier_name, c.name, '손님') who, v.plate_no,
+                 to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM-DD') work_date
+          FROM receivable_payment rp
+          JOIN quote q ON q.id = rp.quote_id
+          LEFT JOIN customer c ON c.id = q.customer_id
+          LEFT JOIN vehicle v ON v.id = q.vehicle_id
+          WHERE q.status = '성사' AND q.payment_method = '외상'
+            ${m ? sql`AND to_char(rp.paid_on, 'YYYY-MM') = ${m}` : sql``}
+            ${from ? sql`AND rp.paid_on >= ${from}::date` : sql``}
+            ${to ? sql`AND rp.paid_on <= ${to}::date` : sql``}
+            ${opts.customerId ? sql`AND q.customer_id = ${opts.customerId}` : sql``}
+            ${opts.vehicleId ? sql`AND q.vehicle_id = ${opts.vehicleId}` : sql``}
+            ${opts.supplierName ? sql`AND q.supplier_name = ${opts.supplierName}` : sql``}
+          UNION ALL
+          SELECT 'qp'::text src, pm.id, q.id quote_id, q.quote_no, pm.amount, pm.method,
+                 to_char(pm.paid_on, 'YYYY-MM-DD') paid_on, NULL::text memo,
+                 COALESCE(q.supplier_name, c.name, '손님') who, v.plate_no,
+                 to_char(COALESCE(q.work_date, q.created_at::date), 'YYYY-MM-DD') work_date
+          FROM quote_payment pm
+          JOIN quote q ON q.id = pm.quote_id
+          LEFT JOIN customer c ON c.id = q.customer_id
+          LEFT JOIN vehicle v ON v.id = q.vehicle_id
+          WHERE q.status = '성사' AND q.payment_method = '혼합'
+            AND pm.paid_on IS NOT NULL
+            AND pm.paid_on <> COALESCE(q.work_date, q.created_at::date)
+            ${m ? sql`AND to_char(pm.paid_on, 'YYYY-MM') = ${m}` : sql``}
+            ${from ? sql`AND pm.paid_on >= ${from}::date` : sql``}
+            ${to ? sql`AND pm.paid_on <= ${to}::date` : sql``}
+            ${opts.customerId ? sql`AND q.customer_id = ${opts.customerId}` : sql``}
+            ${opts.vehicleId ? sql`AND q.vehicle_id = ${opts.vehicleId}` : sql``}
+            ${opts.supplierName ? sql`AND q.supplier_name = ${opts.supplierName}` : sql``}
+        ) u
+        ORDER BY u.paid_on DESC, u.id DESC
         LIMIT 300
       `)),
     ];
@@ -512,6 +554,8 @@ export async function saleHistory(opts: {
    * ⭐ 외상 수금을 「받은 날」 그룹에 싣는다 (사장님 요청 2026-09-03).
    * 🔴 매출 합계(d.amount·totalAmount)에는 절대 안 더한다 — 판 날에 이미 세었다.
    *    수금 정본은 receivable_payment 그대로(외상 장부와 같은 표), 새 판정 없음.
+   *    ⭐ 2026-09-12 부터 완납 예약의 「다른 날 받은 분할 줄」(quote_payment, src='qp')도 같이 —
+   *       외상이 아니라 잔금이라 화면 낱말은 「수금」으로 통일.
    *    수금만 있고 판매가 없는 날도 그룹이 생긴다. 예약중 필터에선 생략(질의 자체를 위에서 안 함).
    *    같은 날 수금은 collectedSum(그날 받은 돈)에는 더하되 항목으로는 안 싣는다.
    */
@@ -520,7 +564,8 @@ export async function saleHistory(opts: {
     d.collectedSum += Number(r.amount);
     if (sameDayAsSale(r)) continue;
     d.collections.push({
-      id: Number(r.id),
+      // 분할 결제(quote_payment) 줄은 음수 id — receivable_payment.id 와 겹치지 않게 (2026-09-12)
+      id: r.src === "qp" ? -Number(r.id) : Number(r.id),
       quoteId: Number(r.quote_id),
       quoteNo: r.quote_no,
       amount: Number(r.amount),
@@ -532,11 +577,25 @@ export async function saleHistory(opts: {
     });
   }
 
-  /* ⭐ 재등장 카드 조립 (2026-09-05) — 시공한 날·수금한 날에 원래 카드가 배지를 달고 다시 뜬다 */
+  /* ⭐ 재등장 카드 조립 (2026-09-05) — 시공한 날·수금한 날에 원래 카드가 배지를 달고 다시 뜬다.
+     ⭐ 2026-09-12: 같은 날·같은 판매는 **카드 한 장**에 배지 여러 개 (사장님 결정 —
+        "시공완료된 내역과 수금 내역의 카드가 동시에 뜨면 안되니 한개의 카드에 같이 뜨게만").
+        권미선 Q26-0910-002 는 9/12 에 잔금 카드 결제와 시공 마무리를 함께 했다 — 전에는
+        시공·수금이 각자 push 해 9/12 에 같은 카드가 두 장 떴다. 시공 루프가 먼저 돌므로
+        수금은 자연히 그 카드에 붙는다. */
+  const echoOf = (day: string, sale: SaleRow): DayEcho => {
+    const d = dayOf(day);
+    let e = d.echoes.find((x) => x.sale.quoteId === sale.quoteId);
+    if (!e) {
+      e = { sale };
+      d.echoes.push(e);
+    }
+    return e;
+  };
   for (const e of fulfillEchoes) {
     const s = map.get(e.id);
     if (!s) continue;
-    dayOf(e.fd).echoes.push({ sale: s, kind: "시공", note: `${e.wd} 예약분` });
+    echoOf(e.fd, s).fulfilled = `${e.wd} 예약분`;
   }
   {
     // 같은 날 같은 판매의 수금 여러 건(나눠 받기)은 카드 하나에 금액 합산
@@ -552,11 +611,7 @@ export async function saleHistory(opts: {
     for (const e of byDayQuote.values()) {
       const s = map.get(e.qid);
       if (!s) continue; // 수금 300건 중 재등장 상한(60판매)을 넘긴 것 — 헤더 합계에는 이미 들어 있다
-      dayOf(e.day).echoes.push({
-        sale: s,
-        kind: "수금",
-        note: `+${e.sum.toLocaleString("ko-KR")}원 · ${e.wd} 정비분`,
-      });
+      echoOf(e.day, s).collected = `+${e.sum.toLocaleString("ko-KR")}원 · ${e.wd} 정비분`;
     }
   }
 

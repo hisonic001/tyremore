@@ -206,9 +206,23 @@ async function posRowsByIds(ids: number[]): Promise<PosRow[]> {
   return rows.map(toPos);
 }
 
+/**
+ * ⭐ 날짜 조각 정본 (2026-09-12) — 판매(`q`)와 결제 줄(`pm`)의 「그날」은 이 둘로만 정한다.
+ *
+ *   사고: 권미선 손님이 카드 3장을 **이틀에 걸쳐** 냈다(9/10 에 200,000 + 854,000, 잔금
+ *   200,000 은 9/12). 일마감 화면은 `COALESCE(paid_on, 작업일)` 로 잘 갈랐는데, 월 요약
+ *   `posDaysSummary` 만 손으로 다시 적은 식이 **작업일뿐**이라 9/10 에 1,254,000 · 9/12 에 0 —
+ *   「오늘 카드 마감」이 맞는 날을 「안 맞음」이라고 알렸다. 같은 식을 두 벌 적어서 갈라진 것.
+ *   🔴 그래서 조각을 한 곳에 두고 전부 여기서 가져다 쓴다. 손으로 다시 적지 않는다.
+ *   (카드 화면 `finance/card/page.tsx` 도 이걸 import 한다.)
+ */
+export const WORK_DAY = sql`COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)`;
+/** 결제 줄(`pm`)의 날짜 = 받은 날 우선, 없으면 작업일 — 스키마 주석(`quote_payment.paid_on`)과 같은 뜻 */
+export const PAID_DAY = sql`COALESCE(pm.paid_on, ${WORK_DAY})`;
+
 /** 앱 대조 항목 — 카드 + 간편결제 (단일 판매 · 분할 몫 · 외상 수금) */
 export async function appPayItems(from: string, to: string): Promise<AppItem[]> {
-  const D = sql`COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)`;
+  const D = WORK_DAY;
   const who = sql`COALESCE(q.supplier_name, c.name, NULLIF(split_part(COALESCE(q.mars_memo, ''), ' ', 2), ''), '손님')`;
   const M = strList(RECON_METHODS);
 
@@ -226,10 +240,10 @@ export async function appPayItems(from: string, to: string): Promise<AppItem[]> 
   const splits = await db.execute<{ id: number; quote_id: number; quote_no: string; amount: number; who: string; at: string; day: string; pm: string }>(sql`
     SELECT pm.id, q.id quote_id, q.quote_no, pm.amount, ${who} who, pm.method pm,
            to_char(q.created_at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') at,
-           to_char(COALESCE(pm.paid_on, ${D}), 'YYYY-MM-DD') AS "day"
+           to_char(${PAID_DAY}, 'YYYY-MM-DD') AS "day"
     FROM quote_payment pm JOIN quote q ON q.id = pm.quote_id LEFT JOIN customer c ON c.id = q.customer_id
     WHERE q.status = '성사' AND pm.method IN (${M}) AND pm.amount > 0
-      AND COALESCE(pm.paid_on, ${D}) >= ${from}::date AND COALESCE(pm.paid_on, ${D}) <= ${to}::date
+      AND ${PAID_DAY} >= ${from}::date AND ${PAID_DAY} <= ${to}::date
     ORDER BY q.created_at LIMIT 600
   `);
       /* 🔴 외상 수금은 그 판매가 **아직 「외상」일 때만** 센다 (사장님 제보 2026-08-29).
@@ -281,7 +295,7 @@ function item(
 async function appItemsByRefs(refs: { table: string; id: number }[]): Promise<AppItem[]> {
   if (refs.length === 0) return [];
   const who = sql`COALESCE(q.supplier_name, c.name, NULLIF(split_part(COALESCE(q.mars_memo, ''), ' ', 2), ''), '손님')`;
-  const D = sql`COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)`;
+  const D = WORK_DAY;
   const pick = (t: string) => [...new Set(refs.filter((r) => r.table === t).map((r) => r.id))];
   const out: AppItem[] = [];
 
@@ -299,7 +313,7 @@ async function appItemsByRefs(refs: { table: string; id: number }[]): Promise<Ap
   if (pIds.length > 0) {
     const rows = await db.execute<{ id: number; quote_id: number; quote_no: string; amount: number; who: string; at: string; day: string; pm: string }>(sql`
       SELECT pm.id, q.id quote_id, q.quote_no, pm.amount, ${who} who, pm.method pm,
-             to_char(q.created_at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') at, to_char(${D}, 'YYYY-MM-DD') AS "day"
+             to_char(q.created_at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') at, to_char(${PAID_DAY}, 'YYYY-MM-DD') AS "day"
       FROM quote_payment pm JOIN quote q ON q.id = pm.quote_id LEFT JOIN customer c ON c.id = q.customer_id
       WHERE pm.id IN (${idList(pIds)}) LIMIT 300
     `);
@@ -479,12 +493,15 @@ export async function posDayData(day: string): Promise<PosDayData> {
   const nearAppFree = [...appByKey.values()].filter((a) => a.remain > 0 && a.day >= from && a.day <= to);
 
   // 수단 착오 후보 — 그 날 판매 중 금액은 같은데 수단이 다른 것
+  // ⭐ 「그 날」= 작업일이 그날이거나, **그날 받은 결제 줄이 있는** 판매 (2026-09-12 — 이틀에 걸친
+  //    카드는 잔금 날에도 후보여야 한다. 전엔 작업일만 봐서 9/12 화면에 9/10 판매가 안 떴다)
   const sameDaySales = await db.execute<{ id: number; quote_no: string; total: number; pm: string | null; who: string }>(sql`
     SELECT q.id, q.quote_no, q.total_amount total, q.payment_method pm,
            COALESCE(q.supplier_name, c.name, '손님') who
     FROM quote q LEFT JOIN customer c ON c.id = q.customer_id
     WHERE q.status = '성사' AND q.total_amount > 0
-      AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) = ${day}::date
+      AND (${WORK_DAY} = ${day}::date
+           OR EXISTS (SELECT 1 FROM quote_payment pm WHERE pm.quote_id = q.id AND pm.paid_on = ${day}::date))
       AND q.payment_method IN ('현금', '계좌이체', '외상', '지역화폐', '카드', '간편결제')
     LIMIT 400
   `);
@@ -848,18 +865,17 @@ export async function posDaysSummary(ym: string): Promise<PosDaySummary[]> {
   const appRows = await db.execute<{ day: string; s: string; open: number }>(sql`
     WITH a AS (
       SELECT 'quote' t, q.id rid, 'quote:' || q.id ref, q.total_amount amt,
-             COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) d
+             ${WORK_DAY} d
       FROM quote q
       WHERE q.status = '성사' AND q.payment_method IN (${M}) AND q.total_amount > 0
-        AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${start}
-        AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${nextStart}
+        AND ${WORK_DAY} >= ${start} AND ${WORK_DAY} < ${nextStart}
       UNION ALL
-      SELECT 'quote_payment', pm.id, 'qp:' || pm.id, pm.amount,
-             COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date)
+      -- 🔴 분할 몫은 받은 날(PAID_DAY) — 일마감 화면(appPayItems)과 같은 식. 전엔 작업일로만 묶어
+      --    이틀에 걸친 카드가 첫날에 몰렸다 (2026-09-12 권미선: 9/10 1,254,000 · 9/12 0 으로 보이던 것)
+      SELECT 'quote_payment', pm.id, 'qp:' || pm.id, pm.amount, ${PAID_DAY}
       FROM quote_payment pm JOIN quote q ON q.id = pm.quote_id
       WHERE q.status = '성사' AND pm.method IN (${M}) AND pm.amount > 0
-        AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${start}
-        AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${nextStart}
+        AND ${PAID_DAY} >= ${start} AND ${PAID_DAY} < ${nextStart}
       UNION ALL
       SELECT 'receivable_payment', rp.id, 'rp:' || rp.id, rp.amount, rp.paid_on
       FROM receivable_payment rp JOIN quote q ON q.id = rp.quote_id

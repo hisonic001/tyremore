@@ -9,6 +9,7 @@ import { EXCLUSIVE, SPLITTABLE, splitLabel } from "@/lib/payments";
 import { signedStr, showSigned } from "@/lib/signed-input";
 import { SquareArrowOutUpRight } from "lucide-react";
 import { StatusPill } from "@/components/ui/badge";
+import { W } from "@/lib/fin-words";
 import { useConfirm } from "@/components/ui/confirm";
 import { CollectionPanel } from "./collections";
 import { ReservationFixPanel } from "./reservation-fix";
@@ -64,8 +65,10 @@ export function SaleCard({
   /**
    * ⭐ 재등장 카드 (사장님 지시 2026-09-05) — 시공한 날·수금한 날에 원래 카드가
    *    이 배지를 달고 다시 뜬다. 그날 매출 합계에는 안 들어간 카드라는 표시이기도 하다.
+   * ⭐ 2026-09-12: 배지 둘을 한 카드에 (사장님 결정 — "한개의 카드에 같이 뜨게만").
+   *    권미선 Q26-0910-002 처럼 같은 날 시공 마무리 + 잔금 수금이면 있는 것만 나란히 그린다.
    */
-  echo?: { kind: "시공" | "수금"; note: string };
+  echo?: { fulfilled?: string; collected?: string };
   /** ⭐ 매입가·마진 표시 (2026-09-02 — cost 스위치. 전엔 owner 하나가 세 용도를 겸직) */
   owner?: boolean;
   /** 외상 수금 UI (receivable_view 스위치) */
@@ -260,11 +263,15 @@ export function SaleCard({
         className="w-full rounded-card p-3 text-left transition-colors active:bg-slate-50 lg:hover:bg-slate-50"
       >
         {/* ── 재등장 배지 (2026-09-05) — 시공한 날·수금한 날의 카드임을 맨 위에서 알린다 ── */}
-        {echo && (
-          <div className="mb-2">
-            <StatusPill tone={echo.kind === "수금" ? "success" : "reserve"}>
-              {echo.kind === "수금" ? "💰 외상 수금" : "🔧 시공 완료"} {echo.note}
-            </StatusPill>
+        {echo && (echo.fulfilled || echo.collected) && (
+          <div className="mb-2 flex flex-wrap items-center gap-1.5">
+            {echo.fulfilled && <StatusPill tone="reserve">🔧 시공 완료 {echo.fulfilled}</StatusPill>}
+            {/* 「외상 수금」→「수금」(2026-09-12) — 완납 예약의 잔금(quote_payment 로 옮겨진 줄)은 외상이 아니다 */}
+            {echo.collected && (
+              <StatusPill tone="success">
+                💰 {W.collect} {echo.collected}
+              </StatusPill>
+            )}
           </div>
         )}
         {/* ── 머리: 누구 · 무슨 차 ── */}

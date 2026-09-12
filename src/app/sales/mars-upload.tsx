@@ -273,9 +273,10 @@ export function SalesList({
                 <span className="tabular text-sm text-slate-500">
                   {d.qty > 0 && `타이어 ${d.qty}본 · `}
                   {won(d.amount)}원
-                  {/* ⭐ 외상 수금 (2026-09-03) — 매출과 색으로 구분, 합계(d.amount)에 안 섞임 */}
+                  {/* ⭐ 그날 받은 돈 (2026-09-03 외상 수금 → 2026-09-12 완납 예약의 다른 날 잔금도 포함)
+                      — 매출과 색으로 구분, 합계(d.amount)에 안 섞임 */}
                   {d.collectedSum > 0 && (
-                    <span className="ml-1.5 font-medium text-emerald-700">· 외상 수금 +{won(d.collectedSum)}원</span>
+                    <span className="ml-1.5 font-medium text-emerald-700">· 수금 +{won(d.collectedSum)}원</span>
                   )}
                 </span>
               </div>
@@ -311,7 +312,7 @@ export function SalesList({
                     <SaleCard
                       key={`echo-${e.sale.quoteId}-${i}`}
                       sale={e.sale}
-                      echo={{ kind: e.kind, note: e.note }}
+                      echo={{ fulfilled: e.fulfilled, collected: e.collected }}
                       owner={owner}
                       canCollect={canCollect}
                       canReassign={canReassign}
@@ -336,5 +337,5 @@ export function SalesList({
 
 /* 🔴 외상 수금 한 줄(CollectionLine → 묶음 CollectionGroup, 2026-09-03~04)은
  *    2026-09-05 「카드 재등장」으로 대체됐다 — 수금한 날에는 원래 영수증 카드가
- *    「💰 외상 수금 +금액」 배지를 달고 다시 뜨고(SaleDay.echoes), 되돌리기는
+ *    「💰 수금 +금액」 배지를 달고 다시 뜨고(SaleDay.echoes — 같은 날 시공 배지와 한 장), 되돌리기는
  *    카드를 펼치면 나오는 수금 패널(CollectionPanel 정본)에 있다. */
