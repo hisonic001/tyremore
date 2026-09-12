@@ -24,7 +24,8 @@ export function BatteryTable({ view }: { view: BatteryPriceView }) {
   /**
    * 🔴 기본은 **표 전체**다 (2026-09-12 운영 확인 뒤 바꿈).
    *    취급하는 것만 보이게 했더니 델코 일반 22종 중 2종만 떠서 「단가표」 구실을 못 했다 —
-   *    사장님이 원한 건 사진 대신 볼 값 목록이다. 안 받는 것은 회색으로만 갈라 놓는다.
+   *    사장님이 원한 건 사진 대신 볼 값 목록이다. 안 받는 것(재고·판매 이력이 없어 검색에서
+   *    꺼 둔 모델)은 품명을 회색으로만 갈라 놓는다 — 줄마다 「안 받음」을 붙이면 시끄럽다.
    */
   const [onlyHandled, setOnlyHandled] = useState(false);
   /** 방금 고친 파는 값 — 서버를 다시 안 부르고 화면만 맞춘다 */
@@ -142,11 +143,11 @@ function Rows({
         {rows.map((r) => (
           <tr key={r.productId ?? r.name} className="border-b border-slate-100 align-middle">
             <td className="py-2 pr-2">
-              <span className={r.isActive ? "font-medium" : "text-slate-400"}>{r.name}</span>
-              {r.displayName && r.displayName !== r.name && (
+              <span className={r.isActive || r.qty > 0 ? "font-medium" : "text-slate-400"}>{r.name}</span>
+              {/* 앱 이름은 품명과 다를 때만 — 「델코 DF40L」처럼 브랜드만 덧붙인 것은 묶음 제목과 겹친다 */}
+              {r.displayName && !r.displayName.includes(r.name) && (
                 <span className="ml-1 text-xs text-slate-400">{r.displayName}</span>
               )}
-              {!r.isActive && r.productId !== null && <span className="ml-1 text-xs text-slate-400">안 받음</span>}
               {r.productId === null && <span className="ml-1"><StatusPill tone="warn">앱에 없음</StatusPill></span>}
             </td>
             {view.costShown && (
