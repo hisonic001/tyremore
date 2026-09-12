@@ -23,7 +23,9 @@ export type FinTabId =
   /** ⭐ 장부 첫 화면 — 손익·근거·마감 (2026-09-11 개편 1단계) */
   | "ledger"
   /** ⭐ 최근 한 일 — 되돌리기 한 곳 (2026-09-12 개편 2단계, 사장님 결정 14) */
-  | "activity";
+  | "activity"
+  /** ⭐ 이번 주 정리 — 한 줄 흐름 (2026-09-12 개편 3단계, 사장님 결정 11) */
+  | "weekly";
 
 type Tab = { id: FinTabId | "receivables"; href: string; label: string; external?: boolean };
 type Group = { id: "todo" | "book" | "data"; label: string; tabs: Tab[] };
@@ -34,6 +36,8 @@ const GROUPS: Group[] = [
     label: "할 일",
     tabs: [
       { id: "home", href: "/finance", label: "현황" },
+      /* 탭 링크는 ?ym= 만 붙는다(hrefOf) — 흐름은 첫 미완 단계부터 (의도) */
+      { id: "weekly", href: "/finance/weekly", label: W.weekly },
       { id: "deposits", href: "/finance/deposits", label: "입금 정리" },
       { id: "tax", href: "/finance/tax", label: "계산서" },
       { id: "expenses", href: "/finance/expenses", label: "지출" },

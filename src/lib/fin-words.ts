@@ -63,6 +63,18 @@ export const W = {
   tierAuto: "앱이 자동 대조한 것",
   tierCheck: "확인해 주세요",
   tierHand: "손이 필요한 것",
+  /** 확실 층 — 앱이 짝을 확신하는 것(체크 기본 ON) */
+  tierSure: "짝 확실",
+  /** ⭐ 「이번 주 정리」 한 줄 흐름 (개편 3단계, 2026-09-12) */
+  weekly: "이번 주 정리",
+  stepDone: "이 단계 끝",
+  next: "다음",
+  prev: "이전",
+  weeklyDone: "이번 주 정리 끝",
+  lastDone: "마지막 정리",
+  goRegisterSale: "정비 내역에 등록하러",
+  backToWeekly: "이번 주 정리로 돌아가기",
+  pcOnly: "PC 에서 하는 일입니다",
 } as const;
 
 /** 「짝이 확실한 N건 모두 잇기」 → 「자동 대조 N건」 */

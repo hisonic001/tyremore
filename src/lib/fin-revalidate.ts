@@ -14,6 +14,8 @@ const PATHS = [
   "/finance/payables",
   "/finance/party",
   "/finance/card",
+  /** ⭐ 「이번 주 정리」 흐름 (개편 3단계, 2026-09-12) — 단계 안에서 쓴 액션이 같은 화면을 새로 그린다 */
+  "/finance/weekly",
   "/sales",
 ] as const;
 
