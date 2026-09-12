@@ -6,6 +6,7 @@ import Link from "@/lib/link";
 import { EXPENSE_CATS } from "@/lib/expense-cats";
 import type { ExpenseData, ExpenseRow, RelatedTxn } from "@/lib/recon-data";
 import { setExpenseCategory } from "@/lib/fin-expense";
+import { LearnCheck } from "@/components/fin/learn-check";
 import { won } from "@/components/fin/money";
 import { W } from "@/lib/fin-words";
 
@@ -58,8 +59,12 @@ export function Clues({ row }: { row: ExpenseRow }) {
 
 export interface ExpenseCtx {
   pending: boolean;
-  /** 한 줄(또는 묶음 대표 id)에 분류 붙이기 — setExpenseCategory 가 같은 상대에 전파한다 */
-  classify: (row: Pick<ExpenseRow, "id" | "payer">, category: string) => void;
+  /**
+   * 한 줄(또는 묶음 대표 id)에 분류 붙이기 — setExpenseCategory 가 같은 상대에 전파한다
+   * ⭐ learn = 「다음부터 자동으로」(개편 4단계, 2026-09-12). 지출은 이 스위치가 **전파까지** 가른다 —
+   *    끄면 규칙을 만들지 않고 같은 상대 다른 줄도 건드리지 않는다(그 줄만). 안 넘기면 켜진 것.
+   */
+  classify: (row: Pick<ExpenseRow, "id" | "payer">, category: string, learn?: boolean) => void;
   /** 줄마다 고른 분류 (셀렉트) */
   pick: Record<number, string>;
   setPick: (id: number, category: string) => void;
@@ -76,11 +81,11 @@ export function useExpenseCtx(): ExpenseCtx {
   /* 🔴 분류 해제(이 줄만 / N건 전부 — 2회차 수리 A5)는 2단계(2026-09-12)에 「최근 한 일」 되돌리기로
      옮겼다(previewUnset·setExpenseCategory(id,null,{scope}) 를 거기서 부른다). 이 화면엔 링크만. */
 
-  const classify: ExpenseCtx["classify"] = (row, category) =>
+  const classify: ExpenseCtx["classify"] = (row, category, learn = true) =>
     start(async () => {
       setMsg(null);
       setError(null);
-      const r = await setExpenseCategory(row.id, category);
+      const r = await setExpenseCategory(row.id, category, { learn });
       if (!r.ok) return setError(r.error);
       setMsg(
         `「${r.payer}」 → ${category}${r.applied > 1 ? ` — 같은 상대 ${r.applied}건에 한꺼번에 붙였습니다` : ""}`,
@@ -105,6 +110,9 @@ export function ExpenseBanner({ ctx }: { ctx: ExpenseCtx }) {
 /** 분류 안 된 지출 한 줄 — 단서(Clues) + 제안 원터치 + 분류 고르기 + 접힌 원문. `<li>` 를 그린다 */
 export function ExpenseRowCard({ row, ctx }: { row: ExpenseRow; ctx: ExpenseCtx }) {
   const { pending, classify, pick, setPick } = ctx;
+  /* ⭐ 「다음부터 자동으로」 (개편 4단계, 2026-09-12 — 결정 7, 기본 켜짐).
+     이 줄의 제안 원터치·「붙이기」 둘 다에 같은 값이 걸린다 — 고르는 곳이 둘이어도 뜻은 하나다. */
+  const [learn, setLearn] = useState(true);
   return (
     <li className="rounded-2xl border border-slate-200 bg-white p-3">
       <div className="flex items-baseline justify-between gap-2">
@@ -129,7 +137,7 @@ export function ExpenseRowCard({ row, ctx }: { row: ExpenseRow; ctx: ExpenseCtx 
           <button
             type="button"
             disabled={pending}
-            onClick={() => classify(row, row.suggest!)}
+            onClick={() => classify(row, row.suggest!, learn)}
             className="rounded-lg bg-emerald-700 px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
           >
             제안: {row.suggest} ✓
@@ -150,11 +158,13 @@ export function ExpenseRowCard({ row, ctx }: { row: ExpenseRow; ctx: ExpenseCtx 
         <button
           type="button"
           disabled={pending || !pick[row.id]}
-          onClick={() => classify(row, pick[row.id])}
+          onClick={() => classify(row, pick[row.id], learn)}
           className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium disabled:opacity-40"
         >
           붙이기
         </button>
+        {/* ⭐ 체크칸 — 「붙이기」와 같은 줄 (개편 4단계). 끄면 이 줄만 분류하고 규칙은 안 만든다 */}
+        <LearnCheck value={learn} onChange={setLearn} disabled={pending} />
       </div>
 
       {/*

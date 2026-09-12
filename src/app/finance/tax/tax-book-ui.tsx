@@ -34,6 +34,7 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { StatusPill } from "@/components/ui/badge";
 import { won } from "@/components/fin/money";
+import { LearnCheck } from "@/components/fin/learn-check";
 import { CheckRunList } from "@/components/fin/check-run-list";
 import { W } from "@/lib/fin-words";
 import { BankSearch, MultiPickBar, PickList, pickedSum, type Picked, type PickItem } from "./link-parts";
@@ -278,8 +279,11 @@ function AutoDoneList({ book }: { book: TaxBook }) {
 
 /* ───────────────────────── 확인 층 (체크해서 한 번에) ───────────────────────── */
 
-/** 카드 하나를 대조 후보대로 대조하는 계획 — 어떤 액션을 부를지 + 사람에게 보여 줄 한 줄 */
-function planFor(c: InvoiceCard): { text: string; run: () => Promise<R>; dedupe?: string } | null {
+/** 카드 하나를 대조 후보대로 대조하는 계획 — 어떤 액션을 부를지 + 사람에게 보여 줄 한 줄
+ *  ⭐ run 은 `{ learn }` 을 받는다(개편 4단계, 2026-09-12 — CheckRunList 머리의 「이번 일괄은
+ *     규칙 학습 안 함」 값이 그대로 들어온다). 수정 계산서 상계(markTaxFixPair)는 상대를 배우는
+ *     일이 아니라 값을 안 쓴다. */
+function planFor(c: InvoiceCard): { text: string; run: (opts: { learn: boolean }) => Promise<R>; dedupe?: string } | null {
   const mo = c.money;
   if (mo.fix) {
     const f = mo.fix;
@@ -291,13 +295,17 @@ function planFor(c: InvoiceCard): { text: string; run: () => Promise<R>; dedupe?
   }
   if (mo.bundle) {
     const b = mo.bundle;
-    return { text: b.label, run: () => confirmBankToTaxes(b.cashTxnId, b.invoiceIds), dedupe: `bundle:${b.cashTxnId}` };
+    return {
+      text: b.label,
+      run: ({ learn }) => confirmBankToTaxes(b.cashTxnId, b.invoiceIds, { learn }),
+      dedupe: `bundle:${b.cashTxnId}`,
+    };
   }
   const sure = mo.picks.find((p) => p.sure);
-  if (sure) return { text: pickText(sure), run: () => confirmTaxToBank(c.id, sure.cashTxnId) };
+  if (sure) return { text: pickText(sure), run: ({ learn }) => confirmTaxToBank(c.id, sure.cashTxnId, { learn }) };
   if (mo.combo) {
     const co = mo.combo;
-    return { text: co.label, run: () => confirmTaxToBanks(c.id, co.cashTxnIds) };
+    return { text: co.label, run: ({ learn }) => confirmTaxToBanks(c.id, co.cashTxnIds, { learn }) };
   }
   return null;
 }
@@ -339,6 +347,9 @@ function ConfirmLayer({ items, ctx }: { items: { card: InvoiceCard; party: Party
       buttonLabel={(n) => `체크한 ${n}장 ${W.recon}`}
       unit="장"
       pending={ctx.pending}
+      /* ⭐ 머리에 「이번 일괄은 규칙 학습 안 함」 하나 (개편 4단계, 2026-09-12 — 결정 7).
+         낱건마다가 아니라 이번 한 번에 대한 스위치다 */
+      learnToggle
     />
   );
 }
@@ -512,6 +523,13 @@ function bankMsg(r: { remaining?: number; shortfall?: number; netted?: boolean; 
 
 function MatchPanel({ card: c, ctx, noteKey, onDone }: { card: InvoiceCard; ctx: Ctx; noteKey: string; onDone: () => void }) {
   const mo = c.money;
+  /**
+   * ⭐ 「다음부터 자동으로」 (개편 4단계, 2026-09-12 — 사장님 결정 7, **기본 켜짐**)
+   *    이 펼침 안의 모든 대조(한 줄·여러 줄 합·통장 한 줄에 N장·직접 찾기)에 같은 값이 걸린다.
+   *    켜 두면 「이 통장 이름 = 이 계산서 상대」를 기억해, 다음 달 같은 이름이 오면 바로 붙인다.
+   *    🔴 수정 계산서 상계(markTaxFixPair)는 상대를 배우는 일이 아니라 걸지 않는다.
+   */
+  const [learn, setLearn] = useState(true);
   const [picked, setPicked] = useState<Picked>({});
   const toggle = (it: PickItem) =>
     setPicked((p) => {
@@ -529,7 +547,7 @@ function MatchPanel({ card: c, ctx, noteKey, onDone }: { card: InvoiceCard; ctx:
     ctx.act(
       noteKey,
       async () => {
-        const r = await confirmTaxToBank(c.id, cashTxnId);
+        const r = await confirmTaxToBank(c.id, cashTxnId, { learn });
         return r.ok ? { ok: true, msg: bankMsg(r) } : r;
       },
       `${W.recon}했습니다.`,
@@ -538,7 +556,7 @@ function MatchPanel({ card: c, ctx, noteKey, onDone }: { card: InvoiceCard; ctx:
     ctx.act(
       noteKey,
       async () => {
-        const r = await confirmTaxToBanks(c.id, ids);
+        const r = await confirmTaxToBanks(c.id, ids, { learn });
         return r.ok ? { ok: true, msg: bankMsg(r) } : r;
       },
       `여러 줄을 합쳐 ${W.recon}했습니다.`,
@@ -550,6 +568,8 @@ function MatchPanel({ card: c, ctx, noteKey, onDone }: { card: InvoiceCard; ctx:
 
   return (
     <div className="mt-2 rounded-control border border-brand-500/40 bg-brand-50/40 p-2.5">
+      {/* ⭐ 체크칸 한 줄 (개편 4단계) — 이 펼침 안의 모든 대조 단추에 함께 걸린다 */}
+      <LearnCheck value={learn} onChange={setLearn} disabled={ctx.pending} className="mb-1.5" />
       {/* 상계 (수정 계산서) */}
       {mo.fixFirst && (
         <div className="mb-1.5 flex items-center justify-between gap-2 text-xs">
@@ -592,7 +612,7 @@ function MatchPanel({ card: c, ctx, noteKey, onDone }: { card: InvoiceCard; ctx:
             disabled={ctx.pending}
             onClick={() => {
               const b = mo.bundle!;
-              ctx.act(noteKey, () => confirmBankToTaxes(b.cashTxnId, b.invoiceIds), `계산서 ${b.invoiceIds.length}장을 통장 한 줄에 ${W.recon}했습니다.`);
+              ctx.act(noteKey, () => confirmBankToTaxes(b.cashTxnId, b.invoiceIds, { learn }), `계산서 ${b.invoiceIds.length}장을 통장 한 줄에 ${W.recon}했습니다.`);
             }}
             className="shrink-0 rounded-control bg-brand-600 px-2.5 py-1.5 font-semibold text-white active:bg-brand-700 disabled:opacity-40"
           >

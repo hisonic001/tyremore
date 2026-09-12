@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, logout, hasPerm } from "@/lib/auth";
 import { marsReportTechAllowed } from "@/lib/mars-eval";
+import { W } from "@/lib/fin-words";
 import { ChangePassword } from "./password";
 import type { ReactNode } from "react";
 import {
@@ -15,6 +16,7 @@ import {
   ChevronRight,
   ClipboardList,
   Megaphone,
+  Sparkles,
   Store,
   Tags,
   Truck,
@@ -50,6 +52,8 @@ const ICONS: Record<string, ReactNode> = {
   "/reports": <BarChart3 className="size-5" />,
   "/settings/users": <Users className="size-5" />,
   "/finance": <Wallet className="size-5" />,
+  /* ⭐ 「자동 규칙」 — 앱이 배운 것 (개편 4단계, 2026-09-12) */
+  "/settings/rules": <Sparkles className="size-5" />,
   "/reports/mars": <ClipboardList className="size-5" />,
   "/settings/products": <Tags className="size-5" />,
   "/stock": <Boxes className="size-5" />,
@@ -121,6 +125,20 @@ export default async function SettingsPage() {
       : []),
     ...(can.finance
       ? [{ href: "/finance", title: "돈 관리", desc: "통장·법인카드 내역 올리기 · 월 자금 흐름" }]
+      : []),
+    /*
+     * ⭐ 「자동 규칙」 (개편 4단계, 2026-09-12) — 사장님 결정 5 「보고 끄기만」.
+     *    맞추기 단추 옆 「다음부터 자동으로」를 켠 채로 한 번 맞추면 앱이 스스로 배운다.
+     *    배운 것이 틀렸을 때 여기서 끈다 — 돈 관리 바로 뒤에 둔 건 전부 돈 관리에서 배운 것이라서.
+     */
+    ...(can.finance
+      ? [
+          {
+            href: "/settings/rules",
+            title: W.rules,
+            desc: "앱이 배운 이름 짝·계산서 상대·지출 분류·입금 성격 — 보고 끄기",
+          },
+        ]
       : []),
     ...(techMarsLink
       ? [

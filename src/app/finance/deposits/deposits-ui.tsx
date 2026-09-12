@@ -17,6 +17,7 @@ import {
 } from "@/lib/fin-deposits";
 import { confirmBankToTaxes, confirmTaxToBank } from "@/lib/recon";
 import { BankSearch } from "../tax/link-parts";
+import { LearnCheck } from "@/components/fin/learn-check";
 import { won } from "@/components/fin/money";
 import { useConfirm, type ConfirmOpts } from "@/components/ui/confirm";
 import { W, autoReconLabel } from "@/lib/fin-words";
@@ -28,8 +29,12 @@ import { W, autoReconLabel } from "@/lib/fin-words";
 export interface DepositCtx {
   pending: boolean;
   act: (fn: () => Promise<{ ok: boolean } & Record<string, unknown>>, okMsg: (r: never) => string) => void;
-  /** 미수금 상대에 수금 등록 (확인 시트 → collectFromDeposit) */
-  collect: (s: DepositSuggestion, key: string, label: string, remain: number) => Promise<void>;
+  /**
+   * 미수금 상대에 수금 등록 (확인 시트 → collectFromDeposit)
+   * ⭐ learn = 「다음부터 자동으로」(개편 4단계, 2026-09-12) — 카드가 가진 체크칸 값을 그대로 넘긴다.
+   *    안 넘기면 켜진 것으로 본다(기본 켜짐 — 지금까지의 동작).
+   */
+  collect: (s: DepositSuggestion, key: string, label: string, remain: number, learn?: boolean) => Promise<void>;
   ask: (opts: ConfirmOpts) => Promise<boolean>;
   msg: string | null;
   error: string | null;
@@ -63,7 +68,7 @@ export function useDepositCtx(): DepositCtx {
       router.refresh();
     });
 
-  const collect: DepositCtx["collect"] = async (s, key, label, remain) => {
+  const collect: DepositCtx["collect"] = async (s, key, label, remain, learn = true) => {
     const take = Math.min(s.dep.amount, remain);
     if (
       !(await ask({
@@ -76,7 +81,7 @@ export function useDepositCtx(): DepositCtx {
     )
       return;
     act(
-      () => collectFromDeposit(s.dep.id, key),
+      () => collectFromDeposit(s.dep.id, key, { learn }),
       (r: { applied: number; settled: number; leftover: number }) =>
         `수금 ${won(r.applied)}원 등록 — ${r.settled}건 완납${r.leftover > 0 ? ` · 남은 ${won(r.leftover)}원은 배분 안 됨` : ""}`,
     );
@@ -142,6 +147,13 @@ export function DepositCard({
   ctx: DepositCtx;
 }) {
   const { pending, act, collect } = ctx;
+  /**
+   * ⭐ 「다음부터 자동으로」 (개편 4단계, 2026-09-12 — 사장님 결정 7, **기본 켜짐**)
+   *    카드 한 장에 하나다. 이 카드에서 무엇으로 맞추든(계산서·판매·수금·성격) 같은 값을 쓴다 —
+   *    사장님이 보는 건 「이 입금의 상대」 하나이므로, 자리마다 체크칸을 두면 어느 것이 적용됐는지
+   *    매번 생각해야 한다. 체크칸은 아래 단추줄(성격 고르기)에 한 줄로 붙는다.
+   */
+  const [learn, setLearn] = useState(true);
   return (
     <li className={`rounded-2xl border bg-white p-4 ${sure ? "border-brand-500" : "border-slate-200"}`}>
       <div className="flex items-baseline justify-between gap-2">
@@ -169,7 +181,7 @@ export function DepositCard({
             disabled={pending}
             onClick={() =>
               act(
-                () => confirmBankToTaxes(s.dep.id, bundles[s.dep.id].invoiceIds),
+                () => confirmBankToTaxes(s.dep.id, bundles[s.dep.id].invoiceIds, { learn }),
                 (r: { applied: number }) => `계산서 ${r.applied}장을 이 입금 하나에 ${W.recon}했습니다.`,
               )
             }
@@ -195,7 +207,7 @@ export function DepositCard({
                   disabled={pending}
                   onClick={() =>
                     act(
-                      () => confirmTaxToBank(c.invId, s.dep.id),
+                      () => confirmTaxToBank(c.invId, s.dep.id, { learn }),
                       (r: { remaining: number; shortfall: number }) =>
                         r.shortfall > 0
                           ? `${W.recon}했습니다 — 계산서에 ${won(r.shortfall)}원이 남았습니다 (다른 입금을 이어서 ${W.recon}하거나 계산서 화면에서 「${W.done}」)`
@@ -243,7 +255,7 @@ export function DepositCard({
                 <button
                   type="button"
                   disabled={pending}
-                  onClick={() => collect(s, p.key, p.label, p.remain)}
+                  onClick={() => collect(s, p.key, p.label, p.remain, learn)}
                   className="shrink-0 rounded-lg bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-40"
                 >
                   수금 등록
@@ -267,7 +279,7 @@ export function DepositCard({
                   type="button"
                   disabled={pending}
                   onClick={() =>
-                    act(() => linkDepositToQuote(s.dep.id, q.quoteId), () => `${W.recon}했습니다.`)
+                    act(() => linkDepositToQuote(s.dep.id, q.quoteId, { learn }), () => `${W.recon}했습니다.`)
                   }
                   className="shrink-0 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium"
                 >
@@ -287,10 +299,12 @@ export function DepositCard({
 
       {/* 「무시」 대신 무엇인지 고르기 (사장님 요청 2026-08-26) — 앱에 기록 없는 판매 대금이 가장 흔하다 */}
       <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5 text-xs">
+        {/* ⭐ 체크칸 한 줄 (개편 4단계) — 이 카드의 모든 맞추기·성격 고르기에 함께 걸린다 */}
+        <LearnCheck value={learn} onChange={setLearn} disabled={pending} className="mr-auto" />
         <button
           type="button"
           disabled={pending}
-          onClick={() => act(() => setDepositKind(s.dep.id, "판매입금"), () => `「판매 대금(앱 기록 없음)」으로 정리 — 손익의 ${W.sales}에 들어갑니다.`)}
+          onClick={() => act(() => setDepositKind(s.dep.id, "판매입금", { learn }), () => `「판매 대금(앱 기록 없음)」으로 정리 — 손익의 ${W.sales}에 들어갑니다.`)}
           title={`앱에 판매 기록이 없는 대금 — 손익에 ${W.sales}로 잡히고, 나중에 정비내역을 등록하면 되돌려 ${W.recon}하면 됩니다`}
           className="rounded-full border border-brand-500 bg-brand-50 px-2.5 py-0.5 font-semibold text-brand-700 active:bg-brand-100 disabled:opacity-40"
         >
@@ -302,7 +316,7 @@ export function DepositCard({
             key={k}
             type="button"
             disabled={pending}
-            onClick={() => act(() => setDepositKind(s.dep.id, k), () => `「${k}」으로 정리했습니다.`)}
+            onClick={() => act(() => setDepositKind(s.dep.id, k, { learn }), () => `「${k}」으로 정리했습니다.`)}
             className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-slate-600 active:bg-slate-100 disabled:opacity-40"
           >
             {k}

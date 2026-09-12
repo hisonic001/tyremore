@@ -32,7 +32,8 @@ export function ExpensesFlow({ step }: { step: WeeklyExpenseStep }) {
             🟡 {W.tierCheck} <span className="tabular">{step.check.length}</span>묶음 — 체크해서 한 번에
           </>
         }
-        hint="앱이 규칙으로 분류를 제안한 상대입니다. 맞으면 그대로, 아니면 체크를 끄고 아래에서 직접 고르세요. 한 상대를 붙이면 같은 상대의 다른 줄에도 같이 붙습니다."
+        /* ⭐ 4단계(2026-09-12): 학습을 끄면 전파도 없다 — 안내문이 거짓이 되지 않게 한 마디 덧붙였다 */
+        hint="앱이 규칙으로 분류를 제안한 상대입니다. 맞으면 그대로, 아니면 체크를 끄고 아래에서 직접 고르세요. 한 상대를 붙이면 같은 상대의 다른 줄에도 같이 붙습니다 — 아래 「규칙 학습 안 함」을 켜면 그 줄만 분류됩니다."
         items={step.check.map((g) => ({
           key: g.key,
           text: (
@@ -43,13 +44,16 @@ export function ExpensesFlow({ step }: { step: WeeklyExpenseStep }) {
             </>
           ),
           sub: `→ ${g.suggest}`,
-          run: () => setExpenseCategory(g.anyId, g.suggest),
+          run: ({ learn }) => setExpenseCategory(g.anyId, g.suggest, { learn }),
           errLabel: `${g.payer} ${won(g.sum)}`,
         }))}
         buttonLabel={(n) => `체크한 ${n}묶음 분류`}
         unit="묶음"
         verb="분류"
         pending={ctx.pending}
+        /* ⭐ 머리에 「이번 일괄은 규칙 학습 안 함」 하나 (개편 4단계, 2026-09-12 — 결정 7).
+           🔴 지출은 끄면 규칙도 안 만들고 같은 상대 전파도 없다 — 묶음의 대표 한 줄만 분류된다 */
+        learnToggle
       />
 
       {/* 3층 — 손이 필요한 것 */}

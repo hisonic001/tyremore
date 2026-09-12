@@ -74,8 +74,11 @@ export function DepositsFlow({ step }: { step: WeeklyDepositStep }) {
               errLabel: `${s.dep.at} ${s.dep.description} ${won(s.dep.amount)}`,
             };
           })}
-          bulk={async (keys) => {
-            const r = await confirmSureDeposits(ym, keys.map(Number));
+          /* ⭐ 머리에 「이번 일괄은 규칙 학습 안 함」 하나 (개편 4단계, 2026-09-12 — 결정 7).
+             기본은 학습 ON — 짝 확실은 앱이 확신하는 것이라 상대를 기억해 두는 게 맞다 */
+          learnToggle
+          bulk={async (keys, { learn }) => {
+            const r = await confirmSureDeposits(ym, keys.map(Number), { learn });
             if (!r.ok) return r;
             return {
               ok: true,

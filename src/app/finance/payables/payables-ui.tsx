@@ -13,6 +13,7 @@ import {
   skipWithdrawal,
 } from "@/lib/purchase-pay";
 import type { SupplierCardInfo } from "@/lib/payables-view";
+import { LearnCheck } from "@/components/fin/learn-check";
 import { won } from "@/components/fin/money";
 import { useConfirm, type ConfirmOpts } from "@/components/ui/confirm";
 import { W } from "@/lib/fin-words";
@@ -34,8 +35,12 @@ export interface PayCtx {
   confirmDialog: ReactNode;
   msg: string | null;
   error: string | null;
-  /** 출금 → 거래처로 지급 대조 (확인 시트 → payFromWithdrawal) */
-  linkPay: (row: PayLinkRow, supplier: string) => Promise<void>;
+  /**
+   * 출금 → 거래처로 지급 대조 (확인 시트 → payFromWithdrawal)
+   * ⭐ learn = 「다음부터 자동으로」(개편 4단계, 2026-09-12) — 출금 줄의 체크칸 값.
+   *    안 넘기면 켜진 것으로 본다(기본 켜짐 — 지금까지의 동작).
+   */
+  linkPay: (row: PayLinkRow, supplier: string, learn?: boolean) => Promise<void>;
   /** 「대조 제외 — 접기」 (확인 시트 → skipWithdrawal) */
   skipRow: (row: PayLinkRow) => Promise<void>;
   /** 출금 → 거래처 직접 선택 (제안이 없거나 다를 때) */
@@ -58,7 +63,7 @@ export function usePayCtx({ remainBySup }: { remainBySup: Map<string, number> })
      아무일도 안일어남"). 실은 「미지급이 없습니다」 거절이 위쪽 배너에만 떠서 안 보였다. */
   const [rowNote, setRowNote] = useState<Record<number, string>>({});
 
-  const linkPay = async (row: PayLinkRow, supplier: string) => {
+  const linkPay = async (row: PayLinkRow, supplier: string, learn = true) => {
     if (
       !(await ask({
         title: `「${supplier}」 ${W.reconPay}할까요?`,
@@ -70,7 +75,7 @@ export function usePayCtx({ remainBySup }: { remainBySup: Map<string, number> })
     start(async () => {
       setMsg(null);
       setError(null);
-      const r = await payFromWithdrawal({ cashTxnId: row.id, supplier });
+      const r = await payFromWithdrawal({ cashTxnId: row.id, supplier }, { learn });
       if (!r.ok) {
         setRowNote((p) => ({ ...p, [row.id]: r.error }));
         return setError(r.error);
@@ -124,6 +129,8 @@ export function PayBanner({ ctx }: { ctx: PayCtx }) {
  *  🔴 거래처 검색 입력은 `<datalist id="pay-supplier-names">` 를 찾는다 — 부르는 화면이 한 번 그려야 한다 */
 export function WithdrawalRow({ row, ctx, supplierNames }: { row: PayLinkRow; ctx: PayCtx; supplierNames: string[] }) {
   const { pending, linkPay, skipRow, linkPick, setLinkPick, rowNote, remainBySup } = ctx;
+  /* ⭐ 「다음부터 자동으로」 (개편 4단계, 2026-09-12 — 결정 7, 기본 켜짐) — 이 출금 줄의 지급 대조에만 걸린다 */
+  const [learn, setLearn] = useState(true);
   return (
     <li className="flex flex-wrap items-center justify-between gap-1.5">
       <span className="tabular min-w-0 truncate text-xs">
@@ -133,7 +140,7 @@ export function WithdrawalRow({ row, ctx, supplierNames }: { row: PayLinkRow; ct
         <button
           type="button"
           disabled={pending}
-          onClick={() => linkPay(row, row.suggest!.supplier)}
+          onClick={() => linkPay(row, row.suggest!.supplier, learn)}
           className="shrink-0 rounded-lg bg-sky-700 px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-40"
         >
           → {row.suggest.supplier} 지급 (잔액 {won(row.suggest.remain)})
@@ -154,13 +161,15 @@ export function WithdrawalRow({ row, ctx, supplierNames }: { row: PayLinkRow; ct
               !supplierNames.includes((linkPick[row.id] ?? "").trim()) ||
               !remainBySup.has((linkPick[row.id] ?? "").trim())
             }
-            onClick={() => linkPay(row, (linkPick[row.id] ?? "").trim())}
+            onClick={() => linkPay(row, (linkPick[row.id] ?? "").trim(), learn)}
             className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium disabled:opacity-40"
           >
             지급
           </button>
         </span>
       )}
+      {/* ⭐ 체크칸 — 지급 단추와 같은 줄 (개편 4단계) */}
+      <LearnCheck value={learn} onChange={setLearn} disabled={pending} className="shrink-0" />
       {/* ⭐ 대조할 인보이스가 없는 출금(지난달 대금 등)은 접는다 (2026-08-31) */}
       <button
         type="button"
@@ -214,9 +223,20 @@ export function PayablesUi({
   const { pending, start, setMsg, setError, ask, confirmDialog } = ctx;
   /** 거래처별 지급 폼 상태 */
   const [form, setForm] = useState<Record<string, { amount: string; method: string; paidOn: string }>>({});
+  /**
+   * ⭐ 거래처 카드 ⚡ 줄의 「다음부터 자동으로」 (개편 4단계, 2026-09-12 — 결정 7)
+   *    map 안에서는 useState 를 못 쓰니 거래처 이름 → 값 표로 든다. **없으면 켜진 것**(기본 켜짐).
+   */
+  const [exactLearn, setExactLearn] = useState<Record<string, boolean>>({});
+  const learnOf = (supplier: string) => exactLearn[supplier] !== false;
 
   /* ⚡ 원단위 자동 대조 (리모델링 ②) — 출금이 인보이스(묶음)와 정확히 일치할 때 한 번에 */
-  const autoLink = async (supplier: string, e: { cashTxnId: number; day: string; amount: number; invoiceNos: string[] }) => {
+  const autoLink = async (
+    supplier: string,
+    e: { cashTxnId: number; day: string; amount: number; invoiceNos: string[] },
+    /** ⭐ 「다음부터 자동으로」 (개편 4단계, 2026-09-12) — 거래처 카드의 ⚡ 줄 체크칸 값 */
+    learn = true,
+  ) => {
     if (
       !(await ask({
         title: `자동으로 ${W.recon}할까요?`,
@@ -228,7 +248,7 @@ export function PayablesUi({
     start(async () => {
       setMsg(null);
       setError(null);
-      const r = await autoLinkExact({ cashTxnId: e.cashTxnId, supplier });
+      const r = await autoLinkExact({ cashTxnId: e.cashTxnId, supplier }, { learn });
       if (!r.ok) return setError(r.error);
       setMsg(`⚡ ${supplier} 인보이스 ${r.n}장에 ${won(r.amount)}원을 ${W.recon}했습니다.`);
       router.refresh();
@@ -414,12 +434,20 @@ export function PayablesUi({
                         key={e.cashTxnId}
                         type="button"
                         disabled={pending}
-                        onClick={() => autoLink(s.supplier, e)}
+                        onClick={() => autoLink(s.supplier, e, learnOf(s.supplier))}
                         className="tabular block w-full rounded-lg bg-sky-700 px-2.5 py-1.5 text-left text-xs font-semibold text-white disabled:opacity-40"
                       >
                         ⚡ {e.day} 출금 {won(e.amount)}원 = 인보이스 {e.invoiceNos.length}장 — 자동 {W.recon}
                       </button>
                     ))}
+                    {/* ⭐ 체크칸 한 줄 — ⚡ 자동 대조 단추 바로 밑 (개편 4단계) */}
+                    {info.exact.length > 0 && (
+                      <LearnCheck
+                        value={learnOf(s.supplier)}
+                        onChange={(v) => setExactLearn((p) => ({ ...p, [s.supplier]: v }))}
+                        disabled={pending}
+                      />
+                    )}
                     {/* 🔴 지급 확인은 대조 완료 계산서 합이 잔액을 덮을 때만 — 소액 계산서 몇 장으로
                         큰 잔액을 확인 처리하면 안 준 돈이 사라진다 (강남세차장 사례로 발견) */}
                     {info.taxOkN > 0 && info.taxOkSum >= s.remain && info.exact.length === 0 && (
