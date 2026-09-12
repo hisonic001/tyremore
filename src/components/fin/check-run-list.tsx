@@ -18,6 +18,7 @@
 import { useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
+import { LearnCheck } from "./learn-check";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/notice";
 import { useConfirm, type ConfirmOpts } from "@/components/ui/confirm";
@@ -83,8 +84,8 @@ export interface CheckRunItem {
   text: ReactNode;
   /** 아랫줄(작은 회색) — 「← 앱이 찾은 줄」 같은 것 */
   sub?: ReactNode;
-  /** 항목 하나 실행 — bulk 를 쓰면 안 봐도 된다 */
-  run?: () => Promise<RunResult>;
+  /** 항목 하나 실행 — bulk 를 쓰면 안 봐도 된다. opts.learn = 「다음부터 자동으로」(기본 true) */
+  run?: (opts: { learn: boolean }) => Promise<RunResult>;
   /** 같은 열쇠는 한 번만 실행(묶음·상계 쌍) */
   dedupeKey?: string;
   /** 실패 목록에 적을 짧은 이름 — 없으면 text 가 글자일 때 그것, 아니면 key */
@@ -103,6 +104,7 @@ export function CheckRunList({
   verb = W.recon,
   tone = "check",
   pending: outerPending,
+  learnToggle = false,
 }: {
   title: ReactNode;
   hint?: ReactNode;
@@ -112,7 +114,13 @@ export function CheckRunList({
   confirm?: ConfirmOpts;
   onDone?: () => void;
   /** 체크한 열쇠를 모아 한 번에 — 있으면 items[].run 은 안 부른다 */
-  bulk?: (keys: string[]) => Promise<RunResult>;
+  bulk?: (keys: string[], opts: { learn: boolean }) => Promise<RunResult>;
+  /**
+   * ⭐ 「☐ 이번 일괄은 규칙 학습 안 함」 (개편 4단계, 2026-09-12; 결정 7)
+   *    켜면 머리에 체크칸이 하나 뜬다 — 낱건마다가 아니라 **이번 일괄 전체**에 대한 스위치.
+   *    기본은 학습 ON(체크 꺼짐). run·bulk 에 `{ learn }` 으로 넘어간다.
+   */
+  learnToggle?: boolean;
   /** 결과 문장의 단위 — 장·건·묶음 */
   unit?: string;
   /** 결과 문장의 동사 — 대조·분류 */
@@ -127,6 +135,8 @@ export function CheckRunList({
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [result, setResult] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const [ask, confirmDialog] = useConfirm();
+  /* ⭐ 규칙 학습 — 기본 켜짐(체크칸은 「학습 안 함」이라 뜻이 뒤집혀 있다), 2026-09-12 */
+  const [learn, setLearn] = useState(true);
   const isOn = (key: string) => checked[key] !== false; // 기본 ON
   const n = items.filter((it) => isOn(it.key)).length;
 
@@ -138,7 +148,7 @@ export function CheckRunList({
       const errs: string[] = [];
       const picked = items.filter((it) => isOn(it.key));
       if (bulk) {
-        const r = await bulk(picked.map((it) => it.key));
+        const r = await bulk(picked.map((it) => it.key), { learn });
         if (r.ok) done = picked.length;
         else errs.push(r.error);
         setResult(
@@ -158,7 +168,7 @@ export function CheckRunList({
             }
             seen.add(it.dedupeKey);
           }
-          const x = await it.run();
+          const x = await it.run({ learn });
           if (x.ok) done += 1;
           else errs.push(`${it.errLabel ?? (typeof it.text === "string" ? it.text : it.key)} — ${x.error}`);
         }
@@ -195,6 +205,10 @@ export function CheckRunList({
         </span>
       </div>
       {hint && <p className={`mt-1 text-xs ${hintCls}`}>{hint}</p>}
+      {/* ⭐ 이번 일괄만 규칙 학습을 끈다 (개편 4단계) — 낱건이 아니라 한 번에 대한 스위치 */}
+      {learnToggle && (
+        <LearnCheck value={!learn} onChange={(v) => setLearn(!v)} label={W.bulkNoLearn} className="mt-1.5" />
+      )}
       <ul className={`mt-2 divide-y ${divide}`}>
         {items.map((it) => (
           <li key={it.key} className="py-2">

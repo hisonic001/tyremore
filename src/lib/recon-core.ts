@@ -21,7 +21,11 @@ export type CoreResult<T> = ({ ok: true } & T) | { ok: false; error: string };
  *   코어가 커밋 뒤 한 줄씩 남긴다. 일괄(confirmSureTaxCore 등)은 quiet 로 낱장 기록을 막고
  *   activity 를 돌려받아 **한 줄 n건**으로 접는다 — 같은 일을 두 줄로 남기지 않는다.
  */
-export type ActivityOpts = { quiet?: boolean };
+/**
+ * ⭐ learn — 「이 상대는 다음부터 자동으로」 (개편 4단계, 2026-09-12; 결정 7③, **기본 켜짐**).
+ *    false 면 그 건만 맞추고 별명(party_alias)을 배우지 않는다 — 맞추기 단추 옆 작은 체크칸이 이걸 끈다.
+ */
+export type ActivityOpts = { quiet?: boolean; learn?: boolean };
 
 /** 낱장 activity → 일괄 줄의 items (bulk 안에 bulk 는 못 넣으니 펼친다) */
 export function activityItems(e: ActivityEntry | null | undefined): UndoItem[] {

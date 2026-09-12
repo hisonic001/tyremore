@@ -43,12 +43,17 @@ export function howOfMethod(method: string | null | undefined): ActivityHow {
  *   upload      cancelFinUpload(id)                        args { uploadId }
  *   skip        skipWithdrawal(id, true)                   args { cashTxnId }
  *   note        clearPosNote(ref)                          args { refTable, refId }
+ *   ⭐ ruleOn   enableRuleCore(ruleKind, key, …)           args { ruleKind, key, value, label, raw?, partyKey? }
+ *   ⭐ ruleOff  disableRuleCore(ruleKind, key)             args { ruleKind, key }
  *   bulk        items 각각을 위 종류로                      args { items: UndoItem[] }
+ *
+ * 🔴 ruleOn·ruleOff(개편 4단계, 2026-09-12)는 정본 party-rule.ts 의 쓰기 함수 **그 자체**다 —
+ *    「규칙 저장」을 되돌리면 끄기, 「규칙 끄기」를 되돌리면 켜기. 새 되돌리기 논리가 아니다.
  */
 export type UndoKind =
   | "tax" | "deposit" | "aside" | "pay" | "payment" | "pos" | "expense" | "depositKind" | "cardSettle"
   | "collection" | "taxRevive" | "taxUnwait" | "monthly" | "rule" | "monthClose" | "posClose" | "upload"
-  | "skip" | "note" | "bulk";
+  | "skip" | "note" | "ruleOn" | "ruleOff" | "bulk";
 
 export type UndoArgs = Record<string, string | number | boolean | null>;
 

@@ -22,6 +22,7 @@
  * 🔴 "use server" 아님 — 페이지·액션·ingest 가 부른다. 질의 순차 · LIMIT.
  */
 import { sql, type SQL } from "drizzle-orm";
+import { combosSummingTo, type PosDaySummary } from "./pos-close-pure";
 import { db } from "@/db";
 import { isReconPos, NEARBY_DAYS, POS_TO_APP, PREPAID_REASON, RECON_METHODS, RECON_POS_METHODS } from "./pos-vocab";
 import { logActivity } from "./fin-activity";
@@ -374,22 +375,6 @@ function liveReconRows(rows: PosRow[]): { live: PosRow[]; cancelled: PosRow[] } 
     used.add(cx.id);
   }
   return { live: target.filter((r) => !used.has(r.id) && r.amount > 0), cancelled };
-}
-
-/** 합이 target 이 되는 조합(2~3개)을 모두 찾는다 — 답이 하나일 때만 자동으로 쓴다 */
-function combosSummingTo<T extends { remain: number }>(items: T[], target: number): T[][] {
-  const out: T[][] = [];
-  const n = items.length;
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      if (items[i].remain + items[j].remain === target) out.push([items[i], items[j]]);
-      for (let k = j + 1; k < n; k++) {
-        if (items[i].remain + items[j].remain + items[k].remain === target) out.push([items[i], items[j], items[k]]);
-      }
-    }
-    if (out.length > 8) return out; // 너무 많으면 어차피 애매하다 — 그만 센다
-  }
-  return out;
 }
 
 export async function posDayData(day: string): Promise<PosDayData> {
@@ -818,14 +803,7 @@ export async function autoMatchPosDayCore(day: string, uid: number | null): Prom
 /* ------------------------------------------------------------------ */
 
 /** 달의 날짜별 요약 — 카드 화면 표·현황·마감 체크리스트 */
-export interface PosDaySummary {
-  day: string;
-  posCard: number;
-  appCard: number;
-  matched: number;
-  open: number;
-  closed: boolean;
-}
+export type { PosDaySummary };
 
 /**
  * 🔴 여기서 posDayData 를 날마다 부르면 안 된다 — 한 날에 질의가 열 번 넘게 나가서

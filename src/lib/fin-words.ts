@@ -75,6 +75,17 @@ export const W = {
   goRegisterSale: "정비 내역에 등록하러",
   backToWeekly: "이번 주 정리로 돌아가기",
   pcOnly: "PC 에서 하는 일입니다",
+  /** ⭐ 붙이기 자동화·규칙 학습 (개편 4단계, 2026-09-12; 결정 7 ①③) */
+  learnNext: "다음부터 자동으로",
+  bulkNoLearn: "이번 일괄은 규칙 학습 안 함",
+  rules: "자동 규칙",
+  ruleOff: "끄기",
+  ruleOn: "켜기",
+  ruleSaved: "규칙 저장",
+  ruleRemoved: "규칙 끄기",
+  codeRules: "앱 기본 규칙",
+  autoRecon: "자동 대조",
+  nextOpenDay: "다음 안 된 날",
 } as const;
 
 /** 「짝이 확실한 N건 모두 잇기」 → 「자동 대조 N건」 */
