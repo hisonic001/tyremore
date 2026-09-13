@@ -49,9 +49,9 @@ function hrefOf(source: string, ym: string | null): string {
     case "법인카드":
       return `/finance/expenses${q}`;
     case "홈택스매출":
-      return `/finance/tax?view=money&direction=매출${ym ? `&ym=${ym}` : ""}`;
+      return `/finance/tax?direction=매출${ym ? `&ym=${ym}` : ""}`;
     case "홈택스매입":
-      return `/finance/tax?view=money&direction=매입${ym ? `&ym=${ym}` : ""}`;
+      return `/finance/tax?direction=매입${ym ? `&ym=${ym}` : ""}`;
     default:
       return `/finance/card${q}`;
   }

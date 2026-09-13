@@ -128,7 +128,7 @@ export default async function FinancePartyLedgerPage({
             {won(data.receivableRemain)}원
           </p>
         </Link>
-        <Link href={`/finance/tax?view=money&ym=${ym}&direction=매입`} className="rounded-2xl border border-slate-200 bg-white p-3">
+        <Link href={`/finance/tax?ym=${ym}&direction=매입`} className="rounded-2xl border border-slate-200 bg-white p-3">
           <p className="text-xs text-slate-500">{W.open} 계산서 (누적)</p>
           <p className={`tabular mt-1 font-bold ${data.taxOpenSum > 0 ? "text-amber-700" : "text-slate-400"}`}>
             {won(data.taxOpenSum)}원

@@ -21,7 +21,7 @@ function nextStepOf(source: string, ym: string): { href: string; label: string }
   if (source.includes("법인카드")) return { href: `/finance/expenses?ym=${ym}`, label: `${m}지출 분류로 →` };
   if (source.includes("토스포스")) return { href: `/finance/card?ym=${ym}`, label: `${m}카드 일마감으로 →` };
   if (source.includes("카드매출")) return { href: `/finance/card?ym=${ym}`, label: `${m}${W.reconCard}로 →` };
-  if (source.includes("홈택스")) return { href: `/finance/tax?view=money&ym=${ym}`, label: `${m}${W.reconTax}로 →` };
+  if (source.includes("홈택스")) return { href: `/finance/tax?ym=${ym}`, label: `${m}${W.reconTax}로 →` };
   return { href: `/finance?ym=${ym}`, label: `${m}현황으로 →` };
 }
 

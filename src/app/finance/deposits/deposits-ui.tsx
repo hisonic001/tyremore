@@ -4,12 +4,11 @@ import { useRef, useState, useTransition, type ReactNode, type RefObject } from 
 import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
 import type { DepositReconData, DepositSuggestion } from "@/lib/recon-data";
-import type { DepositBreakdown, DepositTaxBundles, DepositTaxCands, TransferSale } from "@/lib/deposit-tax";
+import type { DepositTaxBundles, DepositTaxCands, TransferSale } from "@/lib/deposit-tax";
 import { clearPosNote, fixSaleMethod } from "@/lib/pos-actions";
 import { markSaleSettledAside } from "@/lib/trace-actions";
 import {
   collectFromDeposit,
-  confirmSureDeposits,
   linkDepositsToQuote,
   linkDepositToQuote,
   markCardSettlements,
@@ -20,11 +19,13 @@ import { BankSearch } from "../tax/link-parts";
 import { LearnCheck } from "@/components/fin/learn-check";
 import { won } from "@/components/fin/money";
 import { useConfirm, type ConfirmOpts } from "@/components/ui/confirm";
-import { W, autoReconLabel } from "@/lib/fin-words";
+import { W } from "@/lib/fin-words";
 
 /* ───────────────────────── 공통 손잡이 (개편 3단계, 2026-09-12 — 조각으로 승격) ─────────────────────────
-   DepositsRecon 안에 있던 진행 상태·액션 실행·안내·확인 시트를 훅으로 빼서, 기존 화면과
-   「이번 주 정리」 흐름(③)이 같은 카드 조각(DepositCard·TransferSalesList)을 쓴다. 동작은 전과 같다. */
+   옛 DepositsRecon 안에 있던 진행 상태·액션 실행·안내·확인 시트를 훅으로 빼서, 기존 화면과
+   「이번 주 정리」 흐름(③)이 같은 카드 조각(DepositCard·TransferSalesList)을 쓴다. 동작은 전과 같다.
+   🔴 개편 5단계(2026-09-13): 기존 화면도 흐름 조각(DepositsFlow)을 그리게 되어 DepositsRecon 은 지웠다 —
+      여기엔 조각만 남는다. */
 
 export interface DepositCtx {
   pending: boolean;
@@ -129,7 +130,9 @@ export function CardSettleBanner({ data, ym, ctx }: { data: DepositReconData; ym
   );
 }
 
-/** 입금 카드 한 장 — 계산서 묶음·계산서 후보·미수금 수금·판매 후보·성격 고르기. `<li>` 를 그린다 */
+/** 입금 카드 한 장 — 계산서 묶음·계산서 후보·미수금 수금·판매 후보·성격 고르기. `<li>` 를 그린다
+ *  @param saleHref 짝을 못 찾은 입금에서 그 날 정비 내역으로 나가는 링크(`W.goRegisterSale`) — 흐름·기존 화면이 넘긴다
+ *    (5단계 부채 v, 2026-09-13). 안 넘기면 안내문만. */
 export function DepositCard({
   s,
   ym,
@@ -137,6 +140,7 @@ export function DepositCard({
   taxCands,
   bundles,
   ctx,
+  saleHref,
 }: {
   s: DepositSuggestion;
   ym: string;
@@ -145,6 +149,7 @@ export function DepositCard({
   taxCands: DepositTaxCands;
   bundles: DepositTaxBundles;
   ctx: DepositCtx;
+  saleHref?: (day: string) => string;
 }) {
   const { pending, act, collect } = ctx;
   /**
@@ -294,6 +299,15 @@ export function DepositCard({
       {s.parties.length === 0 && s.quotes.length === 0 && !(taxCands[s.dep.id]?.length > 0) && (
         <p className="mt-2 text-xs text-slate-400">
           판매·계산서·{W.receivable} 짝을 못 찾았습니다 — 계산서가 나중에 올라오면 다시 나타나고, 판매와 무관한 돈이면 아래에서 골라 주세요
+          {/* ⭐ 앱에 판매 기록이 없는 대금이 가장 흔하다 — 그 날 정비 내역으로 바로 (5단계 부채 v) */}
+          {saleHref && (
+            <>
+              {" · "}
+              <Link href={saleHref(s.dep.date)} className="underline underline-offset-2">
+                {W.goRegisterSale} →
+              </Link>
+            </>
+          )}
         </p>
       )}
 
@@ -328,7 +342,7 @@ export function DepositCard({
 }
 
 /** ⭐ 계좌이체로 적혔는데 법인 통장에 없는 판매 (사장님 제보 2026-08-26 — 개인 통장으로 보내는 손님)
- *  @param saleHref 흐름(③)에서만 — 그 날 정비 내역으로 나가는 링크(`W.goRegisterSale`). 기존 화면은 안 넘긴다 */
+ *  @param saleHref 그 날 정비 내역으로 나가는 링크(`W.goRegisterSale`) — DepositsFlow 가 넘긴다(흐름은 ?back=weekly 붙여서) */
 export function TransferSalesList({
   transfers,
   ctx,
@@ -415,115 +429,5 @@ export function TransferSalesList({
         ))}
       </ul>
     </section>
-  );
-}
-
-/** ⭐ 통장 입금을 카드 정산·이체 판매·외상 수금으로 정리 (ERP 4단계, 2026-08-24)
- *   화면 글자는 fin-words 정본(ERP 용어, 2026-09-12) — 잇기→대조, 번 돈→매출.
- *   🔴 개편 3단계(2026-09-12): 위 조각(useDepositCtx·CardSettleBanner·DepositCard·TransferSalesList)으로
- *      재조립 — 모양·동작은 전과 같다. */
-export function DepositsRecon({
-  data,
-  ym,
-  taxCands,
-  bundles,
-  sureIds,
-  breakdown,
-  transfers,
-}: {
-  data: DepositReconData;
-  ym: string;
-  /** 입금 id → 열린 계산서 후보 (같은 상대·같은 금액) */
-  taxCands: DepositTaxCands;
-  /** 입금 id → 계산서 여러 장 합이 입금과 맞는 묶음 */
-  bundles: DepositTaxBundles;
-  /** 앱엔 계좌이체인데 법인 통장에 없는 판매 */
-  transfers: TransferSale[];
-  /** 짝이 확실한 입금 id — 한 번에 대조 */
-  sureIds: number[];
-  breakdown: DepositBreakdown;
-}) {
-  const sureSet = new Set(sureIds);
-  const ctx = useDepositCtx();
-  const { pending, act } = ctx;
-
-  return (
-    <>
-      <DepositBanner ctx={ctx} />
-
-      {/* 카드 정산 일괄 */}
-      <CardSettleBanner data={data} ym={ym} ctx={ctx} />
-
-      <section className="mt-4 flex flex-wrap items-center justify-between gap-2 text-sm">
-        <span className="tabular">
-          정리할 입금 <strong>{data.openTotal}건</strong>
-          {data.openTotal > 0 && (
-            <span className="text-xs text-slate-500">
-              {" "}(계산서 짝 {breakdown.tax} · 판매 짝 {breakdown.quote} · {W.receivable} {breakdown.party} · {W.open} {breakdown.none})
-            </span>
-          )}
-          {data.openTotal > data.open.length && ` · 최근 ${data.open.length}건 표시`} · {W.done} {data.doneCount}건 · {W.ignore}{" "}
-          {data.ignoredCount}건
-        </span>
-        {/* ⭐ 짝이 확실한 것 한 번에 (사장님 요청 2026-08-26) */}
-        {sureIds.length > 0 && (
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() =>
-              act(
-                () => confirmSureDeposits(ym),
-                (r: { tax: number; quote: number; failed: number }) =>
-                  `${autoReconLabel(r.tax + r.quote)} 완료 (계산서 ${r.tax} · 판매 ${r.quote})${r.failed > 0 ? ` · ${r.failed}건은 실패` : ""}.`,
-              )
-            }
-            className="shrink-0 rounded-control bg-brand-600 px-3 py-2 text-sm font-semibold text-white active:bg-brand-700 disabled:opacity-40"
-          >
-            ✔ {autoReconLabel(sureIds.length)}
-          </button>
-        )}
-      </section>
-
-      {/* 🔴 2026 감사 R5: 「자료 없음」과 「다 됐다」를 가른다 */}
-      {data.open.length === 0 && data.cardPatternCount === 0 && (
-        <section className="mt-2 rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
-          {data.monthInCount === 0 ? (
-            <>
-              {Number(ym.slice(5, 7))}월 통장 내역이 아직 안 올라왔습니다 —{" "}
-              <Link href={`/finance/upload?ym=${ym}`} className="underline">내역 올리기</Link>
-            </>
-          ) : (
-            <>
-              {Number(ym.slice(5, 7))}월 입금은 다 정리됐습니다 🎉 — 다음은{" "}
-              <Link href={`/finance/expenses?ym=${ym}`} className="font-semibold underline">지출 분류 →</Link>
-            </>
-          )}
-        </section>
-      )}
-
-      <ul className="mt-2 grid grid-cols-1 gap-3 lg:grid-cols-2 lg:items-start">
-        {data.open.map((s) => (
-          <DepositCard key={s.dep.id} s={s} ym={ym} sure={sureSet.has(s.dep.id)} taxCands={taxCands} bundles={bundles} ctx={ctx} />
-        ))}
-      </ul>
-
-      {/* ⭐ 계좌이체로 적혔는데 법인 통장에 없는 판매 */}
-      <TransferSalesList transfers={transfers} ctx={ctx} />
-
-      {/* ⭐ 개편 2단계(2026-09-12) — 이 달에 한 일(통장 밖 정리·분류·카드정산 표시·판매·수금 대조)의
-          되돌리기는 「최근 한 일」 한 곳으로 모았다. 전엔 접힌 표 4개가 여기 있었다(결정 f). */}
-      <p className="mt-4 text-xs text-slate-400">
-        잘못 {W.recon}한 입금·분류·카드정산 표시는{" "}
-        <Link href="/finance/activity" className="underline underline-offset-2">{W.activityUndoHere}</Link>
-        {" "}— 되돌리면 수금 기록까지 함께 풀립니다.
-      </p>
-      <p className="mt-2 text-sm">
-        다음 단계:{" "}
-        <Link href={`/finance/expenses?ym=${ym}`} className="font-semibold text-brand-700 underline underline-offset-2">
-          지출 분류 →
-        </Link>
-      </p>
-      {ctx.confirmDialog}
-    </>
   );
 }

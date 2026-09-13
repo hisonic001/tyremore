@@ -73,7 +73,7 @@ export async function uploadCoverage(): Promise<CoverageRow[]> {
       label: `홈택스 ${dir} 계산서`,
       last: r?.d ?? null,
       granularity: "day",
-      next: `/finance/tax?view=money&direction=${dir}`,
+      next: `/finance/tax?direction=${dir}`,
     });
   }
   return rows;

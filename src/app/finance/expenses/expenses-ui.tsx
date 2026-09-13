@@ -2,13 +2,11 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import Link from "@/lib/link";
 import { EXPENSE_CATS } from "@/lib/expense-cats";
-import type { ExpenseData, ExpenseRow, RelatedTxn } from "@/lib/recon-data";
+import type { ExpenseRow, RelatedTxn } from "@/lib/recon-data";
 import { setExpenseCategory } from "@/lib/fin-expense";
 import { LearnCheck } from "@/components/fin/learn-check";
 import { won } from "@/components/fin/money";
-import { W } from "@/lib/fin-words";
 
 /**
  * ⭐ 「이게 무슨 돈인가」 단서 (사장님 지적 2026-08-27)
@@ -54,8 +52,10 @@ export function Clues({ row }: { row: ExpenseRow }) {
 
 
 /* ───────────────────────── 공통 손잡이 (개편 3단계, 2026-09-12 — 조각으로 승격) ─────────────────────────
-   ExpensesUi 안에 있던 진행 상태·분류 실행·안내·셀렉트 상태를 훅으로 빼서, 기존 화면과
-   「이번 주 정리」 흐름(④)이 같은 줄 카드(ExpenseRowCard)를 쓴다. 동작은 전과 같다. */
+   옛 ExpensesUi 안에 있던 진행 상태·분류 실행·안내·셀렉트 상태를 훅으로 빼서, 기존 화면과
+   「이번 주 정리」 흐름(④)이 같은 줄 카드(ExpenseRowCard)를 쓴다. 동작은 전과 같다.
+   🔴 개편 5단계(2026-09-13): 기존 화면도 흐름 조각(ExpensesFlow)을 그리게 되어 ExpensesUi 는 지웠다 —
+      「같은 상대 여러 건 — 한 번에」(byPayer) 칸은 흐름의 「확인해 주세요」 묶음이 대신한다. */
 
 export interface ExpenseCtx {
   pending: boolean;
@@ -197,145 +197,5 @@ export function ExpenseRowCard({ row, ctx }: { row: ExpenseRow; ctx: ExpenseCtx 
         </dl>
       </details>
     </li>
-  );
-}
-
-/** ⭐ 지출 분류 화면 (ERP ⑥, 2026-08-25) — 제안 원터치 + 분류 고르기
- *   🔴 개편 3단계(2026-09-12): 위 조각(useExpenseCtx·ExpenseRowCard)으로 재조립 — 모양·동작은 전과 같다. */
-export function ExpensesUi({ data, ym }: { data: ExpenseData; ym: string }) {
-  const ctx = useExpenseCtx();
-  const { pending, classify, pick, setPick } = ctx;
-
-  return (
-    <>
-      <ExpenseBanner ctx={ctx} />
-
-      {/* 분류별 합계 */}
-      {data.sums.length > 0 && (
-        <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-          <h2 className="font-semibold">이 달 분류별 지출</h2>
-          <ul className="tabular mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-3">
-            {data.sums.map((s) => (
-              <li key={s.category} className="flex justify-between">
-                <span className="text-slate-600">{s.category}</span>
-                <span>{won(s.amount)}원</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {/*
-        🔴 감사 M5 — 한 상대를 붙이면 그 상대 전체(과거 포함)에 전파된다.
-
-        🔴 사장님 지적(2026-08-27): "무슨 기능인지도 잘 모르겠음. 필요한거임?"
-           1건짜리까지 담는 바람에 **아래 목록과 똑같은 목록이 위에 한 번 더** 있었다.
-           이제 `recon-data` 가 2건 이상만 담는다 — 7월처럼 겹치는 상대가 없는 달엔
-           이 칸 자체가 안 나온다. 6월(103건)·1월(88건)처럼 같은 상대가 여러 번인
-           달에는 한 번에 붙일 수 있어 이 칸이 훨씬 빠르다.
-      */}
-      {data.byPayer.length > 0 && (
-        <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-          <h2 className="font-semibold">
-            같은 상대 여러 건 — 한 번에 붙이기
-            <span className="ml-2 text-xs font-normal text-slate-500">
-              이 달에 두 번 이상 나온 상대입니다. 한 번 붙이면 그 상대의 과거 것까지 같이 붙습니다.
-            </span>
-          </h2>
-          <ul className="mt-2 space-y-1.5 text-sm">
-            {data.byPayer.slice(0, 20).map((g) => (
-              <li key={g.payer} className="flex flex-wrap items-center justify-between gap-1.5">
-                <span className="tabular min-w-0 truncate text-xs">
-                  {g.payer} · {g.n}건 · <strong>−{won(g.sum)}원</strong>
-                </span>
-                <span className="flex shrink-0 items-center gap-1">
-                  {g.suggest && (
-                    <button
-                      type="button"
-                      disabled={pending}
-                      onClick={() =>
-                        classify({ id: g.anyId, payer: g.payer } as unknown as ExpenseRow, g.suggest!)
-                      }
-                      className="rounded-lg bg-emerald-700 px-2 py-1 text-xs font-semibold text-white disabled:opacity-40"
-                    >
-                      {g.suggest} ✓
-                    </button>
-                  )}
-                  <select
-                    value={pick[g.anyId] ?? ""}
-                    onChange={(e) => setPick(g.anyId, e.target.value)}
-                    className="rounded-lg border border-slate-300 px-1.5 py-1 text-xs"
-                  >
-                    <option value="">분류…</option>
-                    {EXPENSE_CATS.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    disabled={pending || !pick[g.anyId]}
-                    onClick={() =>
-                      classify({ id: g.anyId, payer: g.payer } as unknown as ExpenseRow, pick[g.anyId])
-                    }
-                    className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium disabled:opacity-40"
-                  >
-                    붙이기
-                  </button>
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      <section className="mt-4 flex items-center justify-between text-sm">
-        <span className="tabular">
-          분류 안 된 지출 <strong>{data.unclassifiedCount}건 · {won(data.unclassifiedTotal)}원</strong>
-          {data.unclassifiedCount > data.unclassified.length ? ` (금액 큰 ${data.unclassified.length}건부터 표시)` : ""}
-        </span>
-      </section>
-
-      {data.unclassified.length === 0 ? (
-        <section className="mt-2 rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
-          {data.monthOutCount === 0 ? (
-            <>
-              {Number(ym.slice(5, 7))}월 통장·카드 내역이 아직 안 올라왔습니다 —{" "}
-              <Link href={`/finance/upload?ym=${ym}`} className="underline">내역 올리기</Link>
-            </>
-          ) : (
-            <>
-              {Number(ym.slice(5, 7))}월 지출은 모두 분류됐습니다 🎉 — 다음은{" "}
-              <Link href={`/finance/tax?view=money&ym=${ym}`} className="font-semibold underline">{W.reconTax} →</Link>
-            </>
-          )}
-        </section>
-      ) : (
-        <ul className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-2 lg:items-start">
-          {data.unclassified.map((row) => (
-            <ExpenseRowCard key={row.id} row={row} ctx={ctx} />
-          ))}
-        </ul>
-      )}
-
-      {/* ⭐ 개편 2단계(2026-09-12): 「분류된 지출 N건 — 해제」 접힌 표는 「최근 한 일」 한 곳으로(결정 f).
-          해제(이 줄만/전부)는 거기서 되돌리기로 한다. */}
-      <p className="mt-4 text-xs text-slate-400">
-        잘못 분류한 지출{data.classified.length > 0 ? `(이 달 ${data.classified.length}건)` : ""}은{" "}
-        <Link href="/finance/activity" className="underline underline-offset-2">{W.activityUndoHere}</Link>
-      </p>
-
-      <p className="mt-4 text-xs text-slate-400">
-        매입대금·카드대금·내부이체로 분류한 지출은 손익의 「{W.cost}」에 다시 넣지 않습니다 — 매입·법인카드
-        쪽에서 이미 세고 있어 이중 계산이 되기 때문입니다.
-      </p>
-      <p className="mt-2 text-sm">
-        다음 단계:{" "}
-        <Link href={`/finance/tax?view=money&ym=${ym}`} className="font-semibold text-brand-700 underline underline-offset-2">
-          {W.reconTax} →
-        </Link>
-      </p>
-    </>
   );
 }

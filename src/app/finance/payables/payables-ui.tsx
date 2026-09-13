@@ -3,16 +3,9 @@
 import { useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/lib/link";
-import type { PayLinkRow, PayablesData, PayableSupplier } from "@/lib/recon-data";
-import {
-  addSupplierAlias,
-  autoLinkExact,
-  payFromWithdrawal,
-  payToSupplier,
-  removeSupplierAlias,
-  skipWithdrawal,
-} from "@/lib/purchase-pay";
-import type { SupplierCardInfo } from "@/lib/payables-view";
+import type { PayLinkRow, PayableSupplier } from "@/lib/recon-data";
+import type { WeeklyPayableStep } from "@/lib/weekly-types";
+import { payFromWithdrawal, payToSupplier, skipWithdrawal } from "@/lib/purchase-pay";
 import { LearnCheck } from "@/components/fin/learn-check";
 import { won } from "@/components/fin/money";
 import { useConfirm, type ConfirmOpts } from "@/components/ui/confirm";
@@ -22,12 +15,14 @@ const kstToday = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/
 const METHODS = ["계좌이체", "현금", "카드", "기타"];
 
 /* ───────────────────────── 공통 손잡이 (개편 3단계, 2026-09-12 — 조각으로 승격) ─────────────────────────
-   PayablesUi 안에 있던 진행 상태·출금→지급 대조·접기·줄 밑 알림을 훅으로 빼서, 기존 화면과
-   「이번 주 정리」 흐름(⑥)이 같은 출금 줄(WithdrawalRow)을 쓴다. 동작은 전과 같다. */
+   옛 PayablesUi 안에 있던 진행 상태·출금→지급 대조·접기·줄 밑 알림을 훅으로 빼서, 기존 화면과
+   「이번 주 정리」 흐름(⑥)이 같은 출금 줄(WithdrawalRow)을 쓴다. 동작은 전과 같다.
+   🔴 개편 5단계(2026-09-13): 기존 화면도 흐름 조각(PayablesFlow)을 그리게 되어 PayablesUi 는 지웠다 —
+      거래처 카드에서 남길 것만 SupplierCards(맨 아래)로. */
 
 export interface PayCtx {
   pending: boolean;
-  /** 진행 상태 묶음 — 거래처 카드(지급 확인·별명·손 지급)도 같은 start/setMsg/setError 를 쓴다 */
+  /** 진행 상태 묶음 — 거래처 카드(SupplierCards: 지급 확인·손 지급)도 같은 start/setMsg/setError 를 쓴다 */
   start: (fn: () => Promise<void>) => void;
   setMsg: (m: string | null) => void;
   setError: (m: string | null) => void;
@@ -197,63 +192,21 @@ export function WithdrawalRow({ row, ctx, supplierNames }: { row: PayLinkRow; ct
   );
 }
 
-/** ⭐ 미지급금 장부 — 거래처별 잔액 + 지급 등록 (ERP ⑦, 2026-08-25)
- *   화면 글자는 fin-words 정본(ERP 용어, 2026-09-12): 지급 잡기→지급 대조, 도장 찍기→지급 확인, 예치금→선급금.
- *   되돌리기 표(접어둔 출금·출금에서 대조한 지급·최근 지급)는 「최근 한 일」로 옮겼다.
- *   🔴 개편 3단계(2026-09-12): 출금 줄·손잡이는 위 조각(usePayCtx·WithdrawalRow)으로 — 모양·동작은 전과 같다. */
-export function PayablesUi({
-  data,
-  cards,
-  payerOptions,
-  links,
-  supplierNames,
-  cashSummary,
-}: {
-  data: PayablesData;
-  /** ⭐ 리모델링(2026-08-31) — 거래처마다 세 장부(준 돈·계산서·선급금·자동 대조)를 합친 카드 정보 */
-  cards: Record<string, SupplierCardInfo>;
-  /** 별명 추가할 때 고를 이 달 통장 이름 후보 (검색) */
-  payerOptions: string[];
-  links: PayLinkRow[];
-  supplierNames: string[];
-  cashSummary: { ym: string; n: number; sum: number };
-}) {
+/** ⭐ 거래처 카드 — 「거래처별 자세히」 접힘 안 (개편 5단계, 2026-09-13; 옛 PayablesUi 의 거래처 부분)
+ *   화면 글자는 fin-words 정본(ERP 용어, 2026-09-12): 도장 찍기→지급 확인, 예치금→선급금.
+ *   남긴 것: 원장 링크·잔액·매입별 잔액·✅지급 확인·손 지급 폼·선급금 남은 거래처.
+ *   🔴 뺀 것(사장님 결정): ⚡낱건 자동 대조(흐름의 「짝 확실」 층이 한 번에 한다)·통장 이름 별명 관리
+ *      (addSupplierAlias/removeSupplierAlias 액션은 남아 있다 — 규칙 화면 몫)·계산서 안내 박스·큰 잔액 박스
+ *      (PayablesFlow 머리가 보여 준다)·되돌리기 표(「최근 한 일」). 액션은 payToSupplier 하나뿐.
+ *   진행 상태·확인 시트는 PayablesFlow 의 ctx 를 같이 쓴다(배너·confirmDialog 도 거기 것). */
+export function SupplierCards({ step, ctx }: { step: WeeklyPayableStep; ctx: PayCtx }) {
   const router = useRouter();
-  const ctx = usePayCtx({ remainBySup: new Map(data.suppliers.map((x) => [x.supplier, x.remain])) });
-  const { pending, start, setMsg, setError, ask, confirmDialog } = ctx;
+  const { pending, start, setMsg, setError, ask } = ctx;
+  const { suppliers, cardsLite } = step;
   /** 거래처별 지급 폼 상태 */
   const [form, setForm] = useState<Record<string, { amount: string; method: string; paidOn: string }>>({});
-  /**
-   * ⭐ 거래처 카드 ⚡ 줄의 「다음부터 자동으로」 (개편 4단계, 2026-09-12 — 결정 7)
-   *    map 안에서는 useState 를 못 쓰니 거래처 이름 → 값 표로 든다. **없으면 켜진 것**(기본 켜짐).
-   */
-  const [exactLearn, setExactLearn] = useState<Record<string, boolean>>({});
-  const learnOf = (supplier: string) => exactLearn[supplier] !== false;
-
-  /* ⚡ 원단위 자동 대조 (리모델링 ②) — 출금이 인보이스(묶음)와 정확히 일치할 때 한 번에 */
-  const autoLink = async (
-    supplier: string,
-    e: { cashTxnId: number; day: string; amount: number; invoiceNos: string[] },
-    /** ⭐ 「다음부터 자동으로」 (개편 4단계, 2026-09-12) — 거래처 카드의 ⚡ 줄 체크칸 값 */
-    learn = true,
-  ) => {
-    if (
-      !(await ask({
-        title: `자동으로 ${W.recon}할까요?`,
-        body: `${e.day} 출금 ${won(e.amount)}원 = ${supplier} 인보이스 ${e.invoiceNos.length}장 합과 원단위까지 일치합니다.\n(${e.invoiceNos.join(" · ")})`,
-        confirmLabel: W.recon,
-      }))
-    )
-      return;
-    start(async () => {
-      setMsg(null);
-      setError(null);
-      const r = await autoLinkExact({ cashTxnId: e.cashTxnId, supplier }, { learn });
-      if (!r.ok) return setError(r.error);
-      setMsg(`⚡ ${supplier} 인보이스 ${r.n}장에 ${won(r.amount)}원을 ${W.recon}했습니다.`);
-      router.refresh();
-    });
-  };
+  /** 흐름 「짝 확실」에 든 거래처 — 옛 카드의 「⚡정확 후보 없음」 조건(info.exact.length === 0)과 같은 뜻 */
+  const hasSure = (supplier: string) => step.sure.some((e) => e.supplier === supplier);
 
   /* ✅ 「계산서로 확인됨 — 지급 확인」 (리모델링 ③, 나이스형; 옛 이름 「도장 찍기」) — 실제 돈은
      계산서↔통장에서 이미 확인됐고, 앱 보조 장부의 잔액만 0 으로 맞춘다.
@@ -279,29 +232,6 @@ export function PayablesUi({
       router.refresh();
     });
   };
-
-  /* ④ 통장 이름 별명 관리 */
-  const [aliasDraft, setAliasDraft] = useState<Record<string, string>>({});
-  const aliasAdd = (supplier: string) => {
-    const raw = (aliasDraft[supplier] ?? "").trim();
-    if (!raw) return;
-    start(async () => {
-      setMsg(null);
-      setError(null);
-      const r = await addSupplierAlias(supplier, raw);
-      if (!r.ok) return setError(r.error);
-      setAliasDraft((prev) => ({ ...prev, [supplier]: "" }));
-      setMsg(`「${raw}」 를 ${supplier} 의 통장 이름으로 기억했습니다.`);
-      router.refresh();
-    });
-  };
-  const aliasRemove = (supplier: string, key: string, raw: string) =>
-    start(async () => {
-      const r = await removeSupplierAlias(supplier, key);
-      if (!r.ok) return setError(r.error);
-      setMsg(`「${raw}」 별명을 지웠습니다.`);
-      router.refresh();
-    });
 
   const getForm = (s: PayableSupplier) =>
     form[s.supplier] ?? { amount: String(s.remain), method: "계좌이체", paidOn: kstToday() };
@@ -330,61 +260,17 @@ export function PayablesUi({
     });
   };
 
+  /* 선급금만 남은 거래처 — 잔액은 0이지만 미리 넣어둔 돈이 있다 (딜러타이어형) */
+  const prepaidOnly = Object.entries(cardsLite).filter(
+    ([sup, i]) => i.deposit > 0 && !suppliers.some((x) => x.supplier === sup),
+  );
+
   return (
     <>
-      <PayBanner ctx={ctx} />
-
-      <section className="mt-4 rounded-2xl border-2 border-slate-800 bg-white p-4 text-center">
-        <p className="text-xs text-slate-500">{W.payable} (잔액 전체)</p>
-        <p className="tabular mt-1 text-xl font-bold text-red-600">{won(data.totalRemain)}원</p>
-      </section>
-
-      {/* ⭐ 정본 안내 (재설계 2026-08-25) — 계산서 대조의 단일 답변처는 「계산서 대조」 뷰 */}
-      <section className="mt-4 rounded-card border-2 border-brand-500 bg-white p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="min-w-0 text-sm">
-            <span className="font-semibold text-brand-700">세금계산서 기준 (정본)</span> —{" "}
-            {Number(cashSummary.ym.slice(5, 7))}월 매입 계산서 중 출금 {W.open}{" "}
-            <strong className="tabular">
-              {cashSummary.n}건 · {won(cashSummary.sum)}원
-            </strong>
-          </p>
-          <Link
-            href={`/finance/tax?view=money&ym=${cashSummary.ym}&direction=매입`}
-            className="shrink-0 rounded-control bg-brand-600 px-3 py-2 text-sm font-semibold text-white active:bg-brand-700"
-          >
-            {W.reconTax} 화면 →
-          </Link>
-        </div>
-      </section>
-
-      {/* 🔴 감사 P2 — 출금에서 지급 대조: 이미 준 돈을 장부가 알게 하는 고리 */}
-      {links.length > 0 && (
-        <section className="mt-4 rounded-2xl border border-sky-300 bg-sky-50 p-4">
-          <h2 className="font-semibold text-sky-900">출금에서 {W.reconPay} ({links.length}건)</h2>
-          <p className="mt-1 text-xs text-sky-800">
-            매입대금으로 분류된 통장 출금 중 아직 지급 기록과 {W.recon} 안 된 것 — 한 번씩 {W.recon}해 주면
-            {W.payable} 잔액이 실제와 같아집니다
-          </p>
-          <ul className="mt-2 space-y-1.5 text-sm">
-            {links.map((row) => (
-              <WithdrawalRow key={row.id} row={row} ctx={ctx} supplierNames={supplierNames} />
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {/* 🔴 2단계(2026-09-12): 「접어둔 출금 N건 — 되살리기」 접힌 표는 「최근 한 일」로(맨 아래 링크). */}
-
-      {data.suppliers.length === 0 && (
-        <section className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
-          미지급 잔액이 없습니다 🎉
-        </section>
-      )}
-
-      <ul className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2 lg:items-start">
-        {data.suppliers.map((s) => {
+      <ul className="mt-2 grid grid-cols-1 gap-3 lg:grid-cols-2 lg:items-start">
+        {suppliers.map((s) => {
           const f = getForm(s);
+          const info = cardsLite[s.supplier];
           return (
             <li key={s.supplier} className="rounded-2xl border border-slate-200 bg-white p-4">
               <div className="flex items-baseline justify-between gap-2">
@@ -401,68 +287,35 @@ export function PayablesUi({
                 미지급 {s.invoices.length}건{s.oldestD ? ` · 가장 오래된 것 ${s.oldestD}` : ""}
               </p>
 
-              {/* ⭐ 리모델링 ①③ — 세 장부 한눈에 + 성격 배지 (2026-08-31) */}
-              {(() => {
-                const info = cards[s.supplier];
-                if (!info) return null;
-                const gaveNothing = info.bankN === 0 && info.cardN === 0 && info.taxN === 0;
-                return (
-                  <div className="mt-1.5 space-y-1.5">
-                    <p className="tabular text-xs text-slate-500">
-                      이 달 준 돈: 통장 {info.bankN}건 {won(info.bankSum)} · 카드 {info.cardN}건 {won(info.cardSum)}
-                      {info.taxN > 0 && ` · 계산서 ${info.taxN}장 ${won(info.taxSum)}`}
-                    </p>
-                    <div className="flex flex-wrap gap-1">
-                      {gaveNothing && (
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
-                          결제 예정 — 이 달 준 기록 없음 (정상)
-                        </span>
-                      )}
-                      {info.deposit > 0 && (
-                        <span className="tabular rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-800">
-                          {W.prepaid} {won(info.deposit)}원 남음
-                        </span>
-                      )}
-                      {info.taxOkN > 0 && (
-                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800">
-                          계산서 {info.taxOkN}장 통장과 {W.done}
-                        </span>
-                      )}
-                    </div>
-                    {info.exact.map((e) => (
-                      <button
-                        key={e.cashTxnId}
-                        type="button"
-                        disabled={pending}
-                        onClick={() => autoLink(s.supplier, e, learnOf(s.supplier))}
-                        className="tabular block w-full rounded-lg bg-sky-700 px-2.5 py-1.5 text-left text-xs font-semibold text-white disabled:opacity-40"
-                      >
-                        ⚡ {e.day} 출금 {won(e.amount)}원 = 인보이스 {e.invoiceNos.length}장 — 자동 {W.recon}
-                      </button>
-                    ))}
-                    {/* ⭐ 체크칸 한 줄 — ⚡ 자동 대조 단추 바로 밑 (개편 4단계) */}
-                    {info.exact.length > 0 && (
-                      <LearnCheck
-                        value={learnOf(s.supplier)}
-                        onChange={(v) => setExactLearn((p) => ({ ...p, [s.supplier]: v }))}
-                        disabled={pending}
-                      />
+              {info && (
+                <div className="mt-1.5 space-y-1.5">
+                  <div className="flex flex-wrap gap-1">
+                    {info.deposit > 0 && (
+                      <span className="tabular rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-800">
+                        {W.prepaid} {won(info.deposit)}원 남음
+                      </span>
                     )}
-                    {/* 🔴 지급 확인은 대조 완료 계산서 합이 잔액을 덮을 때만 — 소액 계산서 몇 장으로
-                        큰 잔액을 확인 처리하면 안 준 돈이 사라진다 (강남세차장 사례로 발견) */}
-                    {info.taxOkN > 0 && info.taxOkSum >= s.remain && info.exact.length === 0 && (
-                      <button
-                        type="button"
-                        disabled={pending}
-                        onClick={() => stamp(s, info.taxOkN)}
-                        className="tabular block w-full rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-left text-xs font-semibold text-emerald-800 disabled:opacity-40"
-                      >
-                        ✅ 이미 준 돈으로 확인됨 — 잔액 {won(s.remain)}원 {W.payConfirm}
-                      </button>
+                    {info.taxOkN > 0 && (
+                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800">
+                        계산서 {info.taxOkN}장 통장과 {W.done}
+                      </span>
                     )}
                   </div>
-                );
-              })()}
+                  {/* 🔴 지급 확인은 대조 완료 계산서 합이 잔액을 덮을 때만 — 소액 계산서 몇 장으로
+                      큰 잔액을 확인 처리하면 안 준 돈이 사라진다 (강남세차장 사례로 발견).
+                      「짝 확실」 출금이 있는 거래처는 그쪽이 먼저다(옛 exact.length === 0 조건). */}
+                  {info.taxOkN > 0 && info.taxOkSum >= s.remain && !hasSure(s.supplier) && (
+                    <button
+                      type="button"
+                      disabled={pending}
+                      onClick={() => stamp(s, info.taxOkN)}
+                      className="tabular block w-full rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-left text-xs font-semibold text-emerald-800 disabled:opacity-40"
+                    >
+                      ✅ 이미 준 돈으로 확인됨 — 잔액 {won(s.remain)}원 {W.payConfirm}
+                    </button>
+                  )}
+                </div>
+              )}
 
               <details className="mt-2">
                 <summary className="cursor-pointer text-xs text-slate-500 underline">매입별 잔액 보기</summary>
@@ -481,120 +334,65 @@ export function PayablesUi({
                 </ul>
               </details>
 
-              {/* ④ 통장 이름 별명 — 여기서 직접 관리 (맨날 알려주지 않아도 되게) */}
-              <details className="mt-1">
-                <summary className="cursor-pointer text-xs text-slate-400 underline">
-                  통장 이름 짝 {cards[s.supplier]?.aliases.length ?? 0}개
-                </summary>
-                <ul className="mt-1 space-y-0.5 text-xs text-slate-600">
-                  {(cards[s.supplier]?.aliases ?? []).map((a) => (
-                    <li key={a.key} className="flex items-center justify-between gap-2">
-                      <span className="min-w-0 truncate">{a.raw}</span>
-                      <button type="button" disabled={pending} onClick={() => aliasRemove(s.supplier, a.key, a.raw)}
-                        className="shrink-0 text-slate-400" aria-label="별명 지우기">✕</button>
-                    </li>
-                  ))}
-                </ul>
-                <div className="mt-1 flex items-center gap-1">
-                  <input
-                    value={aliasDraft[s.supplier] ?? ""}
-                    onChange={(e) => setAliasDraft((p) => ({ ...p, [s.supplier]: e.target.value }))}
-                    list="bank-payer-names"
-                    placeholder="통장에 찍히는 이름 검색"
-                    className="w-40 rounded-lg border border-slate-300 px-2 py-1 text-xs"
-                  />
-                  <button type="button" disabled={pending || !(aliasDraft[s.supplier] ?? "").trim()}
-                    onClick={() => aliasAdd(s.supplier)}
-                    className="rounded-lg border border-slate-300 px-2 py-1 text-xs disabled:opacity-40">
-                    기억
-                  </button>
-                </div>
-              </details>
-
               {/* 손으로 지급 적기 — 통장에 안 찍힌 지급(현금·상계 등)용. 이름을 밝히고 접어 둔다
                   (사장님 질문 2026-08-31 "지급 등록은 무슨 버튼인거지?") */}
               <details className="mt-2">
                 <summary className="cursor-pointer text-xs text-slate-500 underline">손으로 지급 적기</summary>
                 <p className="mt-1 text-xs text-slate-400">
                   통장에 안 찍힌 지급(현금·{W.offset} 등)을 직접 기록합니다. 통장으로 보낸 돈은 위
-                  「출금에서 {W.reconPay}」·⚡ 자동 {W.recon}로 {W.recon}하는 것이 정확합니다.
+                  「{W.tierSure}」·「{W.tierCheck}」에서 {W.recon}하는 것이 정확합니다.
                 </p>
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                <input
-                  value={f.amount}
-                  onChange={(e) => setForm((p) => ({ ...p, [s.supplier]: { ...f, amount: e.target.value.replace(/[^\d,]/g, "") } }))}
-                  inputMode="numeric"
-                  className="tabular w-28 rounded-lg border border-slate-300 px-2 py-1.5 text-right text-sm"
-                  aria-label="지급 금액"
-                />
-                <select
-                  value={f.method}
-                  onChange={(e) => setForm((p) => ({ ...p, [s.supplier]: { ...f, method: e.target.value } }))}
-                  className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-                >
-                  {METHODS.map((m) => (
-                    <option key={m}>{m}</option>
-                  ))}
-                </select>
-                <input
-                  type="date"
-                  value={f.paidOn}
-                  onChange={(e) => setForm((p) => ({ ...p, [s.supplier]: { ...f, paidOn: e.target.value } }))}
-                  className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-                  aria-label="지급일"
-                />
-                <button
-                  type="button"
-                  disabled={pending}
-                  onClick={() => pay(s)}
-                  className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40"
-                >
-                  지급 적기
-                </button>
-              </div>
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <input
+                    value={f.amount}
+                    onChange={(e) => setForm((p) => ({ ...p, [s.supplier]: { ...f, amount: e.target.value.replace(/[^\d,]/g, "") } }))}
+                    inputMode="numeric"
+                    className="tabular w-28 rounded-lg border border-slate-300 px-2 py-1.5 text-right text-sm"
+                    aria-label="지급 금액"
+                  />
+                  <select
+                    value={f.method}
+                    onChange={(e) => setForm((p) => ({ ...p, [s.supplier]: { ...f, method: e.target.value } }))}
+                    className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                  >
+                    {METHODS.map((m) => (
+                      <option key={m}>{m}</option>
+                    ))}
+                  </select>
+                  <input
+                    type="date"
+                    value={f.paidOn}
+                    onChange={(e) => setForm((p) => ({ ...p, [s.supplier]: { ...f, paidOn: e.target.value } }))}
+                    className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                    aria-label="지급일"
+                  />
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => pay(s)}
+                    className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40"
+                  >
+                    지급 적기
+                  </button>
+                </div>
               </details>
             </li>
           );
         })}
       </ul>
 
-      {/* 선급금만 남은 거래처 — 잔액은 0이지만 미리 넣어둔 돈이 있다 (딜러타이어형) */}
-      {Object.entries(cards).filter(([sup, i]) => i.deposit > 0 && !data.suppliers.some((x) => x.supplier === sup))
-        .length > 0 && (
+      {prepaidOnly.length > 0 && (
         <section className="mt-3 rounded-2xl border border-sky-200 bg-sky-50/50 p-3 text-xs text-sky-900">
           <p className="font-semibold">{W.prepaid}이 남아 있는 거래처</p>
           <ul className="tabular mt-1 space-y-0.5">
-            {Object.entries(cards)
-              .filter(([sup, i]) => i.deposit > 0 && !data.suppliers.some((x) => x.supplier === sup))
-              .map(([sup, i]) => (
-                <li key={sup}>
-                  {sup} — {won(i.deposit)}원 (다음 인보이스가 들어오면 「{W.reconPay}」에서 {W.recon}합니다)
-                </li>
-              ))}
+            {prepaidOnly.map(([sup, i]) => (
+              <li key={sup}>
+                {sup} — {won(i.deposit)}원 (다음 인보이스가 들어오면 「{W.reconPay}」에서 {W.recon}합니다)
+              </li>
+            ))}
           </ul>
         </section>
       )}
-
-      {/* 별명 추가 검색 후보 — 이 달 통장 출금 상대 (2026-08-31) */}
-      <datalist id="bank-payer-names">
-        {payerOptions.map((n) => (
-          <option key={n} value={n} />
-        ))}
-      </datalist>
-
-      <datalist id="pay-supplier-names">
-        {supplierNames.map((s) => (
-          <option key={s} value={s} />
-        ))}
-      </datalist>
-
-      {/* ⭐ 개편 2단계(2026-09-12) — 「출금에서 대조한 지급」·「최근 지급 기록」·「접어둔 출금」의
-          되돌리기 표 3개는 「최근 한 일」 한 곳으로(결정 f). 여기엔 링크 한 줄만. */}
-      <p className="mt-4 text-xs text-slate-400">
-        잘못 {W.recon}한 지급·잘못 접은 출금은{" "}
-        <Link href="/finance/activity" className="underline underline-offset-2">{W.activityUndoHere}</Link>
-      </p>
-      {confirmDialog}
     </>
   );
 }

@@ -132,7 +132,7 @@ export async function weeklySteps(ym: string): Promise<WeeklySteps> {
       no: 5,
       title: "계산서 대조",
       status: taxOpen > 0 ? `남은 ${taxOpen}장` : "다 됨",
-      href: `/finance/tax?view=money&ym=${ym}`,
+      href: `/finance/tax?ym=${ym}`,
       warn: taxOpen > 0,
       remain: taxOpen,
     },

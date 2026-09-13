@@ -7,7 +7,9 @@
  *   → 「확인해 주세요」(정본이 낸 후보 1개짜리 — 카드 그대로, 실행은 카드 안 낱장 단추)
  *   → 「손이 필요한 것」(나머지 카드 + 이체 판매 목록).
  *   카드·목록은 deposits-ui 조각 그대로(DepositCard·TransferSalesList) — 판정·액션을 여기서 새로 만들지 않는다.
- *   밖으로 나가는 링크는 TransferSalesList 의 「정비 내역에 등록하러 →」 하나(?back=weekly 로 돌아온다).
+ *   밖으로 나가는 링크는 「정비 내역에 등록하러 →」 하나(?back=weekly 로 돌아온다) — TransferSalesList 와,
+ *   짝을 못 찾은 입금 카드(5단계 부채 v, 2026-09-13)에.
+ *   🔴 개편 5단계(2026-09-13): 기존 화면 /finance/deposits 도 이 조각을 그린다(standalone) — 같은 3층.
  */
 import type { DepositSuggestion } from "@/lib/recon-data";
 import type { WeeklyDepositStep } from "@/lib/weekly-types";
@@ -33,12 +35,18 @@ function sureWith(step: WeeklyDepositStep, s: DepositSuggestion): string | null 
   return null;
 }
 
-export function DepositsFlow({ step }: { step: WeeklyDepositStep }) {
+/**
+ * @param standalone 기존 화면(/finance/deposits, 개편 5단계 2026-09-13)에서 그릴 때 true —
+ *   정비 내역 링크에 `back=weekly` 를 안 붙인다(/sales 화이트리스트는 back=weekly 만 받는데, 거기서
+ *   돌아올 곳은 흐름이 아니라 이 화면이다). 서버 조각이 넘기므로 함수가 아닌 값으로 받는다.
+ */
+export function DepositsFlow({ step, standalone = false }: { step: WeeklyDepositStep; standalone?: boolean }) {
   const ctx = useDepositCtx();
   const { ym } = step;
   const sureSet = new Set(step.sure);
   const sure = step.data.open.filter((s) => sureSet.has(s.dep.id));
-  const saleHref = (d: string) => `/sales?range=range&from=${d}&to=${d}&back=weekly&step=3&ym=${ym}`;
+  const saleHref = (d: string) =>
+    `/sales?range=range&from=${d}&to=${d}` + (standalone ? "" : `&back=weekly&step=3&ym=${ym}`);
   const handN = step.hand.length + step.transfers.length;
 
   return (
@@ -99,7 +107,7 @@ export function DepositsFlow({ step }: { step: WeeklyDepositStep }) {
       {step.check.length > 0 && (
         <ul className="mt-2 grid grid-cols-1 gap-3 lg:grid-cols-2 lg:items-start">
           {step.check.map((s) => (
-            <DepositCard key={s.dep.id} s={s} ym={ym} sure={false} taxCands={step.taxCands} bundles={step.bundles} ctx={ctx} />
+            <DepositCard key={s.dep.id} s={s} ym={ym} sure={false} taxCands={step.taxCands} bundles={step.bundles} ctx={ctx} saleHref={saleHref} />
           ))}
         </ul>
       )}
@@ -109,7 +117,7 @@ export function DepositsFlow({ step }: { step: WeeklyDepositStep }) {
       {step.hand.length > 0 && (
         <ul className="mt-2 grid grid-cols-1 gap-3 lg:grid-cols-2 lg:items-start">
           {step.hand.map((s) => (
-            <DepositCard key={s.dep.id} s={s} ym={ym} sure={false} taxCands={step.taxCands} bundles={step.bundles} ctx={ctx} />
+            <DepositCard key={s.dep.id} s={s} ym={ym} sure={false} taxCands={step.taxCands} bundles={step.bundles} ctx={ctx} saleHref={saleHref} />
           ))}
         </ul>
       )}

@@ -7,15 +7,20 @@
  *   confirmSureWithdrawals(ym, ids) **한 번**, 서버가 exactPlan 을 재검사하고 bulk 한 줄 남긴다)
  *   → 「확인해 주세요」(거래처는 알겠는데 금액이 딱 안 맞는 출금 — 제안 단추)
  *   → 「손이 필요한 것」(거래처 검색해서 지급 / 접기). 줄은 payables-ui 의 WithdrawalRow 그대로.
+ *   🔴 개편 5단계(2026-09-13): 기존 화면 /finance/payables 도 이 조각을 그린다(withCards) — 같은 3층.
  */
 import type { WeeklyPayableStep } from "@/lib/weekly-types";
 import { confirmSureWithdrawals } from "@/lib/purchase-pay";
 import { W, autoReconLabel } from "@/lib/fin-words";
 import { won } from "@/components/fin/money";
 import { AutoTier, CheckRunList, TierHead } from "@/components/fin/check-run-list";
-import { PayBanner, WithdrawalRow, usePayCtx } from "@/app/finance/payables/payables-ui";
+import { PayBanner, SupplierCards, WithdrawalRow, usePayCtx } from "@/app/finance/payables/payables-ui";
 
-export function PayablesFlow({ step }: { step: WeeklyPayableStep }) {
+/**
+ * @param withCards 기존 화면(/finance/payables, 개편 5단계 2026-09-13)에서만 true — 3층 아래 「거래처별 자세히」
+ *   접힘에 거래처 카드(손 지급 폼·선급금·✅지급 확인·매입별 잔액)를 그린다. 흐름 ⑥ 은 안 그린다(장부 성격).
+ */
+export function PayablesFlow({ step, withCards = false }: { step: WeeklyPayableStep; withCards?: boolean }) {
   const ctx = usePayCtx({ remainBySup: new Map(Object.entries(step.remainBySup)) });
   const { ym } = step;
 
@@ -89,6 +94,14 @@ export function PayablesFlow({ step }: { step: WeeklyPayableStep }) {
             <WithdrawalRow key={row.id} row={row} ctx={ctx} supplierNames={step.supplierNames} />
           ))}
         </ul>
+      )}
+
+      {/* 장부 성격 조각 — 접어 둔다. 통장에 안 찍힌 지급·선급금·매입별 잔액을 볼 때만 연다 (5단계) */}
+      {withCards && (
+        <details className="mt-4">
+          <summary className="cursor-pointer text-sm text-slate-500 underline underline-offset-2">{W.supplierDetail}</summary>
+          <SupplierCards step={step} ctx={ctx} />
+        </details>
       )}
 
       {/* WithdrawalRow 의 거래처 검색 입력이 찾는 목록 — 화면에 한 번 */}
