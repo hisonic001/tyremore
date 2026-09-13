@@ -48,6 +48,7 @@ Claude가 매 세션 시작 시 읽는 프로젝트 기억 파일. 대화가 끊
 | 계산서 | `tax-book.ts` | `taxBook(ym)` 하나 (D-23) |
 | 돈관리 첫 화면 | `today-brief.ts` · `weekly-steps.ts` · `invoice-deadline.ts` · `receivable-total.ts` | 오늘·주간·10일 경고·미수금 (D-22) |
 | 돈관리 말 | `fin-words.ts` | 화면 글자는 여기서만 (D-24) |
+| 장부 조회 | `ledger-data.ts` | `/finance/ledger` 의 SQL — 화면에 인라인 금지 (D-39) |
 | 연간 실행 | `year-run.ts` | 한 달 진행 엔진 (D-35) |
 | 상품 | `kumho-sheet.ts` · `conti-sheet.ts` · `conti-name.ts` | 거래처 목록 적재·이름 규칙 (D-17·D-19) |
 | 배터리 | `battery-price-list.ts` | 단가표 상수 — 화면·스크립트가 같이 본다 (D-25) |
@@ -704,10 +705,12 @@ OE 24년형 카니발). **하중지수가 다르면 다른 타이어다 — 합�
 ### D-21. 돈관리 탭은 「할 일 / 장부 / 자료」 3묶음 + 소탭 — 화면은 안 옮긴다 (2026-09-10)
 
 - 사장님 선택: 「탭만 3개로 묶기 — 지금 구조는 그대로 두고 탭 이름만 정리」. 정본 `src/components/fin/tabs.tsx`.
-  할 일 = 현황·입금 정리·계산서·지출 / 장부 = 거래처·미지급·받을 돈(/receivables)·추적 / 자료 = 올리기·올린 자료·카드 마감.
+  (처음) 할 일 = 현황·입금 정리·계산서·지출 / 장부 = 거래처·미지급·받을 돈(/receivables)·추적 / 자료 = 올리기·올린 자료·카드 마감.
+  **5단계(D-39, 09-13)부터**: 할 일 = 현황·이번 주 정리·최근 한 일 / 장부 = 손익·거래처·입금 정리·지출·계산서·미지급·받을 돈 / 자료 그대로. 추적 없음.
 - 「올린 자료」 `/finance/files` — 정본 `src/lib/upload-ledger.ts`: 언제 무엇을 올렸나 · 비었나(`upload-coverage`) ·
   배치별 「정리 안 된 N줄」(`upload_id` 로 셈) · 검색은 파일로도, **줄의 적요·금액으로도**(어느 파일에서 왔나).
-- 정합성 검사 배너는 자료 지문(`audit_run.fingerprint`)이 바뀌면 열 때 저절로 다시 찍는다(`freshAuditRun`).
+- 정합성 검사는 (처음) 배너가 지문(`audit_run.fingerprint`)이 바뀌면 열 때 다시 찍었다(`freshAuditRun`) →
+  **5단계에 뺐다**: GET 중 쓰기이고 A1 이 60+ 질의라. 이제 07:30 cron + 장부 「지금 다시 검사」 단추만 쓰고, 마감 체크리스트 한 줄은 읽기만(D-39).
 
 ### D-22. 돈관리 첫 화면 = 「오늘 · 이번 주 정리 · 이번 달 돈」 세 칸 — 개편 1단계 (2026-09-11)
 
@@ -718,7 +721,8 @@ OE 24년형 카니발). **하중지수가 다르면 다른 타이어다 — 합�
   본사청구 제외, 건너뛰기 `app_setting.invoice_deadline_skip`) · `receivable-total.ts`(못 받은 돈, 정비 내역 배너와 공유) ·
   `payableTotal()`(줄 돈). 첫 화면에 인라인 SQL 없음.
 - 손익 구성·근거(「어디서 온 숫자?」)·요약·내역·월 마감은 **장부 첫 화면 `/finance/ledger`** 로. 첫 화면은 숫자만.
-- 정합성 A1 은 「오늘 · 안 들어온 이체」가 대신(배너 `hideCodes`). 인박스는 접힌 채(3단계까지).
+- 정합성 A1 은 「오늘 · 안 들어온 이체」가 대신. 배너·인박스는 3단계까지 접힌 채 두었다가 **5단계(D-39)에 없앴다** —
+  A2~A4 는 장부 마감 체크리스트 한 줄(`month-close.auditCheck`), 상대별 묶음은 흐름·거래처 원장.
 - 같은 날 받은 예약금·수금은 정비 내역에서 **별도 카드 없이** 판매 카드가 「예약금 N 받음 · 잔금 M」으로 보여 준다
   (`sale-history.ts sameDayAsSale`, 사장님 09-11).
 - 다음: 2단계 「최근 한 일」+용어 → 3단계 한 줄 흐름 → 4단계 자동 맞춤·규칙 학습 → 5단계 정리.
@@ -1139,8 +1143,58 @@ D-08 의 「채워 넣기」를 4단계로 다시 지었다.
 「식별 확실」의 **입력원**만 넓힌 것으로 계산서 ★ 와 같은 취급). **첫 통장 올리기 때 결과를 봐야 한다.**
 
 **안 한 것(5단계)**: 규칙 직접 추가·수정 UI · `DESC_RULES` 표 승급 · `party_alias`·`expense_rule` `enabled` 칸 ·
-지역화폐·이자·환급 단계의 `recon_status` 통일(undo 경로 정비가 먼저) · 카드 인라인의 묶어 붙이기·선결제·수동 select ·
+~~지역화폐·이자·환급 단계의 `recon_status` 통일(undo 경로 정비가 먼저)~~(5단계 D-39 에서 함) · 카드 인라인의 묶어 붙이기·선결제·수동 select ·
 `setDepositKind` 과거분 일괄 · 자동 연동 · 폰(보기만).
+
+### D-39. 겹친 화면을 걷어낸다 — 돈관리 개편 5단계 「정리」 ⭐ (2026-09-13)
+
+1~4단계로 첫 화면 세 칸·`/finance/weekly` 흐름·「최근 한 일」·자동 규칙이 생기면서 **같은 정본을 두 곳이
+다르게 그리는** 자리가 남았다. 새 기능 없이 그것을 걷어내고 미룬 부채를 갚았다. 사장님 결정 11개
+(설계서 §2·§4 표 5행, 실행 계획 `~/.claude/plans/enchanted-plotting-candy.md`). **한 번에 배포.**
+
+**① 없앤 것** — 첫 화면 정합성 배너(`audit-banner.tsx`)·상대별 인박스(`inbox-ui.tsx`·`fin-inbox.ts`)·
+**추적 화면 전체**(`/finance/trace`·`money-trace.ts`, 탭에서도 제거). 코드 −1,854줄.
+- A1(안 들어온 이체)은 「오늘」 칸이 **같은 함수**(`a1OpenTransfers`)로 이미 보여 줬다 — 「나머지 N건 →」이
+  추적으로 보내던 것은 **그 자리에서 펼친다**(서버 `<details>`, 클라이언트 상태 없음).
+- A2~A4 는 **장부 마감 체크리스트 한 줄**(`month-close.auditCheck`, soft)과 `/finance/ledger#audit` 접힘으로.
+  🔴 **`freshAuditRun` 을 지웠다** — 지문이 바뀌면 GET 중에 `INSERT audit_run` 을 하고 A1 이 판매 60건×후보라
+  첫 방문에 60+ 질의였다. 이제 **읽기 2질의**(`latestAuditRun`+`auditFingerprint`)로 「N가지 · 자료가 바뀜 —
+  다시 검사」라고 **적기만** 하고, 다시 돌리는 건 07:30 cron 과 장부 「지금 다시 검사」 단추(`ledger/audit-rerun.tsx`) 둘.
+- 저장된 `audit_run.items` 에 옛 주소가 남으므로 화면은 저장본 href 대신 **`AUDIT_HREF` 표**(self-audit.ts)로 그린다.
+- 옛 「통장 밖 수령」 자국 **35건**(2단계 전이라 `fin_activity` 줄이 없어 추적 화면이 유일한 되돌리기 자리였다)은
+  `scripts/add-aside-activity.ts` 로 「최근 한 일」에 옮겨 적었다. 🔴 postgres.js 에서 `${JSON.stringify(x)}::jsonb` 는
+  **한 번 더 감싸진다**(`"{\"quoteId\":13}"`) — `sql.json(x)` 를 쓸 것(스크립트에 수리 단계 포함).
+
+**② 기존 4화면 = 흐름과 같은 3층** (URL·딥링크 그대로, 사장님 결정 3)
+`/finance/deposits`·`/expenses`·`/payables` 가 page 에서 어댑터(`weekly*Step`)를 한 번 부르고 흐름 조각
+(`DepositsFlow`·`ExpensesFlow`·`PayablesFlow`)을 그린다 — 옛 `DepositsRecon`·`ExpensesUi`·`PayablesUi` 삭제.
+`weeklySteps` 는 안 부르므로 **조회가 늘지 않는다**(⑥ 은 5개 → 1개). ⑤ 계산서는 1.5단계에 이미 교체됨.
+- 🔴 서버 컴포넌트는 클라이언트 조각에 **함수를 못 넘긴다** — `saleHref` 대신 `standalone?: boolean`(흐름이면 `back=weekly`).
+- 장부 성격 조각은 「자세히」 접힘으로: ④ 분류별 합계(어댑터가 `expenseData` 를 통째 주므로 조회 0) ·
+  ⑥ 거래처 카드에서 **남긴 것**(손 지급 폼·선급금·✅지급 확인·매입별 잔액)은 `SupplierCards`.
+  **뺀 것**: ⚡낱건 자동대조(흐름 `sure` 층이 같은 `exactPlan` 을 일괄로)·별명 관리(설정→자동 규칙에 있다)·
+  `taxCashData` 안내 박스(수십 질의)·`byPayer` 묶음(흐름 `check` 가 더 정확한 열쇠로).
+- 탭: **할 일 = 현황·이번 주 정리·최근 한 일** / 장부 = 손익·거래처·입금·지출·계산서·미지급·받을 돈.
+  계산서 `?view=money` 특례 제거(`tax/page.tsx` 가 무시한 지 오래) — 링크 7곳 정리.
+
+**③ 부채**
+- `ledger/page.tsx` 인라인 SQL 8개 → **`src/lib/ledger-data.ts`**(`ledgerCoverage`·`ledgerOpenBuySum`·`ledgerMonthSums`)
+  + `FinPL.salesN`. 🔴 **숫자를 바꾸는 이관은 안 했다** — `ledgerOpenBuySum` 을 `taxOpenCounts` 로 합치면
+  「장 합 vs 남은 돈」이 달라진다. `bySource`/`accounts` 도 LIMIT·noData 판정이 미묘해 한 질의로 안 합쳤다.
+- `app_setting` 사설 4곳(`mars-eval`·`invoice-deadline`·`invoice-deadline-actions`·`battery-price`) → 공용 `app-setting.ts`.
+- **`recon_status` 통일 + 되돌리기 버그**: 자동 분류의 지역화폐정산·이자·환급이 `category` 만 찍어
+  ⓐ 「제안」(후보가 붙은 줄)을 조용히 덮고 ⓑ 반쪽 줄이 남았다. 셋 다 `recon_status='확정'` + `AND recon_status='미대조'`
+  가드로 카드정산과 같은 모양. 🔴 그 전에 **되돌리기 길부터**: `UNDO_DEPOSIT_KINDS`(고르는 넷 + 「지역화폐정산」) —
+  지역화폐는 `expense` 로 가는데 `fin-expense` 가 입금 줄을 거부해 **되돌리기가 늘 실패했다**.
+  과거 반쪽 줄 23건은 `scripts/add-recon-status-backfill.ts`(화면 숫자 불변 — 판정이 category 기준).
+- `taxBook` 에 `PartyCashCache` 주입(`partyStrictNames`·`partyMonthlyCash` 결과 메모, 요청 안에서만) — 실측 **67 → 63 질의**.
+- 시험 3개 추가(`expense-cats`·`ym`·`payer-name`, +150) → **606 통과**. `expense-cats` 는 TS `payerKeyOf` ↔
+  `PAYER_KEY_SQL` **쌍둥이**를 SQL 실행 없이 지킨다(조각 순서·`\[` 이스케이프 존재·접두사 누락 0).
+
+**안 한 것(별건)**: `card/page.tsx` 인라인 SQL(:67 「혼합은 결제 줄로」가 `cardDaySums` 와 물려 위험) ·
+`posDayData` 경량화 · 규칙 추가·수정 UI · 다중 올리기 자동 진행 · 카드 인라인 빈 슬롯 · `taxOpenCounts` 합계 칸(숫자가 바뀐다).
+**남은 의심**(갈래 D 보고, 고치지 않음): `payer-name.ts:232` 결제대행을 벗긴 이름이 음식점이어도 via 사전 fallback 이
+먼저 `known` 을 채워 「식대·접대」 제안이 안 나온다 — 네이버페이·카카오페이로 낸 밥값 전부.
 
 ---
 
