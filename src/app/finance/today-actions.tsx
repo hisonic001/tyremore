@@ -4,21 +4,67 @@
  * ⭐ 첫 화면 「오늘」 칸의 단추들 (돈관리 개편 1단계, 2026-09-11)
  *
  *   원칙: 한 줄 = 무엇 · 숫자 · 단추 하나. 여기 단추는 전부 **기존 정본 액션**을 부른다 —
- *   대조는 추적 화면의 TraceLinkButton 그대로, 「개인계좌 / 현금 / 보류」는 입금 화면과
+ *   대조는 이 파일 안의 TraceLinkButton(5단계 2026-09-13 에 추적 화면을 없애며 옮김, 액션은
+ *   traceLinkDeposit 그대로), 「개인계좌 / 현금 / 보류」는 입금 화면과
  *   같은 markSaleSettledAside · fixSaleMethod. 새 논리 없음. 글자는 fin-words 정본(2026-09-12).
  */
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { markSaleSettledAside } from "@/lib/trace-actions";
+import { markSaleSettledAside, traceLinkDeposit } from "@/lib/trace-actions";
 import { fixSaleMethod } from "@/lib/pos-actions";
 import { setInvoiceDeadlineSkip } from "@/lib/invoice-deadline-actions";
 import { useConfirm } from "@/components/ui/confirm";
 import { Notice } from "@/components/ui/notice";
 import { W } from "@/lib/fin-words";
-import { TraceLinkButton } from "./trace/client";
 import type { A1Row } from "@/lib/self-audit";
 
 const won = (n: number) => n.toLocaleString("ko-KR");
+
+/** 판매 ↔ 입금 대조 — 후보가 하나뿐일 때만 서버(a1OpenTransfers)가 내려보낸다. 입금 정리와 같은 정본(linkDepositToQuoteCore) */
+export function TraceLinkButton({
+  action,
+  title,
+  amount,
+}: {
+  action: { cashTxnId: number; quoteId: number; label: string };
+  title: string;
+  amount: number;
+}) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [ask, confirmDialog] = useConfirm();
+  const [error, setError] = useState<string | null>(null);
+
+  const go = async () => {
+    const ok = await ask({
+      title: `이 입금과 ${W.recon}할까요?`,
+      body: `${title} ${won(amount)}원 ↔ ${action.label}\n${W.reconDeposit}와 같은 방식으로 ${W.recon}되고, 입금자명도 이 상대로 기억합니다.`,
+      confirmLabel: W.recon,
+    });
+    if (!ok) return;
+    start(async () => {
+      setError(null);
+      const r = await traceLinkDeposit(action.cashTxnId, action.quoteId);
+      if (!r.ok) return setError(r.error);
+      router.refresh();
+    });
+  };
+
+  return (
+    <div className="mt-1.5">
+      {confirmDialog}
+      <button
+        type="button"
+        disabled={pending}
+        onClick={go}
+        className="rounded-lg bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
+      >
+        ⚡ {action.label}
+      </button>
+      {error && <Notice tone="error">{error}</Notice>}
+    </div>
+  );
+}
 
 /** 안 들어온 이체 한 줄 — [⚡짝][개인계좌][현금][보류] */
 export function TransferRow({ t }: { t: A1Row }) {

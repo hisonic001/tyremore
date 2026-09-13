@@ -8,16 +8,12 @@ import { receivableTotal } from "@/lib/receivable-total";
 import { todayBrief } from "@/lib/today-brief";
 import { weeklySteps } from "@/lib/weekly-steps";
 import { weeklyDoneAt } from "@/lib/app-setting";
-import { freshAuditRun } from "@/lib/self-audit";
-import { finInbox } from "@/lib/fin-inbox";
 import { posDayData } from "@/lib/pos-close";
-import { AuditBanner } from "./audit-banner";
-import { InboxSection } from "./inbox-ui";
 import { TodayCardInline } from "./today-card";
 import { InvoiceSkipButton, TransferRow } from "./today-actions";
 import { FinShell } from "@/components/fin/shell";
 import { won } from "@/components/fin/money";
-import { W } from "@/lib/fin-words";
+import { W, moreLabel } from "@/lib/fin-words";
 import { closedDelta } from "@/lib/fin-activity";
 
 export const dynamic = "force-dynamic";
@@ -28,7 +24,9 @@ export const dynamic = "force-dynamic";
  *   사장님 결정(질문 5라운드): 리듬은 매일 저녁 5분 + 주 1회 정리, 첫 화면은 A2 「세 칸 나란히 —
  *   직관적이고 한눈에」. 한 줄 = 무엇 · 숫자 · 단추 하나, 상태는 색(✅ 끝 / 🟡 할 것 / ⚪ 때 아님).
  *   손익의 구성·근거·요약·내역·마감은 장부 첫 화면(/finance/ledger)으로 옮겼다.
- *   정합성 A1(안 들어온 이체)·인박스·추적이 세 곳에서 보여 주던 같은 건은 「오늘」 칸 한 곳으로.
+ *   정합성 배너·상대별 인박스·추적 화면은 5단계(2026-09-13)에 없앴다 — 같은 건이 세 곳에서 다르게
+ *   보였기 때문. A1(안 들어온 이체)은 「오늘」 칸이 같은 함수(a1OpenTransfers)로 보여 주고,
+ *   A2~A4 는 장부 마감 체크리스트 한 줄(month-close), 상대별 묶음은 흐름(weekly)·원장이 맡는다.
  *
  * 🔴 질의는 순차 — Promise.all 금지. 인라인 SQL 없음 — 정본 today-brief·weekly-steps·finPL·
  *    receivable-total·payableTotal·closedDelta·posDayData 만 부른다.
@@ -63,8 +61,6 @@ export default async function FinancePage({
   const pl = await finPL(ym);
   const recv = await receivableTotal();
   const payable = await payableTotal();
-  const audit = await freshAuditRun();
-  const inbox = await finInbox(ym);
   /* ⭐ 마감 뒤 고침 띠 (사장님 결정 15) — 지난달·이번 달 중 마감된 달에 after_close 줄이 있을 때만. 순차 */
   const delta = (await closedDelta(ymAdd(ym, -1))) ?? (await closedDelta(ym));
 
@@ -134,11 +130,17 @@ export default async function FinancePage({
                   {brief.transfers.slice(0, 5).map((t) => (
                     <TransferRow key={t.quoteId} t={t} />
                   ))}
+                  {/* ⭐ 5단계(2026-09-13): 추적 화면으로 보내지 않고 이 자리에서 펼친다 — 서버 details, 클라이언트 상태 없음 */}
                   {brief.transfers.length > 5 && (
-                    <li className="pt-1 text-xs">
-                      <Link href="/finance/trace" className="text-slate-500 underline">
-                        나머지 {brief.transfers.length - 5}건 →
-                      </Link>
+                    <li>
+                      <details className="pt-1">
+                        <summary className="cursor-pointer text-xs text-slate-500">{moreLabel(brief.transfers.length - 5)}</summary>
+                        <ul className="divide-y divide-slate-100">
+                          {brief.transfers.slice(5).map((t) => (
+                            <TransferRow key={t.quoteId} t={t} />
+                          ))}
+                        </ul>
+                      </details>
                     </li>
                   )}
                 </ul>
@@ -290,21 +292,6 @@ export default async function FinancePage({
           <p className="mt-1 text-[11px] text-slate-400">「{W.receivable}·{W.payable}」은 달과 상관없는 지금 기준입니다. 숫자를 누르면 근거가 나옵니다.</p>
         </section>
       </div>
-
-      {/* 자동 검사 — A1(안 들어온 이체)은 위 「오늘」이 대신하므로 배너는 A2~A4 만 */}
-      <div className="hidden lg:block">
-        <AuditBanner audit={audit} hideCodes={["A1"]} />
-      </div>
-
-      {/* 상대별 할 일 — 접어 둔다. 3단계(이번 주 정리 흐름)가 흡수하면 뺀다 */}
-      {inbox && inbox.groups.length > 0 && (
-        <details className="mt-3 hidden lg:block">
-          <summary className="cursor-pointer text-sm text-slate-500">
-            상대별로 보기 ({inbox.groups.length}곳) — 자세히
-          </summary>
-          <InboxSection inbox={inbox} ym={ym} />
-        </details>
-      )}
     </FinShell>
   );
 }

@@ -1,11 +1,12 @@
 "use server";
 
 /**
- * ⭐ 돈 추적 화면 — 쓰기 액션 (돈관리 근본책 1단계, 2026-08-31)
- *   잇기는 입금 정리와 같은 정본(linkDepositToQuoteCore)을 부른다 — 판정 중복 금지.
+ * ⭐ 판매 별도수령 표시 · 입금 대조 · 지금 검사 — 쓰기 액션 (돈관리 근본책 1단계, 2026-08-31)
+ *   추적 화면은 5단계(2026-09-13)에 없앴고, 액션은 첫 화면(today-actions)·입금 정리·장부가 계속 쓴다.
+ *   파일명은 그대로 둔다 — 부르는 곳이 여럿이라 이름 바꾸는 값이 없다.
+ *   대조는 입금 정리와 같은 정본(linkDepositToQuoteCore)을 부른다 — 판정 중복 금지.
  * 🔴 사장님 전용.
  */
-import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, hasPerm } from "@/lib/auth";
@@ -27,7 +28,6 @@ export async function traceLinkDeposit(
   const r = await linkDepositToQuoteCore(cashTxnId, quoteId, s?.uid ?? null, "수동");
   if (!r.ok) return r;
   revalidateFinance();
-  revalidatePath("/finance/trace");
   return { ok: true };
 }
 
@@ -123,14 +123,13 @@ export async function markSaleSettledAside(
     });
   }
   revalidateFinance();
-  revalidatePath("/finance/trace");
   return { ok: true };
 }
 
-/** /finance 「지금 검사」 — 매일 아침 cron 과 같은 검사를 즉시 돌린다 */
+/** 장부 마감 목록 「지금 다시 검사」(ledger/audit-rerun.tsx, 갈래 C) 와 cron 이 같은 검사 — 즉시 돌리고 결과를 남긴다 */
 export async function runAuditNow(): Promise<{ ok: true; items: AuditItem[] } | { ok: false; error: string }> {
   if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
   const r = await runAndSaveAudit();
-  revalidatePath("/finance");
+  revalidateFinance();
   return { ok: true, items: r.items };
 }

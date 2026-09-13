@@ -12,8 +12,10 @@
  *      스크립트 사고 유형. 지급>자국은 정상 — 도장·손 지급은 자국이 없다)
  *   ④ 총액 불변식 — 판매 총액 ≠ 품목 줄 합 · 매입 과지급
  *
- *   결과는 audit_run 표에 쌓이고 /finance 상단 배너가 최신 결과를 보여준다.
- *   실행: 매일 07:30 KST Vercel Cron + /finance 「지금 검사」 단추.
+ *   결과는 audit_run 표에 쌓인다. 보여 주는 곳(5단계 2026-09-13 — 첫 화면 배너·추적 화면은 없앴다):
+ *   A1 은 첫 화면 「오늘」 칸(today-brief → a1OpenTransfers, 실시간), A2~A4 는 장부 마감 체크리스트
+ *   한 줄(month-close.auditCheck — latestAuditRun + auditFingerprint 로 낡았는지 본다).
+ *   실행: 매일 07:30 KST Vercel Cron + 장부 마감 목록 「지금 다시 검사」(trace-actions.runAuditNow).
  *
  * 🔴 "use server" 아님 — 조회·기록만. 부르는 쪽(cron 라우트·서버 액션)이 권한을 진다.
  *    검사마다 질의 1~2개, LIMIT — 서버리스 60초 안에 넉넉히 끝난다.
@@ -31,9 +33,24 @@ export interface AuditItem {
   n: number;
   /** 표본 설명 (최대 6줄) */
   samples: string[];
-  /** 고치러 갈 화면 */
+  /** 고치러 갈 화면 — 그릴 때는 저장본 대신 AUDIT_HREF[code] 를 쓴다(아래 참조) */
   href: string;
 }
+
+/**
+ * ⭐ 검사 번호 → 고치러 갈 화면 (5단계, 2026-09-13)
+ *
+ *   저장된 audit_run.items JSON 에는 없앤 추적 화면·옛 계산서 보기(?view=money) 주소가
+ *   href 로 그대로 남아 있다. 저장본을 고쳐 쓰지 않고 화면(장부 #audit, 갈래 C)이 이 표로 그린다 —
+ *   화면이 또 바뀌어도 표 한 곳만 고치면 된다. runSelfAudit 의 각 항목도 이 표를 참조한다.
+ *   A1 → 첫 화면 오늘 칸, A2 → 계산서, A3 → 미지급, A4 → 자료 수리라 첫 화면.
+ */
+export const AUDIT_HREF: Record<string, string> = {
+  A1: "/finance",
+  A2: "/finance/tax",
+  A3: "/finance/payables",
+  A4: "/finance",
+};
 
 export interface AuditRun {
   id: number;
@@ -46,8 +63,9 @@ export interface AuditRun {
 
 /* ============================================================
  * ⭐ A1 정본 — 계좌이체 판매인데 이체입금 자국이 없는 것 + 이을 만한 입금 후보.
- *    감사(A1)·홈 인박스·돈 추적 화면이 **같은 함수**를 쓴다 (판정 재작성 금지 원칙).
- *    후보 규칙: 금액 정확·미사용·−3~+5일 (money-trace 와 동일).
+ *    감사(A1)·첫 화면 「오늘」 칸(today-brief)이 **같은 함수**를 쓴다 (판정 재작성 금지 원칙).
+ *    인박스·추적 화면도 같은 함수를 썼는데 5단계(2026-09-13)에 없앴다.
+ *    후보 규칙: 금액 정확·미사용·−3~+5일.
  * ========================================================== */
 export interface A1Row {
   quoteId: number;
@@ -133,8 +151,8 @@ export async function runSelfAudit(): Promise<AuditItem[]> {
       samples: a1.slice(0, 6).map((r) =>
         `${r.d.slice(5)} ${r.who} ${r.total.toLocaleString()}원 (${r.quoteNo})${r.candCount > 0 ? " — 이을 만한 입금 있음 ⚡" : " — 동액 입금 없음(미수금·다르게 받았을 수 있음)"}`,
       ),
-      // 추적 화면 기본이 이 목록이다 — 눌러서 그 자리에서 처리 (2026-09-02)
-      href: "/finance/trace",
+      // 첫 화면 「오늘 · 안 들어온 이체」가 이 목록이다 — 눌러서 그 자리에서 처리 (5단계, 2026-09-13)
+      href: AUDIT_HREF.A1,
     });
   }
 
@@ -158,7 +176,7 @@ export async function runSelfAudit(): Promise<AuditItem[]> {
       title: "「대조 완료」인데 대조 내역도 사유도 없는 줄",
       n: a2n,
       samples: [`계산서 ${a2t[0].n}장 · 통장 줄 ${a2c[0].n}건 — 무엇으로 확정됐는지 알 수 없습니다`],
-      href: "/finance/tax?view=money",
+      href: AUDIT_HREF.A2,
     });
   }
 
@@ -179,7 +197,7 @@ export async function runSelfAudit(): Promise<AuditItem[]> {
       title: "지급 대조 내역이 지급 기록보다 큰 거래처 (기록이 어긋남)",
       n: a3bad.length,
       samples: a3bad.slice(0, 6).map((r) => `${r.supplier} — 대조 내역 ${Number(r.marks).toLocaleString()} > 지급 ${Number(r.pays).toLocaleString()}`),
-      href: "/finance/payables",
+      href: AUDIT_HREF.A3,
     });
   }
 
@@ -201,7 +219,7 @@ export async function runSelfAudit(): Promise<AuditItem[]> {
       title: "총액 불변식 어긋남 (판매 총액≠줄 합 · 매입 과지급)",
       n: a4n,
       samples: [`판매 ${a4a[0].n}건 · 매입 과지급 ${a4b[0].n}건 — Claude 에게 알려 주세요 (자료 수리 필요)`],
-      href: "/finance",
+      href: AUDIT_HREF.A4,
     });
   }
 
@@ -211,13 +229,15 @@ export async function runSelfAudit(): Promise<AuditItem[]> {
 /**
  * ⭐ 자료의 지문 (2026-09-10) — 검사 결과가 「어떤 자료 상태」에서 찍혔는지.
  *
- *   사진(audit_run)은 아침에 찍히고, 오후에 14건을 정리해도 배너는 아침 숫자를 보여 줬다.
- *   홈 인박스·돈 추적은 실시간이라 **같은 건을 두고 화면마다 말이 달랐다.**
+ *   사진(audit_run)은 아침에 찍히고, 오후에 14건을 정리해도 옛 배너는 아침 숫자를 보여 줬다.
+ *   첫 화면 「오늘」 칸은 실시간이라 **같은 건을 두고 화면마다 말이 달랐다.**
  *   자료를 바꾸는 서버 액션이 6개 파일 40개가 넘어 하나하나 갱신을 붙이면 빠뜨린다 —
- *   대신 A1~A4 가 보는 표들의 개수·상태 수·합을 한 줄로 묶어 저장하고, 돈관리를 열 때
- *   지문이 다르면 그 자리에서 다시 찍는다. 삭제·되돌리기·올리기·상태 바꿈이 전부
- *   개수나 합에 잡힌다. 날짜가 들어 있어 아침 cron 이 죽어도 하루 한 번은 새로 찍힌다.
- *   질의 하나, 수 ms — 매 화면마다 불러도 된다.
+ *   대신 A1~A4 가 보는 표들의 개수·상태 수·합을 한 줄로 묶어 저장한다. 5단계(2026-09-13)부터는
+ *   장부 마감 체크리스트(month-close.auditCheck)가 저장본 지문과 지금 지문을 견줘 「자료가 바뀜 —
+ *   다시 검사」로만 알리고, 다시 찍는 건 사람이 「지금 다시 검사」를 눌렀을 때와 아침 cron 뿐이다
+ *   (첫 화면을 열 때마다 몰래 다시 찍어 저장하던 함수는 없앴다 — GET 중 쓰기 금지).
+ *   삭제·되돌리기·올리기·상태 바꿈이 전부 개수나 합에 잡힌다. 날짜가 들어 있어 아침 cron 이
+ *   죽어도 하루 한 번은 낡은 것으로 표시된다. 질의 하나, 수 ms — 매 화면마다 불러도 된다.
  */
 export async function auditFingerprint(): Promise<string> {
   const [r] = await db.execute<{ fp: string }>(sql`
@@ -236,7 +256,7 @@ export async function auditFingerprint(): Promise<string> {
   return r?.fp ?? "";
 }
 
-/** 검사를 돌리고 결과를 남긴다 — cron 과 「지금 검사」 단추, 지문이 달라졌을 때의 자동 갱신이 같이 쓴다 */
+/** 검사를 돌리고 결과를 남긴다 — cron 과 장부 마감 목록 「지금 다시 검사」(trace-actions.runAuditNow)가 같이 쓴다 */
 export async function runAndSaveAudit(): Promise<{ items: AuditItem[] }> {
   const fp = await auditFingerprint();
   const items = await runSelfAudit();
@@ -247,7 +267,7 @@ export async function runAndSaveAudit(): Promise<{ items: AuditItem[] }> {
   return { items };
 }
 
-/** 최신 결과 — 저장된 그대로 (지문 포함) */
+/** 최신 결과 — 저장된 그대로 (지문 포함). 장부 마감 체크리스트(month-close)가 auditFingerprint 와 견줘 낡았는지 본다 */
 export async function latestAuditRun(): Promise<(AuditRun & { fingerprint: string | null }) | null> {
   const [r] = await db.execute<{
     id: number; at: string; age_min: number; item_count: number; items: unknown; fingerprint: string | null;
@@ -265,70 +285,4 @@ export async function latestAuditRun(): Promise<(AuditRun & { fingerprint: strin
     items: (typeof r.items === "string" ? JSON.parse(r.items) : r.items) as AuditItem[],
     fingerprint: r.fingerprint ?? null,
   };
-}
-
-/**
- * ⭐ 「지금」을 보여 주는 결과 — /finance 배너가 쓴다.
- *   저장본의 지문이 지금 자료와 같으면 그대로, 다르면 다시 찍어 저장한다(자료가 바뀐 뒤
- *   첫 방문에 1~2초). 다시 찍다 실패하면 저장본을 돌려준다 — 배너 때문에 돈관리가 죽으면 안 된다.
- */
-export async function freshAuditRun(): Promise<AuditRun | null> {
-  const last = await latestAuditRun();
-  try {
-    const fp = await auditFingerprint();
-    if (last && last.fingerprint === fp) return last;
-    await runAndSaveAudit();
-    return (await latestAuditRun()) ?? last;
-  } catch {
-    return last;
-  }
-}
-
-/* ============================================================
- * ⭐ 별도 수령으로 정리해 둔 판매 (2026-09-10)
- *
- *   markSaleSettledAside 가 남긴 자국을 사람이 보는 목록으로 되돌린다 —
- *   되돌리기 단추가 붙을 곳이 없으면 「눌러서 사라지는」 정리는 무서운 정리가 된다
- *   (인박스·추적 화면 안내문은 "되돌릴 수 있습니다"라고 하는데 부르는 곳이 0곳이었다).
- *   사유(pos_note)는 사람이 읽는 말일 뿐 — 판정은 자국 하나다.
- * ========================================================== */
-export interface AsideRow {
-  quoteId: number;
-  quoteNo: string;
-  /** YYYY-MM-DD — 판매일 */
-  d: string;
-  amount: number;
-  who: string;
-  /** 사장님이 고른 사유 (없을 수 있다 — 옛 자국·추적 화면에서 표시한 것) */
-  reason: string | null;
-  /** MM-DD HH:MI — 표시한 때 */
-  markedAt: string | null;
-}
-
-export async function asideMarkedSales(range: { from: string; to?: string }): Promise<AsideRow[]> {
-  const rows = await db.execute<{
-    id: number; quote_no: string; d: string; amount: number; who: string; reason: string | null; at: string | null;
-  }>(sql`
-    SELECT q.id, q.quote_no,
-           to_char(COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date), 'YYYY-MM-DD') d,
-           m.amount, COALESCE(q.supplier_name, c.name, '?') who, n.reason,
-           to_char(m.confirmed_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at
-    FROM recon_match m
-    JOIN quote q ON q.id = m.ref_id
-    LEFT JOIN customer c ON c.id = q.customer_id
-    LEFT JOIN pos_note n ON n.kind = 'transfer' AND n.ref = 'quote:' || q.id
-    WHERE m.kind = '이체입금' AND m.src_table = '별도수령' AND m.ref_table = 'quote'
-      AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${range.from}::date
-      ${range.to ? sql`AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${range.to}::date` : sql``}
-    ORDER BY 3 DESC, q.id DESC LIMIT 60
-  `);
-  return rows.map((r) => ({
-    quoteId: Number(r.id),
-    quoteNo: r.quote_no,
-    d: r.d,
-    amount: Number(r.amount),
-    who: r.who,
-    reason: r.reason,
-    markedAt: r.at,
-  }));
 }
