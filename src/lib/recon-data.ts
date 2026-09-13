@@ -188,6 +188,39 @@ export async function partyMonthlyCash(
   return new Map(rows.map((r) => [r.ym, { outS: Number(r.out_s), inS: Number(r.in_s), n: Number(r.n) }]));
 }
 
+/**
+ * ⭐ 상대별 통장 이름·달별 합 캐시 (5단계 정리, 2026-09-13 — 계산서 화면 질의 줄이기)
+ *
+ *   taxBook 한 화면이 taxCashData(매입)·taxCashData(매출)·monthlyRemain(상대마다) 을 차례로 부르는데,
+ *   셋 다 같은 상대의 partyStrictNames(질의 2)·partyMonthlyCash(질의 1)를 **따로** 읽었다.
+ *   판정은 그대로, **호출 결과만** 기억한다. 값은 같은 함수가 돌려준 그대로다.
+ *
+ * 🔴 **한 요청 안에서만 산다** — 부르는 쪽이 만들어 넘긴다. 모듈 전역으로 두면 요청 사이에
+ *    별명 학습·통장 업로드가 반영 안 된 값이 새어 나간다.
+ * 🔴 monthly 는 이름 목록이 정확히 같을 때만 재사용(정렬한 목록을 열쇠로) — 다른 목록이면 새로 읽는다.
+ */
+export class PartyCashCache {
+  private strictBy = new Map<string, string[]>();
+  private monthlyBy = new Map<string, Map<string, { outS: number; inS: number; n: number }>>();
+
+  async strict(bizNo: string): Promise<string[]> {
+    const hit = this.strictBy.get(bizNo);
+    if (hit) return hit;
+    const v = await partyStrictNames(bizNo);
+    this.strictBy.set(bizNo, v);
+    return v;
+  }
+
+  async monthly(names: string[]): Promise<Map<string, { outS: number; inS: number; n: number }>> {
+    const key = [...names].sort().join("|");
+    const hit = this.monthlyBy.get(key);
+    if (hit) return hit;
+    const v = await partyMonthlyCash(names);
+    this.monthlyBy.set(key, v);
+    return v;
+  }
+}
+
 /* 🔴 감사 M2(2026-08-25): v1 taxReconData 170줄(죽은 코드) 삭제 — 정본은 tax-recon.ts */
 
 /* ================================================================== */

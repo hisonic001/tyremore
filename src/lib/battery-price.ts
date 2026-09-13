@@ -15,6 +15,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { hasPerm } from "./auth";
+import { getSetting } from "./app-setting";
 import {
   BATTERY_PRICES,
   PRICE_HISTORY_KEY,
@@ -93,14 +94,12 @@ export async function batteryPriceTable(): Promise<BatteryPriceView> {
     WHERE p.item_type = 'part' AND p.category = '배터리'
   `);
 
-  /** 이번 인상의 「전 값」 — 없으면 빈 손 (스크립트를 아직 안 돌린 경우) */
-  const hist = await db.execute<{ value: string }>(sql`
-    SELECT value FROM app_setting WHERE key = ${PRICE_HISTORY_KEY} LIMIT 1
-  `);
+  /** 이번 인상의 「전 값」 — 없으면 빈 손 (스크립트를 아직 안 돌린 경우). 공용 정본 getSetting (5단계 정리) */
+  const hist = await getSetting(PRICE_HISTORY_KEY);
   const prevOf = new Map<number, number | null>();
-  if (hist[0]?.value) {
+  if (hist) {
     try {
-      const h = JSON.parse(hist[0].value) as PriceHistory;
+      const h = JSON.parse(hist) as PriceHistory;
       for (const r of h.rows ?? []) prevOf.set(Number(r.productId), r.from);
     } catch {
       /* 값이 깨졌으면 「전 값」만 안 보인다 — 표는 그대로 */

@@ -18,7 +18,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { payerKeyOf } from "./expense-cats";
-import { cashUsedMap, normName, partyMatchSql, partyMonthlyCash, partyStrictNames, samePartyName, similarPartyName } from "./recon-data";
+import { cashUsedMap, normName, partyMatchSql, partyMonthlyCash, partyStrictNames, samePartyName, similarPartyName, type PartyCashCache } from "./recon-data";
 import { monthRange } from "./ym";
 
 export interface TaxRow {
@@ -902,7 +902,12 @@ export const DONE = sql`(t.total > 0 AND (x.cov >= t.total OR x.ind OR COALESCE(
  */
 export const LIVE = sql.raw("t.recon_status NOT IN ('무시', '대기')");
 
-export async function taxCashData(direction: "매입" | "매출", ym: string): Promise<TaxCashData> {
+export async function taxCashData(
+  direction: "매입" | "매출",
+  ym: string,
+  /** 한 화면이 매입·매출·monthlyRemain 을 잇달아 부를 때 상대 이름·달별 합을 나눠 쓴다 (5단계 정리) — 없으면 전과 같다 */
+  opts?: { cache?: PartyCashCache },
+): Promise<TaxCashData> {
   const { start, nextStart } = monthRange(ym);
   const inMonth = sql`t.is_active AND t.direction = ${direction}
     AND t.write_date >= ${start}::date AND t.write_date < ${nextStart}::date`;
@@ -996,8 +1001,8 @@ export async function taxCashData(direction: "매입" | "매출", ym: string): P
     /* 🔴 감사 B5(2026-08-25): 지급 합은 원장과 같은 정본(partyStrictNames +
        partyMonthlyCash) — 환불·상계 입금을 차감하고 '미쉐린'류 짧은 약칭의 과다
        매칭(미쉐린로열 33만원 혼입)을 없앤다. 월정산 카드 잔액 ≡ 거래처 원장 잔액 */
-    const strict = await partyStrictNames(mr.biz_no);
-    const cashByYm = await partyMonthlyCash(strict);
+    const strict = opts?.cache ? await opts.cache.strict(mr.biz_no) : await partyStrictNames(mr.biz_no);
+    const cashByYm = opts?.cache ? await opts.cache.monthly(strict) : await partyMonthlyCash(strict);
     const isIn2 = direction === "매출";
     const mm = cashByYm.get(ym) ?? { outS: 0, inS: 0, n: 0 };
     const paidMonth = isIn2 ? mm.inS - mm.outS : mm.outS - mm.inS;
@@ -1286,6 +1291,8 @@ export async function monthlyRemain(
   direction: "매입" | "매출",
   /** partyRules() 로 미리 읽었으면 넘긴다 — 상대마다 다시 안 읽게 */
   rule?: PartyRule | null,
+  /** partyStrictNames(biz) 를 이미 읽었으면 넘긴다(taxBook 의 PartyCashCache) — 없으면 여기서 읽는다 */
+  strictNames?: string[],
 ): Promise<MonthlyRemain> {
   const { start, nextStart } = monthRange(ym);
   const biz = bizNo.replace(/\D/g, "");
@@ -1317,7 +1324,7 @@ export async function monthlyRemain(
   /* 지급 — 원장·월정산 카드와 같은 이름 정본(partyStrictNames + partyMatchSql). 감사 B5 그대로:
      짧은 약칭은 안 쓴다(미쉐린로열 혼입 방지). 기준일부터 보는 달 말까지 날짜로 자른다 —
      partyMonthlyCash 는 달 단위라 8/25 같은 달 중간 기준일을 못 자른다. */
-  const strict = await partyStrictNames(biz);
+  const strict = strictNames ?? (await partyStrictNames(biz));
   const isIn = direction === "매출";
   const pays =
     strict.length === 0

@@ -6,11 +6,10 @@
  *   그래서 둘이다 — scope 'month' = 그 달만("거래처|YYYY-MM"), 'always' = 늘("거래처").
  *   app_setting `invoice_deadline_skip` 에 넣고 뺀다. 조회 정본은 invoice-deadline.ts.
  */
-import { sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { db } from "@/db";
 import { hasPerm } from "./auth";
 import { PERM_DENIED } from "./perm-keys";
+import { setSetting } from "./app-setting";
 import { SKIP_KEY, skipList } from "./invoice-deadline";
 
 export async function setInvoiceDeadlineSkip(
@@ -27,10 +26,7 @@ export async function setInvoiceDeadlineSkip(
   const cur = new Set(await skipList());
   if (skip) cur.add(entry);
   else cur.delete(entry);
-  await db.execute(sql`
-    INSERT INTO app_setting (key, value, updated_at) VALUES (${SKIP_KEY}, ${JSON.stringify([...cur])}, now())
-    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
-  `);
+  await setSetting(SKIP_KEY, JSON.stringify([...cur])); // 공용 정본 (5단계 정리, 2026-09-13)
   try {
     revalidatePath("/finance");
   } catch {

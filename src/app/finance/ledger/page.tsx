@@ -1,19 +1,20 @@
 import Link from "@/lib/link";
 import { redirect } from "next/navigation";
-import { sql } from "drizzle-orm";
-import { db } from "@/db";
 import { getSession, hasPerm } from "@/lib/auth";
 import { finHealth } from "@/lib/fin-health";
 import { finPL } from "@/lib/fin-pl";
 import { kstToday, ymAdd, pickYm } from "@/lib/ym";
 import { expenseOpen, payableTotal } from "@/lib/recon-data";
 import { receivableTotal } from "@/lib/receivable-total";
-import { taxOpenCounts, CASH_LAT, DONE, LIVE } from "@/lib/tax-recon";
+import { taxOpenCounts } from "@/lib/tax-recon";
+import { ledgerCoverage, ledgerMonthSums, ledgerOpenBuySum } from "@/lib/ledger-data";
+import { AUDIT_HREF, latestAuditRun } from "@/lib/self-audit";
 import { FinShell } from "@/components/fin/shell";
 import { won } from "@/components/fin/money";
 import { closeChecklist, closeMonthForm, monthCloseStatus, reopenMonthForm } from "@/lib/month-close";
 // ⭐ 손익 세 줄은 「매출 · 비용 · 이익」 (사장님 2단계 답, 2026-09-11) — fin-words 정본
 import { W } from "@/lib/fin-words";
+import { AuditRerun } from "./audit-rerun";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,8 @@ export const dynamic = "force-dynamic";
  *   사장님 답답함 「숫자가 어디서 온 건지」 → 항목마다 「어디서 온 숫자?」 펼치기.
  *
  * 🔴 질의는 순차 — Promise.all 금지. 월 마감은 3단계(이번 주 정리 흐름)로 옮길 때까지 여기.
+ * 🔴 인라인 SQL 은 5단계(2026-09-13)에 lib/ledger-data.ts 로 — 이 파일엔 db·sql 이 없다.
+ *    정합성 검사 결과(#audit)는 마감 체크리스트가 한 줄로 가리키는 자리 — 마감된 달에도 보인다.
  */
 export default async function FinanceLedgerPage({
   searchParams,
@@ -44,84 +47,36 @@ export default async function FinanceLedgerPage({
   const closeChecks = !mc.closed ? await closeChecklist(ym, health.allOk) : [];
   const start = `${ym}-01`;
   const nextStart = `${ymAdd(ym, 1)}-01`;
-  const inMonth = sql`is_active
-    AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${start}::date
-    AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date`;
 
-  /* 손익 — 🔴 식은 lib/fin-pl.finPL 한 벌 (마감 headline 과 같은 함수) */
+  /* 손익 — 🔴 식은 lib/fin-pl.finPL 한 벌 (마감 headline 과 같은 함수). 판매 건수(salesN)도 같은 질의 */
   const pl = await finPL(ym);
   const recv = await receivableTotal();
-  const [cov] = await db.execute<{ card_last: string | null; dep_last: string | null; buy_first: string | null }>(sql`
-    SELECT (SELECT max((occurred_at AT TIME ZONE 'Asia/Seoul')::date)::text FROM cash_txn WHERE source = '법인카드' AND is_active) card_last,
-           (SELECT max(month) FROM card_deposit WHERE is_active) dep_last,
-           (SELECT min(COALESCE(issued_at, to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')))
-              FROM purchase_invoice WHERE status <> '취소') buy_first
-  `);
+  const cov = await ledgerCoverage();
   const payable = await payableTotal();
-  const taxBuyOpenRows = await db.execute<{ s: string }>(sql`
-    SELECT COALESCE(SUM(t.total) FILTER (WHERE ${LIVE} AND NOT ${DONE}), 0)::bigint s
-    FROM tax_invoice t ${CASH_LAT}
-    WHERE t.is_active AND t.direction = '매입'
-      AND t.write_date >= ${start}::date AND t.write_date < ${nextStart}::date
-  `);
+  const gTaxBuyOpen = await ledgerOpenBuySum(ym);
   const taxOpenBy = await taxOpenCounts(ym);
   const expOpen = await expenseOpen(ym);
-  const [sales] = await db.execute<{ n: number }>(sql`
-    SELECT count(*)::int n FROM quote q WHERE q.status = '성사'
-      AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) >= ${start}::date
-      AND COALESCE(q.work_date, (q.created_at AT TIME ZONE 'Asia/Seoul')::date) < ${nextStart}::date
-  `);
-
-  const sums = await db.execute<{ source: string; in_sum: string; out_sum: string }>(sql`
-    SELECT source, COALESCE(SUM(in_amount), 0)::bigint in_sum, COALESCE(SUM(out_amount), 0)::bigint out_sum
-    FROM cash_txn WHERE ${inMonth}
-      AND COALESCE(category, '') <> '내부이체'
-    GROUP BY source LIMIT 5
-  `);
-  const bank = sums.find((s) => s.source === "통장");
-  const [asideIn] = await db.execute<{ s: string; n: number }>(sql`
-    SELECT COALESCE(SUM(rp.amount), 0)::bigint s, count(*)::int n
-    FROM receivable_payment rp JOIN quote q ON q.id = rp.quote_id
-    WHERE q.status = '성사' AND rp.method = '개인계좌'
-      AND rp.paid_on >= ${start}::date AND rp.paid_on < ${nextStart}::date
-  `);
-  const accounts = await db.execute<{ source: string; l: string; in_sum: string; out_sum: string; n: number }>(sql`
-    SELECT source, account_label l, COALESCE(SUM(in_amount),0)::bigint in_sum,
-           COALESCE(SUM(out_amount),0)::bigint out_sum, count(*)::int n
-    FROM cash_txn WHERE ${inMonth} GROUP BY 1, 2 ORDER BY 1, 2 LIMIT 20
-  `);
-  const balances = await db.execute<{ l: string; balance: string; at: string }>(sql`
-    SELECT DISTINCT ON (account_label) account_label l, balance::bigint,
-           to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD') at
-    FROM cash_txn
-    WHERE source = '통장' AND is_active AND balance IS NOT NULL
-    ORDER BY account_label, occurred_at DESC, id DESC LIMIT 10
-  `);
-  const txns = await db.execute<{
-    id: number; source: string; l: string; at: string; description: string; in_amount: number; out_amount: number;
-  }>(sql`
-    SELECT id, source, account_label l, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') at,
-           description, in_amount, out_amount
-    FROM cash_txn WHERE ${inMonth}
-    ORDER BY occurred_at DESC, id DESC LIMIT 60
-  `);
+  const { bySource, accounts, balances, txns, asideIn } = await ledgerMonthSums(ym);
+  const bank = bySource.find((s) => s.source === "통장");
+  /* 정합성 검사 저장본 — closeChecklist 도 안에서 읽지만 결과를 안 돌려주므로 여기서 한 번 더(질의 +1) */
+  const audit = await latestAuditRun();
+  const auditItems = (audit?.items ?? []).filter((it) => it.code !== "A1"); // A1 은 첫 화면 「오늘」 칸이 실시간으로 보여 준다
 
   const lastDay = new Date(new Date(nextStart + "T00:00:00Z").getTime() - 86400000).toISOString().slice(0, 10);
   const endShown = ym === thisYm ? kstToday() : lastDay;
   const covWarnings: string[] = [];
-  if (!cov.card_last || cov.card_last < start) {
-    covWarnings.push(`법인카드 내역이 이 달에 없습니다 (마지막 자료 ${cov.card_last ?? "없음"}) — 카드 ${W.cost}이 0원으로 계산됩니다`);
-  } else if (cov.card_last < endShown) {
-    covWarnings.push(`법인카드 내역이 ${cov.card_last}까지만 올라와 있습니다`);
+  if (!cov.cardLast || cov.cardLast < start) {
+    covWarnings.push(`법인카드 내역이 이 달에 없습니다 (마지막 자료 ${cov.cardLast ?? "없음"}) — 카드 ${W.cost}이 0원으로 계산됩니다`);
+  } else if (cov.cardLast < endShown) {
+    covWarnings.push(`법인카드 내역이 ${cov.cardLast}까지만 올라와 있습니다`);
   }
   if (pl.feeEstimated > 0 && pl.feeRate) {
     covWarnings.push(`카드 수수료는 정산 자료가 아직 없어 평균 요율(${(pl.feeRate * 100).toFixed(2)}%)로 추정한 값입니다`);
   }
-  if (pl.bought === 0 && cov.buy_first && start < cov.buy_first.slice(0, 8) + "01") {
-    covWarnings.push(`이 달 매입 기록이 없습니다 (앱 매입 기록은 ${cov.buy_first}부터) — ${W.sales}만 잡혀 ${W.profit}이 실제보다 커 보입니다`);
+  if (pl.bought === 0 && cov.buyFirst && start < cov.buyFirst.slice(0, 8) + "01") {
+    covWarnings.push(`이 달 매입 기록이 없습니다 (앱 매입 기록은 ${cov.buyFirst}부터) — ${W.sales}만 잡혀 ${W.profit}이 실제보다 커 보입니다`);
   }
-  const gTaxBuyOpen = Number(taxBuyOpenRows[0].s);
-  const noData = sums.length === 0;
+  const noData = bySource.length === 0;
   const m = Number(ym.slice(5, 7));
 
   /** 「어디서 온 숫자?」 한 줄 — 구성 항목과 그 목록으로 가는 길 */
@@ -146,7 +101,7 @@ export default async function FinanceLedgerPage({
                   <strong className="text-emerald-700">{won(pl.earnedTotal)}원</strong>
                 </p>
                 <Why>
-                  <p>= 앱 판매 {won(pl.earned)}원 ({sales.n}건, 판매일 기준 — <Link href={`/sales?month=${ym}`} className="underline">정비 내역</Link>)</p>
+                  <p>= 앱 판매 {won(pl.earned)}원 ({pl.salesN}건, 판매일 기준 — <Link href={`/sales?month=${ym}`} className="underline">정비 내역</Link>)</p>
                   {pl.salesUnrecorded > 0 && <p>+ 앱에 기록 없는 판매 입금(통장 「판매입금」 분류) {won(pl.salesUnrecorded)}원 — <Link href={`/finance/deposits?ym=${ym}`} className="underline">입금</Link></p>}
                   {pl.refunded > 0 && <p>− 돌려준 돈(예약금·환불 분류) {won(pl.refunded)}원 — <Link href={`/finance/expenses?ym=${ym}`} className="underline">지출</Link></p>}
                 </Why>
@@ -180,7 +135,7 @@ export default async function FinanceLedgerPage({
                 {gTaxBuyOpen > 0 && (
                   <p>
                     이 달 매입 세금계산서 중 {W.open}: {taxOpenBy.buy}건 · {won(gTaxBuyOpen)}원 —{" "}
-                    <Link href={`/finance/tax?view=money&ym=${ym}&direction=매입`} className="underline">{W.reconTax}</Link>
+                    <Link href={`/finance/tax?ym=${ym}`} className="underline">{W.reconTax}</Link>
                   </p>
                 )}
                 {expOpen.sum > 0 && (
@@ -234,7 +189,7 @@ export default async function FinanceLedgerPage({
               <div className="rounded-2xl border border-slate-200 bg-white p-3 text-center">
                 <p className="text-xs text-slate-500">통장에 들어온 돈 (계좌끼리 제외)</p>
                 <p className="tabular mt-1 font-bold text-emerald-700">{won(Number(bank?.in_sum ?? 0))}원</p>
-                {Number(asideIn?.s ?? 0) > 0 && (
+                {Number(asideIn.s) > 0 && (
                   <p className="tabular mt-0.5 text-[11px] text-emerald-700">
                     + 개인계좌 수금 {won(Number(asideIn.s))}원 <span className="text-slate-400">(통장 밖)</span>
                   </p>
@@ -298,6 +253,40 @@ export default async function FinanceLedgerPage({
                 )}
               </>
             )}
+          </section>
+
+          {/* ── 정합성 검사 (사장님 결정 8, 5단계 2026-09-13) — 체크리스트 「정합성」 한 줄이 #audit 로 온다.
+                마감된 달에도 보인다(검사는 달과 무관한 자료 전체). A1 은 첫 화면 「오늘」 칸이 실시간으로 맡는다 */}
+          <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4" id="audit">
+            <details>
+              <summary className="cursor-pointer font-semibold">
+                {W.audit} <span className="text-xs font-normal text-slate-400">— {audit ? `${audit.at} 기준` : W.auditNone}</span>
+              </summary>
+              {!audit ? null : auditItems.length === 0 ? (
+                <p className="mt-2 text-sm text-emerald-700">✓ {W.auditOk}</p>
+              ) : (
+                <ul className="mt-2 space-y-2 text-sm">
+                  {auditItems.map((it) => (
+                    <li key={it.code} className="rounded-lg bg-amber-50 p-2">
+                      <p className="font-medium text-amber-900">
+                        {it.title} <span className="tabular text-xs text-amber-700">{it.n}건</span>
+                      </p>
+                      {it.samples.length > 0 && (
+                        <ul className="mt-1 space-y-0.5 text-xs text-slate-600">
+                          {it.samples.map((s, i) => (
+                            <li key={i}>· {s}</li>
+                          ))}
+                        </ul>
+                      )}
+                      <Link href={AUDIT_HREF[it.code] ?? it.href} className="mt-1 inline-block text-xs text-amber-800 underline underline-offset-2">
+                        고치러 →
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <AuditRerun />
+            </details>
           </section>
         </div>
       </div>

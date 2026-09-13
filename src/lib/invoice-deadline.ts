@@ -19,6 +19,7 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
+import { getSetting } from "./app-setting";
 import { kstToday, ymAdd } from "./ym";
 import { settleTaxCandidates } from "./settle-tax";
 
@@ -44,9 +45,9 @@ export interface InvoiceDeadline {
 }
 
 export async function skipList(): Promise<string[]> {
-  const [r] = await db.execute<{ value: string }>(sql`SELECT value FROM app_setting WHERE key = ${SKIP_KEY}`);
+  const raw = await getSetting(SKIP_KEY); // 공용 정본 (5단계 정리, 2026-09-13)
   try {
-    const v = r?.value ? (JSON.parse(r.value) as unknown) : [];
+    const v = raw ? (JSON.parse(raw) as unknown) : [];
     return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
   } catch {
     return [];

@@ -46,7 +46,7 @@ import {
   type TaxSuggestion,
 } from "./tax-recon";
 import { confirmMonthlyPartyCore, sureTaxPicksFrom, type SureTaxPick } from "./recon-core";
-import { normName } from "./recon-data";
+import { normName, PartyCashCache } from "./recon-data";
 import { agencyChainOf } from "./settle-tax";
 import { kstToday, monthRange } from "./ym";
 
@@ -121,9 +121,12 @@ export async function taxBook(ym: string): Promise<TaxBook> {
   const { start, nextStart } = monthRange(ym);
   const today = kstToday();
 
-  /* ① 장 단위 판정 정본 — 매입·매출 한 번씩. 확실 후보는 같은 자료로 (재조회 없음) */
-  const buy = await taxCashData("매입", ym);
-  const sell = await taxCashData("매출", ym);
+  /* ① 장 단위 판정 정본 — 매입·매출 한 번씩. 확실 후보는 같은 자료로 (재조회 없음)
+     🔴 상대 이름·달별 합은 이 요청 안에서만 사는 캐시로 나눠 쓴다(5단계 정리, 2026-09-13) — 매입·매출·
+        아래 ③ monthlyRemain 이 같은 상대를 세 번 읽던 것. 판정 값은 같다(같은 함수의 결과를 기억만 한다) */
+  const cache = new PartyCashCache();
+  const buy = await taxCashData("매입", ym, { cache });
+  const sell = await taxCashData("매출", ym, { cache });
   const v2 = await taxReconV2(ym);
   const sure: SureTaxPick[] = [...(await sureTaxPicksFrom(buy, "매입")), ...(await sureTaxPicksFrom(sell, "매출"))];
 
@@ -188,7 +191,7 @@ export async function taxBook(ym: string): Promise<TaxBook> {
   for (const m of monthlyDirs) {
     const key = `B:${m.bizNo}`;
     if (monthlyByKey.has(key)) continue; // 매입·매출 둘 다면 매입(채무 장부)이 줄의 기준 — 매출은 카드로만
-    let mr = await monthlyRemain(m.bizNo, ym, m.direction, rules.get(m.bizNo) ?? null);
+    let mr = await monthlyRemain(m.bizNo, ym, m.direction, rules.get(m.bizNo) ?? null, await cache.strict(m.bizNo));
     if (mr.remain <= 0 && mr.openN > 0) {
       const r = await confirmMonthlyPartyCore(m.bizNo, ym, m.direction);
       if (r.ok && r.applied > 0) mr = { ...mr, openN: 0, invoices: mr.invoices.map((i) => (i.d >= start && (i.reconStatus === "미대조" || i.reconStatus === "제안") ? { ...i, reconStatus: "확정", reconReason: "월정산" } : i)) };

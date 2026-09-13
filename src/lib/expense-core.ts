@@ -11,8 +11,9 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { CARD_SETTLE_PATTERN_SQL, DESC_RULES, descRuleSql, payerKeyOf, payerKeySql } from "./expense-cats";
-/* 개편 4단계(2026-09-12): 입금 성격 규칙(deposit_rule) 소비 + 끈 기본 규칙 건너뛰기 */
-import { DEPOSIT_KINDS } from "./deposit-core";
+/* 개편 4단계(2026-09-12): 입금 성격 규칙(deposit_rule) 소비 + 끈 기본 규칙 건너뛰기.
+   되돌리기 짝 판정은 UNDO_DEPOSIT_KINDS(5단계 정리, 2026-09-13 — 지역화폐정산 포함) */
+import { UNDO_DEPOSIT_KINDS } from "./deposit-core";
 import { descRulesOff } from "./app-setting";
 import { monthRange } from "./ym";
 import { logActivity } from "./fin-activity";
@@ -91,9 +92,15 @@ export async function applyAutoCategories(scope: { uploadId: number } | { ym: st
       AND ${sql.raw(CARD_SETTLE_PATTERN_SQL.replace(/\bdescription\b/g, "c.description"))}
     RETURNING c.id
   `);
+  /* 🔴 recon_status 통일 (5단계 정리, 2026-09-13): 입금 줄에 분류를 찍는 자동 단계는 전부 카드정산과 같은
+     모양 — `recon_status = '확정'` 을 같이 찍고 **'미대조' 줄만** 건드린다. 전엔 category 만 찍어
+     ① 「제안」(계산서·판매 후보가 이미 붙은 줄)을 조용히 덮어 그 짝이 영영 안 보였고
+     ② 반쪽 줄(category 만 있고 recon_status 는 미대조)이 남아 되돌리기가 제 짝을 못 찾았다.
+     지역화폐정산·이자·환급 세 단계가 그랬다. 과거 반쪽 줄 백필은 scripts/add-recon-status-backfill.ts */
   const localPay = await db.execute<{ id: number }>(sql`
-    UPDATE cash_txn c SET category = '지역화폐정산'
+    UPDATE cash_txn c SET category = '지역화폐정산', recon_status = '확정'
     WHERE ${where} AND c.is_active AND c.category IS NULL AND c.source = '통장' AND c.in_amount > 0
+      AND c.recon_status = '미대조'
       AND c.description LIKE '%속초정산%'
     RETURNING c.id
   `);
@@ -132,15 +139,18 @@ export async function applyAutoCategories(scope: { uploadId: number } | { ym: st
     if (hit.length > 0) byDesc.push({ name: r.name, category: r.category, n: hit.length });
   }
   /* 2025 진행(2026-08-27): 한 해 내내 열려 있던 잡음 — 예금이자(「[이자] 12.21~06.20」)·세무서 환급·카드사 환급 */
+  /* 아래 둘도 위 지역화폐와 같은 이유로 두 칸 + '미대조' 가드 (5단계 정리) */
   const interest = await db.execute<{ id: number }>(sql`
-    UPDATE cash_txn c SET category = '이자·지원금'
+    UPDATE cash_txn c SET category = '이자·지원금', recon_status = '확정'
     WHERE ${where} AND c.is_active AND c.category IS NULL AND c.source = '통장' AND c.in_amount > 0
+      AND c.recon_status = '미대조'
       AND (c.description ~ '\] *[0-9]{2}\.[0-9]{2}~[0-9]{2}\.[0-9]{2}' OR c.description LIKE '%예금이자%' OR c.description LIKE '%결산이자%' OR c.description LIKE '[이자]%')
     RETURNING c.id
   `);
   const refund = await db.execute<{ id: number }>(sql`
-    UPDATE cash_txn c SET category = '기타입금'
+    UPDATE cash_txn c SET category = '기타입금', recon_status = '확정'
     WHERE ${where} AND c.is_active AND c.category IS NULL AND c.source = '통장' AND c.in_amount > 0
+      AND c.recon_status = '미대조'
       AND (c.description LIKE '%세무서%' OR c.description LIKE '%환급%')
     RETURNING c.id
   `);
@@ -179,13 +189,15 @@ async function logAutoCategories(scope: { uploadId: number } | { ym: string }, u
   /**
    * 🔴 건별 되돌리기는 **붙은 칸을 되돌릴 수 있는 함수**로 골라야 한다 (개편 4단계, 2026-09-12).
    *    전에는 전부 `expense`(= setExpenseCategory(id, null))였는데, 그 함수는 category 만 지우고
-   *    recon_status 는 못 되돌린다. 카드정산·입금 성격은 두 칸을 같이 찍으므로(위 ①′·카드정산 단계)
+   *    recon_status 는 못 되돌린다(그리고 입금 줄은 아예 거부한다 — fin-expense.ts 「지출(출금) 줄이 아닙니다」).
+   *    입금 줄에 붙는 분류는 전부 두 칸을 같이 찍으므로(위 ①′·카드정산·지역화폐·이자·환급 단계)
    *    두 칸을 같이 되돌리는 짝 — unmarkCardSettlement · undoDepositKind — 으로 보낸다.
-   *    지역화폐·이자·환급 단계는 이번에 안 건드렸다(recon_status 를 안 찍는다) → 그대로 expense.
+   * 🔴 5단계 정리(2026-09-13): 지역화폐정산이 expense 로 가서 **되돌리기가 늘 실패하던 버그** —
+   *    UNDO_DEPOSIT_KINDS(넷 + 지역화폐정산)로 판정한다. 이자·환급은 원래 넷 안(이자·지원금·기타입금).
    */
   const undoOf = (category: string): { kind: Exclude<UndoKind, "bulk">; args: UndoItem["args"] } => {
     if (category === "카드정산") return { kind: "cardSettle", args: {} };
-    if ((DEPOSIT_KINDS as readonly string[]).includes(category)) return { kind: "depositKind", args: {} };
+    if ((UNDO_DEPOSIT_KINDS as readonly string[]).includes(category)) return { kind: "depositKind", args: {} };
     return { kind: "expense", args: { scope: "one" } };
   };
   const items: UndoItem[] = rows.map((x) => {

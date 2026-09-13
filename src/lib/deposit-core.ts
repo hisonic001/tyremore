@@ -25,10 +25,9 @@ const won = (n: number) => n.toLocaleString("ko-KR");
  *   그 판매의 돈은 확인이 끝난 것이다.
  *
  * 🔴 쿼리에서 quote 별칭이 **q** 여야 한다.
- *    쓰는 곳: a1OpenTransfers(감사 A1·홈 인박스·돈 추적 목록) ·
+ *    쓰는 곳: a1OpenTransfers(감사 A1·첫 화면 「오늘」 칸) ·
  *    transferSalesMissing(입금 화면 「짝 못 찾은 판매」).
- *    money-trace 의 판매 카드는 같은 사슬을 자체 표기(tax_cashok)로 이미 본다 —
- *    거기는 「계산서 경로로 돈 확인됨」 글자에 count 가 필요해서 이 조각을 못 쓴다.
+ *    (추적 화면 money-trace 는 5단계(2026-09-13)에 없앴다)
  */
 export const taxChainCoveredSql = sql`EXISTS (SELECT 1 FROM recon_match mq
   JOIN recon_match mc ON mc.kind = '매출계산서' AND mc.src_table = 'tax_invoice'
@@ -96,6 +95,16 @@ export async function learnAlias(
  * 🔴 scripts/add-deposit-rule.ts 의 CHECK 와 같은 네 값이어야 한다.
  */
 export const DEPOSIT_KINDS = ["판매입금", "이자·지원금", "환불", "기타입금"] as const;
+
+/**
+ * ⭐ 「입금 분류 되돌리기」(undoDepositKind)가 풀 수 있는 분류 (5단계 정리, 2026-09-13)
+ *
+ *   DEPOSIT_KINDS 는 사람이 고르는 성격 넷이고 deposit_rule CHECK·규칙 화면과 묶여 있어 **불변**이다.
+ *   자동 분류(expense-core)는 그 넷 말고 「지역화폐정산」도 입금 줄에 category+recon_status 를 같이
+ *   찍는데, 되돌리기 쪽 목록에 없어서 expense(출금 전용 — fin-expense 가 입금 줄을 거부)로 흘러가
+ *   **되돌리기가 늘 실패했다.** 되돌리기 목록만 넓힌다 — 고르는 목록은 그대로.
+ */
+export const UNDO_DEPOSIT_KINDS = [...DEPOSIT_KINDS, "지역화폐정산"] as const;
 
 /**
  * ⭐ 입금 성격 규칙 학습 정본 (개편 4단계, 2026-09-12 — 사장님 결정 7③)

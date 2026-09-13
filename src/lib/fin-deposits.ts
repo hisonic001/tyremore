@@ -16,6 +16,7 @@ import { getSession, hasPerm } from "@/lib/auth";
 import { payerKeyOf } from "./expense-cats";
 import {
   DEPOSIT_KINDS,
+  UNDO_DEPOSIT_KINDS,
   confirmSureDepositsCore,
   getDeposit,
   learnAlias,
@@ -288,9 +289,11 @@ export async function setDepositKind(
 export async function undoDepositKind(cashTxnId: number): Promise<{ ok: true } | { ok: false; error: string }> {
   const g = await guard();
   if (!g.ok) return g;
+  /* 🔴 두 칸(category·recon_status)을 같이 되돌린다 — unmarkCardSettlement 와 같은 모양.
+     목록은 UNDO_DEPOSIT_KINDS(사람이 고르는 넷 + 자동 「지역화폐정산」, 5단계 정리 2026-09-13) */
   const rows = await db.execute<{ id: number; in_amount: number; description: string; d: string }>(sql`
     UPDATE cash_txn SET category = NULL, recon_status = '미대조'
-    WHERE id = ${cashTxnId} AND category IN ('판매입금', '이자·지원금', '환불', '기타입금')
+    WHERE id = ${cashTxnId} AND category IN (${sql.join(UNDO_DEPOSIT_KINDS.map((k) => sql`${k}`), sql`, `)})
     RETURNING id, in_amount, description, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') d
   `);
   if (rows.length === 0) return { ok: false, error: "판매와 무관으로 분류한 줄이 아닙니다" };

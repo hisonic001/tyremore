@@ -1,9 +1,9 @@
 /**
  * ⭐ app_setting 공용 정본 (2026-09-12, 개편 3단계)
  *
- *   키 하나 = 값 하나(문자열). 전엔 mars-eval·invoice-deadline·battery-price 가 제각각
- *   같은 UPSERT 를 들고 있었다 — 네 번째를 또 만들지 않으려고 여기로 모은다.
- *   (기존 세 곳은 이번엔 손대지 않는다 — 동작 변화 없이 diff 만 늘어서. 별건.)
+ *   키 하나 = 값 하나(문자열). 전엔 mars-eval·invoice-deadline(+actions)·battery-price 가 제각각
+ *   같은 SELECT/UPSERT 를 들고 있었다 — 5단계 「정리」(2026-09-13)에 네 곳 전부 여기로 모았다.
+ *   값 형식은 부르는 쪽이 정한다(mars "1"/"0" · invoice_deadline_skip JSON 배열 · 배터리 이력 JSON).
  *
  * 🔴 "use server" 아님 — 액션은 각자 파일에서 권한을 본 뒤 이걸 부른다.
  */

@@ -11,26 +11,14 @@
  *   · 분기별 미쉐린 타겟 수량 (평가표 Ⅰ-1 의 분모 — 본사가 정해 주는 숫자라 손으로 넣는다)
  */
 
-import { sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { db } from "@/db";
 import { getSession, isOwner } from "./auth";
+/* app_setting 읽기·쓰기는 공용 정본(app-setting.ts) — 5단계 정리(2026-09-13)에 지역 복제본을 지웠다 */
+import { getSetting, setSetting } from "./app-setting";
 
 const NOT_OWNER = { ok: false as const, error: "사장님 계정에서만 할 수 있습니다" };
 
 const TECH_ACCESS_KEY = "mars_report_tech";
-
-async function getSetting(key: string): Promise<string | null> {
-  const [r] = await db.execute<{ value: string }>(sql`SELECT value FROM app_setting WHERE key = ${key}`);
-  return r?.value ?? null;
-}
-
-async function putSetting(key: string, value: string): Promise<void> {
-  await db.execute(sql`
-    INSERT INTO app_setting (key, value, updated_at) VALUES (${key}, ${value}, now())
-    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
-  `);
-}
 
 /** 정비사 열람이 켜져 있는가 — 계정 관리 화면과 /reports/mars 문지기가 같이 쓴다 */
 export async function marsReportTechAllowed(): Promise<boolean> {
@@ -50,7 +38,7 @@ export async function setMarsReportTechAccess(
   allowed: boolean,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!(await isOwner())) return NOT_OWNER;
-  await putSetting(TECH_ACCESS_KEY, allowed ? "1" : "0");
+  await setSetting(TECH_ACCESS_KEY, allowed ? "1" : "0");
   try {
     revalidatePath("/settings/users");
     revalidatePath("/reports/mars");
@@ -79,7 +67,7 @@ export async function setMarsQuarterTarget(
   }
   const n = Math.round(Number(qty));
   if (!Number.isFinite(n) || n < 0 || n > 1_000_000) return { ok: false, error: "수량이 올바르지 않습니다" };
-  await putSetting(`mars_target_${year}Q${quarter}`, String(n));
+  await setSetting(`mars_target_${year}Q${quarter}`, String(n));
   try {
     revalidatePath("/reports/mars");
   } catch {

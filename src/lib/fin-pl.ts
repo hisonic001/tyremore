@@ -19,6 +19,8 @@ export interface FinPL {
   ym: string;
   /** 번 돈 (앱 판매, 판매일 기준) */
   earned: number;
+  /** 그 판매 건수 — 장부 「어디서 온 숫자?」가 쓴다. earned 와 같은 질의라 항상 같은 기준(5단계, 2026-09-13) */
+  salesN: number;
   /** 앱에 기록 없는 판매 대금 — 통장 입금을 「판매입금」으로 분류한 것 (2026-08-26) */
   salesUnrecorded: number;
   /**
@@ -61,8 +63,8 @@ export async function finPL(ym: string): Promise<FinPL> {
     AND (occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${nextStart}::date`;
   const CATS = sql.join(EXPENSE_IN_PL.map((c) => sql`${c}`), sql`, `);
 
-  const [earned] = await db.execute<{ s: string }>(sql`
-    SELECT COALESCE(SUM(q.total_amount), 0)::bigint s FROM quote q
+  const [earned] = await db.execute<{ s: string; n: number }>(sql`
+    SELECT COALESCE(SUM(q.total_amount), 0)::bigint s, count(*)::int n FROM quote q
     WHERE q.status = '성사' AND ${D} >= ${start}::date AND ${D} < ${nextStart}::date
   `);
   const [bought] = await db.execute<{ s: string }>(sql`
@@ -118,6 +120,7 @@ export async function finPL(ym: string): Promise<FinPL> {
   return {
     ym,
     earned: e,
+    salesN: Number(earned.n ?? 0),
     salesUnrecorded: u,
     refunded: rf,
     earnedTotal: e + u - rf,
