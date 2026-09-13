@@ -19,7 +19,8 @@ import { finPL } from "./fin-pl";
 import { revalidateFinance } from "./fin-revalidate";
 import { zeroTotalInvoiceCount } from "./invoice";
 import { logActivity } from "./fin-activity";
-import { W } from "./fin-words";
+import { auditIssuesLabel, W } from "./fin-words";
+import { auditFingerprint, latestAuditRun } from "./self-audit";
 import { weeklySteps } from "./weekly-steps";
 import { closeChecksOf } from "./weekly-close";
 import { monthCloseStatusRead, type MonthCloseInfo } from "./month-close-status";
@@ -29,7 +30,9 @@ export type { MonthCloseInfo };
 export interface CloseCheck {
   /** 항목 이름 — 화면이 순서가 아니라 이름으로 고른다 (2026-09-11 첫 화면 개편).
    *  posclose 는 2026-09-12 에 뺐다 — 카드 단계 status 에 「안 된 날 N일」이 이미 있고 soft 였다. */
-  key: "upload" | "card" | "deposits" | "expenses" | "tax" | "payables" | "zero" | "health";
+  key: "upload" | "card" | "deposits" | "expenses" | "tax" | "payables" | "zero" | "health"
+    /** ⭐ 정합성 검사 A2~A4 (개편 5단계, 2026-09-13 — 첫 화면 배너를 없애고 여기 한 줄로. 사장님 결정 8) */
+    | "audit";
   ok: boolean;
   text: string;
   href: string;
@@ -69,9 +72,35 @@ export async function closeChecklist(ym: string, healthOk?: boolean): Promise<Cl
     key: "health",
     ok: hOk || past,
     text: hOk ? "자료 검증 ✓" : past ? "자료 검증 경고 있음 (최근 자료 기준 — 지난 달 마감은 막지 않음)" : "자료 검증 경고 있음",
-    href: `/finance?ym=${ym}`,
+    href: `/finance/ledger?ym=${ym}`,
   };
-  return closeChecksOf(w, { zero, health });
+  const audit = await auditCheck(ym);
+  return closeChecksOf(w, { zero, health, audit });
+}
+
+/**
+ * ⭐ 정합성 검사 한 줄 (개편 5단계, 2026-09-13 — 사장님 결정 8 「장부 마감 체크리스트에 한 줄」)
+ *
+ *   첫 화면 배너(A2~A4)를 없애며 여기로 왔다. A1(안 들어온 이체)은 「오늘」 칸이 같은 함수로 보여 주므로 뺀다.
+ * 🔴 **읽기만** — 저장본(latestAuditRun)과 지금 지문(auditFingerprint) 두 질의. 전에 배너가 하던
+ *    「지문이 다르면 그 자리에서 다시 돌려 저장」은 GET 중 쓰기이고 A1 이 판매 60건×후보 질의라 뺐다.
+ *    지문이 다르면 「자료가 바뀜 — 다시 검사」라고 **적기만** 한다. 다시 돌리는 건 장부 화면의
+ *    「지금 다시 검사」 단추(trace-actions.runAuditNow)와 아침 07:30 cron 둘.
+ *   soft — 마감을 막지 않는다(hard 3 은 입금·지출·계산서 그대로).
+ */
+async function auditCheck(ym: string): Promise<CloseCheck> {
+  const href = `/finance/ledger?ym=${ym}#audit`;
+  const last = await latestAuditRun();
+  if (!last) return { key: "audit", ok: false, soft: true, text: W.auditNone, href };
+  const fp = await auditFingerprint();
+  const stale = last.fingerprint !== null && last.fingerprint !== fp;
+  const issues = last.items.filter((it) => it.code !== "A1");
+  const when = `(${last.at} 기준)`;
+  const tail = stale ? ` · ${W.auditStale}` : "";
+  if (issues.length === 0) {
+    return { key: "audit", ok: !stale, soft: true, text: `${W.auditOk} ${when}${tail}`, href };
+  }
+  return { key: "audit", ok: false, soft: true, text: `${auditIssuesLabel(issues.length)} ${when}${tail}`, href };
 }
 
 /** 마감 당시 손익 머리숫자 — 🔴 2026 감사 N5: 현황과 **같은 함수**(fin-pl.finPL). 추정 수수료 여부도 함께 남긴다 */

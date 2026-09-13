@@ -86,7 +86,30 @@ export const W = {
   codeRules: "앱 기본 규칙",
   autoRecon: "자동 대조",
   nextOpenDay: "다음 안 된 날",
+  /** ⭐ 정리 (개편 5단계, 2026-09-13) — 겹친 화면을 걷어내며 생긴 낱말 */
+  /** 「자세히」 접힘 머리 — 흐름 아래 장부 성격 조각 */
+  detail: "자세히",
+  /** 지출 분류별 합계 접힘 */
+  expenseSums: "분류별 합계",
+  /** 미지급 거래처별 접힘(손 지급·선급금·지급 확인·매입별 잔액) */
+  supplierDetail: "거래처별 자세히",
+  /** 정합성 검사 — 마감 체크리스트 한 줄·장부 접힘 */
+  audit: "정합성 검사",
+  auditNone: "정합성 검사 아직 안 돌았음",
+  auditOk: "정합성 검사 이상 없음",
+  auditStale: "자료가 바뀜 — 다시 검사",
+  auditRerun: "지금 다시 검사",
 } as const;
+
+/** 「나머지 N건」 — 오늘 칸 펼침 머리 */
+export function moreLabel(n: number): string {
+  return `나머지 ${n}건`;
+}
+
+/** 「정합성 이상 N가지」 */
+export function auditIssuesLabel(n: number): string {
+  return `정합성 이상 ${n}가지`;
+}
 
 /** 「짝이 확실한 N건 모두 잇기」 → 「자동 대조 N건」 */
 export function autoReconLabel(n: number): string {

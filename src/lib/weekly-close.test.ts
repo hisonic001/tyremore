@@ -53,20 +53,30 @@ describe("closeChecksOf — 단계 한 벌에서 마감 체크리스트", () => 
     assert.equal(by.deposits.href, "/finance/deposits?ym=2026-08");
   });
 
-  test("posclose·close 항목은 없고, 순서는 단계 순 → zero → health", () => {
+  test("posclose·close 항목은 없고, 순서는 단계 순 → zero → health → audit", () => {
     const zero: CloseCheck = { key: "zero", ok: false, soft: true, text: "금액 없는 매입 1건", href: "/receiving" };
-    const r = closeChecksOf(fake({}), { zero, health });
+    const audit: CloseCheck = { key: "audit", ok: false, soft: true, text: "정합성 이상 2가지", href: "/finance/ledger?ym=2026-08#audit" };
+    const r = closeChecksOf(fake({}), { zero, health, audit });
     assert.deepEqual(
       r.map((c) => c.key),
-      ["upload", "card", "deposits", "expenses", "tax", "payables", "zero", "health"],
+      ["upload", "card", "deposits", "expenses", "tax", "payables", "zero", "health", "audit"],
     );
     assert.ok(!r.some((c) => (c.key as string) === "posclose"));
     assert.ok(!r.some((c) => (c.key as string) === "close"));
   });
 
-  test("zero 가 없으면 빠진다", () => {
+  test("zero·audit 가 없으면 빠진다", () => {
     const r = closeChecksOf(fake({}), { zero: null, health });
     assert.equal(r.length, 7);
     assert.equal(r[r.length - 1].key, "health");
+  });
+
+  test("정합성(audit)은 soft — 이상이 있어도 hard 항목은 그대로", () => {
+    const audit: CloseCheck = { key: "audit", ok: false, soft: true, text: "정합성 이상 1가지", href: "/finance/ledger#audit" };
+    const r = closeChecksOf(fake({}), { zero: null, health, audit });
+    assert.equal(r.length, 8);
+    assert.equal(r[r.length - 1].key, "audit");
+    assert.equal(r[r.length - 1].soft, true);
+    assert.ok(r.filter((c) => !c.soft).every((c) => c.ok), "hard 항목은 전부 ok — audit 이 마감을 막지 않는다");
   });
 });

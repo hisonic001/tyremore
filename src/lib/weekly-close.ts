@@ -9,6 +9,7 @@
  *      **같은 함수**(depositOpenCount·expenseOpen·taxOpenCounts = taxOpenCount 의 buy+sell)로 센다.
  *      soft(참고) 항목은 ⚠ 만 보이고 closeMonth 의 「soft 아닌 미충족 거부」 필터는 그대로다.
  *   · posclose(카드 일마감 안 된 날) 항목은 없앴다 — 카드 단계 status 에 「안 된 날 N일」이 이미 있고 soft 였다.
+ *   · ⭐ 5단계(2026-09-13): 정합성 검사(audit, soft) 한 줄이 「자료 검증」 옆에 붙는다 — 첫 화면 배너 대신.
  *
  * 🔴 DB 를 건드리지 않는다 — 시험(npm test)이 DB 없이 돌아야 해서 순수 함수만.
  */
@@ -25,7 +26,10 @@ const HARD: Record<Exclude<WeeklyStepKey, "close">, boolean> = {
   payables: false,
 };
 
-export function closeChecksOf(w: WeeklySteps, extra: { zero: CloseCheck | null; health: CloseCheck }): CloseCheck[] {
+export function closeChecksOf(
+  w: WeeklySteps,
+  extra: { zero: CloseCheck | null; health: CloseCheck; audit?: CloseCheck },
+): CloseCheck[] {
   const out: CloseCheck[] = [];
   for (const s of w.steps) {
     if (s.key === "close") continue; // 마감 단계 자체는 체크 항목이 아니다
@@ -40,5 +44,6 @@ export function closeChecksOf(w: WeeklySteps, extra: { zero: CloseCheck | null; 
   }
   if (extra.zero) out.push(extra.zero);
   out.push(extra.health);
+  if (extra.audit) out.push(extra.audit);
   return out;
 }

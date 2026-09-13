@@ -16,6 +16,9 @@ const PATHS = [
   "/finance/card",
   /** ⭐ 「이번 주 정리」 흐름 (개편 3단계, 2026-09-12) — 단계 안에서 쓴 액션이 같은 화면을 새로 그린다 */
   "/finance/weekly",
+  /** ⭐ 5단계(2026-09-13) — 장부(마감 체크리스트·정합성 한 줄)·최근 한 일도 쓰기마다 바뀐다. 목록을 진실로 */
+  "/finance/ledger",
+  "/finance/activity",
   "/sales",
 ] as const;
 
