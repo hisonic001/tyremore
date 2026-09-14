@@ -3,8 +3,9 @@ import { redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, hasPerm } from "@/lib/auth";
+import { SPEC_SQL } from "@/lib/spec-sql";
 import { ColumnChart, StackedBar, fmtShort, fmtWon } from "../charts";
-import { Section, Stat, BarList } from "../ui";
+import { Section, Stat, BarList, ReportTabs } from "../ui";
 import type { Bar, Segment } from "../charts";
 
 export const dynamic = "force-dynamic";
@@ -27,12 +28,8 @@ export const dynamic = "force-dynamic";
  * 🔴 평가액은 정가(list_price) 기준 — 매입가 기록이 쌓이면 원가 기준 추가.
  */
 
-/** 규격 조립 — sale-history 와 같은 식. 편평비 80 은 생략(145R13, 사장님 지시 2026-08-08) */
-const SPEC = sql`
-  CASE WHEN p.width IS NOT NULL AND p.rim_inch IS NOT NULL THEN
-    p.width::text || COALESCE('/' || NULLIF(p.aspect_ratio, 80)::text, '')
-      || 'R' || regexp_replace(p.rim_inch::text, '\.0$', '')
-  END`;
+/** 규격 조립 — 정본은 lib/spec-sql.ts (차량 리포트와 같이 쓴다) */
+const SPEC = SPEC_SQL;
 const NAME = sql`COALESCE(NULLIF(p.display_name, ''), p.pattern, p.raw_name)`;
 
 export default async function StockReportPage() {
@@ -176,20 +173,9 @@ export default async function StockReportPage() {
         ← 설정으로
       </Link>
 
-      <header className="mt-3 flex items-center justify-between">
+      <header className="mt-3 flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-bold">재고 리포트</h1>
-        <div className="flex gap-1">
-          <Link href="/reports" className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-100">
-            매출
-          </Link>
-          <span className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white">재고</span>
-          <Link href="/reports/margin" className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-100">
-            마진
-          </Link>
-          <Link href="/reports/mars" className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-100">
-            MARS
-          </Link>
-        </div>
+        <ReportTabs active="stock" />
       </header>
 
       {/* ---- ① 헤드라인 — 큰 숫자 하나 + 보조 줄 (토스풍, 2026-09-03) ---- */}

@@ -101,7 +101,7 @@ export default async function SettingsPage() {
 
   const items = [
     ...(can.reports
-      ? [{ href: "/reports", title: "매출·재고 리포트", desc: "월별 매출 · 결제수단 · 재고 · MARS 입력 평가" }]
+      ? [{ href: "/reports", title: "리포트", desc: "매출 · 재고 · 마진 · MARS 입력 평가 · 손님 · 차량" }]
       : []),
     /* ⭐ 계정 관리 — 유일하게 항상 사장님 전용 (직원이 스스로 권한을 켜는 구멍 방지, 2026-09-02) */
     ...(session?.role === "owner"

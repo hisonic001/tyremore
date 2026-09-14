@@ -114,4 +114,72 @@ export function BarList({ rows, color = "#009944" }: { rows: RankRow[]; color?: 
   );
 }
 
+/**
+ * 리포트 탭 바 (2026-09-14 — 네 화면에 복붙돼 있던 것을 한 곳으로, 손님·차량 추가).
+ * 탭이 6개라 폰 폭에서는 옆으로 밀어 본다.
+ */
+const REPORT_TABS = [
+  { key: "sales", label: "매출", href: "/reports" },
+  { key: "stock", label: "재고", href: "/reports/stock" },
+  { key: "margin", label: "마진", href: "/reports/margin" },
+  { key: "mars", label: "MARS", href: "/reports/mars" },
+  { key: "customers", label: "손님", href: "/reports/customers" },
+  { key: "vehicles", label: "차량", href: "/reports/vehicles" },
+] as const;
+
+export type ReportTabKey = (typeof REPORT_TABS)[number]["key"];
+
+export function ReportTabs({ active, className = "" }: { active: ReportTabKey; className?: string }) {
+  return (
+    <nav className={`-mx-1 flex gap-1 overflow-x-auto whitespace-nowrap px-1 ${className}`}>
+      {REPORT_TABS.map((t) =>
+        t.key === active ? (
+          <span key={t.key} className="shrink-0 rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white">
+            {t.label}
+          </span>
+        ) : (
+          <Link
+            key={t.key}
+            href={t.href}
+            className="shrink-0 rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-100"
+          >
+            {t.label}
+          </Link>
+        ),
+      )}
+    </nav>
+  );
+}
+
+/** [개인 · 거래처 · 전체] 단추 — 링크로 바꾼다 (달은 그대로 들고 간다) */
+export function WhoToggle({
+  who,
+  href,
+}: {
+  who: "person" | "biz" | "all";
+  /** 단추별 주소 만들기 */
+  href: (who: "person" | "biz" | "all") => string;
+}) {
+  const opts = [
+    { key: "person", label: "개인" },
+    { key: "biz", label: "거래처" },
+    { key: "all", label: "전체" },
+  ] as const;
+  return (
+    <div className="inline-flex rounded-control bg-slate-100 p-1">
+      {opts.map((o) =>
+        o.key === who ? (
+          <span key={o.key} className="rounded-lg bg-white px-4 py-1.5 text-sm font-semibold text-slate-900 shadow-sm">
+            {o.label}
+          </span>
+        ) : (
+          <Link key={o.key} href={href(o.key)} className="rounded-lg px-4 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-200">
+            {o.label}
+          </Link>
+        ),
+      )}
+    </div>
+  );
+}
+
 export { fmtShort };

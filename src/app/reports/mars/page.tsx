@@ -6,6 +6,7 @@ import { getSession } from "@/lib/auth";
 import { canViewMarsReport, getMarsQuarterTarget } from "@/lib/mars-eval";
 import { TargetForm } from "./target-form";
 import { ColumnChart } from "../charts";
+import { ReportTabs } from "../ui";
 
 export const dynamic = "force-dynamic";
 
@@ -180,18 +181,7 @@ export default async function MarsEvalPage({
       </header>
 
       {isOwner && (
-        <div className="mt-3 flex gap-1">
-          <Link href="/reports" className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-100">
-            매출
-          </Link>
-          <Link href="/reports/stock" className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-100">
-            재고
-          </Link>
-          <Link href="/reports/margin" className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-100">
-            마진
-          </Link>
-          <span className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white">MARS</span>
-        </div>
+        <ReportTabs active="mars" className="mt-3" />
       )}
 
       {/* 분기 넘기기 */}

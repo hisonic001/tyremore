@@ -8,7 +8,7 @@ import { kstToday, ymAdd } from "@/lib/ym";
 import { estimateRebates, listRebateEntries, oilAllocation } from "@/lib/rebate";
 import { ColumnChart, fmtShort } from "../charts";
 import type { Bar } from "../charts";
-import { Section, Stat, BarList } from "../ui";
+import { Section, Stat, BarList, ReportTabs } from "../ui";
 import { RebateEntries } from "./rebate-ui";
 
 export const dynamic = "force-dynamic";
@@ -160,20 +160,9 @@ export default async function MarginReportPage({
         ← 설정으로
       </Link>
 
-      <header className="mt-3 flex items-center justify-between">
+      <header className="mt-3 flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-bold">마진 리포트</h1>
-        <div className="flex gap-1">
-          <Link href="/reports" className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-100">
-            매출
-          </Link>
-          <Link href="/reports/stock" className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-100">
-            재고
-          </Link>
-          <span className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white">마진</span>
-          <Link href="/reports/mars" className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-100">
-            MARS
-          </Link>
-        </div>
+        <ReportTabs active="margin" />
       </header>
 
       {/* ---- ① 헤드라인 — 이 달 마진 (토스풍, 2026-09-03) ---- */}

@@ -132,7 +132,16 @@ export function ColumnChart({
 export type Segment = { label: string; value: number; color: string };
 
 /** 구성비 한 줄 막대 — 조각 사이 2px 흰 틈, 양 끝 둥글게 */
-export function StackedBar({ parts, clipId }: { parts: Segment[]; clipId: string }) {
+export function StackedBar({
+  parts,
+  clipId,
+  unit,
+}: {
+  parts: Segment[];
+  clipId: string;
+  /** 돈이 아닌 셈(대·명)일 때 풍선 단위 — 없으면 원 (2026-09-14 차량 리포트) */
+  unit?: string;
+}) {
   const W = 700;
   const H = 32;
   const total = parts.reduce((s, p) => s + p.value, 0);
@@ -159,7 +168,7 @@ export function StackedBar({ parts, clipId }: { parts: Segment[]; clipId: string
           const pct = total ? Math.round((s.value / total) * 100) : 0;
           return (
             <g key={s.label}>
-              <title>{`${s.label} · ${fmtWon(s.value)} (${pct}%)`}</title>
+              <title>{`${s.label} · ${unit ? `${s.value.toLocaleString("ko-KR")}${unit}` : fmtWon(s.value)} (${pct}%)`}</title>
               <rect x={s.x} y={0} width={Math.max(0, s.w - (i < segs.length - 1 ? 2 : 0))} height={H} fill={s.color} />
               {s.w >= 64 && (
                 <text x={s.x + s.w / 2} y={H / 2 + 4} textAnchor="middle" fontSize="12" fontWeight="600" fill="#ffffff">

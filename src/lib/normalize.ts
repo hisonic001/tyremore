@@ -73,8 +73,11 @@ export function isPlaceholderPhone(raw: unknown): boolean {
  */
 export function isPlaceholderCustomerName(raw: unknown): boolean {
   const n = String(raw ?? "").trim();
-  return ["고객", "김고객", "관광객", "비회원", "손님", "일반고객"].includes(n);
+  return PLACEHOLDER_CUSTOMER_NAMES.includes(n);
 }
+
+/** 위 판정의 목록 — 리포트 SQL(report-cv.ts)도 이 상수를 본다. 두 벌로 갈라지지 않게 */
+export const PLACEHOLDER_CUSTOMER_NAMES: readonly string[] = ["고객", "김고객", "관광객", "비회원", "손님", "일반고객"];
 
 /** 표시용 010-1234-5678 */
 export function formatPhone(digits: string | null): string | null {

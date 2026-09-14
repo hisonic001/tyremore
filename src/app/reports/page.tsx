@@ -5,7 +5,7 @@ import { db } from "@/db";
 import { getSession, hasPerm } from "@/lib/auth";
 import { marginSql, marginBaseSql } from "@/lib/margin-def";
 import { ColumnChart, StackedBar, fmtShort, fmtWon } from "./charts";
-import { Section, Stat, DeltaChip } from "./ui";
+import { Section, Stat, DeltaChip, ReportTabs } from "./ui";
 import { BrandTires, type BrandTireRow } from "./brand-tires";
 import type { Bar, Segment } from "./charts";
 
@@ -297,20 +297,9 @@ export default async function ReportsPage({
         ← 설정으로
       </Link>
 
-      <header className="mt-3 flex items-center justify-between">
+      <header className="mt-3 flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-bold">매출 리포트</h1>
-        <div className="flex gap-1">
-          <span className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white">매출</span>
-          <Link href="/reports/stock" className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-100">
-            재고
-          </Link>
-          <Link href="/reports/margin" className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-100">
-            마진
-          </Link>
-          <Link href="/reports/mars" className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 active:bg-slate-100">
-            MARS
-          </Link>
-        </div>
+        <ReportTabs active="sales" />
       </header>
 
       {/* ---- ① 헤드라인 — 토스식 계층: 큰 숫자 하나 + 증감 칩 + 보조 줄 (2026-09-03 리프레시) ---- */}
