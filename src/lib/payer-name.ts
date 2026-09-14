@@ -226,10 +226,8 @@ export function readPayer(source: string, description: string): PayerInfo {
   const v = splitVia(p.body);
   const name = v.body || v.via || key;
 
-  /* 「이런 곳입니다」 — 결제대행을 벗긴 **실제 상대 이름**으로 먼저 찾고,
-     못 찾으면 결제대행 자체를 설명한다 (`네이버파이낸셜(주)` 처럼 판매처가 안 붙은 줄) */
+  /* 「이런 곳입니다」 — 결제대행을 벗긴 **실제 상대 이름**으로 먼저 찾는다 */
   let known = KNOWN.find((k) => k.match.some((m) => has(name, m)));
-  if (!known && v.via) known = KNOWN.find((k) => k.match.some((m) => has(v.via!, m)));
 
   /**
    * 사전에 없어도 이름이 음식점처럼 생겼으면 그렇게 말해 준다 — 제안까지만.
@@ -238,11 +236,17 @@ export function readPayer(source: string, description: string): PayerInfo {
    *    `[신한체] 장사식당` 처럼 **통장에 찍힌다.** 그 바람에 같은 식당이 카드 쪽은
    *    「식대·접대」, 통장 쪽은 「기타경비」로 갈렸다.
    *    통장 지출 3,970건 중 음식점 낱말에 걸린 것은 3가지뿐이고 전부 진짜 식당이었다.
+   * 🔴 결제대행 설명보다 **먼저** 본다 (2026-09-14). 전엔 결제대행 사전 fallback 이 먼저 known 을 채워
+   *    `네이버페이 갈비시대` 가 「네이버페이 결제」로만 나오고 「식대·접대」 제안이 안 떴다 —
+   *    네이버페이·카카오페이로 낸 밥값이 전부 그랬다. 실제 상대 이름이 더 많이 말해 준다.
    */
   if (!known && looksLikeFood(name)) {
     return { name, via: v.via && v.via !== name ? v.via : null, place: p.place,
              what: "음식점으로 보입니다", hint: "식대·접대", key };
   }
+
+  /* 그래도 모르면 결제대행 자체를 설명한다 (`네이버파이낸셜(주)` 처럼 판매처가 안 붙은 줄·`RM마케팅` 같은 모르는 판매처) */
+  if (!known && v.via) known = KNOWN.find((k) => k.match.some((m) => has(v.via!, m)));
 
   return {
     name,
