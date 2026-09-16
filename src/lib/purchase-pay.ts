@@ -312,13 +312,23 @@ export async function skipWithdrawal(
   if (!c) return { ok: false, error: "출금 줄을 찾을 수 없습니다" };
   if (!restore) {
     if (c.st === "무시") return { ok: false, error: "이미 접힌 출금입니다" };
-    const linked = await db.execute<{ id: number }>(sql`
-      SELECT id FROM recon_match WHERE kind = '매입지급' AND src_table = 'cash_txn' AND src_id = ${cashTxnId} LIMIT 1
+    /* 🔴 2026-09-16 사장님 제보 — 8/13 블랙서클(통장 이름 「딜러타이어」) 500,000원 중 241,560원만
+       매입에 붙고 258,440원이 남았는데, 그 거래처 미지급이 0원이라 [지급]은 붙을 매입이 없어 거절되고
+       [제외]는 「이미 지급된 출금」이라 막혀 **지울 방법이 없는 줄**이 됐다.
+       접기를 막아야 하는 건 「이미 다 이어진 출금」뿐이다 — 남은 조각이 있으면 접을 수 있어야 한다
+       (물건이 나중에 들어오면 「접어둔 출금」에서 되살려 붙이면 된다. 이미 붙인 지급은 그대로 남는다). */
+    const [usedRow] = await db.execute<{ s: string }>(sql`
+      SELECT ${cashUsedSql("c")}::bigint s FROM cash_txn c WHERE c.id = ${cashTxnId}
     `);
-    if (linked.length > 0) return { ok: false, error: `이미 지급으로 ${W.recon}된 출금입니다 — 먼저 되돌려 주세요` };
+    const leftover = Number(c.out_amount) - Number(usedRow?.s ?? 0);
+    if (leftover <= 0)
+      return { ok: false, error: `이미 다 ${W.recon}된 출금입니다 — 「${W.activity}」에서 되돌린 뒤 접어 주세요` };
+    const partly = leftover < Number(c.out_amount);
     await db.execute(sql`
       UPDATE cash_txn SET recon_status = '무시',
-        memo = COALESCE(memo || ' · ', '') || '지급 잡기에서 접음 (이을 인보이스 없음)'
+        memo = COALESCE(memo || ' · ', '') || ${
+          partly ? `지급 잡기에서 접음 (남은 ${won(leftover)}원은 선급금)` : "지급 잡기에서 접음 (이을 인보이스 없음)"
+        }
       WHERE id = ${cashTxnId}
     `);
   } else {
