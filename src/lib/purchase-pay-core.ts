@@ -13,7 +13,7 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { cashUsedSql } from "./recon-data";
+import { cashUsedPaySql } from "./recon-data";
 import { exactPlan } from "./payables-plan";
 import { learnAlias } from "./deposit-core";
 import { logActivity } from "./fin-activity";
@@ -44,7 +44,7 @@ export async function autoLinkExactCore(
   /* 🔴 2026-09-16: 일부만 붙은 출금의 남은 조각도 이을 수 있어야 한다 (purchase-pay 와 같은 이유) —
      이중 소진은 바로 아래 avail 계산이 막는다. */
   const [usedRow] = await db.execute<{ s: string }>(sql`
-    SELECT ${cashUsedSql("c")}::bigint s FROM cash_txn c WHERE c.id = ${cashTxnId}
+    SELECT ${cashUsedPaySql("c")}::bigint s FROM cash_txn c WHERE c.id = ${cashTxnId}
   `);
   const avail = Number(dep.out_amount) - Number(usedRow?.s ?? 0);
   if (avail <= 0) return { ok: false, error: "이 출금은 남은 금액이 없습니다" };

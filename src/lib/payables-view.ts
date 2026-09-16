@@ -20,7 +20,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { monthRange } from "./ym";
-import { cashUsedSql, normName, samePartyName } from "./recon-data";
+import { cashUsedPaySql, normName, samePartyName } from "./recon-data";
 import { payerKeyOf } from "./expense-cats";
 import { exactPlan } from "./payables-plan";
 
@@ -104,7 +104,7 @@ export async function payablesCardInfo(
   /* ── 이번 달 준 돈 — 통장 매입대금 (접힌 것 포함) ── */
   const bank = await db.execute<{ id: number; d: string; description: string; out: number; remain: string; linked: number }>(sql`
     SELECT c.id, to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD') d, c.description, c.out_amount out,
-           (c.out_amount - ${cashUsedSql("c")})::bigint remain,
+           (c.out_amount - ${cashUsedPaySql("c")})::bigint remain,
            (SELECT count(*)::int FROM recon_match m
              WHERE m.kind = '매입지급' AND m.src_table = 'cash_txn' AND m.src_id = c.id AND m.status = '확정') linked
     FROM cash_txn c

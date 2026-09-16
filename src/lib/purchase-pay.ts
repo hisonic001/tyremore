@@ -11,7 +11,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, hasPerm } from "@/lib/auth";
-import { cashUsedSql, normName } from "./recon-data";
+import { cashUsedPaySql, normName } from "./recon-data";
 import { planSettlement } from "./receivable-plan";
 import { restoreCashLine } from "./cash-restore";
 import { revalidateFinance } from "./fin-revalidate";
@@ -318,7 +318,7 @@ export async function skipWithdrawal(
        접기를 막아야 하는 건 「이미 다 이어진 출금」뿐이다 — 남은 조각이 있으면 접을 수 있어야 한다
        (물건이 나중에 들어오면 「접어둔 출금」에서 되살려 붙이면 된다. 이미 붙인 지급은 그대로 남는다). */
     const [usedRow] = await db.execute<{ s: string }>(sql`
-      SELECT ${cashUsedSql("c")}::bigint s FROM cash_txn c WHERE c.id = ${cashTxnId}
+      SELECT ${cashUsedPaySql("c")}::bigint s FROM cash_txn c WHERE c.id = ${cashTxnId}
     `);
     const leftover = Number(c.out_amount) - Number(usedRow?.s ?? 0);
     if (leftover <= 0)
@@ -384,13 +384,14 @@ export async function payFromWithdrawal(
      (9/4 콘티 1,061,060 중 782,595만 손으로 붙임)의 남은 278,465원이 영영 못 누르는 줄로 남았다.
      이중 소진은 아래 avail(=출금 − cashUsedSql) 계산이 이미 막는다. 그 하나로 충분하다. */
   /* 🔴 감사 B4(2026-08-25): 계산서 확인·수금이 이미 쓴 몫을 빼고 배분 — 같은 출금
-     이중 소진 차단. 2026 감사 G7: 손 복제본 대신 소진량 정본 cashUsedSql */
+     이중 소진 차단. 2026 감사 G7: 손 복제본 대신 소진량 정본.
+     🔴 2026-09-16: 지급 축은 '매입지급'만 센다 (cashUsedPaySql) — 계산서 대조와 따로 (사장님 승인) */
   const [usedRow] = await db.execute<{ s: string }>(sql`
-    SELECT ${cashUsedSql("c")}::bigint s FROM cash_txn c WHERE c.id = ${input.cashTxnId}
+    SELECT ${cashUsedPaySql("c")}::bigint s FROM cash_txn c WHERE c.id = ${input.cashTxnId}
   `);
   const avail = Number(dep.out_amount) - Number(usedRow?.s ?? 0);
   if (avail <= 0)
-    return { ok: false, error: `이 출금은 남은 금액이 없습니다 — ${W.reconTax}·지급이 이미 다 썼습니다` };
+    return { ok: false, error: `이 출금은 남은 금액이 없습니다 — 지급으로 이미 다 썼습니다` };
 
   try {
     const out = await db.transaction(async (tx) => {

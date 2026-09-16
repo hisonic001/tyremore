@@ -959,15 +959,16 @@ export async function payLinkData(
   const { start: pStart, nextStart: pNext } = monthRange(ym);
   const outs = await db.execute<{ id: number; at: string; description: string; out_amount: number }>(sql`
     SELECT c.id, to_char(c.occurred_at AT TIME ZONE 'Asia/Seoul', 'MM-DD') at, c.description,
-           (c.out_amount - ${cashUsedSql("c")})::int out_amount
+           (c.out_amount - ${cashUsedPaySql("c")})::int out_amount
     FROM cash_txn c
     WHERE c.source = '통장' AND c.is_active AND c.category = '매입대금'
       -- ⭐ 「이을 것 없음」으로 접은 출금은 뺀다 (2026-08-31 — 앱 이전 기간 대금은 이을 인보이스가 없다)
       AND c.recon_status <> '무시'
       AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date >= ${pStart}::date
       AND (c.occurred_at AT TIME ZONE 'Asia/Seoul')::date < ${pNext}::date
-      -- 🔴 감사 B4(2026-08-25): 계산서 확인·지급이 이미 쓴 몫을 뺀 잔액만 — 이중 소진 차단
-      AND c.out_amount > ${cashUsedSql("c")}
+      -- 🔴 감사 B4(2026-08-25) → 2026-09-16 개정: 「지급으로 이미 쓴 몫」만 뺀다.
+      --    계산서 대조까지 빼면 그때그때 낸 송금이 목록에서 사라져 미지급이 안 줄었다 (cashUsedPaySql 주석)
+      AND c.out_amount > ${cashUsedPaySql("c")}
     ORDER BY c.occurred_at DESC LIMIT 60
   `);
   // ⭐ 접어둔 출금 — 되돌리기용 (2026-08-31)
@@ -1099,6 +1100,24 @@ export async function cashUsedMap(ids?: number[]): Promise<Map<number, number>> 
 }
 
 /** 위와 같은 식의 SQL 조각 — 상관 서브쿼리용 (searchBankLines 등) */
+/**
+ * ⭐ **지급 축** 소진량 (2026-09-16, 사장님 승인)
+ *
+ *   사장님: "나이스오토파츠는 엠에프티코리아로 매번 입금을 시켜주는데 왜 미지급이 남아있지?"
+ *   — 그때그때 보낸 송금 5건(528,690원)이 **매입계산서**와 짝지어지자 지급 잡기 목록에서
+ *   사라져, 미지급 장부(purchase_invoice ↔ purchase_payment)를 영영 못 줄였다.
+ *
+ * 🔴 매입은 **같은 거래를 두 군데서 본다** — 홈택스 세금계산서 한 장과 앱 입고 한 건.
+ *    출금 한 줄이 양쪽에 붙어도 「돈이 두 번 나갔다」가 아니다. 장부가 각각 소진될 뿐이다.
+ *    그래서 지급 축은 '매입지급'만 센다. 계산서 축은 원래부터 지급을 빼지 않았고
+ *    (tax-recon CASH_LAT 의 ind 로 오히려 「지급으로 확인됨」을 읽는다) 그대로 둔다.
+ * 🔴 지급 축 안에서의 이중 소진(같은 출금을 지급으로 두 번)은 이 값이 그대로 막는다.
+ */
+export const cashUsedPaySql = (alias: string) => sql`
+  COALESCE((SELECT SUM(m.amount)::bigint FROM recon_match m
+    WHERE m.status = '확정' AND m.kind = '매입지급'
+      AND m.src_table = 'cash_txn' AND m.src_id = ${sql.raw(alias)}.id), 0)`;
+
 export const cashUsedSql = (alias: string) => sql`
   COALESCE((SELECT SUM(m.amount)::bigint FROM recon_match m
     WHERE m.status = '확정' AND (
