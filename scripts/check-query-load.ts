@@ -42,6 +42,8 @@ async function main() {
   const { monthRange, kstToday } = await import("../src/lib/ym");
   const { customerReportData } = await import("../src/lib/report-customers");
   const { vehicleReportData } = await import("../src/lib/report-vehicles");
+  const { weeklyPayableStep } = await import("../src/lib/weekly-payables");
+  const { taxPayableTotal } = await import("../src/lib/tax-recon");
   const { sql } = await import("drizzle-orm");
 
   /* 자료량이 일부러 크게 다른 달들 — 한산한 달과 바쁜 달 */
@@ -62,6 +64,15 @@ async function main() {
     { name: "계산서 정리", note: "마이너스 계산서 1장당 1질의", run: async (ym) => void (await taxReconV2(ym)) },
     { name: "지출 분류", note: "", run: async (ym) => void (await expenseData(ym)) },
     { name: "미지급", note: "달과 무관", run: async () => void (await payablesData()) },
+    {
+      name: "미지급 화면",
+      known: true,
+      note: "🔴 거래처 수에 비례(앱 매입 19~22 + 계산서 기준 23~24) — 둘 다 「상대 1곳당 1~2질의」 구조. 42~46이라 상한 80 아래 (2026-09-16)",
+      run: async (ym) => {
+        await weeklyPayableStep(ym);
+        await taxPayableTotal(ym);
+      },
+    },
     { name: "손님 리포트", note: "고정 5질의 (2026-09-14)", run: async (ym) => void (await customerReportData(ym, "person")) },
     { name: "차량 리포트", note: "5질의 · 2026-08 전 달은 규격 2질의를 건너뛰어 3 (2026-09-14)", run: async (ym) => void (await vehicleReportData(ym, "person")) },
   ];

@@ -1372,6 +1372,43 @@ export async function monthlyRemain(
 }
 
 /**
+ * ⭐ 계산서 기준 채무 합 (2026-09-16 사장님 요청 — "계산서 기준도 같이 보여 주세요")
+ *
+ *   앱 「미지급금」(payableTotal)은 **앱에 입고로 등록된 매입**만 센다. 그런데 배터리(스칼릿)처럼
+ *   앱에 금액이 안 들어간 거래처는 0으로 보이고, 8/25 기준일 이전 채무도 빠진다.
+ *   그래서 첫 화면에 **두 숫자를 나란히** 보여 준다 — 합치지 않는다(같은 채무를 두 번 세지 않게).
+ *
+ * 🔴 판정은 정본 monthlyRemain 그대로. 상대마다 3질의(이름·계산서·지급)라 상대 수에 비례한다 —
+ *    월정산 상대는 열 곳 안팎이라 괜찮지만, 늘면 scripts/check-query-load.ts 가 잡는다.
+ */
+export async function taxPayableTotal(ym: string): Promise<{ total: number; rows: { name: string; remain: number }[] }> {
+  const rules = [...(await partyRules()).values()].filter((r) => r.kind === "월정산");
+  if (rules.length === 0) return { total: 0, rows: [] };
+  const bizList = sql.join(rules.map((r) => sql`${r.bizNo}`), sql`, `);
+  /* 🔴 이름은 상대마다 읽지 않고 **두 질의로 한 번에** — partyStrictNames 와 같은 규칙
+     (계산서 최신 상호 + 별명 T:사업자번호). 상대가 여덟이면 16질의가 2질의가 된다. */
+  const latest = await db.execute<{ biz: string; name: string }>(sql`
+    SELECT DISTINCT ON (counterparty_biz_no) counterparty_biz_no biz, counterparty_name name
+    FROM tax_invoice WHERE is_active AND counterparty_biz_no IN (${bizList})
+    ORDER BY counterparty_biz_no, id DESC`);
+  const aliasRows = await db.execute<{ key: string; raw: string }>(sql`
+    SELECT party_key key, alias_raw raw FROM party_alias
+    WHERE party_key IN (${sql.join(rules.map((r) => sql`${"T:" + r.bizNo}`), sql`, `)}) LIMIT 200`);
+  const nameBy = new Map<string, string[]>();
+  for (const r of rules) nameBy.set(r.bizNo, []);
+  for (const l of latest) nameBy.get(l.biz)?.push(l.name);
+  for (const a of aliasRows) nameBy.get(a.key.slice(2))?.push(a.raw);
+
+  const rows: { name: string; remain: number }[] = [];
+  for (const r of rules) {
+    const m = await monthlyRemain(r.bizNo, ym, "매입", r, [...new Set(nameBy.get(r.bizNo) ?? [])]);
+    if (m.remain > 0) rows.push({ name: r.nameRaw, remain: m.remain });
+  }
+  rows.sort((a, b) => b.remain - a.remain);
+  return { total: rows.reduce((s, r) => s + r.remain, 0), rows };
+}
+
+/**
  * 방향별 돈 확인 할 일 — 현황 카드가 "매입 a · 매출 b"로 보여 준다 (2026 감사 N1: 합만 보이면 탭 숫자와 어긋나 보였다)
  *
  * 🔴 계산서 화면 개편(2026-09-11, 결정 2·6): 월정산 거래처는 장 단위로 안 센다 — **거래처 1건**.

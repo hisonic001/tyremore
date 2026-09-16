@@ -5,6 +5,7 @@ import { FinShell } from "@/components/fin/shell";
 import { weeklyPayableStep } from "@/lib/weekly-payables";
 import { pickYm } from "@/lib/ym";
 import { W } from "@/lib/fin-words";
+import { taxPayableTotal } from "@/lib/tax-recon";
 import { PayablesFlow } from "@/app/finance/weekly/steps/payables-flow";
 
 export const dynamic = "force-dynamic";
@@ -31,6 +32,9 @@ export default async function FinancePayablesPage({
   const sp = await searchParams;
   const ym = pickYm(sp.ym);
   const step = await weeklyPayableStep(ym);
+  /* ⭐ 계산서 기준 채무도 같이 (사장님 요청 2026-09-16) — 앱 매입 장부만 보면 배터리(스칼릿)처럼
+     금액이 안 들어간 거래처가 0으로 보이고, 기준일(8/25) 이전 채무도 빠진다. 순차 조회 */
+  const taxPay = await taxPayableTotal(ym);
   // 🔴 2단계(2026-09-12): links.skipped·links.linked(되돌리기 표 2개)는 「최근 한 일」로 옮겨 안 넘긴다
 
   return (
@@ -46,6 +50,28 @@ export default async function FinancePayablesPage({
           실제와 같아집니다. 잘못 {W.recon}했으면 「{W.activity}」에서 언제든 되돌립니다.
         </p>
       </details>
+
+      {/* ⭐ 계산서 기준 채무 (2026-09-16) — 앱 매입 기준과 나란히. 🔴 더하지 않는다: 같은 채무를 두 번 세게 된다 */}
+      {taxPay.total > 0 && (
+        <section className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="flex items-baseline justify-between">
+            <span className="text-sm text-slate-600">계산서 기준 {W.payable}</span>
+            <strong className="tabular text-red-700">{taxPay.total.toLocaleString("ko-KR")}원</strong>
+          </div>
+          <ul className="tabular mt-2 space-y-1 text-xs text-slate-500">
+            {taxPay.rows.map((r) => (
+              <li key={r.name} className="flex justify-between">
+                <span className="truncate">{r.name}</span>
+                <span>{r.remain.toLocaleString("ko-KR")}원</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-[11px] text-slate-400">
+            세금계산서(기준일 이후) − 통장에서 나간 돈. 아래 앱 매입 장부와 <strong>더하지 마세요</strong> — 같은 채무를 두 군데서 본 것입니다.
+            선결제로 사 오는 거래처는 배송이 늦으면 여기 잔액이 실제보다 많게 보일 수 있습니다.
+          </p>
+        </section>
+      )}
 
       {/* 빈 상태 — 미지급 잔액이 있는 거래처가 하나도 없을 때(옛 카드 목록의 빈 상태 그대로) */}
       {step.suppliers.length === 0 && (
