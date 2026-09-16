@@ -368,11 +368,11 @@ export async function payFromWithdrawal(
     FROM cash_txn WHERE id = ${input.cashTxnId} AND source = '통장' AND is_active AND out_amount > 0
   `);
   if (!dep) return { ok: false, error: "출금 줄을 찾을 수 없습니다" };
-  const dupe = await db.execute<{ id: number }>(sql`
-    SELECT id FROM recon_match WHERE src_table = 'cash_txn' AND src_id = ${input.cashTxnId}
-      AND kind = '매입지급' LIMIT 1
-  `);
-  if (dupe.length > 0) return { ok: false, error: `이미 지급으로 ${W.recon}된 출금입니다` };
+  /* 🔴 2026-09-16 사장님 제보 — 「지급을 눌러도 이미 대조됐다고 나오고, 새로고침해도 안 없어짐」
+     한 출금에 지급이 한 번이라도 붙어 있으면 무조건 거절했었다. 그런데 목록(payLinkData)은
+     **남은 금액**(출금 − 이미 쓴 몫)이 있으면 줄을 보여 준다 — 그래서 일부만 붙인 출금
+     (9/4 콘티 1,061,060 중 782,595만 손으로 붙임)의 남은 278,465원이 영영 못 누르는 줄로 남았다.
+     이중 소진은 아래 avail(=출금 − cashUsedSql) 계산이 이미 막는다. 그 하나로 충분하다. */
   /* 🔴 감사 B4(2026-08-25): 계산서 확인·수금이 이미 쓴 몫을 빼고 배분 — 같은 출금
      이중 소진 차단. 2026 감사 G7: 손 복제본 대신 소진량 정본 cashUsedSql */
   const [usedRow] = await db.execute<{ s: string }>(sql`
@@ -380,7 +380,7 @@ export async function payFromWithdrawal(
   `);
   const avail = Number(dep.out_amount) - Number(usedRow?.s ?? 0);
   if (avail <= 0)
-    return { ok: false, error: `이 출금은 남은 금액이 없습니다 — ${W.reconTax}가 이미 썼습니다` };
+    return { ok: false, error: `이 출금은 남은 금액이 없습니다 — ${W.reconTax}·지급이 이미 다 썼습니다` };
 
   try {
     const out = await db.transaction(async (tx) => {

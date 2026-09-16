@@ -41,10 +41,8 @@ export async function autoLinkExactCore(
     FROM cash_txn WHERE id = ${cashTxnId} AND source = '통장' AND is_active AND out_amount > 0
   `);
   if (!dep) return { ok: false, error: "출금 줄을 찾을 수 없습니다" };
-  const dupe = await db.execute<{ id: number }>(sql`
-    SELECT id FROM recon_match WHERE src_table = 'cash_txn' AND src_id = ${cashTxnId} AND kind = '매입지급' LIMIT 1
-  `);
-  if (dupe.length > 0) return { ok: false, error: `이미 지급으로 ${W.recon}된 출금입니다` };
+  /* 🔴 2026-09-16: 일부만 붙은 출금의 남은 조각도 이을 수 있어야 한다 (purchase-pay 와 같은 이유) —
+     이중 소진은 바로 아래 avail 계산이 막는다. */
   const [usedRow] = await db.execute<{ s: string }>(sql`
     SELECT ${cashUsedSql("c")}::bigint s FROM cash_txn c WHERE c.id = ${cashTxnId}
   `);
