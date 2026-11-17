@@ -4,10 +4,11 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/notice";
-import { confirmCandidate, dismissCandidate } from "@/lib/tire-storage";
+import { confirmCandidate, dismissCandidate, moveStorage } from "@/lib/tire-storage";
 import { formatStorageNo, sizeHints, sizesIn, type StorageDropInput, type StorageKind } from "@/lib/tire-storage-pure";
 import type { StorageRow } from "@/lib/tire-storage-data";
 import { DropFields } from "./drop-fields";
+import { otherPlatesIn, VehiclePicker } from "./vehicle-picker";
 
 /**
  * ⭐ 실사 체크표 (D-42 2단계) — 판매 메모에서 뽑은 후보를 창고에서 확인한다.
@@ -53,6 +54,9 @@ function AuditRow({ r, onConfirmed }: { r: StorageRow; onConfirmed: (no: number)
   });
   const [state, setState] = useState<{ kind: "ok"; no: number } | { kind: "gone" } | { kind: "err"; msg: string } | null>(null);
   const [pending, start] = useTransition();
+  /** ⭐ 다른 차·주인으로 (2026-11-17 — 「84고0717보관 이 차량번호로 바꿔 적어서 붙이기」 같은 메모) */
+  const [moving, setMoving] = useState(false);
+  const others = otherPlatesIn(r.sourceText, r.plateNo);
 
   if (state?.kind === "ok")
     return (
@@ -64,10 +68,38 @@ function AuditRow({ r, onConfirmed }: { r: StorageRow; onConfirmed: (no: number)
 
   return (
     <div className="py-4">
-      <p className="text-[15px] font-semibold">
-        {r.plateNo ?? "차량 없음"} · {r.ownerName}
-        <span className="ml-2 text-xs font-normal text-slate-400">{r.storedOn} 판매</span>
-      </p>
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-[15px] font-semibold">
+          {r.plateNo ?? "차량 없음"} · {r.ownerName}
+          <span className="ml-2 text-xs font-normal text-slate-400">{r.storedOn} 판매</span>
+        </p>
+        {!moving && (
+          <button
+            type="button"
+            onClick={() => setMoving(true)}
+            className={`shrink-0 rounded-control border px-2.5 py-1.5 text-xs font-medium ${others.length ? "border-amber-400 bg-amber-50 text-amber-800" : "border-slate-300 text-slate-600"}`}
+          >
+            {others.length ? `⚠️ 메모에 ${others[0]} — 차 바꾸기` : "차·주인 바꾸기"}
+          </button>
+        )}
+      </div>
+      {moving && (
+        <VehiclePicker
+          suggestions={others}
+          pending={pending}
+          onCancel={() => setMoving(false)}
+          onPick={(h) =>
+            start(async () => {
+              const res = await moveStorage(r.id, h.vehicleId);
+              if (res.ok) {
+                setMoving(false);
+                setState(null);
+                router.refresh();
+              } else setState({ kind: "err", msg: res.error });
+            })
+          }
+        />
+      )}
       {r.sourceText && <p className="mt-1 rounded-control bg-slate-50 p-2 text-[13px] leading-snug text-slate-600">{r.sourceText}</p>}
       {r.releaseNote && (
         <p className={`mt-1 text-xs font-medium ${/없음|찾아갔/.test(r.releaseNote) ? "text-amber-700" : "text-brand-700"}`}>

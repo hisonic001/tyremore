@@ -239,3 +239,61 @@ export async function attachSaleStorage(quoteId: number, storage: SaleStorageInp
     return { ok: false, error: errText(e) };
   }
 }
+
+/**
+ * ⭐ 다른 차·주인으로 옮기기 (사장님 지시 2026-11-17 — 「84고0717보관 이 차량번호로 바꿔 적어서 붙이기」 같은 메모)
+ *   주인은 그 차의 주인(거래처 차량이면 차고 손님). 실사 후보(확인대기)는 판매 권한, 보관중은 판매 수정 권한.
+ *   흔적은 원문(source_text)에 남긴다.
+ */
+export async function moveStorage(id: number, vehicleId: number): Promise<Result<{ plate: string }>> {
+  const [t] = await db.execute<{ status: string; vehicle_id: number | null; plate: string | null }>(sql`
+    SELECT t.status, t.vehicle_id, v.plate_no AS plate FROM tire_storage t LEFT JOIN vehicle v ON v.id = t.vehicle_id WHERE t.id = ${id}`);
+  if (!t) return { ok: false, error: "보관 세트를 찾지 못했습니다" };
+  if (!(await hasPerm(t.status === "확인대기" ? "sale" : "sale_edit"))) return { ok: false, error: t.status === "확인대기" ? NO_SALE : NO_EDIT };
+  if (t.status !== "확인대기" && t.status !== "보관중") return { ok: false, error: "보관 중이거나 실사 확인 전인 세트만 옮길 수 있습니다" };
+  if (Number(t.vehicle_id) === vehicleId) return { ok: false, error: "이미 그 차의 세트입니다" };
+  const [v] = await db.execute<{ customer_id: number; plate: string }>(sql`
+    SELECT customer_id, plate_no AS plate FROM vehicle WHERE id = ${vehicleId} AND is_active`);
+  if (!v) return { ok: false, error: "차량을 찾지 못했습니다" };
+  const problem = await storageOwnerProblem(db, Number(v.customer_id));
+  if (problem) return { ok: false, error: problem };
+  const stamp = new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" }).slice(5).replace("-", "/");
+  const trace = `${stamp} 차 바꿈 ${t.plate ?? "차량 없음"} → ${v.plate}`;
+  await db.execute(sql`
+    UPDATE tire_storage SET vehicle_id = ${vehicleId}, customer_id = ${v.customer_id},
+           source_text = left(COALESCE(source_text || ' · ', '') || ${trace}, 900), updated_at = now()
+    WHERE id = ${id} AND status IN ('확인대기','보관중')`);
+  touch(vehicleId);
+  if (t.vehicle_id) revalidatePath(`/vehicle/${t.vehicle_id}`);
+  return { ok: true, plate: v.plate };
+}
+
+/**
+ * ⭐ 보관번호 바꾸기 — 이미 다른 번호를 적어 붙인 세트에 맞출 때. 비어 있는 번호로만(다른 세트가 쓴 번호는
+ *   찾아갔어도 다시 안 쓴다 — 재사용 금지 D-42). 판매 수정 권한.
+ */
+export async function renumberStorage(id: number, newNo: number): Promise<Result<{ no: number }>> {
+  if (!(await hasPerm("sale_edit"))) return { ok: false, error: NO_EDIT };
+  if (!Number.isInteger(newNo) || newNo < 1 || newNo > 99999) return { ok: false, error: "번호는 1~99999 사이 숫자로 적어 주세요" };
+  try {
+    const no = await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('tire_storage_no'))`);
+      const [t] = await tx.execute<{ status: string; storage_no: number | null }>(sql`SELECT status, storage_no FROM tire_storage WHERE id = ${id} FOR UPDATE`);
+      if (!t || t.status !== "보관중") throw new Error("보관 중인 세트만 번호를 바꿀 수 있습니다");
+      if (Number(t.storage_no) === newNo) throw new Error("지금 번호와 같습니다");
+      const [used] = await tx.execute<{ status: string }>(sql`SELECT status FROM tire_storage WHERE storage_no = ${newNo}`);
+      if (used) throw new Error(`#${String(newNo).padStart(4, "0")} 는 이미 쓴 번호입니다(${used.status}) — 비어 있는 번호로 해 주세요`);
+      const stamp = new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" }).slice(5).replace("-", "/");
+      await tx.execute(sql`
+        UPDATE tire_storage SET storage_no = ${newNo},
+               source_text = left(COALESCE(source_text || ' · ', '') || ${`${stamp} 번호 바꿈 #${String(t.storage_no).padStart(4, "0")} → #${String(newNo).padStart(4, "0")}`}, 900),
+               updated_at = now()
+        WHERE id = ${id}`);
+      return newNo;
+    });
+    revalidatePath("/storage");
+    return { ok: true, no };
+  } catch (e) {
+    return { ok: false, error: errText(e) };
+  }
+}
