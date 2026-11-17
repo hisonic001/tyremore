@@ -11,7 +11,42 @@ import {
   suggestDropKind,
   validateDrop,
   type ContactRow,
+  composeSize,
+  joinBrands,
+  parseSizeParts,
+  sizeHints,
+  splitBrands,
+  labelKind,
+  parseLabelPaper,
+  brandsIn,
 } from "./tire-storage-pure";
+
+test("라벨 — 일반/윈터 · 용지 기본 A4 · COOPER", () => {
+  assert.equal(labelKind("스노"), "윈터");
+  assert.equal(labelKind("일반"), "일반");
+  assert.equal(parseLabelPaper(null), "a4");
+  assert.equal(parseLabelPaper("label"), "label");
+  assert.deepEqual(brandsIn("235/55R19 *4개 COOPER"), ["쿠퍼"]);
+});
+
+test("규격 칸 셋 — 읽기·만들기", () => {
+  assert.deepEqual(parseSizeParts("225/45R18"), { w: 225, a: 45, r: 18 });
+  assert.deepEqual(parseSizeParts("225/45 zr 18"), { w: 225, a: 45, r: 18 });
+  assert.deepEqual(parseSizeParts("145R13C"), { w: 145, a: null, r: 13, c: true });
+  assert.equal(parseSizeParts("245/40+275/35R20"), null);
+  assert.equal(composeSize({ w: 235, a: 55, r: 19 }), "235/55R19");
+  assert.equal(composeSize({ w: 145, a: null, r: 13, c: true }), "145R13C");
+});
+
+test("규격 바로 고르기 — 겹침 없이, 읽히는 것만", () => {
+  assert.deepEqual(sizeHints("225/45R18", null, "225/45ZR18", "195/70R15, 145R13", "엉뚱"), ["225/45R18", "195/70R15", "145R13"]);
+});
+
+test("브랜드 여러 개", () => {
+  assert.deepEqual(splitBrands("금호,넥센"), ["금호", "넥센"]);
+  assert.equal(joinBrands(["금호", "넥센", "금호"]), "금호,넥센");
+  assert.deepEqual(splitBrands(null), []);
+});
 
 test("보관번호 — 4자리, 1만부터 그대로", () => {
   assert.equal(formatStorageNo(12), "0012");

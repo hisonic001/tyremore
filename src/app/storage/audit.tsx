@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/notice";
 import { confirmCandidate, dismissCandidate } from "@/lib/tire-storage";
-import { formatStorageNo, type StorageDropInput, type StorageKind } from "@/lib/tire-storage-pure";
+import { formatStorageNo, sizeHints, sizesIn, type StorageDropInput, type StorageKind } from "@/lib/tire-storage-pure";
 import type { StorageRow } from "@/lib/tire-storage-data";
 import { DropFields } from "./drop-fields";
 
@@ -69,9 +69,14 @@ function AuditRow({ r, onConfirmed }: { r: StorageRow; onConfirmed: (no: number)
         <span className="ml-2 text-xs font-normal text-slate-400">{r.storedOn} 판매</span>
       </p>
       {r.sourceText && <p className="mt-1 rounded-control bg-slate-50 p-2 text-[13px] leading-snug text-slate-600">{r.sourceText}</p>}
-      {r.releaseNote && <p className="mt-1 text-xs text-amber-700">{r.releaseNote}</p>}
+      {r.releaseNote && (
+        <p className={`mt-1 text-xs font-medium ${/없음|찾아갔/.test(r.releaseNote) ? "text-amber-700" : "text-brand-700"}`}>
+          {/없음|찾아갔/.test(r.releaseNote) ? "⚠️ " : "✓ "}
+          {r.releaseNote}
+        </p>
+      )}
       <div className="mt-2">
-        <DropFields value={drop} onChange={setDrop} disabled={pending} />
+        <DropFields value={drop} onChange={setDrop} disabled={pending} sizeHints={sizeHints(r.size, r.lastFittedSize, ...sizesIn(r.sourceText ?? ""))} />
       </div>
       {state?.kind === "err" && <Notice tone="error">{state.msg}</Notice>}
       <div className="mt-2 grid grid-cols-2 gap-2">

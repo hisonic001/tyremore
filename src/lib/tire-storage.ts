@@ -13,14 +13,17 @@ import { db } from "@/db";
 import { getSession, hasPerm } from "./auth";
 import { setSetting } from "./app-setting";
 import { ymdKst } from "./tire-age";
-import { insertStoredSet, nextStorageNo, storageOwnerProblem } from "./tire-storage-db";
-import { storageForVehicle, type StorageRow } from "./tire-storage-data";
+import { applySaleStorage, hasSaleStorage, insertStoredSet, nextStorageNo, storageOwnerProblem } from "./tire-storage-db";
+import { storageForSale, storageForVehicle, type StorageRow } from "./tire-storage-data";
 import {
   cleanDrop,
   formatLabelSize,
+  LABEL_PAPER_KEY,
   LABEL_SIZE_KEY,
+  parseLabelPaper,
   parseLabelSize,
   validateDrop,
+  type SaleStorageInput,
   type StorageDropInput,
 } from "./tire-storage-pure";
 
@@ -120,6 +123,15 @@ export async function updateStorage(id: number, drop: StorageDropInput): Promise
   return { ok: true };
 }
 
+/** 스티커 용지 — 일반 프린터(A4) / 라벨프린터 */
+export async function setLabelPaper(paper: string): Promise<Result<{ paper: string }>> {
+  if (!(await hasPerm("sale"))) return { ok: false, error: NO_SALE };
+  const v = parseLabelPaper(paper);
+  await setSetting(LABEL_PAPER_KEY, v);
+  revalidatePath("/print/storage");
+  return { ok: true, paper: v };
+}
+
 /** 스티커 크기 — 매장 라벨프린터에 맞춰 한 번 */
 export async function setLabelSize(raw: string): Promise<Result<{ size: string }>> {
   if (!(await hasPerm("sale"))) return { ok: false, error: NO_SALE };
@@ -176,4 +188,54 @@ export async function dismissCandidate(id: number): Promise<Result> {
 export async function findStoredSets(vehicleId: number | null, customerId: number | null): Promise<StorageRow[]> {
   if (!(await hasPerm("sale"))) return [];
   return storageForVehicle(vehicleId, customerId);
+}
+
+/** 정비 내역 카드 — 이 판매에 걸린 보관 (펼칠 때 부른다) */
+export async function saleStorage(quoteId: number): Promise<{ stored: StorageRow[]; released: StorageRow[] }> {
+  if (!(await hasPerm("sale"))) return { stored: [], released: [] };
+  return storageForSale(quoteId);
+}
+
+/**
+ * ⭐ 이미 저장한 판매에 보관 붙이기 (사장님 지시 2026-11-17 — 예약 「시공 완료」 · 판매 때 깜빡한 경우)
+ *
+ *   판매 저장 때와 **같은 정본**(applySaleStorage)으로, 그 판매에 연결해서 적는다 — 판매를 취소하면
+ *   지금처럼 같이 되돌아간다. 맡긴 날 = 시공한 날(예약이면 시공 완료일) → 없으면 작업일.
+ *   예약중(아직 시공 전)·취소된 판매·차 없는 판매는 안 된다.
+ */
+export async function attachSaleStorage(quoteId: number, storage: SaleStorageInput): Promise<Result<{ stored: { id: number; no: number }[]; released: number }>> {
+  if (!(await hasPerm("sale"))) return { ok: false, error: NO_SALE };
+  if (!hasSaleStorage(storage)) return { ok: false, error: "맡긴 타이어를 적거나 찾아간 세트를 골라 주세요" };
+  for (const d of storage.drops) {
+    const bad = validateDrop(d);
+    if (bad) return { ok: false, error: `맡긴 타이어: ${bad}` };
+  }
+  // 🔴 별칭은 AS 로 — 「day」·「at」 같은 낱말은 AS 없이 쓰면 문법 오류다 (2026-11-17 실측)
+  const [q] = await db.execute<{ status: string; reservation_status: string | null; vehicle_id: number | null; owner_id: number | null; on_day: string }>(sql`
+    SELECT q.status, q.reservation_status, q.vehicle_id, v.customer_id AS owner_id,
+           to_char(COALESCE(q.fulfilled_on, q.work_date), 'YYYY-MM-DD') AS on_day
+    FROM quote q LEFT JOIN vehicle v ON v.id = q.vehicle_id
+    WHERE q.id = ${quoteId}`);
+  if (!q) return { ok: false, error: "판매 기록을 찾지 못했습니다" };
+  if (q.status !== "성사") return { ok: false, error: "취소된 판매에는 보관을 붙일 수 없습니다" };
+  if (q.reservation_status === "예약중") return { ok: false, error: "아직 시공 전인 예약입니다 — 「시공 완료」를 먼저 눌러 주세요" };
+  if (q.vehicle_id == null || q.owner_id == null) return { ok: false, error: "차량이 없는 판매입니다 — 「손님·거래처 바꾸기」로 차를 먼저 붙여 주세요" };
+  const s = await getSession();
+  try {
+    const r = await db.transaction((tx) =>
+      applySaleStorage(tx, {
+        quoteId,
+        customerId: Number(q.owner_id),
+        vehicleId: Number(q.vehicle_id),
+        workDate: q.on_day,
+        userId: s?.uid ?? null,
+        storage,
+      }),
+    );
+    touch(Number(q.vehicle_id));
+    revalidatePath("/sales");
+    return { ok: true, stored: r.stored, released: r.released.length };
+  } catch (e) {
+    return { ok: false, error: errText(e) };
+  }
 }

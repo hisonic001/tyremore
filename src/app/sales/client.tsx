@@ -3,6 +3,7 @@
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { cancelSale, convertToReservation, fulfillReservation, updateSaleHead, updateSaleMemo } from "@/lib/sale-edit";
+import { SaleStorageAttach } from "./storage-attach";
 import Link from "@/lib/link";
 import type { SaleRow } from "@/lib/sale-history";
 import { EXCLUSIVE, SPLITTABLE, splitLabel } from "@/lib/payments";
@@ -81,6 +82,8 @@ export function SaleCard({
   const [editing, setEditing] = useState(false);
   /** 손님·거래처 바꾸기 패널 (2026-08-17) */
   const [reassigning, setReassigning] = useState(false);
+  /** ⭐ 📦 보관 붙이기 (2026-11-17) — 시공 완료 직후 저절로 열린다 */
+  const [storageOpen, setStorageOpen] = useState(false);
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -723,12 +726,24 @@ export function SaleCard({
                               ? `시공 완료 — ⚠️ 재고 부족: ${r.shortages.join(" · ")} (재주문 확인!)${due}`
                               : `시공 완료 — 재고가 차감됐습니다.${due}${remain > 0 ? " 받으면 MARS 에 올릴 수 있습니다." : " 이제 MARS 에 올릴 수 있습니다."}`,
                           );
+                          // 보관 타이어를 빼고 끼웠으면 바로 적게 (예약 때는 보관 칸이 없다)
+                          if (s.vehicleId !== null) setStorageOpen(true);
                           router.refresh();
                         })
                       }
                       className="w-full rounded-lg bg-violet-700 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
                     >
                       🔧 시공 완료 — 이제 재고 차감
+                    </button>
+                  )}
+                  {/* ⭐ 📦 보관 (2026-11-17) — 이 판매에 맡김·찾아감 붙이기 (예약 시공 완료 · 판매 때 깜빡함) */}
+                  {s.status === "성사" && s.vehicleId !== null && s.reservationStatus !== "예약중" && (
+                    <button
+                      type="button"
+                      onClick={() => setStorageOpen((v) => !v)}
+                      className="flex-1 rounded-lg border border-slate-300 py-2 text-sm font-medium text-slate-700 active:bg-slate-50"
+                    >
+                      {storageOpen ? "📦 보관 접기" : "📦 보관"}
                     </button>
                   )}
                   <button
@@ -796,6 +811,15 @@ export function SaleCard({
                     판매 취소 (재고 복원)
                   </button>
                 </div>
+              )}
+              {storageOpen && s.vehicleId !== null && s.status === "성사" && (
+                <SaleStorageAttach
+                  quoteId={s.quoteId}
+                  vehicleId={s.vehicleId}
+                  customerId={s.customerId}
+                  lines={s.lines}
+                  onClose={() => setStorageOpen(false)}
+                />
               )}
               <p className="mt-2 text-xs text-slate-400">
                 품목마다 「고치기」로 수량·단가를 바꾸거나 지울 수 있습니다 — 재고가 알아서 따라갑니다.

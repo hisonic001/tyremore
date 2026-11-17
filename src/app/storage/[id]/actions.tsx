@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/notice";
 import { useConfirm } from "@/components/ui/confirm";
 import { excludeStorage, releaseStorage, restoreStorage, updateStorage } from "@/lib/tire-storage";
-import type { StorageDropInput, StorageStatus } from "@/lib/tire-storage-pure";
+import { sizeHints, type StorageDropInput, type StorageStatus } from "@/lib/tire-storage-pure";
 import { DropFields } from "../drop-fields";
 
 /** 보관 세트 상세의 단추들 — 위험한 것은 확인 시트(useConfirm) */
@@ -16,12 +16,14 @@ export function StorageActions({
   manualRelease,
   canEdit,
   drop: initial,
+  lastFittedSize,
 }: {
   id: number;
   status: StorageStatus;
   manualRelease: boolean;
   canEdit: boolean;
   drop: StorageDropInput;
+  lastFittedSize?: string | null;
 }) {
   const router = useRouter();
   const [ask, confirmNode] = useConfirm();
@@ -92,7 +94,7 @@ export function StorageActions({
 
       {editing && (
         <div className="mt-2 rounded-card border border-slate-200 bg-white p-3">
-          <DropFields value={drop} onChange={setDrop} disabled={pending} />
+          <DropFields value={drop} onChange={setDrop} disabled={pending} sizeHints={sizeHints(initial.size, lastFittedSize)} />
           <div className="mt-2 grid grid-cols-2 gap-2">
             <Button variant="secondary" onClick={() => (setEditing(false), setDrop(initial))}>
               취소
