@@ -38,6 +38,11 @@ async function main() {
       )`;
     await sql`CREATE INDEX IF NOT EXISTS idx_intake_log_received ON intake_log (received_at DESC)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_intake_log_status ON intake_log (status) WHERE status IN ('대기','보관','해석불가','오류')`;
+    /* ⭐ 2026-11-17 보강 — 지난 메일 일괄 검토: 상태 「검토」(해석만, 장부 미반영) + 해석 요약 칸 parsed */
+    await sql`ALTER TABLE intake_log ADD COLUMN IF NOT EXISTS parsed jsonb`;
+    await sql`ALTER TABLE intake_log DROP CONSTRAINT IF EXISTS intake_log_status`;
+    await sql`ALTER TABLE intake_log ADD CONSTRAINT intake_log_status
+              CHECK (status IN ('대기','반영','중복','보관','해석불가','오류','검토'))`;
     // 알림 줄을 빨리 찾는다 — 통장 파일이 올라올 때마다 「알림|」 줄을 훑는다
     await sql`CREATE INDEX IF NOT EXISTS idx_cash_txn_alert ON cash_txn (account_label, occurred_at)
               WHERE is_active AND dedup_key LIKE '알림|%'`;

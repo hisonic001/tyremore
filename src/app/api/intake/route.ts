@@ -40,6 +40,8 @@ export async function POST(req: Request) {
     if (ctype.includes("application/json")) {
       const j = (await req.json()) as Record<string, unknown>;
       const s = (k: string) => (typeof j[k] === "string" ? (j[k] as string) : null);
+      /* 지난 메일 일괄 검토(구글 스크립트 backfill)는 「review」 — 해석만 하고 장부에 넣지 않는다 */
+      const mode = j.mode === "review" ? ("review" as const) : ("apply" as const);
       if (j.type === "bank-alert") {
         // 알림 앱마다 칸 이름이 다르다 — 가장 긴 글자(펼친 내용)를 쓴다
         const text = [s("bigText"), s("text"), s("body")].filter(Boolean).sort((x, y) => y!.length - x!.length)[0];
@@ -50,12 +52,12 @@ export async function POST(req: Request) {
         const fileName = s("fileName");
         const base64 = s("base64");
         if (!messageId || !fileName || !base64) return bad("messageId·fileName·base64 가 필요합니다");
-        input = { type: "mail-file", messageId, index: Number(j.index ?? 0), sender: s("sender"), subject: s("subject"), fileName, mime: s("mime"), base64 };
+        input = { type: "mail-file", messageId, index: Number(j.index ?? 0), sender: s("sender"), subject: s("subject"), fileName, mime: s("mime"), base64, mode };
       } else if (j.type === "mail-note") {
         const messageId = s("messageId");
         const body = s("body");
         if (!messageId || !body) return bad("messageId·body 가 필요합니다");
-        input = { type: "mail-note", messageId, sender: s("sender"), subject: s("subject"), body };
+        input = { type: "mail-note", messageId, sender: s("sender"), subject: s("subject"), body, mode };
       } else {
         return bad("type 을 모릅니다");
       }
