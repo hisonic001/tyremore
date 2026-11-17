@@ -9,6 +9,13 @@
  *     입금(1210) ← 현240991175
  *     잔액 9,639,873원
  *
+ *     입출금 안내                      ← 출금 (2026-11-17 12:55 캡처)
+ *     출금 9,768,703원 11/17 12:55
+ *     입금(1210) → (주)싸이오토모
+ *     잔액 0원
+ *
+ *   🔴 둘째 줄 앞의 「입금(1210)」은 거래 종류가 아니라 **통장 별명 + 계좌 끝 네 자리**다 — 출금 알림에도
+ *      「입금(1210)」이 붙는다(별명이 「입금」인 통장). 별명은 통장마다 다르니 별명이 아니라 숫자로 가른다.
  *   🔴 알림은 **속보**다. 통장 파일(정본)이 올라오면 같은 거래를 파일 내용으로 **확정**한다
  *      (matchAlertToStatement — 새 줄을 하나 더 만들지 않는다. fin-ingest.ingestCashTxns).
  *   🔴 접힌 알림은 둘째·셋째 줄이 잘려 올 수 있다 — 금액·시각만 있어도 받고, 잔액 없음은 표시한다.
@@ -19,8 +26,10 @@ export interface BankAlert {
   amount: number;
   /** KST "YYYY-MM-DD HH:mm:00" — 알림은 분까지만 준다 */
   occurredAt: string;
-  /** 「입금(1210)」의 괄호 숫자 — 계좌를 가르는 표 (BANK_ALERT_ACCOUNTS 로 계정 이름에 잇는다) */
+  /** 「입금(1210)」의 괄호 숫자 = 계좌 끝 네 자리 — 계좌를 가르는 표 (BANK_ALERT_ACCOUNTS 로 계정 이름에 잇는다) */
   accountTag: string | null;
+  /** 「입금(1210)」의 앞말 = SOL Biz 에 붙인 통장 별명 (거래 종류 아님). 화면 표시용 */
+  accountName: string | null;
   /** 「← 현240991175」 상대(입금자·받는 분). 카드사 정산이면 카드사 첫 글자 + 가맹점 번호 */
   counterparty: string | null;
   /** 거래 후 잔액 — 통장 파일과 맞춰 볼 핵심 열쇠 */
@@ -54,16 +63,18 @@ export function parseBankAlert(text: string, now: Date = new Date()): BankAlert 
   const pad = (n: number) => String(n).padStart(2, "0");
   const occurredAt = `${year}-${pad(mm)}-${pad(dd)} ${pad(hh)}:${pad(mi)}:00`;
 
-  // 둘째 줄: 「입금(1210) ← 현240991175」 / 출금은 화살표가 반대일 수 있다
-  const who = /(?:입금|출금)\s*\((\d+)\)\s*(?:←|→|<-|->|<|>)?\s*([^\n]+)/.exec(t.slice(head.index + head[0].length));
-  const accountTag = who?.[1] ?? null;
-  const counterpartyRaw = who?.[2]?.replace(/잔액.*$/, "").replace(/…|\.\.\.$/g, "").trim() ?? "";
+  // 둘째 줄: 「별명(끝4자리) ← 상대」(입금) / 「별명(끝4자리) → 상대」(출금)
+  //   별명은 아무 말이나 될 수 있다(「입금」「주거래」…). 괄호 안이 숫자일 때만 계좌로 본다 — 상대의 「(주)」와 갈린다
+  const who = /([^\s()←→<>]{1,20})\s*\((\d{3,6})\)\s*(?:←|→|<-|->|<|>)?\s*([^\n]+)/.exec(t.slice(head.index + head[0].length));
+  const accountName = who?.[1] ?? null;
+  const accountTag = who?.[2] ?? null;
+  const counterpartyRaw = who?.[3]?.replace(/잔액.*$/, "").replace(/…|\.\.\.$/g, "").trim() ?? "";
   const counterparty = counterpartyRaw.length > 0 ? counterpartyRaw : null;
 
   const bal = /잔액\s*(-?[\d,]+)\s*원/.exec(t);
   const balance = bal ? (bal[1].startsWith("-") ? -num(bal[1]) : num(bal[1])) : null;
 
-  return { direction, amount, occurredAt, accountTag, counterparty, balance };
+  return { direction, amount, occurredAt, accountTag, accountName, counterparty, balance };
 }
 
 /** 「1210=신한입금;5678=신한출금」 → 계좌표 → 계정 이름 */
