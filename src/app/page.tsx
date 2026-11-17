@@ -109,6 +109,13 @@ export default async function Home({
           >
             정비 조회
           </Link>
+          {/* ⭐ 타이어 보관 (D-42, 2026-11-17) — 보관번호·차량번호로 맡긴 타이어 찾기 */}
+          <Link
+            href="/storage"
+            className="rounded-control px-2.5 py-2 text-sm font-medium text-slate-600 active:bg-slate-200 lg:hover:bg-slate-100"
+          >
+            보관
+          </Link>
         </nav>
       </header>
 

@@ -5,6 +5,7 @@ import { db } from "@/db";
 import { VehicleEditForm } from "./form";
 import { ToSupplier } from "./to-supplier";
 import { VehicleSpecBlock } from "./spec-block";
+import { VehicleStorageBlock } from "./storage-block";
 import { hasPerm } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -132,6 +133,9 @@ export default async function VehiclePage({ params }: { params: Promise<{ id: st
           memo: row.v_memo,
         }}
       />
+      {/* ⭐ 보관 타이어 (D-42, 2026-11-17) */}
+      {(await hasPerm("sale")) && <VehicleStorageBlock vehicleId={Number(row.vehicle_id)} customerId={Number(row.customer_id)} />}
+
       {/* ⭐ 순정 제원 (2026-09-03) — 확인된 값만, 세대를 아는 차만 */}
       <VehicleSpecBlock vehicleId={Number(row.vehicle_id)} />
 

@@ -319,6 +319,8 @@ export const stockItem = pgTable(
     createdAt,
   },
   (t) => [
+    /* 🔴 '보관중' 은 쓰지 않는다 (D-42, 2026-11-17) — 손님이 맡긴 타이어는 tire_storage 에만 둔다.
+       매장 재고와 같은 표에 두면 남의 타이어를 팔 수 있고 재고 정합 검사가 틀어진다. */
     check("stock_status", sql`${t.status} IN ('재고','보관중','판매완료','반품','폐기')`),
     check("stock_qty_positive", sql`${t.qty} >= 0`),
     index("idx_stock_avail").on(t.productId).where(sql`${t.status} = '재고'`),
@@ -1827,3 +1829,57 @@ export const saleDraft = pgTable("sale_draft", {
   updatedAt,
 });
 
+/**
+ * ⭐ 타이어 보관 (D-42, 2026-11-17 사장님 착수 지시) — 정본 생성: scripts/add-tire-storage.ts
+ *
+ *   손님이 맡긴 타이어 한 세트 = 한 줄. **보관번호가 곧 창고 자리**(번호 순서로 쌓음 — 자리 칸 없음).
+ *   🔴 손님 타이어는 stock_item/stock_movement(매장 재고)에 넣지 않는다. stock_item 「보관중」 값은 쓰지 않는다.
+ *   🔴 보관번호는 재사용하지 않는다 — 찾아간 자리가 비어도 새 세트는 맨 끝(tire-storage-db.nextStorageNo).
+ *   보관료는 여기 없다 — 받을 땐 판매에 「보관료」(S001/1194) 줄을 넣는다(손님마다 다름).
+ */
+export const tireStorage = pgTable(
+  "tire_storage",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    /** 0001… — 확인대기·(번호 받기 전)제외는 비어 있다 */
+    storageNo: integer("storage_no").unique(),
+    /** 확인대기 · 보관중 · 찾아감 · 폐기 · 제외 */
+    status: text("status").notNull().default("보관중"),
+    /** 타이어 주인. 거래처 차량이면 그 거래처의 차고 고객(garage.ts) */
+    customerId: bigint("customer_id", { mode: "number" })
+      .notNull()
+      .references(() => customer.id),
+    /** 어느 차에서 뺐나 — 번호판이 바뀌면 새 차량이라(차 바꿈 규칙) 손님으로도 찾는다 */
+    vehicleId: bigint("vehicle_id", { mode: "number" }).references(() => vehicle.id),
+    /** 스노 · 일반(사계절·여름) */
+    kind: text("kind"),
+    brand: text("brand"),
+    size: text("size"),
+    qty: integer("qty").notNull().default(4),
+    dot: text("dot"),
+    memo: text("memo"),
+    storedOn: date("stored_on").notNull(),
+    storedQuoteId: bigint("stored_quote_id", { mode: "number" }).references(() => quote.id),
+    releasedOn: date("released_on"),
+    releasedQuoteId: bigint("released_quote_id", { mode: "number" }).references(() => quote.id),
+    releaseNote: text("release_note"),
+    /** 실사 후보의 원래 판매 메모 */
+    sourceText: text("source_text"),
+    createdBy: bigint("created_by", { mode: "number" }).references(() => appUser.id),
+    releasedBy: bigint("released_by", { mode: "number" }).references(() => appUser.id),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    check("tire_storage_status", sql`${t.status} IN ('확인대기','보관중','찾아감','폐기','제외')`),
+    check("tire_storage_kind", sql`${t.kind} IS NULL OR ${t.kind} IN ('스노','일반')`),
+    check("tire_storage_kind_needed", sql`${t.kind} IS NOT NULL OR ${t.status} IN ('확인대기','제외')`),
+    check("tire_storage_no_needed", sql`${t.storageNo} IS NOT NULL OR ${t.status} IN ('확인대기','제외')`),
+    check("tire_storage_qty", sql`${t.qty} BETWEEN 1 AND 8`),
+    index("idx_tire_storage_customer").on(t.customerId).where(sql`${t.status} = '보관중'`),
+    index("idx_tire_storage_vehicle").on(t.vehicleId),
+    index("idx_tire_storage_stored_quote").on(t.storedQuoteId),
+    index("idx_tire_storage_released_quote").on(t.releasedQuoteId),
+    index("idx_tire_storage_status").on(t.status, t.storageNo),
+  ],
+);

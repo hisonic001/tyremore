@@ -161,6 +161,20 @@ export async function reassignSale(input: {
   if (before === after) return { ok: false, error: "이미 그 대상입니다" };
 
   /**
+   * ⭐ 타이어 보관 (D-42) — 이 판매로 맡긴 세트는 새 차·새 주인으로 따라간다.
+   *    비회원으로 돌리면 차가 없어져 세트가 갈 곳이 없다 → 막는다.
+   *    거래처로 돌릴 때는 차량을 유지하므로 세트도 그대로.
+   */
+  const [stc] = await db.execute<{ stored: number; released: number }>(sql`
+    SELECT count(*) FILTER (WHERE stored_quote_id = ${q.id} AND status IN ('보관중','확인대기'))::int stored,
+           count(*) FILTER (WHERE released_quote_id = ${q.id} AND status = '찾아감')::int released
+    FROM tire_storage`);
+  const storedHere = Number(stc?.stored ?? 0);
+  if (storedHere > 0 && input.target.kind === "walkin") {
+    return { ok: false, error: "이 판매로 맡긴 보관 타이어가 있어 비회원으로 바꿀 수 없습니다 — 손님·차량을 골라 주세요" };
+  }
+
+  /**
    * ── MARS 상태 ──
    * 거래처 판매는 MARS 에 안 간다('해당없음'). 개인으로 돌아오면 다시 올릴 수 있어야 한다.
    * 🔴 '미전송' 이 아니라 '보류' 로 돌린다 — '미전송' 은 매장 PC 가 확인 없이 집어간다.
@@ -204,6 +218,12 @@ export async function reassignSale(input: {
       })
       .where(eq(quote.id, q.id));
 
+    if (storedHere > 0 && input.target.kind === "customer") {
+      await tx.execute(sql`
+        UPDATE tire_storage SET customer_id = ${setCustomerId}, vehicle_id = ${setVehicleId}, updated_at = now()
+        WHERE stored_quote_id = ${q.id} AND status IN ('보관중','확인대기')`);
+    }
+
     /** MARS 에 이미 들어간 건은 메모에도 한 번만 남긴다 (sale-edit 의 방식과 같게) */
     if (q.marsStatus === "전송완료") {
       await tx.execute(sql`
@@ -220,6 +240,10 @@ export async function reassignSale(input: {
    * ⚠️ vehicle.mileage 도 갱신하지 않는다 — 과거 판매를 새 차에 붙이면서 그 차의
    *    최신 주행거리를 옛 값으로 덮으면 안 된다.
    */
+  if (input.target.kind === "customer" && Number(stc?.released ?? 0) > 0) {
+    const note = "이 판매로 「찾아감」 처리한 보관 세트는 옛 주인 기록에 그대로 있습니다 — 보관 화면에서 확인해 주세요";
+    warning = warning ? `${warning} · ${note}` : note;
+  }
   refresh();
   return { ok: true, from: before, to: after, warning };
 }

@@ -30,6 +30,8 @@ export interface SaleDraftState {
   /** ⭐ 2026-09-07 보강 — 접히지 않아 복원 때 유실되던 두 칸 */
   payDates?: Record<string, string>;
   reserve?: boolean;
+  /** ⭐ 타이어 보관 (D-42, 2026-11-17) — 오늘 맡김·찾아감. 옛 임시저장엔 없다(비면 빈 값) */
+  storage?: unknown;
 }
 
 /** 옛 localStorage 에 남은 접어둔 판매 — 서버로 이사 보낼 때 한 번 읽는다 */

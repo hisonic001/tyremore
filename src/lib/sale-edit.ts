@@ -23,6 +23,7 @@ import { db } from "@/db";
 import { quote, quotePayment, stockItem, stockMovement } from "@/db/schema";
 import { ALL_METHODS, checkSplitPayments } from "./payments";
 import { PERM_DENIED } from "./perm-keys";
+import { revertSaleStorage } from "./tire-storage-db";
 
 function refresh() {
   for (const p of ["/sales", "/", "/stock"]) {
@@ -224,6 +225,14 @@ export async function convertToReservation(
   if (q.status === "취소") return { ok: false, error: "취소된 판매입니다" };
   if (q.reservationStatus === "예약중") return { ok: false, error: "이미 예약중인 판매입니다" };
 
+  /* 🔴 보관이 걸린 판매 (D-42) — 예약은 「아직 시공 안 함」이라 맡김·찾아감과 모순된다 */
+  const [st] = await db.execute<{ n: number }>(sql`
+    SELECT count(*)::int n FROM tire_storage
+    WHERE (stored_quote_id = ${quoteId} AND status = '보관중') OR (released_quote_id = ${quoteId} AND status = '찾아감')`);
+  if (Number(st?.n ?? 0) > 0) {
+    return { ok: false, error: "이 판매에 타이어 보관(맡김·찾아감)이 걸려 있어 예약으로 바꿀 수 없습니다 — 판매를 취소하고 예약으로 다시 등록해 주세요" };
+  }
+
   if (q.marsStatus === "전송완료" && !confirmMars) {
     return {
       ok: false,
@@ -346,7 +355,7 @@ export async function cancelSale(
   confirmMars = false,
   userId?: number,
 ): Promise<
-  | { ok: true; restored: number; marsWarning: string | null }
+  | { ok: true; restored: number; marsWarning: string | null; storageNote: string | null }
   | { ok: false; error: string; needMarsConfirm?: boolean }
 > {
   if (!(await (await import("./auth")).hasPerm("sale_edit"))) return { ok: false, error: PERM_DENIED };
@@ -394,6 +403,9 @@ export async function cancelSale(
    */
   const restored = await restoreStockForQuote(quoteId, "판매취소", `${q.quoteNo} 취소`, userId);
 
+  /* ⭐ 보관 되돌리기 (D-42) — 이 판매로 맡긴 세트는 「제외」(스티커 떼기), 찾아간 세트는 다시 보관중 */
+  const storageNote = await db.transaction((tx) => revertSaleStorage(tx, quoteId, q.quoteNo, userId ?? null));
+
   const marsWarning =
     q.marsStatus === "전송완료"
       ? "MARS 에는 아직 남아 있습니다 — MARS 매출 주문(또는 송장)을 직접 지워 주세요"
@@ -411,7 +423,8 @@ export async function cancelSale(
     .where(eq(quote.id, quoteId));
 
   refresh();
-  return { ok: true, restored, marsWarning };
+  if (storageNote) revalidatePath("/storage");
+  return { ok: true, restored, marsWarning, storageNote };
 }
 
 /* ============================================================
