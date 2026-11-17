@@ -18,11 +18,11 @@
 /** 보내는 대상 — 발신처와 무엇을 보낼지 */
 var SOURCES = [
   { from: 'contactus.kr@michelin.com', what: 'files' },                 // 미쉐린 인보이스 PDF
-  { from: 'TI_Z3_SM_noreply.sap-p52@continental.com', what: 'files' },  // 콘티넨탈 Proforma Invoice PDF
   { from: 'hometaxadmin@hometax.go.kr', what: 'files' },                // 홈택스 전자세금계산서 (보안메일)
-  { from: 'wooricard@wooricard.com', what: 'files' },                   // 우리카드 이용대금명세서 (보안메일)
-  { from: 'shinhancard@mail3.shinhancard.com', what: 'files' },         // 신한카드 법인 이용대금명세서
-  { from: 'easypay_noreturn@easypay.co.kr', what: 'note' },             // 미쉐린 가상계좌 결제 알림 (본문)
+  // 2026-11-17 실물 분석 뒤 빼기로 한 것 (D-41 보강) — 앱도 받으면 「쓰지 않음」으로 보관만 한다
+  //   콘티넨탈 Proforma  : 미출고 주문 누적 청구서(1시간마다 같은 줄 반복) → 입고는 billing-report 엑셀
+  //   우리·신한카드 명세서: 카드사 전용 보안 프로그램 → 카드사 엑셀을 회계\올리기 폴더에
+  //   KICC 결제 알림     : 통장 출금이 인보이스 합계와 원 단위로 맞아 지급 자동 대조가 이미 잇는다
 ];
 var LABEL = '앱수집';
 var FILE_RE = /\.(pdf|xlsx?|html?)$/i;
