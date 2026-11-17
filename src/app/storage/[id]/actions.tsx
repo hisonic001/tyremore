@@ -5,9 +5,10 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/notice";
 import { useConfirm } from "@/components/ui/confirm";
-import { excludeStorage, releaseStorage, restoreStorage, updateStorage } from "@/lib/tire-storage";
+import { excludeStorage, moveStorage, releaseStorage, renumberStorage, restoreStorage, updateStorage } from "@/lib/tire-storage";
 import { sizeHints, type StorageDropInput, type StorageStatus } from "@/lib/tire-storage-pure";
 import { DropFields } from "../drop-fields";
+import { otherPlatesIn, VehiclePicker } from "../vehicle-picker";
 
 /** 보관 세트 상세의 단추들 — 위험한 것은 확인 시트(useConfirm) */
 export function StorageActions({
@@ -17,6 +18,9 @@ export function StorageActions({
   canEdit,
   drop: initial,
   lastFittedSize,
+  plateNo,
+  sourceText,
+  storageNo,
 }: {
   id: number;
   status: StorageStatus;
@@ -24,6 +28,9 @@ export function StorageActions({
   canEdit: boolean;
   drop: StorageDropInput;
   lastFittedSize?: string | null;
+  plateNo?: string | null;
+  sourceText?: string | null;
+  storageNo?: number | null;
 }) {
   const router = useRouter();
   const [ask, confirmNode] = useConfirm();
@@ -31,6 +38,10 @@ export function StorageActions({
   const [msg, setMsg] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const [editing, setEditing] = useState(false);
   const [drop, setDrop] = useState(initial);
+  /** ⭐ 주인·차량 / 번호 바꾸기 (2026-11-17) */
+  const [moving, setMoving] = useState(false);
+  const [renumbering, setRenumbering] = useState(false);
+  const [newNo, setNewNo] = useState(storageNo ? String(storageNo) : "");
 
   const run = (fn: () => Promise<{ ok: true } | { ok: false; error: string }>, done: string) =>
     start(async () => {
@@ -89,6 +100,60 @@ export function StorageActions({
               잘못 등록 — 지우기
             </Button>
           )}
+        </div>
+      )}
+
+      {status === "보관중" && canEdit && !editing && !moving && !renumbering && (
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <Button variant="ghost" onClick={() => setMoving(true)}>
+            주인·차량 바꾸기
+          </Button>
+          <Button variant="ghost" onClick={() => setRenumbering(true)}>
+            번호 바꾸기
+          </Button>
+        </div>
+      )}
+
+      {moving && (
+        <VehiclePicker
+          suggestions={otherPlatesIn(sourceText, plateNo)}
+          pending={pending}
+          onCancel={() => setMoving(false)}
+          onPick={async (h) => {
+            if (!(await ask({ title: `${h.plateNo} ${h.customerName} 의 세트로 바꿀까요?`, body: "주인이 그 차의 주인으로 바뀝니다. 스티커 내용이 바뀌니 다시 뽑아 붙여 주세요.", confirmLabel: "바꾸기" })))
+              return;
+            setMoving(false);
+            run(() => moveStorage(id, h.vehicleId), `${h.plateNo} 의 세트로 바꿨습니다 — 스티커를 다시 뽑아 붙여 주세요`);
+          }}
+        />
+      )}
+
+      {renumbering && (
+        <div className="mt-2 rounded-card border border-slate-200 bg-white p-3">
+          <label className="flex items-center gap-2 text-sm text-slate-600">
+            새 보관번호
+            <input
+              value={newNo}
+              onChange={(e) => setNewNo(e.target.value.replace(/\D/g, ""))}
+              inputMode="numeric"
+              className="tabular w-28 rounded-control border border-slate-300 px-3 py-2 text-lg font-bold"
+            />
+          </label>
+          <p className="mt-1 text-xs text-slate-500">이미 다른 번호를 적어 붙였을 때 맞추는 용도입니다. 다른 세트가 쓴 번호는 못 씁니다.</p>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <Button variant="secondary" onClick={() => setRenumbering(false)}>
+              취소
+            </Button>
+            <Button
+              pending={pending}
+              onClick={() => {
+                setRenumbering(false);
+                run(() => renumberStorage(id, Number(newNo)), "번호를 바꿨습니다 — 스티커를 다시 뽑아 붙이고, 그 번호 자리에 놓아 주세요");
+              }}
+            >
+              번호 바꾸기
+            </Button>
+          </div>
         </div>
       )}
 

@@ -110,6 +110,9 @@ export default async function StorageDetailPage({ params, searchParams }: { para
         manualRelease={d.releasedQuoteId == null}
         canEdit={canEdit}
         lastFittedSize={d.lastFittedSize}
+        plateNo={d.plateNo}
+        sourceText={d.sourceText}
+        storageNo={d.no}
         drop={{ kind: (d.kind as "스노" | "일반" | null) ?? null, brand: d.brand ?? "", size: d.size ?? "", qty: d.qty, dot: d.dot ?? "", memo: d.memo ?? "" }}
       />
 
