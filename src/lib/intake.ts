@@ -106,15 +106,32 @@ async function route(
     const r = await ingestBankAlertText(input.text);
     return { status: r.status, result: r.result, ...("cashTxnId" in r && r.cashTxnId ? { linkedTable: "cash_txn", linkedId: r.cashTxnId } : {}) };
   }
-  if (input.type === "mail-note") return { status: "보관", result: "메일 본문 보관 (결제 알림 등 — 아직 자동 처리 없음)" };
+  /* 쓰지 않기로 정한 메일 (D-41 보강, 2026-11-17 실물 분석) — 버리지 않고 보관하되 까닭을 한 줄로 */
+  if (input.type === "mail-note") {
+    return { status: "보관", result: "결제 알림 — 쓰지 않음: 미쉐린 가상계좌 결제는 통장 출금이 인보이스 합계와 원 단위로 맞아 지급 자동 대조로 이어진다" };
+  }
 
   const name = input.fileName;
   const buf = bytes!;
 
+  if (/^Continental Proforma Invoice/i.test(name)) {
+    return {
+      status: "보관",
+      result: "콘티넨탈 Proforma — 쓰지 않음: 미출고 주문 전체를 1시간마다 다시 보내는 누적 청구서라 입고에 넣으면 중복된다. 입고는 billing-report 엑셀",
+    };
+  }
+
   // ① 보안메일 (홈택스 전자세금계산서)
   if (/\.html?$/i.test(name)) {
     const html = buf.toString("utf8");
-    if (!isCriMail(html)) return { status: "보관", result: "보안메일 형식이 아닌 HTML — 원본 보관" };
+    if (!isCriMail(html)) {
+      return {
+        status: "보관",
+        result: /woori|shinhancard/i.test(name)
+          ? "카드 명세서 메일 — 쓰지 않음: 카드사 전용 보안 프로그램이라 깨지기 쉽다. 카드사 엑셀(승인 상세내역)을 회계\\올리기 폴더에"
+          : "보안메일 형식이 아닌 HTML — 원본 보관",
+      };
+    }
     const shop = await getShopInfo();
     const bizNo = (shop.bizNo ?? process.env.INTAKE_BIZ_NO ?? "").replace(/\D/g, "");
     if (bizNo.length !== 10) return { status: "보관", result: "매장 사업자번호가 없어 보안메일을 못 엽니다 — 설정 → 매장 정보에 사업자번호를 넣어 주세요" };
