@@ -17,6 +17,19 @@ export const STORAGE_FEE_SERVICE_NO = "S001/1194";
 /** 라벨 기본 크기 — 기종 확인 전 기본값(브라더 62mm 연속지 기준) */
 export const DEFAULT_LABEL = { w: 62, h: 40 } as const;
 export const LABEL_SIZE_KEY = "storage_label_size";
+/**
+ * 스티커 용지 — 「a4」(일반 프린터, A4 한 장에 8개를 잘라 붙임) · 「label」(라벨프린터, 한 장에 하나).
+ * 기본 a4 — 라벨프린터를 아직 안 샀다 (사장님 2026-11-17).
+ */
+export const LABEL_PAPER_KEY = "storage_label_paper";
+export type LabelPaper = "a4" | "label";
+export function parseLabelPaper(raw: string | null | undefined): LabelPaper {
+  return raw === "label" ? "label" : "a4";
+}
+/** 라벨에 쓰는 종류 이름 — 사장님 표현 「일반 / 윈터」 */
+export function labelKind(kind: string | null | undefined): string {
+  return kind === "스노" ? "윈터" : kind === "일반" ? "일반" : "";
+}
 
 /** 0012 — 4자리 미만만 앞을 0으로 채운다(1만 번째부터는 그대로) */
 export function formatStorageNo(n: number | null | undefined): string {
@@ -88,6 +101,82 @@ export interface SaleStorageInput {
   pickupIds: number[];
 }
 
+/* ------------------------------------------------------------------
+ * 고르는 입력 (사장님 2026-11-17 — "일일이 미쉐린·한국을 쓰고 규격도 써야 해서 실사가 힘들다.
+ * 텍스트보다 옵션을 펼쳐서 고르는 형식이 낫다")
+ * ---------------------------------------------------------------- */
+
+/** 브랜드 버튼 — 앞쪽이 자주 쓰는 것. 메모 해석(brandsIn)과 같은 이름을 쓴다 */
+export const STORAGE_BRANDS = [
+  "한국",
+  "금호",
+  "미쉐린",
+  "넥센",
+  "콘티넨탈",
+  "피렐리",
+  "브리지스톤",
+  "굿이어",
+  "제너럴",
+  "라우펜",
+  "던롭",
+  "요코하마",
+  "맥시스",
+  "쿠퍼",
+] as const;
+
+/** "금호,넥센" ↔ ["금호","넥센"] — 섞인 세트는 여러 개를 고른다 */
+export function splitBrands(raw: string | null | undefined): string[] {
+  return (raw ?? "")
+    .split(/[,·/]/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+export function joinBrands(list: string[]): string {
+  return [...new Set(list.map((x) => x.trim()).filter(Boolean))].join(",");
+}
+
+export const SIZE_WIDTHS = [135, 145, 155, 165, 175, 185, 195, 205, 215, 225, 235, 245, 255, 265, 275, 285, 295, 305, 315, 325];
+export const SIZE_ASPECTS = [25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80];
+export const SIZE_RIMS = [12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
+
+export interface SizeParts {
+  w: number;
+  /** null = 편평비 없는 밴 표기(145R13) */
+  a: number | null;
+  r: number;
+  /** 145R13C 의 C */
+  c?: boolean;
+}
+
+/** "225/45R18" · "225/45ZR18" · "145R13C" → 칸 셋. 앞뒤 다른 규격·이상한 글은 null(직접 입력으로) */
+export function parseSizeParts(raw: string | null | undefined): SizeParts | null {
+  const t = (raw ?? "").trim().toUpperCase().replace(/\s+/g, "");
+  let m = /^(\d{3})\/(\d{2})Z?R(\d{2})$/.exec(t);
+  if (m) return { w: +m[1], a: +m[2], r: +m[3] };
+  m = /^(\d{3})R(\d{2})(C?)$/.exec(t);
+  if (m) return { w: +m[1], a: null, r: +m[2], c: m[3] === "C" };
+  return null;
+}
+
+export function composeSize(p: SizeParts): string {
+  return p.a == null ? `${p.w}R${p.r}${p.c ? "C" : ""}` : `${p.w}/${p.a}R${p.r}`;
+}
+
+/** 규격 바로 고르기 버튼 — 겹치지 않게, 칸 셋으로 읽히는 것만 */
+export function sizeHints(...raw: (string | null | undefined)[]): string[] {
+  const out: string[] = [];
+  for (const r of raw) {
+    for (const piece of (r ?? "").split(/,\s*/)) {
+      const p = parseSizeParts(piece);
+      if (p) {
+        const s = composeSize(p);
+        if (!out.includes(s)) out.push(s);
+      }
+    }
+  }
+  return out.slice(0, 4);
+}
+
 /** 맡김 한 줄 검사 — 문제 있으면 사람에게 보일 문장 */
 export function validateDrop(d: StorageDropInput): string | null {
   if (d.kind !== "스노" && d.kind !== "일반") return "스노/일반 중 하나를 골라 주세요";
@@ -130,7 +219,7 @@ const BRAND_ALIASES: [RegExp, string][] = [
   [/던롭/, "던롭"],
   [/요코하마/, "요코하마"],
   [/토요/, "토요"],
-  [/쿠퍼/, "쿠퍼"],
+  [/쿠퍼|COOPER/i, "쿠퍼"],
 ];
 
 const SIZE_RE = /\d{3}\/\d{2}\s*Z?R\s*\d{2}(?:\.\d)?C?|\d{3}\/\d{2}\+\d{3}\/\d{2}\s*Z?R\s*\d{2}|\b\d{3}R\d{2}C?\b/gi;

@@ -1,11 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { VehicleHit } from "@/lib/search";
 import { findStoredSets } from "@/lib/tire-storage";
 import type { StorageRow } from "@/lib/tire-storage-data";
 import { parseTireAttrs } from "@/lib/tire-attrs";
-import { formatStorageNo, suggestDropKind, type SaleStorageInput } from "@/lib/tire-storage-pure";
+import { formatStorageNo, sizeHints, suggestDropKind, type SaleStorageInput } from "@/lib/tire-storage-pure";
 import { DropFields, emptyDrop } from "../storage/drop-fields";
 
 export const EMPTY_SALE_STORAGE: SaleStorageInput = { drops: [], pickupIds: [] };
@@ -25,7 +24,8 @@ export function StoragePanel({
   value,
   onChange,
 }: {
-  vehicle: VehicleHit | null;
+  /** 판매 화면의 VehicleHit 또는 정비 내역 카드의 차 — 셋만 쓴다 */
+  vehicle: { vehicleId: number; customerId: number; lastFittedSize?: string | null } | null;
   reserve: boolean;
   rows: { kind: string; description: string; spec?: string | null }[];
   value: SaleStorageInput;
@@ -60,6 +60,7 @@ export function StoragePanel({
   }
 
   const firstSpec = rows.find((r) => r.kind === "tire" && r.spec)?.spec ?? "";
+  const hints = sizeHints(...rows.filter((r) => r.kind === "tire").map((r) => r.spec), vehicle.lastFittedSize, ...sets.map((x) => x.size));
   const mounted = rows.filter((r) => r.kind === "tire").map((r) => parseTireAttrs(r.description, r.description).season);
   const pickedKinds = sets.filter((s) => value.pickupIds.includes(s.id)).map((s) => s.kind);
   const addDrop = () => {
@@ -124,7 +125,11 @@ export function StoragePanel({
                   빼기 ✕
                 </button>
               </div>
-              <DropFields value={d} onChange={(nd) => onChange({ ...value, drops: value.drops.map((x, j) => (j === i ? nd : x)) })} />
+              <DropFields
+                value={d}
+                sizeHints={hints}
+                onChange={(nd) => onChange({ ...value, drops: value.drops.map((x, j) => (j === i ? nd : x)) })}
+              />
             </div>
           ))}
           {value.drops.length > 0 && (

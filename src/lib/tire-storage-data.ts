@@ -31,6 +31,8 @@ export interface StorageRow {
   vehicleId: number | null;
   plateNo: string | null;
   model: string | null;
+  /** 이 차에 지난번 끼운 규격 — 「규격 바로 고르기」 */
+  lastFittedSize: string | null;
   sourceText: string | null;
   storedQuoteId: number | null;
   releasedQuoteId: number | null;
@@ -59,6 +61,7 @@ type Raw = {
   vehicle_id: number | null;
   plate_no: string | null;
   model: string | null;
+  last_fitted_size: string | null;
   source_text: string | null;
   stored_quote_id: number | null;
   released_quote_id: number | null;
@@ -68,7 +71,7 @@ const BASE = sql`
   SELECT s.id, s.storage_no, s.status, s.kind, s.brand, s.size, s.qty, s.dot, s.memo,
          to_char(s.stored_on, 'YYYY-MM-DD') stored_on, to_char(s.released_on, 'YYYY-MM-DD') released_on, s.release_note,
          s.customer_id, c.name customer_name, c.supplier_name, c.phone,
-         s.vehicle_id, v.plate_no, v.model, s.source_text, s.stored_quote_id, s.released_quote_id
+         s.vehicle_id, v.plate_no, v.model, v.last_fitted_size, s.source_text, s.stored_quote_id, s.released_quote_id
   FROM tire_storage s
   JOIN customer c ON c.id = s.customer_id
   LEFT JOIN vehicle v ON v.id = s.vehicle_id`;
@@ -95,6 +98,7 @@ function toRow(r: Raw): StorageRow {
     vehicleId: r.vehicle_id == null ? null : Number(r.vehicle_id),
     plateNo: r.plate_no,
     model: r.model,
+    lastFittedSize: r.last_fitted_size,
     sourceText: r.source_text,
     storedQuoteId: r.stored_quote_id == null ? null : Number(r.stored_quote_id),
     releasedQuoteId: r.released_quote_id == null ? null : Number(r.released_quote_id),
@@ -242,4 +246,13 @@ export async function contactRows(): Promise<ContactRow[]> {
         consentMarketing: r.consent_marketing,
       };
     });
+}
+
+/** 정비 내역 카드 — 이 판매로 맡긴 세트 · 이 판매로 찾아간 세트 */
+export async function storageForSale(quoteId: number): Promise<{ stored: StorageRow[]; released: StorageRow[] }> {
+  const raw = await db.execute<Raw>(sql`${BASE}
+    WHERE (s.stored_quote_id = ${quoteId} OR s.released_quote_id = ${quoteId}) AND s.status <> '제외'
+    ORDER BY s.storage_no`);
+  const rows = raw.map(toRow);
+  return { stored: rows.filter((r) => r.storedQuoteId === quoteId), released: rows.filter((r) => r.releasedQuoteId === quoteId) };
 }

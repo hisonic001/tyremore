@@ -9,7 +9,7 @@ import { ListRow } from "@/components/ui/list-row";
 import { searchVehicles } from "@/lib/search-actions";
 import type { VehicleHit } from "@/lib/search";
 import { registerStorage } from "@/lib/tire-storage";
-import { formatStorageNo, suggestDropKind, type StorageDropInput } from "@/lib/tire-storage-pure";
+import { formatStorageNo, sizeHints, suggestDropKind, type StorageDropInput } from "@/lib/tire-storage-pure";
 import { DropFields, emptyDrop } from "../drop-fields";
 
 export function RegisterForm({
@@ -98,7 +98,7 @@ export function RegisterForm({
         </Notice>
       )}
 
-      <DropFields value={drop} onChange={setDrop} disabled={pending} />
+      <DropFields value={drop} onChange={setDrop} disabled={pending} sizeHints={sizeHints(vehicle.lastFittedSize)} />
 
       <label className="flex items-center gap-2 text-sm text-slate-600">
         맡긴 날
