@@ -17,9 +17,28 @@ describe("parseBankAlert", () => {
       amount: 1660680,
       occurredAt: "2026-11-17 10:34:00",
       accountTag: "1210",
+      accountName: "입금",
       counterparty: "현240991175",
       balance: 9639873,
     });
+  });
+  test("실물 출금 (2026-11-17 12:55) — 둘째 줄 「입금(1210)」은 통장 별명, 상대의 「(주)」는 계좌가 아니다", () => {
+    const a = parseBankAlert("입출금 안내\n출금 9,768,703원 11/17 12:55\n입금(1210) → (주)싸이오토모\n잔액 0원", NOW);
+    assert.deepEqual(a, {
+      direction: "출금",
+      amount: 9768703,
+      occurredAt: "2026-11-17 12:55:00",
+      accountTag: "1210",
+      accountName: "입금",
+      counterparty: "(주)싸이오토모",
+      balance: 0,
+    });
+  });
+  test("별명이 「입금」「출금」이 아니어도 계좌 숫자를 읽는다", () => {
+    const a = parseBankAlert("입금 9,768,703원 11/17 12:55\n주거래(5678) ← (주)싸이오토모\n잔액 12,000,000원", NOW);
+    assert.equal(a?.accountTag, "5678");
+    assert.equal(a?.accountName, "주거래");
+    assert.equal(a?.counterparty, "(주)싸이오토모");
   });
   test("한 줄로 이어 붙어 와도 읽는다", () => {
     const a = parseBankAlert("입출금 안내 입금 128,830원 11/17 11:36 입금(1210) ← 하나92226127 잔액 9,768,703원", NOW);
