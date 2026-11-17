@@ -4,7 +4,27 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { ymsOfRows } from "./fin-upload-pure";
+import { pickAccountLabel, ymsOfRows } from "./fin-upload-pure";
+
+describe("pickAccountLabel (폴더 자동 업로드, D-41)", () => {
+  const labels = ["신한입금", "신한출금", "우리카드", "신한법인카드"];
+  test("파일 이름 안에 계정 이름이 통째로 — 띄어쓰기 무시", () => {
+    assert.equal(pickAccountLabel("신한 입금계좌 2026Q3.xlsx", labels), "신한입금");
+    assert.equal(pickAccountLabel("신한 출금 (2).xlsx", labels), "신한출금");
+    assert.equal(pickAccountLabel("우리카드 2026.8.xls", labels), "우리카드");
+  });
+  test("모르면 null — 틀린 통장에 넣지 않는다", () => {
+    assert.equal(pickAccountLabel("거래내역.xlsx", labels), null);
+    assert.equal(pickAccountLabel("신한카드 법인이용내역(전체) 2026.7.xls", labels), null);
+  });
+  test("지정표가 먼저", () => {
+    const fixed = new Map([["신한카드 법인", "신한법인카드"]]);
+    assert.equal(pickAccountLabel("신한카드 법인이용내역(전체) 2026.7.xls", labels, fixed), "신한법인카드");
+  });
+  test("같은 길이 후보 둘이면 고르지 않는다", () => {
+    assert.equal(pickAccountLabel("신한입금 신한출금 합본.xlsx", labels), null);
+  });
+});
 
 describe("ymsOfRows", () => {
   test("줄이 가장 많은 달이 best", () => {

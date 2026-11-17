@@ -35,3 +35,28 @@ export function ymsOfRows(dates: readonly string[], fallback: string | null): Ym
   const ok = /^\d{4}-\d{2}$/.test(f);
   return { best: ok ? f : null, yms: ok ? [f] : [] };
 }
+
+/**
+ * ⭐ 폴더 자동 업로드의 계정 이름 고르기 (2026-11-17, D-41)
+ *
+ *   화면에서는 사람이 「신한입금」 같은 계정 이름을 고른다. 자동 업로드는 **파일 이름**으로 고른다.
+ *     ① 지정표(COLLECT_FIN_LABELS 「파일이름조각=계정」)에 걸리면 그것
+ *     ② 이미 쓰는 계정 이름이 파일 이름 안에 **통째로** 들어 있으면 그것 (띄어쓰기·대소문자 무시)
+ *        「신한 입금계좌 2026Q3.xlsx」 → 「신한입금」
+ *   🔴 후보가 둘 이상이면 가장 긴 것 하나만 — 그래도 같은 길이로 둘이면 고르지 않는다(null).
+ *      틀린 통장에 넣는 것보다 사람에게 넘기는 게 낫다.
+ */
+export function pickAccountLabel(
+  fileName: string,
+  labels: readonly string[],
+  fixed: ReadonlyMap<string, string> = new Map(),
+): string | null {
+  const norm = (s: string) => s.toLowerCase().replace(/\.[a-z0-9]+$/i, "").replace(/[\s_\-()[\]·.,]+/g, "");
+  const f = norm(fileName);
+  for (const [piece, label] of fixed) if (piece && f.includes(norm(piece))) return label;
+  const hits = labels.filter((l) => norm(l).length >= 2 && f.includes(norm(l)));
+  if (hits.length === 0) return null;
+  const longest = Math.max(...hits.map((l) => norm(l).length));
+  const top = hits.filter((l) => norm(l).length === longest);
+  return top.length === 1 ? top[0] : null;
+}
