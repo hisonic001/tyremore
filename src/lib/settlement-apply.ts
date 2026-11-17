@@ -307,7 +307,7 @@ async function applyOneLine(
       const r = await cancelSale(quoteId);
       if (!r.ok) return { quoteNo: no, decision, ok: false, note: r.error };
       await stamp(0);
-      return { quoteNo: no, decision, ok: true, note: r.restored > 0 ? `취소 · 재고 ${r.restored}개 복원` : "취소" };
+      return { quoteNo: no, decision, ok: true, note: (r.restored > 0 ? `취소 · 재고 ${r.restored}개 복원` : "취소") + (r.storageNote ? ` · ${r.storageNote}` : "") };
     }
 
     if (q.status === "취소") return { quoteNo: no, decision, ok: false, note: "취소된 판매입니다 — 판정을 다시 봐 주세요" };

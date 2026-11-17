@@ -29,6 +29,8 @@ import { costSnapshotMap } from "./sale-cost";
 import { ageAnchorSql } from "./tire-age";
 import type { NewCustomerInput } from "./sale-types";
 import { PERM_DENIED } from "./perm-keys";
+import { applySaleStorage, hasSaleStorage, type SaleStorageInput } from "./tire-storage-db";
+import { validateDrop } from "./tire-storage-pure";
 
 function refresh(...paths: string[]) {
   for (const p of paths) {
@@ -127,6 +129,12 @@ export interface SaleInput {
    *    `paidOn` 은 receivable_payment.paid_on 으로 — 비면 작업일(workDate).
    */
   prepaid?: PaymentPart[] | null;
+  /**
+   * ⭐ 타이어 보관 (D-42, 2026-11-17) — 오늘 맡기는 세트 · 오늘 찾아가는(꺼내 끼우는) 보관 세트.
+   *    판매와 **같은 트랜잭션**에 적는다(정본 tire-storage-db.applySaleStorage). 주인은 차량의 주인
+   *    (거래처 차량이면 그 거래처 차고 손님). 예약 판매·차 없는 판매는 안 된다.
+   */
+  storage?: SaleStorageInput | null;
 }
 
 /** 오늘 (YYYY-MM-DD) */
@@ -236,7 +244,10 @@ export async function sellFromStock(
 
 export async function saveSale(
   input: SaleInput,
-): Promise<{ ok: true; quoteId: number; quoteNo: string; shortages: string[] } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; quoteId: number; quoteNo: string; shortages: string[]; storage: { id: number; no: number }[] }
+  | { ok: false; error: string }
+> {
   if (!(await (await import("./auth")).hasPerm("sale"))) return { ok: false, error: PERM_DENIED };
   // ⭐ 부품(use) 줄은 기본 0원이지만 금액도 쓸 수 있다 (사장님 요청 2026-08-24 —
   //    "default 값은 0원이지만 금액도 쓸 수 있게"). 기표가·할인율은 부품에 없으니 비운다.
@@ -254,6 +265,25 @@ export async function saveSale(
   }
 
   const total = lines.reduce((s, l) => s + l.unitPrice * l.qty, 0);
+
+  /**
+   * ⭐ 보관 (D-42) — 저장 전에 거른다. 주인은 차량의 주인(거래처 차량 = 차고 손님).
+   *    예약은 아직 시공 전이라 타이어가 안 들어왔다 — 시공 완료 뒤 보관 화면에서 등록.
+   */
+  const storage = hasSaleStorage(input.storage) ? input.storage : null;
+  let storageOwner: number | null = null;
+  if (storage) {
+    if (input.reserve) return { ok: false, error: "예약 판매에는 보관을 적을 수 없습니다 — 시공한 날 보관 화면에서 등록해 주세요" };
+    if (!input.vehicleId) return { ok: false, error: "보관은 차량이 있는 판매에만 적을 수 있습니다 — 차량을 골라 주세요" };
+    for (const d of storage.drops) {
+      const bad = validateDrop(d);
+      if (bad) return { ok: false, error: `맡긴 타이어: ${bad}` };
+    }
+    const [v] = await db.execute<{ customer_id: number }>(sql`SELECT customer_id FROM vehicle WHERE id = ${input.vehicleId}`);
+    if (!v) return { ok: false, error: "차량을 찾지 못했습니다" };
+    storageOwner = Number(v.customer_id);
+  }
+  const sessionUid = storage ? ((await (await import("./auth")).getSession())?.uid ?? null) : null;
 
   /**
    * ⭐ 분할 결제 검증 (2026-08-10).
@@ -426,6 +456,20 @@ export async function saveSale(
           })),
         );
 
+        // ⭐ 보관 맡김·찾아감 (D-42) — 문제가 있으면 throw → 판매 전체가 되돌아간다
+        const storedSets = storage
+          ? (
+              await applySaleStorage(tx, {
+                quoteId: q.id,
+                customerId: storageOwner!,
+                vehicleId: input.vehicleId ?? null,
+                workDate: input.workDate?.trim() || todayISO(),
+                userId: sessionUid,
+                storage,
+              })
+            ).stored
+          : [];
+
         // 재고 차감 — 타이어·부품만. ⭐ 예약은 건너뛴다 — 시공 완료 때 뺀다 (재고 0 이어도 예약 가능)
         const shortages: string[] = [];
         if (!input.reserve) {
@@ -445,10 +489,11 @@ export async function saveSale(
             .where(eq(vehicle.id, input.vehicleId));
         }
 
-        return { quoteId: q.id, quoteNo, shortages };
+        return { quoteId: q.id, quoteNo, shortages, storage: storedSets };
       });
 
       refresh("/sale", "/sales", "/");
+      if (storage) refresh("/storage");
       return { ok: true, ...done };
     } catch (e) {
       lastErr = (e as Error).message.split("\n")[0];

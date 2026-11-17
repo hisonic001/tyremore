@@ -65,6 +65,8 @@ async function main() {
         UPDATE quote SET customer_id = ${nc.id}
         WHERE vehicle_id = ${t.vid} AND customer_id = ${t.cid}
         RETURNING id`);
+      // 보관 세트도 그 차를 따라간다 (D-42) — 자리표시 손님엔 보관을 막지만 혹시 남은 것까지
+      await tx.execute(sql`UPDATE tire_storage SET customer_id = ${nc.id}, updated_at = now() WHERE vehicle_id = ${t.vid} AND customer_id = ${t.cid}`);
       console.log(`✓ 차량 ${t.plate} → 새 고객 ${nc.id} (판매 ${moved.length}건 함께)`);
     });
   }

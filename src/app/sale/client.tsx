@@ -15,6 +15,8 @@ import { clearLegacyDrafts, readLegacyDrafts, type SaleDraftState } from "./draf
 import { listSaleDrafts, removeSaleDraft, saveSaleDraft, type ServerSaleDraft } from "@/lib/sale-draft";
 import { useConfirm } from "@/components/ui/confirm";
 import { AmountBox } from "@/components/ui/amount-box";
+import { EMPTY_SALE_STORAGE, StoragePanel } from "./storage-panel";
+import { formatStorageNo, type SaleStorageInput } from "@/lib/tire-storage-pure";
 
 const won = (n: number) => n.toLocaleString();
 
@@ -86,7 +88,9 @@ export function SaleForm({
   /** 실제로 정비한 날 — 기본은 오늘이지만 고칠 수 있다 */
   const today = new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD
   const [workDate, setWorkDate] = useState(today);
-  const [done, setDone] = useState<{ quoteNo: string; shortages: string[]; reserved?: boolean } | null>(null);
+  const [done, setDone] = useState<{ quoteNo: string; shortages: string[]; reserved?: boolean; storage?: { id: number; no: number }[] } | null>(null);
+  /** ⭐ 타이어 보관 (D-42) — 오늘 맡김·찾아감. 규칙·저장은 storage-panel → saveSale */
+  const [storage, setStorage] = useState<SaleStorageInput>(EMPTY_SALE_STORAGE);
   const [error, setError] = useState<string | null>(null);
 
   /**
@@ -328,6 +332,7 @@ export function SaleForm({
     setWheels([]);
     setWorkDate(today);
     setNewCust(null);
+    setStorage(EMPTY_SALE_STORAGE);
     setActiveDraftId(null);
     setFormEpoch((e) => e + 1);
   };
@@ -362,6 +367,7 @@ export function SaleForm({
           // ⭐ 2026-09-07 보강 — 접히지 않아 유실되던 두 칸
           payDates,
           reserve,
+          storage,
         },
         draftId,
       ).catch(() => null);
@@ -386,6 +392,7 @@ export function SaleForm({
     setWorkDate(st.workDate || today);
     setWheels(st.wheels ?? []);
     setNewCust((st.newCustomer as NewCustomerDraft | null) ?? null);
+    setStorage((st.storage as SaleStorageInput | undefined) ?? EMPTY_SALE_STORAGE);
     setFormEpoch((e) => e + 1); // CustomerPick 을 다시 그려 신규 폼이 접힌 그대로 열리게
     /* ⭐ 펼쳐도 카드는 남는다 (사장님 확정 2026-09-07) — 지워지는 건 x 또는 판매완료뿐.
        대신 id 를 기억해, 다시 접으면 이 카드가 갱신되고 판매완료 때 지워진다 */
@@ -521,6 +528,8 @@ export function SaleForm({
         mileage: mileage ? Number(mileage.replace(/\D/g, "")) : null,
         // 거래처 판매는 차량 점검이 없다 — 바퀴 정보도 안 넘긴다
         tyrePositions: !supplierSale && tyreQty > 0 && wheels.length > 0 ? wheels : null,
+        // ⭐ 타이어 보관 (D-42) — 차 있는 일반 판매만 (예약은 시공 전이라 빼고 보낸다)
+        storage: vehicle && !reserve && (storage.drops.length || storage.pickupIds.length) ? storage : null,
       });
       if (!res.ok) {
         setError(res.error);
@@ -536,7 +545,8 @@ export function SaleForm({
           .then((r) => setDrafts(r))
           .catch(() => null);
       }
-      setDone({ quoteNo: res.quoteNo, shortages: res.shortages, reserved: reserve });
+      setDone({ quoteNo: res.quoteNo, shortages: res.shortages, reserved: reserve, storage: res.storage });
+      setStorage(EMPTY_SALE_STORAGE);
       setRows([]);
       setVehicle(null);
       setSupplierSale(null);
@@ -564,6 +574,20 @@ export function SaleForm({
             ? "📌 예약으로 남았습니다 — 재고는 아직 안 빠졌고, 손님이 오시면 정비 내역에서 「시공 완료」를 눌러 주세요. 차량을 고르면 예약 배너가 뜹니다."
             : "재고가 빠졌고 정비 내역에 남았습니다. MARS 에 올릴 때는 정비 내역에서 카드를 체크하세요."}
         </p>
+        {done.storage && done.storage.length > 0 && (
+          <div className="mt-3 rounded-lg bg-white p-3 text-sm">
+            <p className="font-semibold text-slate-800">
+              📦 보관번호 {done.storage.map((x) => formatStorageNo(x.no)).join(", ")} — 스티커를 붙여 번호 순서 자리에 놓아 주세요
+            </p>
+            <a
+              href={`/print/storage?ids=${done.storage.map((x) => x.id).join(",")}`}
+              target="_blank"
+              className="mt-2 inline-flex min-h-11 items-center rounded-control bg-slate-900 px-4 font-semibold text-white"
+            >
+              스티커 인쇄
+            </a>
+          </div>
+        )}
         {done.shortages.length > 0 && (
           <div className="mt-3 rounded-lg bg-amber-100 p-3 text-sm text-amber-900">
             <strong>재고보다 많이 팔렸습니다</strong> — {done.shortages.join(", ")}
@@ -636,6 +660,9 @@ export function SaleForm({
           </a>
         </div>
       )}
+
+      {/* ⭐ 타이어 보관 (D-42, 2026-11-17) — 맡겨 둔 세트 찾아감 · 오늘 맡김 */}
+      <StoragePanel vehicle={vehicle} reserve={reserve} rows={rows} value={storage} onChange={setStorage} />
 
       {vehicle && (
         <label className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2">

@@ -215,7 +215,8 @@ export function SaleCard({
       setAskMars(false);
       setNotice(
         `취소했습니다 — 재고 ${r.restored}개가 되살아났습니다.` +
-          (r.marsWarning ? ` ⚠️ ${r.marsWarning}` : ""),
+          (r.marsWarning ? ` ⚠️ ${r.marsWarning}` : "") +
+          (r.storageNote ? ` 📦 ${r.storageNote}` : ""),
       );
       router.refresh();
     });

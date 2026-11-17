@@ -7,11 +7,13 @@
  *   ① 판매의 고객 ≠ 그 판매에 붙은 차량의 소유주 (거래처 차고 제외)
  *   ② 자리표시 이름(고객·관광객 등) 행에 차량 2대 이상
  *   ③ 더미 전화(010-1234-5678 등) 행에 이관 뒤 새 차량·새 판매가 붙음
+ *   ④ 보관 세트(D-42) 주인 ≠ 그 차량의 주인 (거래처 차고 제외) · 자리표시 손님에 붙은 보관
  *
  * 실행: npx tsx --env-file=.env.local scripts/customer-integrity-check.ts
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
+import { PLACEHOLDER_CUSTOMER_NAMES } from "@/lib/normalize";
 
 async function main() {
   let bad = 0;
@@ -53,6 +55,20 @@ async function main() {
   console.log(`③ 더미 전화 행에 이관 뒤 차량 2대 이상: ${dummyNew.length}행`);
   for (const d of dummyNew) console.log(`   · 고객 ${d.id} 「${d.name}」 ${d.phone} — 새 차량 ${d.ncars}대`);
   bad += dummyNew.length;
+
+  const storageMix = await db.execute<{ storage_no: number | null; plate: string | null; sc: string; vc: string | null }>(sql`
+    SELECT t.storage_no, v.plate_no plate, c1.name sc, c2.name vc
+    FROM tire_storage t
+    JOIN customer c1 ON c1.id = t.customer_id
+    LEFT JOIN vehicle v ON v.id = t.vehicle_id
+    LEFT JOIN customer c2 ON c2.id = v.customer_id
+    WHERE t.status IN ('보관중','확인대기')
+      AND ((v.id IS NOT NULL AND t.customer_id <> v.customer_id AND c2.supplier_name IS NULL AND c1.supplier_name IS NULL)
+           OR trim(c1.name) IN (${sql.join(PLACEHOLDER_CUSTOMER_NAMES.map((n) => sql`${n}`), sql`, `)}))
+    ORDER BY t.id`);
+  console.log(`④ 보관 세트 주인 ≠ 차량 주인 / 자리표시 손님: ${storageMix.length}건`);
+  for (const m of storageMix) console.log(`   · 보관 #${m.storage_no ?? "후보"} 주인 「${m.sc}」 vs 차량(${m.plate ?? "-"}) 소유 「${m.vc ?? "-"}」`);
+  bad += storageMix.length;
 
   console.log(bad === 0 ? "\n✅ 전부 정상 — 섞인 고객 없음" : `\n⚠ 이상 ${bad}건 — 위 목록 확인 필요`);
   process.exit(0);

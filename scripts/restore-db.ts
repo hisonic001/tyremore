@@ -32,6 +32,7 @@ const ORDER = [
   "vehicle",
   "quote",
   "quote_item",
+  "tire_storage", // D-42 — customer·vehicle·quote 뒤
   "stock_item",
   "stock_movement",
   "purchase_invoice",
