@@ -64,6 +64,12 @@ export async function ingestCashTxns(
   const label = accountLabel.trim();
   const keys = dedupKeys(parsed.rows, label);
 
+  /* ⭐ 폰 알림으로 먼저 들어온 줄을 파일 내용으로 확정 (D-41, 2026-11-17).
+     🔴 배치 머리(fin_upload)보다 **먼저** — 여기서 멈춰도 빈 배치가 남지 않게 (2026-11-17 실측).
+     짝지은 알림 줄의 열쇠를 파일 줄 열쇠로 바꿔 두면 아래 삽입이 「이미 있는 줄」로 건너뛴다 —
+     같은 거래가 두 줄이 되지 않고, 알림 줄에 이미 걸린 대조(recon_match)도 그대로 산다. */
+  const confirmedAlerts = parsed.source === "통장" ? await confirmAlertLines(parsed.rows, keys, label) : 0;
+
   // ① 배치 머리 먼저 — 원본 CSV 를 보존한다 (파서를 고쳐 다시 읽을 수 있게)
   const [up] = await db.execute<{ id: number }>(sql`
     INSERT INTO fin_upload (source, account_label, file_name, raw_text, row_count, period_from, period_to, created_by)
@@ -72,11 +78,6 @@ export async function ingestCashTxns(
     RETURNING id
   `);
   const uploadId = Number(up.id);
-
-  /* ⭐ 폰 알림으로 먼저 들어온 줄을 파일 내용으로 확정 (D-41, 2026-11-17).
-     짝지은 알림 줄의 열쇠를 파일 줄 열쇠로 바꿔 두면 아래 삽입이 「이미 있는 줄」로 건너뛴다 —
-     같은 거래가 두 줄이 되지 않고, 알림 줄에 이미 걸린 대조(recon_match)도 그대로 산다. */
-  const confirmedAlerts = parsed.source === "통장" ? await confirmAlertLines(parsed.rows, keys, label) : 0;
 
   // ② 100줄씩 순차 삽입 — 이미 있는 열쇠는 조용히 건너뛴다
   let newCount = 0;
@@ -125,18 +126,18 @@ export async function ingestCashTxns(
 async function confirmAlertLines(rows: NormalizedCashTxn[], keys: string[], label: string): Promise<number> {
   if (rows.length === 0) return 0;
   const days = rows.map((r) => r.occurredAt.slice(0, 10)).sort();
-  const alerts = await db.execute<{ id: number; at: string; in_amount: number; out_amount: number; balance: number | null }>(sql`
-    SELECT id, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD HH24:MI:SS') at, in_amount, out_amount, balance
+  const alerts = await db.execute<{ id: number; occ: string; in_amount: number; out_amount: number; balance: number | null }>(sql`
+    SELECT id, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD HH24:MI:SS') AS occ, in_amount, out_amount, balance
     FROM cash_txn
     WHERE is_active AND source = '통장' AND account_label = ${label} AND dedup_key LIKE '알림|%'
-      AND occurred_at BETWEEN (${days[0]}::date - 1)::timestamp AT TIME ZONE 'Asia/Seoul'
-                          AND (${days[days.length - 1]}::date + 2)::timestamp AT TIME ZONE 'Asia/Seoul'
+      AND occurred_at BETWEEN ((${days[0]}::date - 1)::timestamp AT TIME ZONE 'Asia/Seoul')
+                          AND ((${days[days.length - 1]}::date + 2)::timestamp AT TIME ZONE 'Asia/Seoul')
     LIMIT 5000
   `);
   if (alerts.length === 0) return 0;
   const lite: CashLineLite[] = alerts.map((a) => ({
     id: Number(a.id),
-    occurredAt: a.at,
+    occurredAt: a.occ,
     inAmount: a.in_amount,
     outAmount: a.out_amount,
     balance: a.balance == null ? null : Number(a.balance),
