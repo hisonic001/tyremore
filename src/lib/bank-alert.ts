@@ -40,20 +40,20 @@ export async function ingestBankAlertText(text: string, now: Date = new Date()):
   const outAmt = a.direction === "출금" ? a.amount : 0;
 
   // ② 통장 파일 줄이 이미 있으면 그쪽이 정본
-  const fileRows = await db.execute<{ id: number; at: string; in_amount: number; out_amount: number; balance: number | null }>(sql`
-    SELECT id, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD HH24:MI:SS') at, in_amount, out_amount, balance
+  const fileRows = await db.execute<{ id: number; occ: string; in_amount: number; out_amount: number; balance: number | null }>(sql`
+    SELECT id, to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD HH24:MI:SS') AS occ, in_amount, out_amount, balance
     FROM cash_txn
     WHERE is_active AND source = '통장' AND account_label = ${label}
       AND dedup_key NOT LIKE '알림|%'
       AND in_amount = ${inAmt} AND out_amount = ${outAmt}
-      AND occurred_at BETWEEN (${a.occurredAt}::timestamp - interval '1 day') AT TIME ZONE 'Asia/Seoul'
-                          AND (${a.occurredAt}::timestamp + interval '1 day') AT TIME ZONE 'Asia/Seoul'
+      AND occurred_at BETWEEN ((${a.occurredAt}::timestamp - interval '1 day') AT TIME ZONE 'Asia/Seoul')
+                          AND ((${a.occurredAt}::timestamp + interval '1 day') AT TIME ZONE 'Asia/Seoul')
     LIMIT 20
   `);
   const asLite: CashLineLite = { id: 0, occurredAt: a.occurredAt, inAmount: inAmt, outAmount: outAmt, balance: a.balance };
   const already = matchAlertToStatement(
     asLite,
-    fileRows.map((r) => ({ id: Number(r.id), occurredAt: r.at, inAmount: r.in_amount, outAmount: r.out_amount, balance: r.balance == null ? null : Number(r.balance) })),
+    fileRows.map((r) => ({ id: Number(r.id), occurredAt: r.occ, inAmount: r.in_amount, outAmount: r.out_amount, balance: r.balance == null ? null : Number(r.balance) })),
     new Set(),
   );
   if (already != null) return { status: "중복", cashTxnId: already, result: `${money} — 통장 파일에 이미 있는 거래` };

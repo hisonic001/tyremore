@@ -220,7 +220,9 @@ async function sweepFinance(seen: Seen): Promise<number> {
         warned.add(full);
       }
     } catch (e) {
-      console.log(`  ⚠️ ${name} — 올리다 멈췄습니다: ${(e as Error).message}`);
+      // DB 오류는 drizzle 이 질의문으로 감싸 진짜 까닭(cause)이 가려진다 — 까닭을 먼저 보인다
+      const err = e as Error & { cause?: { message?: string } };
+      console.log(`  ⚠️ ${name} — 올리다 멈췄습니다: ${err.cause?.message ?? err.message.split("\n")[0]}`);
     }
   }
   return done;
