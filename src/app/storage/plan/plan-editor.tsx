@@ -2,7 +2,7 @@
 
 import { useRef, useState, type PointerEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { moveShape, newShapeId, resizeShape, type Plan, type PlanShape, type ShapeKind } from "@/lib/storage-plan-pure";
+import { moveShape, newShapeId, nextSlotName, resizeShape, type Plan, type PlanShape, type ShapeKind } from "@/lib/storage-plan-pure";
 import { ShapeG } from "./plan-canvas";
 
 /**
@@ -11,7 +11,7 @@ import { ShapeG } from "./plan-canvas";
  *   배치도(site)에서는 건물 칸을 고른 뒤 「들어갈 구역」을 켜고 끈다.
  */
 const ADD: { kind: ShapeKind; label: string; w: number; h: number; text: string }[] = [
-  { kind: "block", label: "새 칸", w: 20, h: 12, text: "+ 칸(더미 자리)" },
+  { kind: "block", label: "새 자리", w: 22, h: 14, text: "+ 자리" },
   { kind: "door", label: "출입문", w: 16, h: 5, text: "+ 문" },
   { kind: "stairs", label: "계단", w: 12, h: 10, text: "+ 계단" },
 ];
@@ -24,7 +24,7 @@ export function PlanEditor({
   initial,
   isSite,
   areas = [],
-  imageUrl,
+  occupied = {},
   pending,
   onSave,
   onCancel,
@@ -33,7 +33,8 @@ export function PlanEditor({
   isSite: boolean;
   /** 배치도일 때 건물에 이어 붙일 수 있는 구역 */
   areas?: { id: number; name: string }[];
-  imageUrl?: string | null;
+  /** 자리 id → 세트 수 — 세트가 든 자리는 못 지운다(서버도 막음) */
+  occupied?: Record<string, number>;
   pending?: boolean;
   onSave: (p: Plan) => void;
   onCancel: () => void;
@@ -71,7 +72,8 @@ export function PlanEditor({
   };
 
   const add = (a: (typeof ADD)[number]) => {
-    const s: PlanShape = { id: newShapeId(), kind: a.kind, x: 50 - a.w / 2, y: Math.max(0, H / 2 - a.h / 2), w: a.w, h: a.h, label: a.label };
+    // 새 자리는 「새 자리 1·2…」 — 같은 이름 두 자리가 생기지 않게 (저장도 겹치면 막음)
+    const s: PlanShape = { id: newShapeId(), kind: a.kind, x: 50 - a.w / 2, y: Math.max(0, H / 2 - a.h / 2), w: a.w, h: a.h, label: a.kind === "block" ? nextSlotName(plan) : a.label };
     setPlan((p) => ({ ...p, shapes: [...p.shapes, s] }));
     setSel(s.id);
   };
@@ -89,10 +91,9 @@ export function PlanEditor({
         onPointerCancel={end}
         onPointerDown={() => setSel(null)}
       >
-        {imageUrl && <image href={imageUrl} x={0} y={0} width={100} height={H} preserveAspectRatio="xMidYMid slice" opacity={0.45} />}
         {plan.shapes.map((s) => (
           <g key={s.id} onPointerDown={(e) => start(e, s, "move")} style={{ cursor: "move" }}>
-            <ShapeG s={s} selected={s.id === sel} />
+            <ShapeG s={s} state={s.id === sel ? "selected" : "normal"} badge={occupied[s.id] ? `${occupied[s.id]}세트` : null} />
           </g>
         ))}
         {selected && (
@@ -124,20 +125,24 @@ export function PlanEditor({
             <input
               value={selected.label}
               onChange={(e) => update(selected.id, (s) => ({ ...s, label: e.target.value.slice(0, 30) }))}
-              placeholder="칸 이름 (예: 선반 1, 안쪽 더미)"
+              placeholder="자리 이름 (예: 선반 1, 안쪽 2)"
               className="min-w-0 flex-1 rounded-control border border-slate-300 bg-white px-3 py-2.5 text-base"
             />
             <button
               type="button"
+              disabled={!!occupied[selected.id]}
               onClick={() => {
                 setPlan((p) => ({ ...p, shapes: p.shapes.filter((s) => s.id !== selected.id) }));
                 setSel(null);
               }}
-              className="min-h-11 shrink-0 rounded-control border border-red-200 px-3 text-sm text-red-600"
+              className="min-h-11 shrink-0 rounded-control border border-red-200 px-3 text-sm text-red-600 disabled:border-slate-200 disabled:text-slate-400"
             >
               지우기
             </button>
           </div>
+          {occupied[selected.id] ? (
+            <p className="text-sm font-semibold text-amber-800">이 자리에 {occupied[selected.id]}세트가 있어 지울 수 없습니다 — 이름·크기는 바꿔도 됩니다</p>
+          ) : null}
           {isSite && selected.kind === "building" && areas.length > 0 && (
             <div>
               <p className="text-xs text-slate-500">이 건물을 누르면 들어갈 구역</p>

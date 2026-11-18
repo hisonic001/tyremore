@@ -11,7 +11,7 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { defaultRoomPlan, defaultSitePlan } from "@/lib/storage-plan-pure";
+import { defaultRoomPlan, defaultSitePlan, isLegacyDefaultRoom, sanitizePlan } from "@/lib/storage-plan-pure";
 
 async function main() {
   await db.execute(sql`
@@ -103,6 +103,37 @@ async function main() {
     const site = defaultSitePlan({ brick: ids[0], white: ids[1], floor1: ids[2], floor2: ids[3], floor3: ids[4] });
     await db.execute(sql`INSERT INTO storage_area (name, is_site, plan, sort) VALUES ('전체 배치도', true, ${JSON.stringify(site)}::jsonb, 0)`);
     console.log("기본 도면을 그렸습니다 — 배치도 1 · 구역 5");
+  }
+
+  /* ⭐ 3차 개정 (2026-11-18) — 점 대신 「자리(도면 칸 id) + 더미 번호」. pin_x/pin_y 는 더 안 쓴다(나중에 지움). */
+  await db.execute(sql`ALTER TABLE tire_storage ADD COLUMN IF NOT EXISTS slot_id text`);
+  await db.execute(sql`ALTER TABLE tire_storage ADD COLUMN IF NOT EXISTS stack_no smallint`);
+  await db.execute(sql`ALTER TABLE tire_storage ADD COLUMN IF NOT EXISTS located_at timestamptz`);
+  await db.execute(sql`ALTER TABLE tire_storage ADD COLUMN IF NOT EXISTS located_by bigint REFERENCES app_user(id)`);
+  await db.execute(sql`DO $$ BEGIN
+    ALTER TABLE tire_storage ADD CONSTRAINT tire_storage_slot_area CHECK (slot_id IS NULL OR area_id IS NOT NULL);
+  EXCEPTION WHEN duplicate_object THEN NULL; END $$`);
+  await db.execute(sql`DO $$ BEGIN
+    ALTER TABLE tire_storage ADD CONSTRAINT tire_storage_slot_stack CHECK ((slot_id IS NULL) = (stack_no IS NULL));
+  EXCEPTION WHEN duplicate_object THEN NULL; END $$`);
+  await db.execute(sql`DO $$ BEGIN
+    ALTER TABLE tire_storage ADD CONSTRAINT tire_storage_stack CHECK (stack_no IS NULL OR stack_no BETWEEN 1 AND 99);
+  EXCEPTION WHEN duplicate_object THEN NULL; END $$`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_tire_storage_slot ON tire_storage (area_id, slot_id, stack_no) WHERE status IN ('보관중','확인대기')`);
+
+  // 1차 기본 도면(벽 셋+가운데)을 손 안 댔고 세트도 없으면 새 기본(자리 12개)으로 — 사장님이 고친 도면은 그대로
+  const rooms = await db.execute<{ id: number; name: string; plan: unknown; n: number }>(sql`
+    SELECT a.id, a.name, a.plan, (SELECT count(*)::int FROM tire_storage t WHERE t.area_id = a.id AND t.status IN ('보관중','확인대기')) AS n
+    FROM storage_area a WHERE NOT a.is_site`);
+  for (const r of rooms) {
+    const { legacy, stairs } = isLegacyDefaultRoom(sanitizePlan(r.plan));
+    if (!legacy) continue;
+    if (Number(r.n) > 0) {
+      console.log(`  ${r.name}: 1차 기본 도면이지만 세트가 있어 그대로`);
+      continue;
+    }
+    await db.execute(sql`UPDATE storage_area SET plan = ${JSON.stringify(defaultRoomPlan({ stairs }))}::jsonb, updated_at = now() WHERE id = ${r.id}`);
+    console.log(`  ${r.name}: 새 기본 도면(자리 12개)으로 바꿈`);
   }
 
   const rows = await db.execute<{ status: string; n: number }>(

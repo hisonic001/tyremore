@@ -7,8 +7,9 @@ import { StatusPill } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
 import { ListRow } from "@/components/ui/list-row";
 import { Notice } from "@/components/ui/notice";
-import { areaPins, listAreas, storageDetail } from "@/lib/tire-storage-data";
+import { countSets, listAreas, storageDetail } from "@/lib/tire-storage-data";
 import { LocationSection } from "../plan/location-section";
+import { toSetLite } from "../plan/set-lite";
 import { formatStorageNo } from "@/lib/tire-storage-pure";
 import { formatPhone } from "@/lib/normalize";
 import { shortDate } from "@/lib/tire-age";
@@ -26,6 +27,8 @@ export default async function StorageDetailPage({ params, searchParams }: { para
   const d = await storageDetail(sid);
   if (!d) notFound();
   const canEdit = await hasPerm("sale_edit");
+  const live = d.status === "보관중" || d.status === "확인대기";
+  const [areas, sets] = live ? await Promise.all([listAreas(), countSets()]) : [[], []];
   const salesLink = (date: string) =>
     d.vehicleId ? `/sales?vehicle=${d.vehicleId}&range=range&from=${date}&to=${date}` : `/sales?customer=${d.customerId}&range=range&from=${date}&to=${date}`;
 
@@ -33,7 +36,22 @@ export default async function StorageDetailPage({ params, searchParams }: { para
     <PageShell>
       <PageHeader title={d.no != null ? `보관 #${formatStorageNo(d.no)}` : "보관 후보"} back={{ href: "/storage", label: "보관 목록" }} />
 
-      {sp.new === "1" && <Notice tone="success">등록했습니다. 스티커를 뽑아 타이어 묶음에 붙이고, 번호 순서 자리에 놓아 주세요.</Notice>}
+      {sp.new === "1" && <Notice tone="success">등록했습니다. 스티커를 뽑아 타이어마다 붙이고, 아래에서 놓은 자리를 정해 주세요.</Notice>}
+
+      {/* ⭐ 위치가 맨 위 (2026-11-18 3차 — 찾는 사람이 이 화면에서 제일 먼저 보는 것) */}
+      {live && (
+        <section className="mt-3 rounded-card border-2 border-slate-900 bg-white p-3">
+          <LocationSection
+            id={d.id}
+            no={d.no}
+            areaId={d.areaId}
+            slotId={d.slotId}
+            stackNo={d.stackNo}
+            areas={areas}
+            sets={sets.map(toSetLite)}
+          />
+        </section>
+      )}
 
       <div className="mt-3 rounded-card border border-slate-200 bg-white p-4">
         <div className="flex items-start justify-between gap-3">
@@ -98,22 +116,6 @@ export default async function StorageDetailPage({ params, searchParams }: { para
         </dl>
         {d.sourceText && <p className="mt-3 rounded-control bg-slate-50 p-2 text-[13px] text-slate-600">원래 판매 메모: {d.sourceText}</p>}
       </div>
-
-      {/* ⭐ 위치 (2026-11-18) — 배치도 → 구역 도면 위 점. 섞인 더미는 같은 점 */}
-      {(d.status === "보관중" || d.status === "확인대기") && (
-        <section className="mt-3 rounded-card border border-slate-200 bg-white p-3">
-          <h2 className="text-sm font-semibold text-slate-600">📍 위치{d.areaName ? ` — ${d.areaName}` : " — 아직 안 찍음"}</h2>
-          <LocationSection
-            id={d.id}
-            areaId={d.areaId}
-            x={d.pinX}
-            y={d.pinY}
-            areas={await listAreas()}
-            pins={await areaPins()}
-            startOpen={sp.new === "1" && d.areaId == null}
-          />
-        </section>
-      )}
 
       {d.no != null && d.status === "보관중" && (
         <ButtonLink href={`/print/storage?ids=${d.id}`} variant="secondary" size="lg" className="mt-3">

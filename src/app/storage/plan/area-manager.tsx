@@ -6,8 +6,10 @@ import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/notice";
 import { useConfirm } from "@/components/ui/confirm";
 import { addArea, hideArea, renameArea, saveAreaPlan, setAreaImage } from "@/lib/storage-area";
-import type { AreaInfo, PinRow } from "@/lib/tire-storage-data";
+import type { AreaInfo } from "@/lib/tire-storage-data";
 import { formatStorageNo } from "@/lib/tire-storage-pure";
+import { slotLabel, stacksIn } from "@/lib/storage-plan-pure";
+import type { SetLite } from "./location";
 import { areaImageUrl, PlanCanvas, toPlan } from "./plan-canvas";
 import { PlanEditor } from "./plan-editor";
 
@@ -40,21 +42,32 @@ async function shrinkImage(file: File): Promise<string> {
  * ⭐ 「구역」 탭 (2026-11-18) — 배치도·구역 도면 보기 + (판매 수정 권한) 도면 고치기·사진·이름·더하기·숨기기.
  *   앱이 그려 둔 기본 도면을 사장님이 실제대로 고친다 (사장님: 「알아서 그려 주거나 내가 살짝 수정 가능하게」).
  */
-export function AreaManager({ areas, pins, canEdit }: { areas: AreaInfo[]; pins: PinRow[]; canEdit: boolean }) {
+export function AreaManager({
+  areas,
+  sets,
+  occupied,
+  canEdit,
+}: {
+  areas: AreaInfo[];
+  sets: SetLite[];
+  occupied: { areaId: number; slotId: string; sets: number; stacks: number }[];
+  canEdit: boolean;
+}) {
   const router = useRouter();
   const [ask, confirmNode] = useConfirm();
   const [selId, setSelId] = useState<number>(areas[0]?.id ?? 0);
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState("");
   const [newName, setNewName] = useState("");
-  const [group, setGroup] = useState<PinRow[] | null>(null);
+  const [slotId, setSlotId] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const [pending, start] = useTransition();
   const sel = areas.find((a) => a.id === selId) ?? areas[0];
   const rooms = areas.filter((a) => !a.isSite);
   if (!sel) return <p className="mt-4 text-slate-500">구역이 없습니다.</p>;
   const plan = toPlan(sel.plan);
-  const inArea = pins.filter((p) => p.areaId === sel.id);
+  const occHere = occupied.filter((o) => o.areaId === sel.id);
+  const badges: Record<string, string> = Object.fromEntries(occHere.map((o) => [o.slotId, `${o.sets}세트`]));
 
   const run = (fn: () => Promise<{ ok: true } | { ok: false; error: string }>, done: string, after?: () => void) =>
     start(async () => {
@@ -76,14 +89,14 @@ export function AreaManager({ areas, pins, canEdit }: { areas: AreaInfo[]; pins:
             onClick={() => {
               setSelId(a.id);
               setEditing(false);
-              setGroup(null);
+              setSlotId(null);
               setName(a.name);
             }}
             className={`min-h-11 rounded-full px-3.5 text-sm font-medium ${a.id === sel.id ? "bg-slate-900 text-white" : "border border-slate-300 bg-white text-slate-700"}`}
           >
             {a.isSite ? "🗺 " : ""}
             {a.name}
-            {!a.isSite && <span className="ml-1 text-xs opacity-70">{pins.filter((p) => p.areaId === a.id).length}</span>}
+            {!a.isSite && <span className="ml-1 text-xs opacity-70">{sets.filter((p) => p.areaId === a.id).length}</span>}
           </button>
         ))}
       </div>
@@ -97,7 +110,7 @@ export function AreaManager({ areas, pins, canEdit }: { areas: AreaInfo[]; pins:
             initial={plan}
             isSite={sel.isSite}
             areas={rooms.map((r) => ({ id: r.id, name: r.name }))}
-            imageUrl={areaImageUrl(sel)}
+            occupied={Object.fromEntries(occHere.map((o) => [o.slotId, o.sets]))}
             pending={pending}
             onCancel={() => setEditing(false)}
             onSave={(p) => run(() => saveAreaPlan(sel.id, p), "도면을 저장했습니다", () => setEditing(false))}
@@ -106,29 +119,53 @@ export function AreaManager({ areas, pins, canEdit }: { areas: AreaInfo[]; pins:
           <>
             <PlanCanvas
               plan={plan}
-              imageUrl={areaImageUrl(sel)}
-              pins={sel.isSite ? [] : inArea}
+              badges={sel.isSite ? {} : badges}
+              selectedId={slotId}
+              onSlotTap={sel.isSite ? undefined : (sh) => setSlotId(sh.id)}
               onShapeTap={
                 sel.isSite
-                  ? (s) => {
-                      const id = s.areaIds?.[0];
-                      if (id) setSelId(id);
+                  ? (sh) => {
+                      const id = sh.areaIds?.[0];
+                      const to = areas.find((a) => a.id === id);
+                      if (!to) return;
+                      // 구역 버튼과 똑같이 초기화 — 이름 칸·고른 자리가 옛 구역 것으로 남지 않게
+                      setSelId(to.id);
+                      setEditing(false);
+                      setSlotId(null);
+                      setName(to.name);
                     }
                   : undefined
               }
-              onPinGroupTap={(g) => setGroup(inArea.filter((p) => g.some((x) => x.id === p.id)))}
             />
-            {sel.isSite && <p className="mt-1 text-xs text-slate-500">건물을 누르면 그 구역 도면으로 갑니다.</p>}
-            {group && (
-              <ul className="mt-2 rounded-control bg-slate-50 p-2 text-sm">
-                {group.map((p) => (
-                  <li key={p.id}>
-                    <a href={`/storage/${p.id}`} className="underline underline-offset-2">
-                      #{formatStorageNo(p.no)} {p.plate} {p.owner} · {p.describe}
-                    </a>
-                  </li>
+            {sel.isSite && <p className="mt-1 text-sm text-slate-600">건물을 누르면 그 구역 도면으로 갑니다.</p>}
+            {/* 사진은 도면 밑에 깔지 않는다(글자가 안 보임) — 따로 작게 */}
+            {areaImageUrl(sel) && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={areaImageUrl(sel)!} alt={`${sel.name} 사진`} className="mt-2 max-h-48 w-full rounded-control object-cover" />
+            )}
+            {!sel.isSite && slotId && (
+              <div className="mt-2 rounded-card border-2 border-slate-900 p-3">
+                <p className="text-lg font-extrabold">
+                  {sel.name} › {slotLabel(plan, slotId)}
+                </p>
+                {stacksIn(sets, sel.id, slotId).map((st) => (
+                  <div key={st.no} className="mt-2">
+                    <p className="font-bold">
+                      더미 {st.no} · {st.sets.length}세트 · {st.tires}본
+                    </p>
+                    <ul className="text-sm">
+                      {st.sets.map((x) => (
+                        <li key={x.id}>
+                          <a href={`/storage/${x.id}`} className="underline underline-offset-2">
+                            #{formatStorageNo(x.no)} {x.plate} {x.owner} · {x.describe}
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 ))}
-              </ul>
+                {stacksIn(sets, sel.id, slotId).length === 0 && <p className="mt-1 text-sm text-slate-600">비어 있는 자리입니다.</p>}
+              </div>
             )}
           </>
         )}
@@ -137,8 +174,17 @@ export function AreaManager({ areas, pins, canEdit }: { areas: AreaInfo[]; pins:
       {canEdit && !editing && (
         <div className="mt-3 space-y-2 rounded-card border border-slate-200 bg-white p-3">
           <Button variant="secondary" className="w-full" onClick={() => setEditing(true)}>
-            ✏️ 도면 고치기 (칸 옮기기·크기·이름)
+            ✏️ 도면 고치기 (자리 옮기기·크기·이름)
           </Button>
+          {!sel.isSite && (
+            <a
+              href={`/print/storage/signs?area=${sel.id}`}
+              target="_blank"
+              className="flex min-h-11 items-center justify-center rounded-control border border-slate-300 bg-white text-sm font-semibold text-slate-800"
+            >
+              🪧 자리 표지 인쇄 — 자리 이름을 A4 에 크게 뽑아 벽에 붙이기
+            </a>
+          )}
           <div className="flex gap-2">
             <input
               value={name || sel.name}

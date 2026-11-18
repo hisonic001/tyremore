@@ -10,6 +10,7 @@ import { findVehicles, guessMode } from "./search";
 import { parseSpecQuery } from "./tire-spec";
 import { isPlaceholderCustomerName, isPlaceholderPhone } from "./normalize";
 import { describeSet, parseStorageNoQuery, STORAGE_FEE_SERVICE_NO, type ContactRow, type StorageStatus } from "./tire-storage-pure";
+import { locationText } from "./storage-plan-pure";
 
 export interface StorageRow {
   id: number;
@@ -37,11 +38,14 @@ export interface StorageRow {
   storedQuoteId: number | null;
   releasedQuoteId: number | null;
   origin: string;
-  /** ⭐ 위치 (2026-11-18) — 구역 도면 위 점(0~1). 같은 좌표 = 같은 더미 */
+  /** ⭐ 위치 (2026-11-18 3차) — 구역 › 자리 › 더미. 자리 이름은 도면에서 읽는다(이름 바꾸면 어디서나 바뀜) */
   areaId: number | null;
   areaName: string | null;
-  pinX: number | null;
-  pinY: number | null;
+  slotId: string | null;
+  slotLabel: string | null;
+  stackNo: number | null;
+  /** 「흰색 창고 › 안쪽 2 › 더미 3」 · 「위치 없음」 */
+  location: string;
   /** 스티커·목록에 쓰는 「주인 이름」 — 거래처 차량이면 거래처 이름 */
   ownerName: string;
   describe: string;
@@ -74,8 +78,9 @@ type Raw = {
   origin: string;
   area_id: number | null;
   area_name: string | null;
-  pin_x: number | null;
-  pin_y: number | null;
+  slot_id: string | null;
+  slot_label: string | null;
+  stack_no: number | null;
 };
 
 const BASE = sql`
@@ -83,7 +88,13 @@ const BASE = sql`
          to_char(s.stored_on, 'YYYY-MM-DD') stored_on, to_char(s.released_on, 'YYYY-MM-DD') released_on, s.release_note,
          s.customer_id, c.name customer_name, c.supplier_name, c.phone,
          s.vehicle_id, v.plate_no, v.model, v.last_fitted_size, s.source_text, s.stored_quote_id, s.released_quote_id,
-         s.origin, s.area_id, a.name AS area_name, s.pin_x, s.pin_y
+         s.origin, s.area_id, a.name AS area_name, s.slot_id, s.stack_no,
+         -- 자리 이름은 도면에서 (비면 「칸」, 지워졌으면 「지워진 자리」 — 화면 정본은 storage-plan-pure.slotLabel)
+         CASE WHEN s.slot_id IS NULL THEN NULL
+              ELSE COALESCE((SELECT NULLIF(btrim(e->>'label'), '') FROM jsonb_array_elements(a.plan->'shapes') e
+                             WHERE e->>'id' = s.slot_id AND e->>'kind' = 'block' LIMIT 1),
+                            CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(a.plan->'shapes') e WHERE e->>'id' = s.slot_id)
+                                 THEN '칸' ELSE '지워진 자리' END) END AS slot_label
   FROM tire_storage s
   JOIN customer c ON c.id = s.customer_id
   LEFT JOIN vehicle v ON v.id = s.vehicle_id
@@ -118,14 +129,17 @@ function toRow(r: Raw): StorageRow {
     origin: r.origin,
     areaId: r.area_id == null ? null : Number(r.area_id),
     areaName: r.area_name,
-    pinX: r.pin_x == null ? null : Number(r.pin_x),
-    pinY: r.pin_y == null ? null : Number(r.pin_y),
+    slotId: r.slot_id,
+    slotLabel: r.slot_label,
+    stackNo: r.stack_no == null ? null : Number(r.stack_no),
+    location: locationText({ areaName: r.area_name, slotLabel: r.slot_label, stackNo: r.stack_no == null ? null : Number(r.stack_no) }),
     ownerName: r.supplier_name ?? r.customer_name,
     describe: describeSet({ brand: r.brand, kind: r.kind, size: r.size, qty }),
   };
 }
 
 export type StorageView = "보관중" | "지난" | "확인대기" | "위치없음";
+
 
 const VIEW_WHERE: Record<StorageView, SQL> = {
   보관중: sql`s.status = '보관중'`,
@@ -319,32 +333,20 @@ export async function listAreas(): Promise<AreaInfo[]> {
   return rows.map((r) => ({ id: Number(r.id), name: r.name, isSite: !!r.is_site, plan: r.plan, hasImage: !!r.has_image, ver: Number(r.ver), sort: Number(r.sort) }));
 }
 
-export interface PinRow {
-  id: number;
-  no: number | null;
-  areaId: number;
-  x: number;
-  y: number;
-  kind: string | null;
-  plate: string | null;
-  owner: string;
-  describe: string;
+/** 같은 더미 세트들 (찾기 화면 — 「이 더미: #0012 4본 + #0031 2본」) */
+export async function stackMates(areaId: number, slotId: string, stackNo: number): Promise<StorageRow[]> {
+  const raw = await db.execute<Raw>(sql`${BASE}
+    WHERE s.status IN ('보관중','확인대기') AND s.area_id = ${areaId} AND s.slot_id = ${slotId} AND s.stack_no = ${stackNo}
+    ORDER BY s.storage_no NULLS LAST`);
+  return raw.map(toRow);
 }
 
-/** 도면 위 점 전부 (보관중) — 위치 찍기·찾기·더미 묶음이 같이 쓴다 */
-export async function areaPins(): Promise<PinRow[]> {
-  const raw = await db.execute<Raw>(sql`${BASE} WHERE s.status = '보관중' AND s.area_id IS NOT NULL AND s.pin_x IS NOT NULL ORDER BY s.storage_no`);
-  return raw.map(toRow).map((r) => ({
-    id: r.id,
-    no: r.no,
-    areaId: r.areaId!,
-    x: r.pinX!,
-    y: r.pinY!,
-    kind: r.kind,
-    plate: r.plateNo,
-    owner: r.ownerName,
-    describe: r.describe,
-  }));
+/** 자리마다 세트 수 — 도면 배지 · 편집기(세트 든 자리는 못 지움) */
+export async function slotCounts(): Promise<{ areaId: number; slotId: string; sets: number; stacks: number }[]> {
+  const rows = await db.execute<{ area_id: number; slot_id: string; sets: number; stacks: number }>(sql`
+    SELECT area_id, slot_id, count(*)::int AS sets, count(DISTINCT stack_no)::int AS stacks
+    FROM tire_storage WHERE status IN ('보관중','확인대기') AND slot_id IS NOT NULL GROUP BY 1, 2`);
+  return rows.map((r) => ({ areaId: Number(r.area_id), slotId: r.slot_id, sets: Number(r.sets), stacks: Number(r.stacks) }));
 }
 
 export async function areaImage(id: number): Promise<string | null> {

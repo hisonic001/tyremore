@@ -8,6 +8,7 @@
  *   ② 자리표시 이름(고객·관광객 등) 행에 차량 2대 이상
  *   ③ 더미 전화(010-1234-5678 등) 행에 이관 뒤 새 차량·새 판매가 붙음
  *   ④ 보관 세트(D-42) 주인 ≠ 그 차량의 주인 (거래처 차고 제외) · 자리표시 손님에 붙은 보관
+ *   ⑤ 보관 세트의 위치 자리가 구역 도면에서 사라짐
  *
  * 실행: npx tsx --env-file=.env.local scripts/customer-integrity-check.ts
  */
@@ -69,6 +70,16 @@ async function main() {
   console.log(`④ 보관 세트 주인 ≠ 차량 주인 / 자리표시 손님: ${storageMix.length}건`);
   for (const m of storageMix) console.log(`   · 보관 #${m.storage_no ?? "후보"} 주인 「${m.sc}」 vs 차량(${m.plate ?? "-"}) 소유 「${m.vc ?? "-"}」`);
   bad += storageMix.length;
+
+  // ⑤ 위치 자리가 도면에서 사라진 세트 (D-42 3차, 2026-11-18) — 도면 저장이 막지만 혹시 남은 것
+  const lostSlot = await db.execute<{ storage_no: number | null; area: string; slot_id: string }>(sql`
+    SELECT t.storage_no, a.name AS area, t.slot_id
+    FROM tire_storage t JOIN storage_area a ON a.id = t.area_id
+    WHERE t.status IN ('보관중','확인대기') AND t.slot_id IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(a.plan->'shapes') e WHERE e->>'id' = t.slot_id AND e->>'kind' = 'block')`);
+  console.log(`⑤ 위치 자리가 도면에서 사라진 세트: ${lostSlot.length}건`);
+  for (const m of lostSlot) console.log(`   · 보관 #${m.storage_no ?? "후보"} ${m.area} 자리 ${m.slot_id} — 위치를 다시 정해 주세요`);
+  bad += lostSlot.length;
 
   console.log(bad === 0 ? "\n✅ 전부 정상 — 섞인 고객 없음" : `\n⚠ 이상 ${bad}건 — 위 목록 확인 필요`);
   process.exit(0);
