@@ -1,4 +1,4 @@
-import { requirePerm } from "@/lib/auth";
+import { requireStoragePerm } from "@/lib/auth";
 import { getSetting } from "@/lib/app-setting";
 import { labelRows, labelRowsByRange } from "@/lib/tire-storage-data";
 import { LABEL_PAPER_KEY, LABEL_PER_KEY, LABEL_SIZE_KEY, parseLabelPaper, parseLabelPer, parseLabelSize } from "@/lib/tire-storage-pure";
@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
  *   바코드 없음(D-11). AppNav 는 /print/* 에서 숨는다.
  */
 export default async function StorageLabelPage({ searchParams }: { searchParams: Promise<{ ids?: string; from?: string; to?: string }> }) {
-  await requirePerm("sale");
+  await requireStoragePerm();
   const sp = await searchParams;
   const from = Number(sp.from);
   const to = Number(sp.to);

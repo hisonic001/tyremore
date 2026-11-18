@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { Printer } from "lucide-react";
 import Link from "@/lib/link";
-import { hasPerm, requirePerm } from "@/lib/auth";
+import { requireStoragePerm, hasStoragePerm } from "@/lib/auth";
 import { PageHeader, PageShell } from "@/components/ui/page";
 import { StatusPill } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
@@ -19,14 +19,14 @@ export const dynamic = "force-dynamic";
 
 /** ⭐ 보관 세트 한 장 (D-42) — 스티커 다시 뽑기 · 찾아감 · 폐기 · 고치기 */
 export default async function StorageDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ new?: string }> }) {
-  await requirePerm("sale");
+  await requireStoragePerm();
   const { id } = await params;
   const sp = await searchParams;
   const sid = Number(id);
   if (!Number.isInteger(sid)) notFound();
   const d = await storageDetail(sid);
   if (!d) notFound();
-  const canEdit = await hasPerm("sale_edit");
+  const canEdit = await hasStoragePerm("edit");
   const live = d.status === "보관중" || d.status === "확인대기";
   const [areas, sets] = live ? await Promise.all([listAreas(), countSets()]) : [[], []];
   const salesLink = (date: string) =>
