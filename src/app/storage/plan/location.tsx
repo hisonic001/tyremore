@@ -2,13 +2,13 @@
 
 import { useMemo } from "react";
 import { formatStorageNo, labelKind } from "@/lib/tire-storage-pure";
-import { ONE_STACK, siteShapeForArea, slotLabel, slotsOf } from "@/lib/storage-plan-pure";
+import { siteShapeForArea, slotLabel, slotsOf, stacksIn } from "@/lib/storage-plan-pure";
 import type { AreaInfo } from "@/lib/tire-storage-data";
 import { PlanCanvas, toPlan } from "./plan-canvas";
 
 /**
  * ⭐ 위치 고르기 · 찾기 (2026-11-18 3차 개정)
- *   위치 = 구역 › 자리 (더미는 2026-11-18 뺐다). 고르기는 **큰 버튼 두 줄**(구역 → 자리). 도면은 자리를 누르는 또 하나의 길일 뿐 —
+ *   위치 = 구역 › 자리 › 더미. 고르기는 **큰 버튼 세 줄**(구역 → 자리 → 더미). 도면은 자리를 누르는 또 하나의 길일 뿐 —
  *   작은 칸도 아래 자리 버튼으로 정확히 고른다. 근처 누르면 붙는 일·점은 없다.
  */
 
@@ -56,14 +56,17 @@ export function LocationChooser({
   const plan = area ? toPlan(area.plan) : null;
   const slots = slotsOf(plan);
   const perSlot = (slotId: string) => others.filter((s) => s.areaId === area?.id && s.slotId === slotId);
+  const stacks = area && value.slotId ? stacksIn(others, area.id, value.slotId) : [];
   const badges: Record<string, string> = {};
   for (const sl of slots) {
     const n = perSlot(sl.id).length;
     if (n) badges[sl.id] = `${n}세트`;
   }
 
-  // 더미는 묻지 않는다(2026-11-18) — 자리를 누르면 위치가 다 정해진다
-  const pickSlot = (slotId: string) => onChange({ areaId: value.areaId, slotId, stack: ONE_STACK });
+  const pickSlot = (slotId: string) => {
+    const empty = area ? stacksIn(others, area.id, slotId).length === 0 : true;
+    onChange({ areaId: value.areaId, slotId, stack: empty ? "new" : null });
+  };
 
   return (
     <div className="space-y-3">
@@ -100,6 +103,7 @@ export function LocationChooser({
           <div className="mt-2 grid grid-cols-2 gap-2">
             {slots.map((sl, i) => {
               const ss = perSlot(sl.id);
+              const st = stacksIn(ss, area.id, sl.id).length;
               const on = sl.id === value.slotId;
               return (
                 <button
@@ -109,7 +113,7 @@ export function LocationChooser({
                   className={`min-h-12 rounded-control px-3 text-left ${on ? "bg-amber-300 font-extrabold text-black ring-2 ring-black" : "border border-slate-300 bg-white font-bold text-slate-900"}`}
                 >
                   {sl.label || `칸 ${i + 1}`}
-                  <span className="ml-1 text-xs font-medium text-slate-600">{ss.length ? `${ss.length}세트 · ${ss.reduce((t, x) => t + x.qty, 0)}본` : "비어 있음"}</span>
+                  <span className="ml-1 text-xs font-medium text-slate-600">{ss.length ? `${st}더미 · ${ss.length}세트` : "비어 있음"}</span>
                 </button>
               );
             })}
@@ -117,22 +121,61 @@ export function LocationChooser({
         </div>
       )}
 
+      {/* C. 더미 */}
+      {area && value.slotId && (
+        <div>
+          <p className="mb-1 text-sm font-bold text-slate-700">③ 더미</p>
+          <div className="flex flex-col gap-2">
+            {stacks.map((st) => {
+              const on = value.stack === st.no;
+              return (
+                <button
+                  key={st.no}
+                  type="button"
+                  onClick={() => onChange({ ...value, stack: st.no })}
+                  className={`min-h-14 rounded-control px-3 py-2 text-left ${on ? "bg-slate-900 text-white" : "border-2 border-slate-300 bg-white text-slate-900"}`}
+                >
+                  <span className="text-lg font-extrabold">더미 {st.no}</span>
+                  <span className="ml-2 text-sm font-semibold">
+                    {st.sets.length}세트 · {st.tires}본
+                  </span>
+                  <span className={`block truncate text-xs ${on ? "text-slate-300" : "text-slate-500"}`}>
+                    {st.sets.map((s) => `#${formatStorageNo(s.no)} ${tail4(s.plate)}`).join(" · ")}
+                  </span>
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => onChange({ ...value, stack: "new" })}
+              className={`min-h-14 rounded-control px-3 text-left text-lg font-extrabold ${value.stack === "new" ? "bg-slate-900 text-white" : "border-2 border-dashed border-slate-400 bg-white text-slate-700"}`}
+            >
+              ＋ 새 더미 {stacks.length === 0 ? "(더미 1)" : `(더미 ${Math.max(...stacks.map((s) => s.no)) + 1})`}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-/** 지금 고른 위치 한 줄 — 「흰색 창고 › 안쪽 2」 (더미는 뺐다, 2026-11-18) */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function chosenText(areas: AreaInfo[], v: LocValue, _sets?: SetLite[], _selfId?: number): string | null {
+/** 지금 고른 위치 한 줄 — 「흰색 창고 › 안쪽 2 › 더미 3」 */
+export function chosenText(areas: AreaInfo[], v: LocValue, sets: SetLite[], selfId?: number): string | null {
   const area = areas.find((a) => a.id === v.areaId);
   if (!area) return null;
+  const plan = toPlan(area.plan);
   const parts = [area.name];
-  if (v.slotId) parts.push(slotLabel(toPlan(area.plan), v.slotId) ?? "");
+  if (v.slotId) parts.push(slotLabel(plan, v.slotId) ?? "");
+  if (v.slotId && v.stack != null) {
+    // 옮기는 그 세트는 빼고 센다 — 서버(resolveLoc)와 같은 번호가 보이게
+    const nextNo = stacksIn(sets.filter((s) => s.id !== selfId), area.id, v.slotId).reduce((m, s) => Math.max(m, s.no), 0) + 1;
+    parts.push(v.stack === "new" ? `새 더미 ${nextNo}` : `더미 ${v.stack}`);
+  }
   return parts.join(" › ");
 }
 
 /**
- * 찾기 — 🔴 글자가 먼저(크게), 도면은 확인용. 같은 자리에 함께 있는 세트를 이 세트와 구분해 보여 준다.
+ * 찾기 — 🔴 글자가 먼저(크게), 도면은 확인용. 같은 더미에 섞인 세트를 이 세트와 구분해 보여 준다.
  */
 export function LocationFinder({
   areas,
@@ -158,12 +201,13 @@ export function LocationFinder({
       <div>
         <p className="text-sm font-semibold text-slate-600">{area.name}</p>
         <p className="text-3xl font-extrabold leading-tight text-slate-900">{label ?? "자리 미정"}</p>
+        {me.stackNo != null && <span className="mt-1 inline-block rounded-lg bg-slate-900 px-3 py-0.5 text-2xl font-extrabold text-white">더미 {me.stackNo}</span>}
       </div>
 
       {mixed && (
         <div className="rounded-card border-2 border-amber-400 bg-amber-50 p-3">
           <p className="font-bold text-slate-900">
-            이 자리 {tires}본 = {mates.map((s) => s.qty).join(" + ")} ({mates.length}세트)
+            이 더미 {tires}본 = {mates.map((s) => s.qty).join(" + ")} (섞여 쌓임)
           </p>
           <ul className="mt-1 space-y-1">
             {mates.map((s) => (

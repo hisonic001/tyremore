@@ -32,7 +32,7 @@ export interface FoundSetDone {
  *   전엔 「판매 등록에서 손님·차량을 먼저」에서 막혔다.
  *
  *   ① 차번호 → 이미 있는 차면 「이 차 맞아요」 한 번 ② 없으면 개인 손님(이름·전화) 또는 거래처 고르기
- *   ③ 타이어 내용(고르기) ④ 맡긴 날(모르면 「모름」) → 등록 = 번호 + (실사 화면이면) 지금 자리에 놓기.
+ *   ③ 타이어 내용(고르기) ④ 맡긴 날(모르면 「모름」) → 등록 = 번호 + (실사 화면이면) 지금 더미에 놓기.
  */
 export function FoundSetForm({
   initialQuery,
@@ -43,7 +43,7 @@ export function FoundSetForm({
   onCancel,
 }: {
   initialQuery: string;
-  /** 창고 실사 화면의 지금 위치 — 있으면 등록과 동시에 그 자리에 놓는다 */
+  /** 창고 실사 화면의 지금 위치 — 있으면 등록과 동시에 그 더미에 놓는다 */
   loc: Loc | null;
   locText?: string | null;
   today: string;

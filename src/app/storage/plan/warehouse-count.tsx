@@ -7,7 +7,7 @@ import { placeHere, undoPlace, type PrevLoc } from "@/lib/storage-area";
 import { dismissCandidate } from "@/lib/tire-storage";
 import type { AreaInfo } from "@/lib/tire-storage-data";
 import { formatStorageNo, labelKind } from "@/lib/tire-storage-pure";
-import { ONE_STACK, setsAtSlot, slotLabel, slotsOf } from "@/lib/storage-plan-pure";
+import { slotLabel, slotsOf, stacksIn } from "@/lib/storage-plan-pure";
 import { chosenText, LocationChooser, type LocValue, type SetLite } from "./location";
 import { toPlan } from "./plan-canvas";
 import { FoundSetForm, type FoundSetDone } from "../found-set-form";
@@ -36,10 +36,9 @@ const LOC_KEY = "storage.count.loc";
 const LOC_FRESH_MS = 30 * 60 * 1000;
 
 /**
- * ⭐ 창고 실사 — 자리 단위 한 화면 (2026-11-18 3차 개정, 사장님 「점찍기 허술·허접 — 찾는 사람 입장에서 각잡고」)
- *   🔴 같은 날 4차: 더미를 뺐다(사장님 「더미 구성이 복잡 — 더 직관적이고 쉽게」 → 「더미 없애기」). 위치 = 구역 › 자리.
+ * ⭐ 창고 실사 — 더미 단위 한 화면 (2026-11-18 3차 개정, 사장님 「점찍기 허술·허접 — 찾는 사람 입장에서 각잡고」)
  *
- *   맨 위 「지금 위치」(구역 › 자리)가 고정이다. 고르기는 큰 버튼 두 줄 → 「이 자리에서 실사 시작」.
+ *   맨 위 「지금 위치」(구역 › 자리 › 더미)가 고정이다. 고르기는 큰 버튼 세 줄 → 고르면 접힌다.
  *   타이어에 적힌 차번호 끝 4자리 → 「여기 ✓」 한 번 = 실사 확인 + 번호 + 위치. 8초 「되돌리기」.
  *   다른 곳에 있던 세트는 「여기로 옮길까요?」. 실사 중엔 화면이 꺼지지 않는다.
  */
@@ -63,7 +62,7 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
   const [ask, confirmNode] = useConfirm();
   const inputRef = useRef<HTMLInputElement>(null);
   const doneKey = `storage.count.done.${today}`;
-  const complete = loc.areaId != null && !!loc.slotId;
+  const complete = loc.areaId != null && !!loc.slotId && loc.stack != null;
 
   // 🔴 기억한 위치를 **첫 화면 전에** 되살린다 — 다른 구역으로 잘못 넣는 일이 없게. 도면에서 사라진 자리면 버린다
   useEffect(() => {
@@ -72,11 +71,11 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
       const area = rooms.find((r) => r.id === saved?.areaId);
       if (saved && area) {
         const slotOk = !!saved.slotId && slotsOf(toPlan(area.plan)).some((s) => s.id === saved.slotId);
-        const next: LocValue = { areaId: area.id, slotId: slotOk ? saved.slotId : null, stack: slotOk ? ONE_STACK : null };
+        const next: LocValue = { areaId: area.id, slotId: slotOk ? saved.slotId : null, stack: slotOk ? saved.stack : null };
         setLoc(next);
-        // 30분 안 + 다 골라져 있을 때만 바로 실사 화면 — 아니면 고르는 화면을 열어 둔다(「이 자리에서 실사 시작」을 눌러야 시작)
+        // 30분 안 + 다 골라져 있을 때만 바로 실사 화면 — 아니면 고르는 화면을 열어 둔다(「이 더미에서 실사 시작」을 눌러야 시작)
         const fresh = typeof saved.at === "number" && Date.now() - saved.at < LOC_FRESH_MS;
-        setOpen(!(fresh && next.slotId));
+        setOpen(!(fresh && next.slotId && next.stack != null));
       }
       const d = JSON.parse(store.get(doneKey) ?? "[]");
       if (Array.isArray(d)) setDone(d.filter((n) => Number.isInteger(n)));
@@ -108,7 +107,7 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
     return () => clearTimeout(t);
   }, [undo]);
 
-  // 🔴 저절로 접지 않는다 — 잘못 누른 한 번이 위치가 되지 않게. 「이 자리에서 실사 시작」을 눌러야 시작
+  // 🔴 저절로 접지 않는다 — 잘못 누른 한 번이 위치가 되지 않게. 「이 더미에서 실사 시작」을 눌러야 시작
   const changeLoc = (v: LocValue) => {
     setLoc(v);
     store.set(LOC_KEY, JSON.stringify({ ...v, at: Date.now() }));
@@ -121,9 +120,8 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
 
   const area = rooms.find((a) => a.id === loc.areaId) ?? null;
   const plan = area ? toPlan(area.plan) : null;
-  const here = (s: SetLite) => s.areaId === loc.areaId && s.slotId === loc.slotId && loc.slotId != null;
-  const mates = complete ? setsAtSlot(sets, loc.areaId, loc.slotId) : [];
-  const slotName = area && plan && loc.slotId ? (slotLabel(plan, loc.slotId) ?? "") : "";
+  const here = (s: SetLite) => s.areaId === loc.areaId && s.slotId === loc.slotId && loc.stack !== "new" && s.stackNo === loc.stack;
+  const mates = complete && loc.stack !== "new" ? sets.filter(here) : [];
   const stats = {
     pending: sets.filter((s) => s.status === "확인대기").length,
     unplaced: sets.filter((s) => s.areaId == null).length,
@@ -145,7 +143,7 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
   const whereText = (s: SetLite) => {
     const a = rooms.find((r) => r.id === s.areaId);
     if (!a) return null;
-    return [a.name, slotLabel(toPlan(a.plan), s.slotId)].filter(Boolean).join(" › ");
+    return [a.name, slotLabel(toPlan(a.plan), s.slotId), s.stackNo ? `더미 ${s.stackNo}` : null].filter(Boolean).join(" › ");
   };
 
   const place = async (s: SetLite) => {
@@ -155,16 +153,17 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
       return;
     setBusyId(s.id);
     start(async () => {
-      const r = await placeHere(s.id, { areaId: loc.areaId!, slotId: loc.slotId!, stack: ONE_STACK });
+      const r = await placeHere(s.id, { areaId: loc.areaId!, slotId: loc.slotId!, stack: loc.stack! });
       setBusyId(null);
       if (!r.ok) return setMsg({ tone: "error", text: r.error });
       setSets((all) => all.map((x) => (x.id === s.id ? { ...x, status: "보관중", no: r.no, areaId: loc.areaId, slotId: loc.slotId, stackNo: r.stackNo } : x)));
+      if (loc.stack === "new") changeLoc({ ...loc, stack: r.stackNo }); // 새 더미 → 진짜 번호로, 그대로 고른 채
       setDone((d) => {
         const next = d.includes(s.id) ? d : [...d, s.id];
         store.set(doneKey, JSON.stringify(next));
         return next;
       });
-      const label = `#${formatStorageNo(r.no)} ${s.plate ?? ""} → ${slotName}${r.confirmed ? " (실사 확인)" : ""}`;
+      const label = `#${formatStorageNo(r.no)} ${s.plate ?? ""} → 더미 ${r.stackNo}${r.confirmed ? " (실사 확인)" : ""}`;
       setMsg({ tone: "success", text: `✓ ${label}` });
       setUndo({ id: s.id, placed: { areaId: loc.areaId!, slotId: loc.slotId!, stackNo: r.stackNo }, prev: r.prev, confirmed: r.confirmed, label });
       try {
@@ -221,6 +220,7 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
       stackNo: r.stackNo,
     };
     setSets((all) => [...all, lite]);
+    if (loc.stack === "new" && r.stackNo != null) changeLoc({ ...loc, stack: r.stackNo });
     setDone((d) => {
       const next = [...d, r.id];
       store.set(doneKey, JSON.stringify(next));
@@ -228,7 +228,7 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
     });
     setFound(null);
     setQ("");
-    setMsg({ tone: "success", text: `✓ #${formatStorageNo(r.no)} ${r.plate} ${r.owner} → ${slotName} (새로 등록${r.reused ? " · 이미 있던 차" : ""})` });
+    setMsg({ tone: "success", text: `✓ #${formatStorageNo(r.no)} ${r.plate} ${r.owner} → 더미 ${r.stackNo ?? ""} (새로 등록${r.reused ? " · 이미 있던 차" : ""})` });
     try {
       navigator.vibrate?.(30);
     } catch {
@@ -275,25 +275,34 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
           <LocationChooser areas={areas} sets={sets} value={loc} onChange={changeLoc} />
           {complete && (
             <button type="button" onClick={startHere} className="mt-3 min-h-14 w-full rounded-control bg-slate-900 text-lg font-bold text-white">
-              이 자리에서 실사 시작
+              이 더미에서 실사 시작
             </button>
           )}
         </div>
       ) : (
         <>
-          {/* 이 자리 */}
+          {/* 이 더미 */}
           {area && plan && loc.slotId && (
             <div className="mt-3 rounded-card border-2 border-slate-900 p-3">
               {mates.length ? (
                 <>
                   <p className="font-bold">
-                    이 자리 {mates.reduce((t, s) => t + s.qty, 0)}본 = {mates.length}세트 — 실제 타이어와 맞나요?
+                    이 더미 {mates.reduce((t, s) => t + s.qty, 0)}본 = {mates.length}세트 — 실제 타이어와 맞나요?
                   </p>
                   <p className="mt-0.5 text-sm text-slate-700">{mates.map((s) => `#${formatStorageNo(s.no)} ${tail4(s.plate)} ${s.qty}본`).join(" · ")}</p>
                 </>
               ) : (
-                <p className="font-bold text-slate-700">이 자리는 비어 있습니다 — 차번호를 치고 「여기 ✓」</p>
+                <p className="font-bold text-slate-700">
+                  {loc.stack === "new" ? `새 더미 — 첫 세트를 넣으면 「더미 ${stacksIn(sets, area.id, loc.slotId).reduce((m, s) => Math.max(m, s.no), 0) + 1}」이 됩니다` : "이 더미는 비어 있습니다"}
+                </p>
               )}
+              <button
+                type="button"
+                onClick={() => changeLoc({ ...loc, stack: "new" })}
+                className="mt-2 min-h-12 w-full rounded-control border-2 border-dashed border-slate-400 text-base font-bold text-slate-800"
+              >
+                이 더미 끝 → 옆 새 더미
+              </button>
             </div>
           )}
 
@@ -390,7 +399,7 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
           {found !== null && complete && (
             <FoundSetForm
               initialQuery={found}
-              loc={{ areaId: loc.areaId!, slotId: loc.slotId!, stack: ONE_STACK }}
+              loc={{ areaId: loc.areaId!, slotId: loc.slotId!, stack: loc.stack! }}
               locText={chosenText(areas, loc, sets)}
               today={today}
               onDone={foundDone}
