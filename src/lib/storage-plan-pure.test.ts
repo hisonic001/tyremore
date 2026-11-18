@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  cloneShapes,
+  moveGroup,
   clamp01,
   defaultRoomPlan,
   defaultSitePlan,
@@ -179,4 +181,24 @@ test("자리 이름 — 빈 이름·겹친 이름 막기, 새 자리는 번호�
   assert.equal(nextSlotName(p), "새 자리 1");
   const one = { ...p, shapes: [...p.shapes, { id: "z", kind: "block" as const, x: 30, y: 60, w: 20, h: 14, label: "새 자리 1" }] };
   assert.equal(nextSlotName(one), "새 자리 2");
+});
+
+test("여러 칸 — 묶음째 옮기기는 도면 밖으로 안 나가고, 복사는 같은 크기·새 이름 (2026-11-18)", () => {
+  const plan = { h: 60, shapes: [
+    { id: "a", kind: "block" as const, x: 0, y: 0, w: 20, h: 14, label: "안쪽 1" },
+    { id: "b", kind: "block" as const, x: 30, y: 0, w: 20, h: 14, label: "안쪽 2" },
+    { id: "c", kind: "building" as const, x: 60, y: 30, w: 20, h: 14, label: "창고", areaIds: [3] },
+  ] };
+  // 왼쪽으로 더 못 간다 — 묶음 간격 그대로
+  const moved = moveGroup(plan.shapes.slice(0, 2), -10, 5, plan.h);
+  assert.deepEqual(moved.map((s) => [s.x, s.y]), [[0, 5], [30, 5]]);
+  // 복사 — 같은 크기, 새 id, 자리 이름 겹치지 않음, 구역 연결은 안 따라감
+  const { plan: p2, newIds } = cloneShapes(plan, ["a", "b", "c"], 0, 20);
+  assert.equal(p2.shapes.length, 6);
+  const clones = p2.shapes.filter((s) => newIds.includes(s.id));
+  // 묶음째 아래로 — 맨 아래 칸(창고)이 바닥에 닿는 만큼(16)만
+  assert.deepEqual(clones.map((s) => [s.w, s.h, s.y]), [[20, 14, 16], [20, 14, 16], [20, 14, 46]]);
+  const labels = p2.shapes.filter((s) => s.kind === "block").map((s) => s.label);
+  assert.equal(new Set(labels).size, labels.length);
+  assert.equal(clones[2].areaIds, undefined);
 });
