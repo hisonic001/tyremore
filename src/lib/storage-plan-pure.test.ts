@@ -122,7 +122,8 @@ test("더미 — 자리 안 번호 순 · 본수 · 새 더미 = 가장 큰 번�
 });
 
 test("위치 글자", () => {
-  assert.equal(locationText({ areaName: "흰색 창고", slotLabel: "안쪽 2", stackNo: 3 }), "흰색 창고 › 안쪽 2 › 더미 3");
+  // 더미는 화면에서 뺐다(2026-11-18) — 옛 번호가 있어도 안 보인다
+  assert.equal(locationText({ areaName: "흰색 창고", slotLabel: "안쪽 2", stackNo: 3 }), "흰색 창고 › 안쪽 2");
   assert.equal(locationText({ areaName: "흰색 창고" }), "흰색 창고");
   assert.equal(locationText({}), "위치 없음");
 });

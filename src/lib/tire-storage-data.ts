@@ -44,7 +44,7 @@ export interface StorageRow {
   slotId: string | null;
   slotLabel: string | null;
   stackNo: number | null;
-  /** 「흰색 창고 › 안쪽 2 › 더미 3」 · 「위치 없음」 */
+  /** 「흰색 창고 › 안쪽 2」 · 「위치 없음」 (더미는 2026-11-18 화면에서 뺐다) */
   location: string;
   /** 스티커·목록에 쓰는 「주인 이름」 — 거래처 차량이면 거래처 이름 */
   ownerName: string;
