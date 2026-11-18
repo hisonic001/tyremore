@@ -7,12 +7,12 @@ import { ButtonLink } from "@/components/ui/button";
 import { ChipLink } from "@/components/ui/chip";
 import { EmptyState } from "@/components/ui/empty";
 import { Notice } from "@/components/ui/notice";
-import { areaPins, contactRows, listAreas, listStorage, storageCounts, type StorageRow, type StorageView } from "@/lib/tire-storage-data";
+import { areaPins, contactRows, countSets, listAreas, listStorage, storageCounts, type StorageRow, type StorageView } from "@/lib/tire-storage-data";
 import { contactKindFor, contactTargets, formatStorageNo, type StorageKind } from "@/lib/tire-storage-pure";
 import { formatPhone } from "@/lib/normalize";
 import { shortDate } from "@/lib/tire-age";
 import { AuditList } from "./audit";
-import { PlaceList } from "./plan/place-list";
+import { WarehouseCount } from "./plan/warehouse-count";
 import { AreaManager } from "./plan/area-manager";
 import Link from "@/lib/link";
 
@@ -22,9 +22,9 @@ export const dynamic = "force-dynamic";
  * ⭐ 타이어 보관 (D-42, 사장님 착수 지시 2026-11-17)
  *
  *   번호 = 누구 것, 위치 = 구역 도면 위의 점 (2026-11-18 개정 — 「찾는 게 문제」). 차량번호·전화·이름·보관번호·규격으로 찾는다.
- *   탭: 보관 중 · 실사 · 붙이기(위치 찍기) · 구역(도면) · 연락 명단 · 지난 기록.
+ *   탭: 📦 창고 실사(더미 단위 한 화면 — 실사·번호·위치 한 번에) · 보관 중 · 실사(내용 고치기) · 구역(도면) · 연락 명단 · 지난 기록.
  */
-type Tab = "보관중" | "실사" | "붙이기" | "구역" | "연락" | "지난";
+type Tab = "창고" | "보관중" | "실사" | "구역" | "연락" | "지난";
 
 /** 서버는 UTC — 달은 한국 시각으로 (8/1·1/1 아침 9시 전 어긋남 방지) */
 const kstMonth = () => Number(new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" }).slice(5, 7));
@@ -32,7 +32,8 @@ const kstMonth = () => Number(new Date().toLocaleDateString("sv-SE", { timeZone:
 export default async function StoragePage({ searchParams }: { searchParams: Promise<{ q?: string; tab?: string; kind?: string }> }) {
   await requirePerm("sale");
   const sp = await searchParams;
-  const tab: Tab = (["보관중", "실사", "붙이기", "구역", "연락", "지난"] as const).find((t) => t === sp.tab) ?? "보관중";
+  // 옛 「붙이기」 탭 주소는 창고 실사로
+  const tab: Tab = (["창고", "보관중", "실사", "구역", "연락", "지난"] as const).find((t) => t === (sp.tab === "붙이기" ? "창고" : sp.tab)) ?? "보관중";
   const q = (sp.q ?? "").trim().slice(0, 40);
   const counts = await storageCounts();
 
@@ -74,17 +75,17 @@ export default async function StoragePage({ searchParams }: { searchParams: Prom
       </form>
 
       <div className="mt-3 flex flex-wrap gap-2">
+        <ChipLink href={href("창고")} active={tab === "창고"}>
+          📦 창고 실사
+        </ChipLink>
         <ChipLink href={href("보관중")} active={tab === "보관중"}>
           보관 중
         </ChipLink>
         {(counts.확인대기 > 0 || tab === "실사") && (
           <ChipLink href={href("실사")} active={tab === "실사"}>
-            실사 {counts.확인대기}
+            실사 후보 {counts.확인대기}
           </ChipLink>
         )}
-        <ChipLink href={href("붙이기")} active={tab === "붙이기"}>
-          📍 붙이기
-        </ChipLink>
         <ChipLink href={href("구역")} active={tab === "구역"}>
           🗺 구역
         </ChipLink>
@@ -96,7 +97,7 @@ export default async function StoragePage({ searchParams }: { searchParams: Prom
         </ChipLink>
       </div>
 
-      {tab !== "연락" && tab !== "구역" && (
+      {tab !== "연락" && tab !== "구역" && tab !== "창고" && (
         <form action="/storage" className="mt-3 flex gap-2">
           <input type="hidden" name="tab" value={tab} />
           <input
@@ -115,8 +116,8 @@ export default async function StoragePage({ searchParams }: { searchParams: Prom
         <ContactTab kind={sp.kind === "스노" || sp.kind === "일반" ? sp.kind : contactKindFor(kstMonth())} canExport={await hasPerm("customer")} />
       ) : tab === "실사" ? (
         <AuditTab q={q} />
-      ) : tab === "붙이기" ? (
-        <PlaceTab q={q} />
+      ) : tab === "창고" ? (
+        <CountTab />
       ) : tab === "구역" ? (
         <AreaManager areas={await listAreas()} pins={await areaPins()} canEdit={await hasPerm("sale_edit")} />
       ) : (
@@ -145,19 +146,25 @@ function StorageListRow({ r }: { r: StorageRow }) {
   );
 }
 
-async function PlaceTab({ q }: { q: string }) {
-  const { rows, more } = await listStorage({ view: "위치없음", q });
-  const areas = await listAreas();
-  const pins = await areaPins();
+async function CountTab() {
+  const [areas, rows] = await Promise.all([listAreas(), countSets()]);
   return (
-    <section className="mt-3">
-      <Notice tone="info">
-        스티커를 붙이면서 세트마다 <strong>📍 위치 찍기</strong> → 건물 → 도면에서 그 자리를 누르세요. 다른 세트와 섞여 쌓였으면 그 점을 누르면 같은 더미로 묶입니다.
-        도면이 실제와 다르면 「🗺 구역」 탭에서 고치세요.
-      </Notice>
-      {more && <Notice tone="warn">300세트까지만 보여 줍니다 — 차량번호로 찾아 주세요</Notice>}
-      <PlaceList rows={rows} areas={areas} pins={pins} />
-    </section>
+    <WarehouseCount
+      areas={areas}
+      today={new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" })}
+      sets={rows.map((r) => ({
+        id: r.id,
+        no: r.no,
+        status: r.status,
+        plate: r.plateNo,
+        owner: r.ownerName,
+        describe: [r.brand, r.size, `${r.qty}본`].filter(Boolean).join(" "),
+        kind: r.kind,
+        areaId: r.areaId,
+        x: r.pinX,
+        y: r.pinY,
+      }))}
+    />
   );
 }
 

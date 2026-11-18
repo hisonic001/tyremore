@@ -87,3 +87,39 @@ export async function setStorageLocation(storageId: number, areaId: number | nul
   if (r[0].vehicle_id) revalidatePath(`/vehicle/${r[0].vehicle_id}`);
   return { ok: true };
 }
+
+/**
+ * ⭐ 창고 실사 「여기 ✓」 한 번 (사장님 2026-11-18 — 「위치 찍기 너무 불편, 실사 때 간편하게 한 번에」)
+ *   실사 전 후보면 번호를 주고 보관중으로 + 위치, 이미 보관중이면 위치만. 한 트랜잭션.
+ */
+export async function placeHere(storageId: number, areaId: number, x: number, y: number): Promise<Result<{ no: number; confirmed: boolean }>> {
+  if (!(await hasPerm("sale"))) return { ok: false, error: NO_SALE };
+  const { nextStorageNo, storageOwnerProblem } = await import("./tire-storage-db");
+  try {
+    const out = await db.transaction(async (tx) => {
+      const [a] = await tx.execute<{ id: number }>(sql`SELECT id FROM storage_area WHERE id = ${areaId} AND is_active AND NOT is_site`);
+      if (!a) throw new Error("구역을 찾지 못했습니다");
+      const [t] = await tx.execute<{ status: string; storage_no: number | null; customer_id: number; kind: string | null }>(sql`
+        SELECT status, storage_no, customer_id, kind FROM tire_storage WHERE id = ${storageId} FOR UPDATE`);
+      if (!t || (t.status !== "보관중" && t.status !== "확인대기")) throw new Error("보관 중이거나 실사 전인 세트가 아닙니다 — 새로 고침해 보세요");
+      let no = t.storage_no == null ? null : Number(t.storage_no);
+      const confirmed = t.status === "확인대기";
+      if (confirmed) {
+        if (!t.kind) throw new Error("스노/일반이 비어 있습니다 — 실사 탭에서 내용을 채워 주세요");
+        const problem = await storageOwnerProblem(tx, Number(t.customer_id));
+        if (problem) throw new Error(problem);
+        no = await nextStorageNo(tx);
+      }
+      await tx.execute(sql`
+        UPDATE tire_storage SET status = '보관중', storage_no = ${no}, area_id = ${areaId}, pin_x = ${clamp01(x)}, pin_y = ${clamp01(y)},
+               release_note = CASE WHEN status = '확인대기' THEN NULL ELSE release_note END, updated_at = now()
+        WHERE id = ${storageId}`);
+      return { no: no!, confirmed };
+    });
+    touch();
+    return { ok: true, ...out };
+  } catch (e) {
+    const err = e as Error & { cause?: { message?: string } };
+    return { ok: false, error: err.cause?.message ?? err.message.split("\n")[0] };
+  }
+}
