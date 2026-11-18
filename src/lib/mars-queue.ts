@@ -652,6 +652,18 @@ export async function saveMarsRefNo(quoteId: number, refNo: string): Promise<voi
  *    로그만 어지럽힌다. 보류로 내리면, 서명을 받은 뒤 정비 내역에서 다시
  *    체크하는 순간 (보류→미전송) 도로 올라간다 — 기존 흐름 그대로다.
  */
+/**
+ * ⭐ 이 판매가 **같은 이유로** 몇 번 실패했나 (최근 14일, 자동입력 시도 이력 mars_attempt) — 2026-11-18 로그 점검.
+ *   key 는 mars-fill-pure.failKey(실패 문구 앞 40자). mars-fill 이 SAME_FAIL_LIMIT 에 닿으면 보류로 내린다.
+ */
+export async function sameFailCount(quoteId: number, key: string): Promise<number> {
+  const [r] = await db.execute<{ n: number }>(sql`
+    SELECT count(*)::int AS n FROM mars_attempt
+    WHERE quote_id = ${quoteId} AND error IS NOT NULL AND started_at > now() - interval '14 days'
+      AND left(btrim(regexp_replace(error, '[[:space:]]+', ' ', 'g')), 40) = ${key}`);
+  return Number(r?.n ?? 0);
+}
+
 export async function holdMars(quoteId: number, memo?: string | null): Promise<void> {
   await db
     .update(quote)
