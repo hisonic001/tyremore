@@ -1,0 +1,93 @@
+/**
+ * ⭐ 「처음 보는 세트」 등록 시험 — 실제 DB 에서 돌리고 **끝에 전부 되돌린다**(ROLLBACK). 흔적 0.
+ *   registerFoundSetTx(storage-found-db.ts) 정본을 그대로 부른다 — 화면 액션과 같은 코드.
+ *
+ * 실행: npx tsx --env-file=.env.local scripts/test-found-set.ts
+ */
+import { sql } from "drizzle-orm";
+import { db } from "@/db";
+import { registerFoundSetTx } from "@/lib/storage-found-db";
+import { sanitizePlan } from "@/lib/storage-plan-pure";
+
+const ROLLBACK = "__시험_되돌림__";
+const drop = { kind: "일반" as const, brand: "미쉐린", size: "235/55R19", qty: 4, dot: "", memo: "" };
+let fails = 0;
+const ok = (cond: boolean, msg: string) => {
+  console.log(`${cond ? "✓" : "✗"} ${msg}`);
+  if (!cond) fails++;
+};
+
+async function main() {
+  try {
+    await db.transaction(async (tx) => {
+      // 시험용 번호판 — 없는 것이어야 한다
+      const plates = ["99테9991", "99테9992"];
+      const [hit] = await tx.execute<{ n: number }>(sql`SELECT count(*)::int n FROM vehicle WHERE plate_no_norm IN (${plates[0]}, ${plates[1]})`);
+      if (Number(hit.n) > 0) throw new Error("시험 번호판이 이미 있습니다 — 다른 번호로 바꾸세요");
+      const [area] = await tx.execute<{ id: number; plan: unknown }>(sql`SELECT id, plan FROM storage_area WHERE is_active AND NOT is_site ORDER BY sort LIMIT 1`);
+      const slot = sanitizePlan(area.plan)?.shapes.find((s) => s.kind === "block");
+      if (!slot) throw new Error("자리가 있는 구역이 없습니다");
+      const [{ m: maxNo }] = await tx.execute<{ m: number }>(sql`SELECT COALESCE(MAX(storage_no),0)::int m FROM tire_storage`);
+      const loc = { areaId: Number(area.id), slotId: slot.id, stack: "new" as const };
+
+      // A. 새 손님 + 새 차 + 실사 위치 + 맡긴 날 모름
+      const a = await registerFoundSetTx(tx, { plate: "99테 9991", owner: { kind: "손님", name: "시험손님", phone: "" }, drop, storedOn: null, loc }, null);
+      ok(a.no === Number(maxNo) + 1, `A 번호 = 지금 최대+1 (${a.no})`);
+      ok(!a.reused && a.owner === "시험손님", "A 새 손님·새 차");
+      const [ra] = await tx.execute<{ origin: string; status: string; source_text: string | null; area_id: number; slot_id: string; stack_no: number; plate_no: string }>(sql`
+        SELECT s.origin, s.status, s.source_text, s.area_id, s.slot_id, s.stack_no, v.plate_no FROM tire_storage s JOIN vehicle v ON v.id = s.vehicle_id WHERE s.id = ${a.id}`);
+      ok(ra.origin === "실사" && ra.status === "보관중", `A 실사·보관중 (${ra.origin}/${ra.status})`);
+      ok((ra.source_text ?? "").startsWith("맡긴 날 모름"), `A 원문 「${ra.source_text}」`);
+      ok(Number(ra.area_id) === loc.areaId && ra.slot_id === slot.id && Number(ra.stack_no) === a.stackNo, `A 위치 = 그 자리 더미 ${a.stackNo}`);
+
+      // B. 같은 번호판(띄어쓰기 다름)에 다른 이름 → 새 차를 만들지 않고 A 의 차·주인
+      const b = await registerFoundSetTx(tx, { plate: "99테9991", owner: { kind: "손님", name: "다른이름" }, drop, storedOn: "2026-10-01", loc: { ...loc, stack: a.stackNo! } }, null);
+      ok(b.reused && b.vehicleId === a.vehicleId && b.owner === "시험손님", "B 같은 번호판 → 기존 차 재사용(중복 차 없음)");
+      ok(b.stackNo === a.stackNo, "B 같은 더미");
+      const [rb] = await tx.execute<{ stored_on: string; source_text: string | null; origin: string }>(sql`SELECT stored_on::text, source_text, origin FROM tire_storage WHERE id = ${b.id}`);
+      ok(rb.stored_on === "2026-10-01" && rb.source_text == null, "B 맡긴 날 고르면 그 날짜·원문 없음");
+
+      // C. 거래처 차 → 그 거래처 차고 손님
+      const [sup] = await tx.execute<{ name: string }>(sql`SELECT name FROM supplier WHERE is_active ORDER BY id LIMIT 1`);
+      const c = await registerFoundSetTx(tx, { plate: "99테9992", owner: { kind: "거래처", supplier: sup.name }, drop, storedOn: null, loc: null }, null);
+      const [rc] = await tx.execute<{ supplier_name: string | null; origin: string; area_id: number | null }>(sql`
+        SELECT cu.supplier_name, s.origin, s.area_id FROM tire_storage s JOIN customer cu ON cu.id = s.customer_id WHERE s.id = ${c.id}`);
+      ok(rc.supplier_name === sup.name, `C 거래처 차고(${sup.name})에 붙음`);
+      ok(rc.origin === "등록" && rc.area_id == null, "C 위치 없이 등록(맡김 등록 화면)");
+
+      // D. 자리표시 이름 · 빈 이름 · 없는 거래처 → 거절
+      for (const [label, owner] of [
+        ["자리표시 「고객」", { kind: "손님" as const, name: "고객" }],
+        ["빈 이름", { kind: "손님" as const, name: " " }],
+        ["없는 거래처", { kind: "거래처" as const, supplier: "없는거래처시험" }],
+      ] as const) {
+        let err = "";
+        await tx.execute(sql`SAVEPOINT t`);
+        try {
+          await registerFoundSetTx(tx, { plate: "99테9993", owner, drop, storedOn: null, loc: null }, null);
+        } catch (e) {
+          err = (e as Error).message;
+        }
+        await tx.execute(sql`ROLLBACK TO SAVEPOINT t`);
+        ok(!!err, `D ${label} 거절 — ${err}`);
+      }
+
+      // E. 이미 있는 차 고르기
+      const e = await registerFoundSetTx(tx, { plate: "", owner: { kind: "차량", vehicleId: a.vehicleId }, drop, storedOn: null, loc: null }, null);
+      ok(e.reused && e.vehicleId === a.vehicleId, "E 이미 있는 차 고르기");
+
+      throw new Error(ROLLBACK);
+    });
+  } catch (e) {
+    if ((e as Error).message !== ROLLBACK) throw e;
+  }
+  const [left] = await db.execute<{ n: number }>(sql`SELECT count(*)::int n FROM vehicle WHERE plate_no_norm IN ('99테9991','99테9992')`);
+  ok(Number(left.n) === 0, "되돌림 — 시험 차량이 남지 않음");
+  console.log(fails ? `\n✗ ${fails}개 실패` : "\n모두 통과");
+  process.exit(fails ? 1 : 0);
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

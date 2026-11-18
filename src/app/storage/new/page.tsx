@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * ⭐ 판매 없이 맡김 등록 (D-42) — 차량 화면 「보관 등록」 · 실사에서 메모 없이 찾은 세트.
+ *   앱에 없는 차·손님(거래처)도 여기서 같이 만든다(found-set-form, 2026-11-18).
  *   교체 작업과 함께 맡기면 판매 등록 화면의 「맡긴 타이어」가 더 빠르다.
  */
 export default async function NewStoragePage({ searchParams }: { searchParams: Promise<{ vehicle?: string }> }) {

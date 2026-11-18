@@ -11,6 +11,7 @@ import type { VehicleHit } from "@/lib/search";
 import { registerStorage } from "@/lib/tire-storage";
 import { formatStorageNo, sizeHints, suggestDropKind, type StorageDropInput } from "@/lib/tire-storage-pure";
 import { DropFields, emptyDrop } from "../drop-fields";
+import { FoundSetForm } from "../found-set-form";
 
 export function RegisterForm({
   initial,
@@ -31,6 +32,20 @@ export function RegisterForm({
   const [storedOn, setStoredOn] = useState(today);
   const [err, setErr] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  /** 앱에 없는 차·손님 — 판매 등록으로 돌아가지 않고 여기서 (사장님 2026-11-18) */
+  const [fresh, setFresh] = useState<string | null>(null);
+
+  if (!vehicle && fresh !== null) {
+    return (
+      <FoundSetForm
+        initialQuery={fresh}
+        loc={null}
+        today={today}
+        onDone={(r) => router.push(`/storage/${r.id}?new=1`)}
+        onCancel={() => setFresh(null)}
+      />
+    );
+  }
 
   if (!vehicle) {
     return (
@@ -55,7 +70,12 @@ export function RegisterForm({
           </Button>
         </form>
         {hits && hits.length === 0 && (
-          <Notice tone="info">찾는 차가 없습니다 — 처음 오신 손님이면 판매 등록 화면에서 손님·차량을 먼저 등록해 주세요.</Notice>
+          <div className="mt-3">
+            <Notice tone="info">찾는 차가 없습니다 — 앱에 없는 차·손님이면 여기서 같이 등록합니다.</Notice>
+            <Button size="lg" className="mt-2 w-full" onClick={() => setFresh(q)}>
+              새 차·손님(거래처)으로 등록
+            </Button>
+          </div>
         )}
         <div className="mt-2 divide-y divide-slate-100">
           {hits?.map((h) => (
@@ -72,6 +92,11 @@ export function RegisterForm({
             </button>
           ))}
         </div>
+        {hits && hits.length > 0 && (
+          <button type="button" onClick={() => setFresh(q)} className="mt-2 min-h-12 w-full text-center text-base font-semibold text-slate-700 underline">
+            이 중에 없음 — 새 차·손님으로 등록
+          </button>
+        )}
       </div>
     );
   }

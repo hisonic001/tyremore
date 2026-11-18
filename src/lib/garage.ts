@@ -10,13 +10,17 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 
-export async function ensureGarageCustomer(supplierName: string): Promise<number> {
+export async function ensureGarageCustomer(
+  supplierName: string,
+  /** 트랜잭션 안에서 부를 때(보관 실사 등록) — 실패하면 차고 손님도 같이 되돌아가게 */
+  ex: Pick<typeof db, "execute"> = db,
+): Promise<number> {
   const name = supplierName.trim();
-  const [garage] = await db.execute<{ id: number }>(sql`
+  const [garage] = await ex.execute<{ id: number }>(sql`
     SELECT id FROM customer WHERE supplier_name = ${name} LIMIT 1
   `);
   if (garage) return Number(garage.id);
-  const [made] = await db.execute<{ id: number }>(sql`
+  const [made] = await ex.execute<{ id: number }>(sql`
     INSERT INTO customer (name, name_search, type, supplier_name, memo)
     VALUES (${name}, ${name.replace(/\s/g, "").toLowerCase()}, '법인', ${name},
             ${"거래처 차고 — " + name + " 차량 보관용 (자동 생성)"})
