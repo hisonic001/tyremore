@@ -7,7 +7,8 @@ import { ButtonLink } from "@/components/ui/button";
 import { ChipLink } from "@/components/ui/chip";
 import { EmptyState } from "@/components/ui/empty";
 import { Notice } from "@/components/ui/notice";
-import { areaPins, contactRows, countSets, listAreas, listStorage, storageCounts, type StorageRow, type StorageView } from "@/lib/tire-storage-data";
+import { contactRows, countSets, listAreas, listStorage, slotCounts, storageCounts, type StorageRow, type StorageView } from "@/lib/tire-storage-data";
+import { toSetLite } from "./plan/set-lite";
 import { contactKindFor, contactTargets, formatStorageNo, type StorageKind } from "@/lib/tire-storage-pure";
 import { formatPhone } from "@/lib/normalize";
 import { shortDate } from "@/lib/tire-age";
@@ -119,7 +120,7 @@ export default async function StoragePage({ searchParams }: { searchParams: Prom
       ) : tab === "창고" ? (
         <CountTab />
       ) : tab === "구역" ? (
-        <AreaManager areas={await listAreas()} pins={await areaPins()} canEdit={await hasPerm("sale_edit")} />
+        <AreaManager areas={await listAreas()} sets={(await countSets()).map(toSetLite)} occupied={await slotCounts()} canEdit={await hasPerm("sale_edit")} />
       ) : (
         <ListTab view={tab === "지난" ? "지난" : "보관중"} q={q} />
       )}
@@ -139,7 +140,18 @@ function StorageListRow({ r }: { r: StorageRow }) {
       href={`/storage/${r.id}`}
       icon={<span className="tabular text-[11px] font-bold text-slate-700">{formatStorageNo(r.no)}</span>}
       title={`${r.plateNo ?? "차량 없음"} · ${r.ownerName}`}
-      sub={[r.areaName ? `📍${r.areaName}` : null, r.describe, r.memo].filter(Boolean).join(" · ") || "내용 없음"}
+      sub={
+        past ? (
+          [r.describe, r.memo].filter(Boolean).join(" · ") || "내용 없음"
+        ) : (
+          <>
+            {/* 🔴 위치가 맨 앞 — 찾는 사람이 먼저 읽는다 (2026-11-18 3차) */}
+            <span className={r.areaId ? "font-semibold text-slate-900" : "font-semibold text-amber-700"}>{r.areaId ? r.location : "위치 없음"}</span>
+            {" · "}
+            {[r.describe, r.memo].filter(Boolean).join(" · ")}
+          </>
+        )
+      }
       right={past ? <StatusPill tone={r.status === "찾아감" ? "success" : "neutral"}>{r.status}</StatusPill> : kindPill(r.kind)}
       rightSub={past ? `${shortDate(r.releasedOn ?? r.storedOn)}` : `${shortDate(r.storedOn)}~`}
     />
@@ -152,18 +164,7 @@ async function CountTab() {
     <WarehouseCount
       areas={areas}
       today={new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" })}
-      sets={rows.map((r) => ({
-        id: r.id,
-        no: r.no,
-        status: r.status,
-        plate: r.plateNo,
-        owner: r.ownerName,
-        describe: [r.brand, r.size, `${r.qty}본`].filter(Boolean).join(" "),
-        kind: r.kind,
-        areaId: r.areaId,
-        x: r.pinX,
-        y: r.pinY,
-      }))}
+      sets={rows.map(toSetLite)}
     />
   );
 }
@@ -206,7 +207,7 @@ async function AuditTab({ q }: { q: string }) {
       </Notice>
       {more && <Notice tone="warn">300건까지만 보여 줍니다</Notice>}
       {rows.length ? (
-        <AuditList rows={rows} areas={await listAreas()} pins={await areaPins()} />
+        <AuditList rows={rows} />
       ) : (
         <EmptyState emoji="✅" title="확인할 후보가 없습니다" hint="실사가 끝났거나, 아직 후보를 만들지 않았습니다" />
       )}

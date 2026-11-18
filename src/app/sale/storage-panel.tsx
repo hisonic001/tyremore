@@ -107,8 +107,9 @@ export function StoragePanel({
                 <span className="tabular text-xl font-extrabold">{s.no != null ? formatStorageNo(s.no) : "실사 전"}</span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">{s.describe || "내용 없음"}</span>
+                  {/* 🔴 위치는 따로 굵게 (2026-11-18 3차 — 꺼내러 갈 사람이 읽는 줄) */}
+                  <span className={`block text-base font-bold ${s.areaId ? "text-slate-900" : "text-amber-700"}`}>📍 {s.location}</span>
                   <span className="block text-xs text-slate-500">
-                    {s.areaName ? `📍${s.areaName} · ` : ""}
                     {s.storedOn}부터 보관{s.status === "확인대기" ? "(실사 전 후보)" : ""} {on ? "→ 오늘 찾아감(꺼내 끼움)" : "· 꺼내 끼우면 체크"}
                   </span>
                 </span>

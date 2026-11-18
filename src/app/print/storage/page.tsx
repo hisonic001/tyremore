@@ -42,7 +42,8 @@ export default async function StorageLabelPage({ searchParams }: { searchParams:
         size: r.size,
         qty: r.qty,
         storedOn: r.storedOn,
-        area: r.areaName,
+        // 🔴 위치는 안 찍는다 (2026-11-18 3차) — 옮기는 순간 틀린 말이 된다. 위치는 앱에서 본다
+        area: null,
       }))}
     />
   );

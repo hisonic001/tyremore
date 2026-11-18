@@ -1887,9 +1887,18 @@ export const tireStorage = pgTable(
      *    실사(옛 메모·경리 명단). 🔴 판매 취소·대상 바꾸기·예약 전환은 「판매」만 건드린다 — 창고에서 확인한 세트가 지워지지 않게.
      */
     origin: text("origin").notNull().default("판매"),
-    /** ⭐ 위치 (2026-11-18) — 구역 도면 위의 점(0~1). 같은 좌표 = 같은 더미(섞여 쌓인 여러 세트) */
+    /**
+     * ⭐ 위치 (2026-11-18 3차 개정) — 구역 + 자리(구역 도면의 block 칸 id) + 더미 번호(자리 안 1,2,3…).
+     *    점(pin_x/pin_y)은 사장님 「허술·허접(작고 잘못 눌리고 겹침)」으로 버렸다 — 칸 전체를 누르고 더미는 버튼.
+     */
     areaId: bigint("area_id", { mode: "number" }).references(() => storageArea.id),
+    slotId: text("slot_id"),
+    stackNo: integer("stack_no"),
+    locatedAt: timestamp("located_at", { withTimezone: true }),
+    locatedBy: bigint("located_by", { mode: "number" }).references(() => appUser.id),
+    /** @deprecated 3차 개정으로 안 씀 — 비어 있음을 확인한 뒤 지운다 */
     pinX: real("pin_x"),
+    /** @deprecated */
     pinY: real("pin_y"),
     createdBy: bigint("created_by", { mode: "number" }).references(() => appUser.id),
     releasedBy: bigint("released_by", { mode: "number" }).references(() => appUser.id),
@@ -1903,6 +1912,10 @@ export const tireStorage = pgTable(
     check("tire_storage_no_needed", sql`${t.storageNo} IS NOT NULL OR ${t.status} IN ('확인대기','제외')`),
     check("tire_storage_qty", sql`${t.qty} BETWEEN 1 AND 8`),
     check("tire_storage_origin", sql`${t.origin} IN ('판매','등록','실사')`),
+    check("tire_storage_slot_area", sql`${t.slotId} IS NULL OR ${t.areaId} IS NOT NULL`),
+    check("tire_storage_slot_stack", sql`(${t.slotId} IS NULL) = (${t.stackNo} IS NULL)`),
+    check("tire_storage_stack", sql`${t.stackNo} IS NULL OR ${t.stackNo} BETWEEN 1 AND 99`),
+    index("idx_tire_storage_slot").on(t.areaId, t.slotId, t.stackNo),
     index("idx_tire_storage_area").on(t.areaId).where(sql`${t.status} = '보관중'`),
     index("idx_tire_storage_customer").on(t.customerId).where(sql`${t.status} = '보관중'`),
     index("idx_tire_storage_vehicle").on(t.vehicleId),
