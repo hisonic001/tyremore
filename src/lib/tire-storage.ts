@@ -136,6 +136,43 @@ export async function updateStorage(id: number, drop: StorageDropInput): Promise
   return { ok: true };
 }
 
+/**
+ * ⭐ 맡긴 날 고치기 (사장님 2026-11-18 「톡톡 눌러 수정할 때 다 수정 가능하게」).
+ *   null = 모름(날짜 칸은 그대로 두고 원문에 「모름」) · approx = 연도·월 바퀴로 고른 것(그 달 가운데 + 「대략」).
+ */
+export async function setStoredOn(id: number, storedOn: string | null, approx: boolean): Promise<Result> {
+  if (!(await hasStoragePerm("edit"))) return { ok: false, error: NO_STORE };
+  if (storedOn != null && !/^\d{4}-\d{2}-\d{2}$/.test(storedOn)) return { ok: false, error: "날짜가 이상합니다" };
+  if (storedOn != null && storedOn > ymdKst(new Date())) return { ok: false, error: "앞으로 올 날짜는 넣을 수 없습니다" };
+  const note = storedOn == null ? "맡긴 날 모름" : approx ? `맡긴 날 대략 ${storedOn.slice(0, 7)}쯤 — 날짜 칸은 그 달 가운데` : null;
+  const [cur] = await db.execute<{ source_text: string | null }>(sql`SELECT source_text FROM tire_storage WHERE id = ${id}`);
+  if (!cur) return { ok: false, error: "세트를 찾지 못했습니다" };
+  // 원문 첫 줄의 옛 「맡긴 날 모름/대략」 표시는 바꿔 끼우고, 나머지 원문(판매 메모 등)은 그대로 둔다
+  const rest = (cur.source_text ?? "")
+    .split("\n")
+    .filter((l) => !/^맡긴 날 (모름|대략)/.test(l))
+    .join("\n")
+    .trim();
+  const text = [note, rest].filter(Boolean).join("\n") || null;
+  const rows = await db.execute<{ vehicle_id: number | null }>(sql`
+    UPDATE tire_storage SET stored_on = COALESCE(${storedOn}::date, stored_on), source_text = ${text}, updated_at = now()
+    WHERE id = ${id} AND status IN ('보관중','확인대기')
+    RETURNING vehicle_id`);
+  if (!rows.length) return { ok: false, error: "고칠 수 없는 상태입니다" };
+  touch(rows[0].vehicle_id);
+  return { ok: true };
+}
+
+/** 차종만 고치기 — 보관 고치기 칸에서 (다른 차 정보는 안 건드린다). 보관 관리 또는 고객·차량 수정 권한 */
+export async function setVehicleModel(vehicleId: number, model: string): Promise<Result> {
+  if (!(await hasStoragePerm("edit")) && !(await hasPerm("customer"))) return { ok: false, error: NO_STORE };
+  const m = model.trim().slice(0, 40) || null;
+  const rows = await db.execute<{ id: number }>(sql`UPDATE vehicle SET model = ${m} WHERE id = ${vehicleId} RETURNING id`);
+  if (!rows.length) return { ok: false, error: "차량을 찾지 못했습니다" };
+  touch(vehicleId);
+  return { ok: true };
+}
+
 /** 스티커 — 타이어마다 한 장 / 한 세트에 한 장 */
 export async function setLabelPer(per: string): Promise<Result<{ per: string }>> {
   if (!(await hasStoragePerm("use"))) return { ok: false, error: NO_STORE };

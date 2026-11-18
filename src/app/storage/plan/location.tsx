@@ -33,6 +33,14 @@ export interface SetLite {
   dot?: string | null;
   memo?: string | null;
   lastFittedSize?: string | null;
+  /** 두 번 톡톡 「전부 고치기」용 (2026-11-18) */
+  customerId?: number;
+  vehicleId?: number | null;
+  phone?: string | null;
+  model?: string | null;
+  supplierName?: string | null;
+  storedOn?: string;
+  sourceText?: string | null;
 }
 
 export interface LocValue {

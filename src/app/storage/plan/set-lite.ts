@@ -21,5 +21,12 @@ export function toSetLite(r: StorageRow): SetLite {
     dot: r.dot,
     memo: r.memo,
     lastFittedSize: r.lastFittedSize,
+    customerId: r.customerId,
+    vehicleId: r.vehicleId,
+    phone: r.phone,
+    model: r.model,
+    supplierName: r.supplierName,
+    storedOn: r.storedOn,
+    sourceText: r.sourceText,
   };
 }
