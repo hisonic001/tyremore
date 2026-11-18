@@ -55,8 +55,6 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
   const [done, setDone] = useState<number[]>([]);
   const [msg, setMsg] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const [undo, setUndo] = useState<{ id: number; placed: { areaId: number; slotId: string; stackNo: number }; prev: PrevLoc; confirmed: boolean; label: string } | null>(null);
-  /** 검색칸에 손가락이 있으면(키보드 열림) 아래 띠를 숨긴다 — 「여기 ✓」를 가리지 않게 */
-  const [typing, setTyping] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   /** 처음 보는 세트 — 손님·차가 앱에 없어도 이 화면에서 등록 (사장님 2026-11-18) */
   const [found, setFound] = useState<string | null>(null);
@@ -304,7 +302,7 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
   if (rooms.length === 0) return <Notice tone="warn">구역이 없습니다 — 「🗺 구역」 탭에서 구역을 먼저 만들어 주세요.</Notice>;
 
   return (
-    <div className="mt-2 pb-28">
+    <div className="mt-2 pb-6">
       {confirmNode}
 
       {/* 지금 위치 — 고정 */}
@@ -321,6 +319,12 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
         </div>
         <p className="tabular text-sm text-slate-700">
           오늘 <strong>{done.length}</strong> · 실사 전 남음 <strong>{stats.pending}</strong> · 위치 없음 <strong>{stats.unplaced}</strong>
+          {/* 스티커는 떠 있는 띠 대신 여기 작은 글자로 (사장님 2026-11-18 「스티커 인쇄 팝업이 계속 거슬림」) */}
+          {done.length > 0 && (
+            <a href={`/print/storage?ids=${done.join(",")}`} target="_blank" className="ml-2 font-semibold text-slate-600 underline underline-offset-2">
+              오늘 것 스티커
+            </a>
+          )}
         </p>
       </div>
 
@@ -364,8 +368,6 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
               ref={inputRef}
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              onFocus={() => setTyping(true)}
-              onBlur={() => setTimeout(() => setTyping(false), 150)}
               inputMode={hangul ? "text" : "numeric"}
               placeholder={hangul ? "이름 · 차번호" : "타이어에 적힌 차번호 끝 4자리"}
               className="min-w-0 flex-1 rounded-control border-2 border-slate-900 bg-white px-4 py-3 text-xl font-bold placeholder:text-base placeholder:font-normal placeholder:text-slate-500 focus:outline-none"
@@ -461,23 +463,6 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
         </>
       )}
 
-      {/* 오늘 한 것 스티커 — 검색 중(키보드)엔 숨김 */}
-      <div className={`fixed inset-x-0 bottom-16 z-30 mx-auto max-w-2xl px-4 lg:bottom-3 ${typing ? "hidden" : ""}`}>
-        {done.length > 0 && (
-          <div className="flex items-center justify-between gap-2 rounded-card border border-slate-300 bg-white px-4 py-2 shadow">
-            <span className="text-sm">
-              오늘 한 것 <strong>{done.length}</strong>세트
-            </span>
-            <a
-              href={`/print/storage?ids=${done.join(",")}`}
-              target="_blank"
-              className="inline-flex min-h-11 items-center rounded-control bg-slate-900 px-4 text-sm font-semibold text-white"
-            >
-              스티커 인쇄
-            </a>
-          </div>
-        )}
-      </div>
     </div>
   );
 }
