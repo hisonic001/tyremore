@@ -52,6 +52,8 @@ export function FoundSetForm({
 }) {
   const q0 = initialQuery.trim();
   const [plate, setPlate] = useState(/^\d+$/.test(q0.replace(/\s/g, "")) ? "" : q0);
+  /** 차종 (선택) — 사장님 2026-11-18 「차량이 뭔지도 선택적으로 적을 수 있는 칸」 */
+  const [model, setModel] = useState("");
   const [hits, setHits] = useState<VehicleHit[]>([]);
   const [picked, setPicked] = useState<VehicleHit | null>(null);
   const [mode, setMode] = useState<"손님" | "거래처">("손님");
@@ -100,7 +102,7 @@ export function FoundSetForm({
           ? { kind: "손님", name, phone }
           : { kind: "거래처", supplier: supplier ?? "" };
       if (owner.kind === "거래처" && !supplier) return setErr("거래처를 골라 주세요");
-      const r = await registerFoundSet({ plate: picked ? picked.plateNo : plate, owner, drop, storedOn: dateKnown ? storedOn : null, loc });
+      const r = await registerFoundSet({ plate: picked ? picked.plateNo : plate, model, owner, drop, storedOn: dateKnown ? storedOn : null, loc });
       if (!r.ok) return setErr(r.error);
       onDone({ id: r.id, no: r.no, stackNo: r.stackNo, vehicleId: r.vehicleId, plate: r.plate, owner: r.owner, reused: r.reused, drop });
     });
@@ -127,9 +129,14 @@ export function FoundSetForm({
               바꾸기
             </Button>
           </div>
-        ) : (
+        ) : null}
+        {picked && !picked.model && (
+          <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="차종이 비어 있어요 — 알면 적기 (예: 쏘렌토)" className={`${INPUT} mt-2`} />
+        )}
+        {picked ? null : (
           <>
             <input value={plate} onChange={(e) => setPlate(e.target.value)} placeholder="전체 번호 (예: 12가3456)" className={INPUT} autoFocus />
+            <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="차종 — 몰라도 됩니다 (예: 쏘렌토)" className={`${INPUT} mt-2`} />
             {hits.length > 0 && (
               <div className="mt-2 rounded-card border border-amber-300 bg-amber-50 p-2">
                 <p className="text-sm font-semibold text-amber-900">이미 있는 차일 수 있어요 — 맞으면 누르세요</p>

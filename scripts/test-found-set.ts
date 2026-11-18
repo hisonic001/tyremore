@@ -31,7 +31,7 @@ async function main() {
       const loc = { areaId: Number(area.id), slotId: slot.id, stack: "new" as const };
 
       // A. 새 손님 + 새 차 + 실사 위치 + 맡긴 날 모름
-      const a = await registerFoundSetTx(tx, { plate: "99테 9991", owner: { kind: "손님", name: "시험손님", phone: "" }, drop, storedOn: null, loc }, null);
+      const a = await registerFoundSetTx(tx, { plate: "99테 9991", model: "쏘렌토", owner: { kind: "손님", name: "시험손님", phone: "" }, drop, storedOn: null, loc }, null);
       ok(a.no === Number(maxNo) + 1, `A 번호 = 지금 최대+1 (${a.no})`);
       ok(!a.reused && a.owner === "시험손님", "A 새 손님·새 차");
       const [ra] = await tx.execute<{ origin: string; status: string; source_text: string | null; area_id: number; slot_id: string; stack_no: number; plate_no: string }>(sql`
@@ -41,9 +41,11 @@ async function main() {
       ok(Number(ra.area_id) === loc.areaId && ra.slot_id === slot.id && Number(ra.stack_no) === a.stackNo, `A 위치 = 그 자리 더미 ${a.stackNo}`);
 
       // B. 같은 번호판(띄어쓰기 다름)에 다른 이름 → 새 차를 만들지 않고 A 의 차·주인
-      const b = await registerFoundSetTx(tx, { plate: "99테9991", owner: { kind: "손님", name: "다른이름" }, drop, storedOn: "2026-10-01", loc: { ...loc, stack: a.stackNo! } }, null);
+      const b = await registerFoundSetTx(tx, { plate: "99테9991", model: "카니발", owner: { kind: "손님", name: "다른이름" }, drop, storedOn: "2026-10-01", loc: { ...loc, stack: a.stackNo! } }, null);
       ok(b.reused && b.vehicleId === a.vehicleId && b.owner === "시험손님", "B 같은 번호판 → 기존 차 재사용(중복 차 없음)");
       ok(b.stackNo === a.stackNo, "B 같은 더미");
+      const [mv] = await tx.execute<{ model: string | null }>(sql`SELECT model FROM vehicle WHERE id = ${a.vehicleId}`);
+      ok(mv.model === "쏘렌토", `A 차종 적힘·B 가 덮지 않음 (${mv.model})`);
       const [rb] = await tx.execute<{ stored_on: string; source_text: string | null; origin: string }>(sql`SELECT stored_on::text, source_text, origin FROM tire_storage WHERE id = ${b.id}`);
       ok(rb.stored_on === "2026-10-01" && rb.source_text == null, "B 맡긴 날 고르면 그 날짜·원문 없음");
 

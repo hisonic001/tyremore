@@ -50,6 +50,8 @@ export type FoundOwner =
 
 export interface FoundSetInput {
   plate: string;
+  /** 차종 (선택 — 「쏘렌토」) — 새 차면 그대로, 이미 있는 차면 비어 있을 때만 채운다 (사장님 2026-11-18) */
+  model?: string;
   owner: FoundOwner;
   drop: StorageDropInput;
   /** null = 맡긴 날 모름 → 등록한 날로 넣고 원문에 적는다 */
@@ -79,6 +81,7 @@ export async function registerFoundSetTx(
   const today = ymdKst(new Date());
   const dated = /^\d{4}-\d{2}-\d{2}$/.test(input.storedOn ?? "") && input.storedOn! <= today;
   const storedOn = dated ? input.storedOn! : today;
+  const model = (input.model ?? "").trim().slice(0, 40) || null;
   const sourceText = dated ? null : `맡긴 날 모름 — ${input.loc ? "창고 실사 중 발견" : "맡김 등록"}(${today}), 맡긴 날 칸은 등록한 날`;
 
   let vehicleId: number;
@@ -133,9 +136,14 @@ export async function registerFoundSetTx(
         ownerName = s.name;
       }
       const [v] = await tx.execute<{ id: number }>(sql`
-        INSERT INTO vehicle (customer_id, plate_no, plate_no_norm) VALUES (${customerId}, ${plate}, ${plateNorm}) RETURNING id`);
+        INSERT INTO vehicle (customer_id, plate_no, plate_no_norm, model) VALUES (${customerId}, ${plate}, ${plateNorm}, ${model}) RETURNING id`);
       vehicleId = Number(v.id);
     }
+  }
+
+  // 이미 있던 차인데 차종이 비어 있으면 적어 준 것으로 채운다 (있는 값은 안 덮는다)
+  if (reused && model) {
+    await tx.execute(sql`UPDATE vehicle SET model = ${model} WHERE id = ${vehicleId} AND (model IS NULL OR btrim(model) = '')`);
   }
 
   const problem = await storageOwnerProblem(tx, customerId);
