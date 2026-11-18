@@ -47,7 +47,7 @@ function errText(e: unknown): string {
 }
 
 /** 판매 없이 맡김 등록 (차량 화면·보관 화면) */
-export async function registerStorage(input: { vehicleId: number; drop: StorageDropInput; storedOn?: string }): Promise<Result<{ id: number; no: number }>> {
+export async function registerStorage(input: { vehicleId: number; drop: StorageDropInput; storedOn?: string; storedApprox?: boolean }): Promise<Result<{ id: number; no: number }>> {
   if (!(await hasStoragePerm("use"))) return { ok: false, error: NO_STORE };
   const s = await getSession();
   const bad = validateDrop(input.drop);
@@ -60,7 +60,16 @@ export async function registerStorage(input: { vehicleId: number; drop: StorageD
   const storedOn = /^\d{4}-\d{2}-\d{2}$/.test(input.storedOn ?? "") ? input.storedOn! : ymdKst(new Date());
   try {
     const r = await db.transaction((tx) =>
-      insertStoredSet(tx, { customerId, vehicleId: input.vehicleId, drop: input.drop, storedOn, userId: s?.uid ?? null, origin: "등록" }),
+      insertStoredSet(tx, {
+        customerId,
+        vehicleId: input.vehicleId,
+        drop: input.drop,
+        storedOn,
+        userId: s?.uid ?? null,
+        origin: "등록",
+        // 연도·월 바퀴로 고른 것 — 그 달 가운데 날짜, 「대략」 (2026-11-18)
+        sourceText: input.storedApprox ? `맡긴 날 대략 ${storedOn.slice(0, 7)}쯤 — 날짜 칸은 그 달 가운데` : null,
+      }),
     );
     touch(input.vehicleId);
     return { ok: true, ...r };

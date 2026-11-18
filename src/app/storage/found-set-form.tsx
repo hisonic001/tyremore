@@ -9,6 +9,7 @@ import { listSuppliers } from "@/lib/supplier";
 import { foundSetHints, registerFoundSet, suggestModels, type FoundOwner, type Loc } from "@/lib/storage-area";
 import { sizeHints, suggestDropKind, type StorageDropInput } from "@/lib/tire-storage-pure";
 import { DropFields, emptyDrop } from "./drop-fields";
+import { monthToDate, MonthWheel } from "./month-wheel";
 
 const INPUT =
   "w-full rounded-control border-2 border-slate-300 bg-white px-3 py-3 text-lg placeholder:text-base placeholder:text-slate-400 focus:border-slate-900 focus:outline-none";
@@ -64,9 +65,9 @@ export function FoundSetForm({
   const [sq, setSq] = useState("");
   const [supplier, setSupplier] = useState<string | null>(null);
   const [drop, setDrop] = useState<StorageDropInput>(() => emptyDrop(suggestDropKind({ month: Number(today.slice(5, 7)) })));
-  /** 맡긴 날 — 버튼으로 (사장님 2026-11-18 「날짜 입력이 불편」). 모름 · 오늘 · 어제 · 「10월쯤」(그 달 가운데) · 직접 */
-  const [when, setWhen] = useState<{ kind: "모름" | "날짜" | "달"; date: string }>(loc ? { kind: "모름", date: today } : { kind: "날짜", date: today });
-  const [pickDate, setPickDate] = useState(false);
+  /** 맡긴 날 — 「모름」 또는 연도·월 바퀴 (사장님 2026-11-18 「연도·월이 나오게 하고 누른 뒤 스크롤해서 고르게」). 실사 화면은 모름이 기본 */
+  const [unknown, setUnknown] = useState(!!loc);
+  const [ym, setYm] = useState({ y: Number(today.slice(0, 4)), m: Number(today.slice(5, 7)) });
   /** 「이 차 규격」 바로 고르기 — 판매 기록·같은 차종 */
   const [sizeHintList, setSizeHintList] = useState<string[]>([]);
   const [models, setModels] = useState<string[]>([]);
@@ -155,19 +156,6 @@ export function FoundSetForm({
     </div>
   );
 
-  // 맡긴 날 버튼 — 오늘 · 어제 · 최근 달들
-  const ymd = (d: Date) => d.toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
-  const t0 = new Date(`${today}T12:00:00+09:00`);
-  const yesterday = ymd(new Date(t0.getTime() - 86400000));
-  const months = Array.from({ length: 8 }, (_, i) => {
-    const y = Number(today.slice(0, 4));
-    const m0 = Number(today.slice(5, 7)) - 1 - i;
-    const yy = y + Math.floor(m0 / 12);
-    const mm = ((m0 % 12) + 12) % 12 + 1;
-    const mid = `${yy}-${String(mm).padStart(2, "0")}-15`;
-    return { label: `${mm}월쯤`, date: mid > today ? today : mid };
-  });
-  const chip = (on: boolean) => `min-h-11 rounded-full px-3.5 text-base font-bold ${on ? "bg-slate-900 text-white" : "border-2 border-slate-300 bg-white"}`;
 
   const submit = () =>
     start(async () => {
@@ -183,8 +171,8 @@ export function FoundSetForm({
         model,
         owner,
         drop,
-        storedOn: when.kind === "모름" ? null : when.date,
-        storedApprox: when.kind === "달",
+        storedOn: unknown ? null : monthToDate(ym.y, ym.m, today),
+        storedApprox: !unknown,
         loc,
       });
       if (!r.ok) return setErr(r.error);
@@ -292,43 +280,23 @@ export function FoundSetForm({
         <DropFields value={drop} onChange={setDrop} disabled={pending} sizeHints={sizeHints(...sizeHintList, picked?.lastFittedSize)} />
       </section>
 
-      {/* ④ 맡긴 날 — 버튼으로 */}
+      {/* ④ 맡긴 날 — 모름 또는 연도·월 바퀴 */}
       <section>
-        <p className="mb-1 font-bold">④ 맡긴 날</p>
-        <div className="flex flex-wrap gap-1.5">
-          <button type="button" onClick={() => setWhen({ kind: "모름", date: today })} className={chip(when.kind === "모름")}>
+        <p className="mb-1 font-bold">④ 맡긴 달</p>
+        <div className="flex flex-wrap items-start gap-2">
+          <button
+            type="button"
+            onClick={() => setUnknown(true)}
+            className={`min-h-12 rounded-control px-4 text-lg font-extrabold ${unknown ? "bg-slate-900 text-white" : "border-2 border-slate-300 bg-white"}`}
+          >
             모름
           </button>
-          <button type="button" onClick={() => setWhen({ kind: "날짜", date: today })} className={chip(when.kind === "날짜" && when.date === today)}>
-            오늘
-          </button>
-          <button type="button" onClick={() => setWhen({ kind: "날짜", date: yesterday })} className={chip(when.kind === "날짜" && when.date === yesterday)}>
-            어제
-          </button>
-          {months.map((m) => (
-            <button key={m.label} type="button" onClick={() => setWhen({ kind: "달", date: m.date })} className={chip(when.kind === "달" && when.date === m.date)}>
-              {m.label}
-            </button>
-          ))}
-          <button type="button" onClick={() => setPickDate((v) => !v)} className={chip(pickDate)}>
-            날짜 직접
-          </button>
+          <div onClick={() => setUnknown(false)} className={unknown ? "opacity-50" : ""}>
+            <MonthWheel value={ym} today={today} onChange={(v) => (setYm(v), setUnknown(false))} />
+          </div>
         </div>
-        {pickDate && (
-          <input
-            type="date"
-            value={when.date}
-            max={today}
-            onChange={(e) => e.target.value && setWhen({ kind: "날짜", date: e.target.value })}
-            className="tabular mt-2 min-h-11 rounded-control border-2 border-slate-300 bg-white px-3"
-          />
-        )}
         <p className="mt-1 text-xs text-slate-500">
-          {when.kind === "모름"
-            ? "「맡긴 날 모름」으로 남고, 날짜 칸은 오늘(등록한 날)로 들어갑니다."
-            : when.kind === "달"
-              ? `${when.date.slice(0, 7)} 「대략」으로 남습니다.`
-              : `${when.date} 로 들어갑니다.`}
+          {unknown ? "「맡긴 날 모름」으로 남고, 날짜 칸은 오늘(등록한 날)로 들어갑니다." : `${ym.y}년 ${ym.m}월 「대략」으로 남습니다.`}
         </p>
       </section>
 
