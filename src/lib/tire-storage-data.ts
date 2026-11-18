@@ -44,6 +44,8 @@ export interface StorageRow {
   slotId: string | null;
   slotLabel: string | null;
   stackNo: number | null;
+  /** 위치를 정한 시각(ms) — ⭐ **더미 안 쌓인 순서**로도 쓴다(늦을수록 위). ▲▼ 고치면 시각을 서로 바꾼다 (2026-11-18) */
+  placedAt: number | null;
   /** 「흰색 창고 › 안쪽 2 › 더미 3」 · 「위치 없음」 */
   location: string;
   /** 스티커·목록에 쓰는 「주인 이름」 — 거래처 차량이면 거래처 이름 */
@@ -81,6 +83,7 @@ type Raw = {
   slot_id: string | null;
   slot_label: string | null;
   stack_no: number | null;
+  placed_ms: number | null;
 };
 
 const BASE = sql`
@@ -89,6 +92,7 @@ const BASE = sql`
          s.customer_id, c.name customer_name, c.supplier_name, c.phone,
          s.vehicle_id, v.plate_no, v.model, v.last_fitted_size, s.source_text, s.stored_quote_id, s.released_quote_id,
          s.origin, s.area_id, a.name AS area_name, s.slot_id, s.stack_no,
+         (extract(epoch FROM s.located_at) * 1000)::float8 AS placed_ms,
          -- 자리 이름은 도면에서 (비면 「칸」, 지워졌으면 「지워진 자리」 — 화면 정본은 storage-plan-pure.slotLabel)
          CASE WHEN s.slot_id IS NULL THEN NULL
               ELSE COALESCE((SELECT NULLIF(btrim(e->>'label'), '') FROM jsonb_array_elements(a.plan->'shapes') e
@@ -132,6 +136,7 @@ function toRow(r: Raw): StorageRow {
     slotId: r.slot_id,
     slotLabel: r.slot_label,
     stackNo: r.stack_no == null ? null : Number(r.stack_no),
+    placedAt: r.placed_ms == null ? null : Number(r.placed_ms),
     location: locationText({ areaName: r.area_name, slotLabel: r.slot_label, stackNo: r.stack_no == null ? null : Number(r.stack_no) }),
     ownerName: r.supplier_name ?? r.customer_name,
     describe: describeSet({ brand: r.brand, kind: r.kind, size: r.size, qty }),
