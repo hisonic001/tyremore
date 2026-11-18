@@ -12,6 +12,7 @@ import { registerStorage } from "@/lib/tire-storage";
 import { formatStorageNo, sizeHints, suggestDropKind, type StorageDropInput } from "@/lib/tire-storage-pure";
 import { DropFields, emptyDrop } from "../drop-fields";
 import { FoundSetForm } from "../found-set-form";
+import { monthToDate, MonthWheel } from "../month-wheel";
 
 export function RegisterForm({
   initial,
@@ -29,7 +30,9 @@ export function RegisterForm({
   const [drop, setDrop] = useState<StorageDropInput>(() =>
     emptyDrop(suggestDropKind({ month: Number(today.slice(5, 7)) }), initial?.lastFittedSize ?? ""),
   );
-  const [storedOn, setStoredOn] = useState(today);
+  /** 맡긴 날 — 「오늘」 또는 연도·월 바퀴 (사장님 2026-11-18) */
+  const [isToday, setIsToday] = useState(true);
+  const [ym, setYm] = useState({ y: Number(today.slice(0, 4)), m: Number(today.slice(5, 7)) });
   const [err, setErr] = useState<string | null>(null);
   const [pending, start] = useTransition();
   /** 앱에 없는 차·손님 — 판매 등록으로 돌아가지 않고 여기서 (사장님 2026-11-18) */
@@ -125,16 +128,21 @@ export function RegisterForm({
 
       <DropFields value={drop} onChange={setDrop} disabled={pending} sizeHints={sizeHints(vehicle.lastFittedSize)} />
 
-      <label className="flex items-center gap-2 text-sm text-slate-600">
-        맡긴 날
-        <input
-          type="date"
-          value={storedOn}
-          max={today}
-          onChange={(e) => setStoredOn(e.target.value)}
-          className="tabular rounded-control border border-slate-300 bg-white px-3 py-2"
-        />
-      </label>
+      <div>
+        <p className="mb-1 text-sm font-semibold text-slate-600">맡긴 날</p>
+        <div className="flex flex-wrap items-start gap-2">
+          <button
+            type="button"
+            onClick={() => setIsToday(true)}
+            className={`min-h-12 rounded-control px-4 text-lg font-extrabold ${isToday ? "bg-slate-900 text-white" : "border-2 border-slate-300 bg-white"}`}
+          >
+            오늘
+          </button>
+          <div onClick={() => setIsToday(false)} className={isToday ? "opacity-50" : ""}>
+            <MonthWheel value={ym} today={today} onChange={(v) => (setYm(v), setIsToday(false))} />
+          </div>
+        </div>
+      </div>
 
       {err && <Notice tone="error">{err}</Notice>}
 
@@ -144,7 +152,12 @@ export function RegisterForm({
         onClick={() =>
           start(async () => {
             setErr(null);
-            const r = await registerStorage({ vehicleId: vehicle.vehicleId, drop, storedOn });
+            const r = await registerStorage({
+              vehicleId: vehicle.vehicleId,
+              drop,
+              storedOn: isToday ? today : monthToDate(ym.y, ym.m, today),
+              storedApprox: !isToday,
+            });
             if (r.ok) router.push(`/storage/${r.id}?new=1`);
             else setErr(r.error);
           })
