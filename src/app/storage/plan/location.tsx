@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { formatStorageNo, labelKind } from "@/lib/tire-storage-pure";
 import { siteShapeForArea, slotLabel, slotsOf, stacksIn } from "@/lib/storage-plan-pure";
 import type { AreaInfo } from "@/lib/tire-storage-data";
 import { PlanCanvas, toPlan } from "./plan-canvas";
+import { maxStack, StackStrip } from "./stack-strip";
 
 /**
  * ⭐ 위치 고르기 · 찾기 (2026-11-18 3차 개정)
@@ -33,7 +34,6 @@ export interface LocValue {
   stack: number | "new" | null;
 }
 
-const tail4 = (p: string | null) => (p ?? "").replace(/\s/g, "").slice(-4);
 
 export function LocationChooser({
   areas,
@@ -56,17 +56,20 @@ export function LocationChooser({
   const plan = area ? toPlan(area.plan) : null;
   const slots = slotsOf(plan);
   const perSlot = (slotId: string) => others.filter((s) => s.areaId === area?.id && s.slotId === slotId);
-  const stacks = area && value.slotId ? stacksIn(others, area.id, value.slotId) : [];
   const badges: Record<string, string> = {};
   for (const sl of slots) {
     const n = perSlot(sl.id).length;
     if (n) badges[sl.id] = `${n}세트`;
   }
 
+  // 자리를 누르면 그 자리 **마지막 더미**를 고른 채로(이어 쌓기) — 비었으면 더미 1. 다른 더미는 그림에서 누른다 (5차)
   const pickSlot = (slotId: string) => {
-    const empty = area ? stacksIn(others, area.id, slotId).length === 0 : true;
-    onChange({ areaId: value.areaId, slotId, stack: empty ? "new" : null });
+    const top = area ? maxStack(others.filter((s) => s.areaId === area.id && s.slotId === slotId)) : 0;
+    setStackCount(Math.max(1, top));
+    onChange({ areaId: value.areaId, slotId, stack: Math.max(1, top) });
   };
+  const slotSets = area && value.slotId ? others.filter((s) => s.areaId === area.id && s.slotId === value.slotId) : [];
+  const [stackCount, setStackCount] = useState(() => Math.max(1, maxStack(slotSets), typeof value.stack === "number" ? value.stack : 0));
 
   return (
     <div className="space-y-3">
@@ -124,35 +127,17 @@ export function LocationChooser({
       {/* C. 더미 */}
       {area && value.slotId && (
         <div>
-          <p className="mb-1 text-sm font-bold text-slate-700">③ 더미</p>
-          <div className="flex flex-col gap-2">
-            {stacks.map((st) => {
-              const on = value.stack === st.no;
-              return (
-                <button
-                  key={st.no}
-                  type="button"
-                  onClick={() => onChange({ ...value, stack: st.no })}
-                  className={`min-h-14 rounded-control px-3 py-2 text-left ${on ? "bg-slate-900 text-white" : "border-2 border-slate-300 bg-white text-slate-900"}`}
-                >
-                  <span className="text-lg font-extrabold">더미 {st.no}</span>
-                  <span className="ml-2 text-sm font-semibold">
-                    {st.sets.length}세트 · {st.tires}본
-                  </span>
-                  <span className={`block truncate text-xs ${on ? "text-slate-300" : "text-slate-500"}`}>
-                    {st.sets.map((s) => `#${formatStorageNo(s.no)} ${tail4(s.plate)}`).join(" · ")}
-                  </span>
-                </button>
-              );
-            })}
-            <button
-              type="button"
-              onClick={() => onChange({ ...value, stack: "new" })}
-              className={`min-h-14 rounded-control px-3 text-left text-lg font-extrabold ${value.stack === "new" ? "bg-slate-900 text-white" : "border-2 border-dashed border-slate-400 bg-white text-slate-700"}`}
-            >
-              ＋ 새 더미 {stacks.length === 0 ? "(더미 1)" : `(더미 ${Math.max(...stacks.map((s) => s.no)) + 1})`}
-            </button>
-          </div>
+          <p className="mb-1 text-sm font-bold text-slate-700">③ 더미 — 그림에서 누르세요</p>
+          <StackStrip
+            sets={slotSets}
+            count={stackCount}
+            current={typeof value.stack === "number" ? value.stack : null}
+            onPick={(no) => onChange({ ...value, stack: no })}
+            onCount={(n) => {
+              setStackCount(n);
+              if (typeof value.stack === "number" && value.stack > n) onChange({ ...value, stack: n });
+            }}
+          />
         </div>
       )}
     </div>
@@ -181,10 +166,13 @@ export function LocationFinder({
   areas,
   me,
   mates,
+  slotSets = [],
 }: {
   areas: AreaInfo[];
   me: { id: number; areaId: number; slotId: string | null; stackNo: number | null };
   mates: SetLite[];
+  /** 같은 자리 세트 전부 — 더미 그림(5차) */
+  slotSets?: SetLite[];
 }) {
   const site = areas.find((a) => a.isSite) ?? null;
   const area = areas.find((a) => a.id === me.areaId) ?? null;
@@ -218,6 +206,13 @@ export function LocationFinder({
             ))}
           </ul>
           {self && <p className="mt-1 text-sm font-semibold text-amber-900">스티커 {formatStorageNo(self.no)} 붙은 {self.qty}개만 꺼내세요</p>}
+        </div>
+      )}
+
+      {slotSets.length > 0 && me.stackNo != null && (
+        <div>
+          <p className="mb-1 text-sm font-bold text-slate-700">이 자리 더미 — 검정 테두리가 이 세트</p>
+          <StackStrip sets={slotSets} count={maxStack(slotSets)} current={me.stackNo} highlightId={me.id} showList={false} currentLabel="여기" />
         </div>
       )}
 

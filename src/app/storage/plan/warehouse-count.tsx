@@ -7,10 +7,11 @@ import { placeHere, undoPlace, type PrevLoc } from "@/lib/storage-area";
 import { dismissCandidate } from "@/lib/tire-storage";
 import type { AreaInfo } from "@/lib/tire-storage-data";
 import { formatStorageNo, labelKind } from "@/lib/tire-storage-pure";
-import { slotLabel, slotsOf, stacksIn } from "@/lib/storage-plan-pure";
+import { slotLabel, slotsOf } from "@/lib/storage-plan-pure";
 import { chosenText, LocationChooser, type LocValue, type SetLite } from "./location";
 import { toPlan } from "./plan-canvas";
 import { FoundSetForm, type FoundSetDone } from "../found-set-form";
+import { maxStack, StackStrip } from "./stack-strip";
 
 /** 기기 저장 — 막히면(사생활 창 등) 조용히 무시 */
 const store = {
@@ -36,7 +37,8 @@ const LOC_KEY = "storage.count.loc";
 const LOC_FRESH_MS = 30 * 60 * 1000;
 
 /**
- * ⭐ 창고 실사 — 더미 단위 한 화면 (2026-11-18 3차 개정, 사장님 「점찍기 허술·허접 — 찾는 사람 입장에서 각잡고」)
+ * ⭐ 창고 실사 — 더미 단위 한 화면 (5차 2026-11-18: 더미를 **그림**으로 — stack-strip.tsx, 「다음 더미 →」 한 번)
+ * (아래는 3차 설명) (2026-11-18 3차 개정, 사장님 「점찍기 허술·허접 — 찾는 사람 입장에서 각잡고」)
  *
  *   맨 위 「지금 위치」(구역 › 자리 › 더미)가 고정이다. 고르기는 큰 버튼 세 줄 → 고르면 접힌다.
  *   타이어에 적힌 차번호 끝 4자리 → 「여기 ✓」 한 번 = 실사 확인 + 번호 + 위치. 8초 「되돌리기」.
@@ -58,6 +60,8 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
   const [busyId, setBusyId] = useState<number | null>(null);
   /** 처음 보는 세트 — 손님·차가 앱에 없어도 이 화면에서 등록 (사장님 2026-11-18) */
   const [found, setFound] = useState<string | null>(null);
+  /** 이 자리 더미 수 (그림의 [−] N [+]) — 빈 더미는 그림에만, 기기에 자리마다 기억 */
+  const [stackCount, setStackCount] = useState(1);
   const [, start] = useTransition();
   const [ask, confirmNode] = useConfirm();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -85,6 +89,19 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
     setReady(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 자리가 바뀌면 그 자리에 정해 둔 더미 수를 되살린다
+  useEffect(() => {
+    if (loc.areaId == null || !loc.slotId) return;
+    setStackCount(Math.max(1, Number(store.get(countKey)) || 0));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loc.areaId, loc.slotId]);
+
+  // 「새 더미」(옛 기억값)는 번호로 바꿔 둔다 — 그림이 번호로 움직인다
+  useEffect(() => {
+    if (ready && complete && loc.stack === "new") changeLoc({ ...loc, stack: curStack });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, complete, loc.stack]);
 
   // 실사 중엔 화면이 꺼지지 않게 (지원 안 하는 기기는 그냥 넘어감)
   useEffect(() => {
@@ -120,8 +137,27 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
 
   const area = rooms.find((a) => a.id === loc.areaId) ?? null;
   const plan = area ? toPlan(area.plan) : null;
+  const slotSets = area && loc.slotId ? sets.filter((s) => s.areaId === area.id && s.slotId === loc.slotId && s.status === "보관중") : [];
+  const countKey = `storage.count.stacks.${loc.areaId}.${loc.slotId}`;
+  const curStack = typeof loc.stack === "number" ? loc.stack : maxStack(slotSets) + 1;
+  const shownCount = Math.max(stackCount, maxStack(slotSets), curStack, 1);
+  const setCount = (n: number) => {
+    setStackCount(n);
+    store.set(countKey, String(n));
+  };
+  /** ⭐ 다음 더미로 — 한 번. 없으면 하나 늘려서 (5차) */
+  const nextStack = () => {
+    const next = curStack + 1;
+    if (next > shownCount) setCount(next);
+    changeLoc({ ...loc, stack: next });
+    try {
+      navigator.vibrate?.(20);
+    } catch {
+      /* 무시 */
+    }
+    setTimeout(() => inputRef.current?.focus(), 30);
+  };
   const here = (s: SetLite) => s.areaId === loc.areaId && s.slotId === loc.slotId && loc.stack !== "new" && s.stackNo === loc.stack;
-  const mates = complete && loc.stack !== "new" ? sets.filter(here) : [];
   const stats = {
     pending: sets.filter((s) => s.status === "확인대기").length,
     unplaced: sets.filter((s) => s.areaId == null).length,
@@ -281,27 +317,19 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
         </div>
       ) : (
         <>
-          {/* 이 더미 */}
+          {/* ⭐ 더미 그림 (5차) — 쌓인 모양 · 몇 본 · 누구 것. 더미를 누르면 거기로, 「다음 더미 →」 한 번으로 넘어간다 */}
           {area && plan && loc.slotId && (
             <div className="mt-3 rounded-card border-2 border-slate-900 p-3">
-              {mates.length ? (
-                <>
-                  <p className="font-bold">
-                    이 더미 {mates.reduce((t, s) => t + s.qty, 0)}본 = {mates.length}세트 — 실제 타이어와 맞나요?
-                  </p>
-                  <p className="mt-0.5 text-sm text-slate-700">{mates.map((s) => `#${formatStorageNo(s.no)} ${tail4(s.plate)} ${s.qty}본`).join(" · ")}</p>
-                </>
-              ) : (
-                <p className="font-bold text-slate-700">
-                  {loc.stack === "new" ? `새 더미 — 첫 세트를 넣으면 「더미 ${stacksIn(sets, area.id, loc.slotId).reduce((m, s) => Math.max(m, s.no), 0) + 1}」이 됩니다` : "이 더미는 비어 있습니다"}
-                </p>
-              )}
+              <StackStrip sets={slotSets} count={shownCount} current={curStack} onPick={(no) => changeLoc({ ...loc, stack: no })} onCount={(n) => {
+                setCount(n);
+                if (curStack > n) changeLoc({ ...loc, stack: n });
+              }} />
               <button
                 type="button"
-                onClick={() => changeLoc({ ...loc, stack: "new" })}
-                className="mt-2 min-h-12 w-full rounded-control border-2 border-dashed border-slate-400 text-base font-bold text-slate-800"
+                onClick={nextStack}
+                className="mt-2 min-h-14 w-full rounded-control bg-slate-900 text-lg font-extrabold text-white active:bg-slate-700"
               >
-                이 더미 끝 → 옆 새 더미
+                이 더미 다 쌓음 → 다음 더미 {curStack + 1}
               </button>
             </div>
           )}

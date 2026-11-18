@@ -9,6 +9,7 @@ import { addArea, hideArea, renameArea, saveAreaPlan, setAreaImage } from "@/lib
 import type { AreaInfo } from "@/lib/tire-storage-data";
 import { formatStorageNo } from "@/lib/tire-storage-pure";
 import { slotLabel, stacksIn } from "@/lib/storage-plan-pure";
+import { StackStrip } from "./stack-strip";
 import type { SetLite } from "./location";
 import { areaImageUrl, PlanCanvas, toPlan } from "./plan-canvas";
 import { PlanEditor } from "./plan-editor";
@@ -148,6 +149,16 @@ export function AreaManager({
                 <p className="text-lg font-extrabold">
                   {sel.name} › {slotLabel(plan, slotId)}
                 </p>
+                {stacksIn(sets, sel.id, slotId).length > 0 && (
+                  <div className="mt-2">
+                    <StackStrip
+                      sets={sets.filter((x) => x.areaId === sel.id && x.slotId === slotId)}
+                      count={0}
+                      current={null}
+                      showList={false}
+                    />
+                  </div>
+                )}
                 {stacksIn(sets, sel.id, slotId).map((st) => (
                   <div key={st.no} className="mt-2">
                     <p className="font-bold">

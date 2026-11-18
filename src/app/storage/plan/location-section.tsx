@@ -92,7 +92,7 @@ export function LocationSection({
     <div>
       {has ? (
         <>
-          <LocationFinder areas={areas} me={{ id, areaId: areaId!, slotId, stackNo }} mates={mates} />
+          <LocationFinder areas={areas} me={{ id, areaId: areaId!, slotId, stackNo }} mates={mates} slotSets={sets.filter((s) => s.areaId === areaId && s.slotId === slotId && slotId != null)} />
           <Button variant="secondary" className="mt-3 w-full" onClick={() => setEditing(true)}>
             위치 바꾸기
           </Button>
