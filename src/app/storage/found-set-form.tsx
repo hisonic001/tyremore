@@ -6,7 +6,7 @@ import { Notice } from "@/components/ui/notice";
 import { searchVehicles } from "@/lib/search-actions";
 import type { VehicleHit } from "@/lib/search";
 import { listSuppliers } from "@/lib/supplier";
-import { registerFoundSet, type FoundOwner, type Loc } from "@/lib/storage-area";
+import { foundSetHints, registerFoundSet, suggestModels, type FoundOwner, type Loc } from "@/lib/storage-area";
 import { sizeHints, suggestDropKind, type StorageDropInput } from "@/lib/tire-storage-pure";
 import { DropFields, emptyDrop } from "./drop-fields";
 
@@ -51,7 +51,8 @@ export function FoundSetForm({
   onCancel: () => void;
 }) {
   const q0 = initialQuery.trim();
-  const [plate, setPlate] = useState(/^\d+$/.test(q0.replace(/\s/g, "")) ? "" : q0);
+  // 실사 때 친 「3398」도 그대로 둔다 — 앞자리만 더 치면 된다 (사장님 2026-11-18)
+  const [plate, setPlate] = useState(q0);
   /** 차종 (선택) — 사장님 2026-11-18 「차량이 뭔지도 선택적으로 적을 수 있는 칸」 */
   const [model, setModel] = useState("");
   const [hits, setHits] = useState<VehicleHit[]>([]);
@@ -63,8 +64,14 @@ export function FoundSetForm({
   const [sq, setSq] = useState("");
   const [supplier, setSupplier] = useState<string | null>(null);
   const [drop, setDrop] = useState<StorageDropInput>(() => emptyDrop(suggestDropKind({ month: Number(today.slice(5, 7)) })));
-  const [dateKnown, setDateKnown] = useState(!loc); // 실사 화면은 「모름」이 기본
-  const [storedOn, setStoredOn] = useState(today);
+  /** 맡긴 날 — 버튼으로 (사장님 2026-11-18 「날짜 입력이 불편」). 모름 · 오늘 · 어제 · 「10월쯤」(그 달 가운데) · 직접 */
+  const [when, setWhen] = useState<{ kind: "모름" | "날짜" | "달"; date: string }>(loc ? { kind: "모름", date: today } : { kind: "날짜", date: today });
+  const [pickDate, setPickDate] = useState(false);
+  /** 「이 차 규격」 바로 고르기 — 판매 기록·같은 차종 */
+  const [sizeHintList, setSizeHintList] = useState<string[]>([]);
+  const [models, setModels] = useState<string[]>([]);
+  const [modelOpen, setModelOpen] = useState(false);
+  const mTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -88,10 +95,79 @@ export function FoundSetForm({
   const norm = (s: string) => s.replace(/\s/g, "").toLowerCase();
   const supplierHits = (suppliers ?? []).filter((n) => !sq.trim() || norm(n).includes(norm(sq))).slice(0, 12);
 
+  /** 차를 고르면 그 차에 끼운 규격을 판매 기록에서 찾아 **바로 넣는다** (차 칸의 「지난번 규격」은 비어 있다) */
   const pick = (h: VehicleHit) => {
     setPicked(h);
-    if (!drop.size && h.lastFittedSize) setDrop({ ...drop, size: h.lastFittedSize });
+    void foundSetHints({ vehicleId: h.vehicleId, model: h.model }).then((r) => {
+      setSizeHintList(r.sizes);
+      if (r.sizes[0]) setDrop((d) => (d.size ? d : { ...d, size: r.sizes[0] }));
+    });
   };
+
+  // 전체 번호를 다 쳤고 그 번호의 차가 앱에 딱 하나 있으면 저절로 고른다
+  useEffect(() => {
+    if (picked) return;
+    const n = norm(plate);
+    if (!/[가-힣]/.test(n) || n.length < 7) return;
+    const same = hits.filter((h) => norm(h.plateNo) === n);
+    if (same.length === 1) pick(same[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hits, plate, picked]);
+
+  // 차종 자동완성 — 앞글자만 쳐도 (차종 목록 + 손님 차에 적힌 이름)
+  const typeModel = (v: string) => {
+    setModel(v);
+    setModelOpen(true);
+    if (mTimer.current) clearTimeout(mTimer.current);
+    if (!v.trim()) return setModels([]);
+    mTimer.current = setTimeout(() => void suggestModels(v).then(setModels), 200);
+  };
+  const chooseModel = (m: string) => {
+    setModel(m);
+    setModelOpen(false);
+    void foundSetHints({ model: m }).then((r) => setSizeHintList((old) => [...new Set([...old, ...r.sizes])].slice(0, 4)));
+  };
+  const modelBox = (placeholder: string) => (
+    <div className="relative mt-2">
+      <input
+        value={model}
+        onChange={(e) => typeModel(e.target.value)}
+        onFocus={() => model && setModelOpen(true)}
+        onBlur={() => setTimeout(() => setModelOpen(false), 150)}
+        placeholder={placeholder}
+        className={INPUT}
+      />
+      {modelOpen && models.length > 0 && (
+        <div className="absolute inset-x-0 top-full z-20 mt-1 max-h-72 overflow-y-auto rounded-control border-2 border-slate-900 bg-white shadow-lg">
+          {models.map((m) => (
+            <button
+              key={m}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => chooseModel(m)}
+              className="block min-h-12 w-full border-b border-slate-100 px-3 text-left text-base font-semibold active:bg-slate-100"
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  // 맡긴 날 버튼 — 오늘 · 어제 · 최근 달들
+  const ymd = (d: Date) => d.toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
+  const t0 = new Date(`${today}T12:00:00+09:00`);
+  const yesterday = ymd(new Date(t0.getTime() - 86400000));
+  const months = Array.from({ length: 8 }, (_, i) => {
+    const y = Number(today.slice(0, 4));
+    const m0 = Number(today.slice(5, 7)) - 1 - i;
+    const yy = y + Math.floor(m0 / 12);
+    const mm = ((m0 % 12) + 12) % 12 + 1;
+    const mid = `${yy}-${String(mm).padStart(2, "0")}-15`;
+    return { label: `${mm}월쯤`, date: mid > today ? today : mid };
+  });
+  const chip = (on: boolean) => `min-h-11 rounded-full px-3.5 text-base font-bold ${on ? "bg-slate-900 text-white" : "border-2 border-slate-300 bg-white"}`;
 
   const submit = () =>
     start(async () => {
@@ -102,7 +178,15 @@ export function FoundSetForm({
           ? { kind: "손님", name, phone }
           : { kind: "거래처", supplier: supplier ?? "" };
       if (owner.kind === "거래처" && !supplier) return setErr("거래처를 골라 주세요");
-      const r = await registerFoundSet({ plate: picked ? picked.plateNo : plate, model, owner, drop, storedOn: dateKnown ? storedOn : null, loc });
+      const r = await registerFoundSet({
+        plate: picked ? picked.plateNo : plate,
+        model,
+        owner,
+        drop,
+        storedOn: when.kind === "모름" ? null : when.date,
+        storedApprox: when.kind === "달",
+        loc,
+      });
       if (!r.ok) return setErr(r.error);
       onDone({ id: r.id, no: r.no, stackNo: r.stackNo, vehicleId: r.vehicleId, plate: r.plate, owner: r.owner, reused: r.reused, drop });
     });
@@ -130,13 +214,11 @@ export function FoundSetForm({
             </Button>
           </div>
         ) : null}
-        {picked && !picked.model && (
-          <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="차종이 비어 있어요 — 알면 적기 (예: 쏘렌토)" className={`${INPUT} mt-2`} />
-        )}
+        {picked && !picked.model && modelBox("차종이 비어 있어요 — 알면 앞글자만 (예: 쏘)")}
         {picked ? null : (
           <>
             <input value={plate} onChange={(e) => setPlate(e.target.value)} placeholder="전체 번호 (예: 12가3456)" className={INPUT} autoFocus />
-            <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="차종 — 몰라도 됩니다 (예: 쏘렌토)" className={`${INPUT} mt-2`} />
+            {modelBox("차종 — 앞글자만 치면 아래에서 고르기 (몰라도 됨)")}
             {hits.length > 0 && (
               <div className="mt-2 rounded-card border border-amber-300 bg-amber-50 p-2">
                 <p className="text-sm font-semibold text-amber-900">이미 있는 차일 수 있어요 — 맞으면 누르세요</p>
@@ -207,38 +289,47 @@ export function FoundSetForm({
       {/* ③ 타이어 */}
       <section>
         <p className="mb-1 font-bold">③ 타이어</p>
-        <DropFields value={drop} onChange={setDrop} disabled={pending} sizeHints={sizeHints(picked?.lastFittedSize)} />
+        <DropFields value={drop} onChange={setDrop} disabled={pending} sizeHints={sizeHints(...sizeHintList, picked?.lastFittedSize)} />
       </section>
 
-      {/* ④ 맡긴 날 */}
+      {/* ④ 맡긴 날 — 버튼으로 */}
       <section>
         <p className="mb-1 font-bold">④ 맡긴 날</p>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setDateKnown(false)}
-            className={`min-h-11 rounded-full px-4 text-base font-bold ${!dateKnown ? "bg-slate-900 text-white" : "border-2 border-slate-300 bg-white"}`}
-          >
+        <div className="flex flex-wrap gap-1.5">
+          <button type="button" onClick={() => setWhen({ kind: "모름", date: today })} className={chip(when.kind === "모름")}>
             모름
           </button>
-          <button
-            type="button"
-            onClick={() => setDateKnown(true)}
-            className={`min-h-11 rounded-full px-4 text-base font-bold ${dateKnown ? "bg-slate-900 text-white" : "border-2 border-slate-300 bg-white"}`}
-          >
-            날짜 고르기
+          <button type="button" onClick={() => setWhen({ kind: "날짜", date: today })} className={chip(when.kind === "날짜" && when.date === today)}>
+            오늘
           </button>
-          {dateKnown && (
-            <input
-              type="date"
-              value={storedOn}
-              max={today}
-              onChange={(e) => setStoredOn(e.target.value)}
-              className="tabular min-h-11 rounded-control border-2 border-slate-300 bg-white px-3"
-            />
-          )}
+          <button type="button" onClick={() => setWhen({ kind: "날짜", date: yesterday })} className={chip(when.kind === "날짜" && when.date === yesterday)}>
+            어제
+          </button>
+          {months.map((m) => (
+            <button key={m.label} type="button" onClick={() => setWhen({ kind: "달", date: m.date })} className={chip(when.kind === "달" && when.date === m.date)}>
+              {m.label}
+            </button>
+          ))}
+          <button type="button" onClick={() => setPickDate((v) => !v)} className={chip(pickDate)}>
+            날짜 직접
+          </button>
         </div>
-        {!dateKnown && <p className="mt-1 text-xs text-slate-500">「맡긴 날 모름」으로 기록이 남고, 날짜 칸은 오늘(등록한 날)로 들어갑니다.</p>}
+        {pickDate && (
+          <input
+            type="date"
+            value={when.date}
+            max={today}
+            onChange={(e) => e.target.value && setWhen({ kind: "날짜", date: e.target.value })}
+            className="tabular mt-2 min-h-11 rounded-control border-2 border-slate-300 bg-white px-3"
+          />
+        )}
+        <p className="mt-1 text-xs text-slate-500">
+          {when.kind === "모름"
+            ? "「맡긴 날 모름」으로 남고, 날짜 칸은 오늘(등록한 날)로 들어갑니다."
+            : when.kind === "달"
+              ? `${when.date.slice(0, 7)} 「대략」으로 남습니다.`
+              : `${when.date} 로 들어갑니다.`}
+        </p>
       </section>
 
       {err && <Notice tone="error">{err}</Notice>}

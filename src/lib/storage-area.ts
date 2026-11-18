@@ -278,3 +278,18 @@ export async function dropSet(input: { id: number; areaId: number; slotId: strin
     return { ok: false, error: errText(e) };
   }
 }
+
+/** ⭐ 처음 보는 세트 등록 칸 돕기 — 규격 자동 · 차종 자동완성 (2026-11-18). 정본 storage-found-db */
+export async function foundSetHints(input: { vehicleId?: number | null; model?: string | null }): Promise<{ sizes: string[] }> {
+  if (!(await hasStoragePerm("use"))) return { sizes: [] };
+  const { tireSizesForVehicle, tireSizesForModel } = await import("./storage-found-db");
+  const own = input.vehicleId ? await tireSizesForVehicle(db, input.vehicleId) : [];
+  const byModel = input.model ? await tireSizesForModel(db, input.model) : [];
+  return { sizes: [...new Set([...own, ...byModel])].slice(0, 4) };
+}
+
+export async function suggestModels(prefix: string): Promise<string[]> {
+  if (!(await hasStoragePerm("use"))) return [];
+  const { suggestModelNames } = await import("./storage-found-db");
+  return suggestModelNames(db, prefix);
+}

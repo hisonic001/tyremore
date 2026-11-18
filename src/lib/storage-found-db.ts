@@ -56,6 +56,8 @@ export interface FoundSetInput {
   drop: StorageDropInput;
   /** null = 맡긴 날 모름 → 등록한 날로 넣고 원문에 적는다 */
   storedOn: string | null;
+  /** 「10월쯤」처럼 달만 고른 것 — 날짜 칸은 그 달 15일, 원문에 「대략」 (2026-11-18) */
+  storedApprox?: boolean;
   /** 창고 실사 화면이면 지금 위치, 맡김 등록 화면이면 null */
   loc: Loc | null;
 }
@@ -82,7 +84,7 @@ export async function registerFoundSetTx(
   const dated = /^\d{4}-\d{2}-\d{2}$/.test(input.storedOn ?? "") && input.storedOn! <= today;
   const storedOn = dated ? input.storedOn! : today;
   const model = (input.model ?? "").trim().slice(0, 40) || null;
-  const sourceText = dated ? null : `맡긴 날 모름 — ${input.loc ? "창고 실사 중 발견" : "맡김 등록"}(${today}), 맡긴 날 칸은 등록한 날`;
+  const sourceText = dated && input.storedApprox ? `맡긴 날 대략 ${storedOn.slice(0, 7)}쯤 — 날짜 칸은 그 달 가운데` : dated ? null : `맡긴 날 모름 — ${input.loc ? "창고 실사 중 발견" : "맡김 등록"}(${today}), 맡긴 날 칸은 등록한 날`;
 
   let vehicleId: number;
   let customerId: number;
@@ -213,4 +215,60 @@ export async function dropSetTx(
       WHERE id = ${input.id}`);
   }
   await reorderStackTx(tx, input, input.bottomToTop);
+}
+
+/* ------------------------------------------------------------------
+ * 처음 보는 세트 등록 칸 돕기 (사장님 2026-11-18 — 「차량 정보가 있으면 사이즈는 바로」 「차종은 앞글자만 쓰면 자동완성」)
+ * ---------------------------------------------------------------- */
+
+// 숫자 칸이 「19.0」처럼 읽히므로 끝의 .0 은 뗀다(17.5 같은 건 그대로)
+const SIZE_SQL = sql`(regexp_replace(p.width::text, '[.]0+$', '') || COALESCE('/' || regexp_replace(p.aspect_ratio::text, '[.]0+$', ''), '') || 'R' || regexp_replace(p.rim_inch::text, '[.]0+$', ''))`;
+
+/**
+ * 이 차에 끼운 타이어 규격 — 최근 것부터 (판매 기록 → 지난 보관 세트).
+ *   🔴 vehicle.last_fitted_size 는 비어 있다(2026-11-18 실측 3,354대 전부) — 그래서 판매 품목에서 직접 읽는다.
+ */
+export async function tireSizesForVehicle(ex: Pick<Tx, "execute">, vehicleId: number): Promise<string[]> {
+  const rows = await ex.execute<{ size: string }>(sql`
+    SELECT size FROM (
+      SELECT ${SIZE_SQL} AS size, max(COALESCE(q.work_date::timestamptz, q.created_at)) AS at
+      FROM quote q JOIN quote_item i ON i.quote_id = q.id JOIN product p ON p.id = i.product_id
+      WHERE q.vehicle_id = ${vehicleId} AND q.status = '성사' AND p.item_type = 'tire' AND p.width IS NOT NULL AND p.rim_inch IS NOT NULL
+      GROUP BY 1
+      UNION ALL
+      SELECT btrim(size), max(created_at) FROM tire_storage WHERE vehicle_id = ${vehicleId} AND btrim(COALESCE(size, '')) <> '' GROUP BY 1
+    ) x GROUP BY size ORDER BY max(at) DESC LIMIT 4`);
+  return rows.map((r) => r.size);
+}
+
+/** 같은 차종 손님 차에 많이 끼운 규격 — 새 차일 때 「바로 고르기」 후보 */
+export async function tireSizesForModel(ex: Pick<Tx, "execute">, model: string): Promise<string[]> {
+  const key = model.replace(/\s/g, "").toLowerCase();
+  if (key.length < 2) return [];
+  const rows = await ex.execute<{ size: string }>(sql`
+    SELECT ${SIZE_SQL} AS size, count(*) n
+    FROM quote q JOIN vehicle v ON v.id = q.vehicle_id JOIN quote_item i ON i.quote_id = q.id JOIN product p ON p.id = i.product_id
+    WHERE q.status = '성사' AND p.item_type = 'tire' AND p.width IS NOT NULL AND p.rim_inch IS NOT NULL
+      AND replace(lower(COALESCE(v.model, '')), ' ', '') LIKE ${key + "%"}
+    GROUP BY 1 ORDER BY n DESC LIMIT 4`);
+  return rows.map((r) => r.size);
+}
+
+/**
+ * 차종 자동완성 — 앞글자로. 차종 목록(vehicle_model) 먼저, 그다음 손님 차에 많이 적힌 이름.
+ *   앞글자로 맞는 게 적으면 가운데 들어간 것도 뒤에 붙인다.
+ */
+export async function suggestModelNames(ex: Pick<Tx, "execute">, prefix: string): Promise<string[]> {
+  const key = prefix.replace(/\s/g, "").toLowerCase();
+  if (!key) return [];
+  const rows = await ex.execute<{ name: string }>(sql`
+    WITH c AS (
+      SELECT btrim(name_ko) AS name, 100000 AS w FROM vehicle_model
+      UNION ALL
+      SELECT btrim(model), count(*)::int FROM vehicle WHERE btrim(COALESCE(model, '')) <> '' GROUP BY btrim(model)
+    ), k AS (SELECT name, max(w) w, replace(lower(name), ' ', '') nk FROM c GROUP BY name)
+    SELECT name FROM k
+    WHERE nk LIKE ${key + "%"} OR nk LIKE ${"%" + key + "%"}
+    ORDER BY (nk LIKE ${key + "%"}) DESC, w DESC, length(name) LIMIT 8`);
+  return rows.map((r) => r.name);
 }
