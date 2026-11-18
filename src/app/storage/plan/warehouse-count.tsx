@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import Link from "@/lib/link";
 import { Notice } from "@/components/ui/notice";
 import { useConfirm } from "@/components/ui/confirm";
 import { placeHere, undoPlace, type PrevLoc } from "@/lib/storage-area";
@@ -11,6 +10,7 @@ import { formatStorageNo, labelKind } from "@/lib/tire-storage-pure";
 import { slotLabel, slotsOf, stacksIn } from "@/lib/storage-plan-pure";
 import { chosenText, LocationChooser, type LocValue, type SetLite } from "./location";
 import { toPlan } from "./plan-canvas";
+import { FoundSetForm, type FoundSetDone } from "../found-set-form";
 
 /** 기기 저장 — 막히면(사생활 창 등) 조용히 무시 */
 const store = {
@@ -56,6 +56,8 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
   /** 검색칸에 손가락이 있으면(키보드 열림) 아래 띠를 숨긴다 — 「여기 ✓」를 가리지 않게 */
   const [typing, setTyping] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
+  /** 처음 보는 세트 — 손님·차가 앱에 없어도 이 화면에서 등록 (사장님 2026-11-18) */
+  const [found, setFound] = useState<string | null>(null);
   const [, start] = useTransition();
   const [ask, confirmNode] = useConfirm();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -203,6 +205,37 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
     });
   };
 
+  const foundDone = (r: FoundSetDone) => {
+    const lite: SetLite = {
+      id: r.id,
+      no: r.no,
+      status: "보관중",
+      plate: r.plate,
+      owner: r.owner,
+      describe: [r.drop.brand, r.drop.size, `${r.drop.qty}본`].filter(Boolean).join(" "),
+      kind: r.drop.kind,
+      qty: r.drop.qty,
+      areaId: loc.areaId,
+      slotId: loc.slotId,
+      stackNo: r.stackNo,
+    };
+    setSets((all) => [...all, lite]);
+    if (loc.stack === "new" && r.stackNo != null) changeLoc({ ...loc, stack: r.stackNo });
+    setDone((d) => {
+      const next = [...d, r.id];
+      store.set(doneKey, JSON.stringify(next));
+      return next;
+    });
+    setFound(null);
+    setQ("");
+    setMsg({ tone: "success", text: `✓ #${formatStorageNo(r.no)} ${r.plate} ${r.owner} → 더미 ${r.stackNo ?? ""} (새로 등록${r.reused ? " · 이미 있던 차" : ""})` });
+    try {
+      navigator.vibrate?.(30);
+    } catch {
+      /* 무시 */
+    }
+  };
+
   const notHere = async (s: SetLite) => {
     if (!(await ask({ title: `${s.plate ?? ""} ${s.owner} — 창고에 없나요?`, body: "실사 후보에서 뺍니다(기록은 남습니다).", confirmLabel: "창고에 없음", tone: "danger" }))) return;
     start(async () => {
@@ -345,15 +378,34 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
                 </div>
               );
             })}
-            {q && results.length === 0 && (
-              <p className="py-4 text-center text-base text-slate-700">
-                찾는 세트가 없습니다 —{" "}
-                <Link href="/storage/new" className="font-bold underline">
-                  처음 보는 세트 등록
-                </Link>
-              </p>
+            {q && results.length > 0 && found === null && (
+              <button type="button" onClick={() => setFound(q)} className="block min-h-12 w-full py-3 text-center text-base font-bold text-slate-800 underline">
+                이 중에 없음 — 처음 보는 세트 등록
+              </button>
+            )}
+            {q && results.length === 0 && found === null && (
+              <div className="py-3 text-center">
+                <p className="text-base text-slate-700">찾는 세트가 없습니다</p>
+                <button
+                  type="button"
+                  onClick={() => setFound(q)}
+                  className="mt-2 min-h-14 w-full rounded-control bg-slate-900 text-lg font-extrabold text-white"
+                >
+                  처음 보는 세트 — 여기서 등록
+                </button>
+              </div>
             )}
           </div>
+          {found !== null && complete && (
+            <FoundSetForm
+              initialQuery={found}
+              loc={{ areaId: loc.areaId!, slotId: loc.slotId!, stack: loc.stack! }}
+              locText={chosenText(areas, loc, sets)}
+              today={today}
+              onDone={foundDone}
+              onCancel={() => setFound(null)}
+            />
+          )}
         </>
       )}
 

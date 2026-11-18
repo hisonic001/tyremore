@@ -45,8 +45,10 @@ export async function insertStoredSet(
     storedOn: string;
     storedQuoteId?: number | null;
     userId: number | null;
-    /** 판매(판매 취소 때 같이 되돌림) · 등록(손으로) */
-    origin: "판매" | "등록";
+    /** 판매(판매 취소 때 같이 되돌림) · 등록(손으로) · 실사(창고에서 처음 본 세트를 그 자리에서) */
+    origin: "판매" | "등록" | "실사";
+    /** 원문·흔적 — 「맡긴 날 모름」 같은 것 */
+    sourceText?: string | null;
   },
 ): Promise<{ id: number; no: number }> {
   const bad = validateDrop(o.drop);
@@ -55,9 +57,9 @@ export async function insertStoredSet(
   const no = await nextStorageNo(tx);
   const [r] = await tx.execute<{ id: number }>(sql`
     INSERT INTO tire_storage (storage_no, status, customer_id, vehicle_id, kind, brand, size, qty, dot, memo,
-                              stored_on, stored_quote_id, created_by, origin)
+                              stored_on, stored_quote_id, created_by, origin, source_text)
     VALUES (${no}, '보관중', ${o.customerId}, ${o.vehicleId}, ${d.kind}, ${d.brand}, ${d.size}, ${d.qty}, ${d.dot}, ${d.memo},
-            ${o.storedOn}::date, ${o.storedQuoteId ?? null}, ${o.userId}, ${o.origin})
+            ${o.storedOn}::date, ${o.storedQuoteId ?? null}, ${o.userId}, ${o.origin}, ${o.sourceText ?? null})
     RETURNING id
   `);
   return { id: Number(r.id), no };

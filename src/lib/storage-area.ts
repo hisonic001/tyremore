@@ -12,7 +12,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, hasPerm } from "./auth";
 import { defaultRoomPlan, imageProblem, removedOccupiedSlots, sanitizePlan, slotLabel, slotNameProblem, type Plan } from "./storage-plan-pure";
-import type { Tx } from "./tire-storage-db";
+import { registerFoundSetTx, resolveLoc, type FoundSetInput, type Loc } from "./storage-found-db";
 
 type Result<T = object> = ({ ok: true } & T) | { ok: false; error: string };
 const NO_SALE = "판매 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다";
@@ -101,41 +101,13 @@ export async function setAreaImage(id: number, dataUrl: string | null): Promise<
  * 위치 — 구역 + 자리 + 더미
  * ---------------------------------------------------------------- */
 
-export interface Loc {
-  areaId: number;
-  slotId: string;
-  /** 더미 번호 또는 「새 더미」 */
-  stack: number | "new";
-}
+export type { Loc } from "./storage-found-db";
 export interface PrevLoc {
   areaId: number | null;
   slotId: string | null;
   stackNo: number | null;
   /** 「여기 ✓」가 지운 실사 메모(경리 명단 있음 등) — 되돌릴 때 살린다 */
   note?: string | null;
-}
-
-/**
- * 자리 확인 + 더미 번호 정하기 (트랜잭션 안).
- *   구역 줄을 FOR SHARE 로 잡아 도면 저장(FOR UPDATE)과 줄 세운다 — 저장 중에 지워진 자리에 넣지 않게.
- *   「새 더미」는 자리별 잠금 아래 MAX+1 — 두 사람이 동시에 눌러도 같은 번호가 안 나온다.
- */
-async function resolveLoc(tx: Tx, loc: Loc, selfId?: number): Promise<number> {
-  const [a] = await tx.execute<{ plan: unknown }>(sql`SELECT plan FROM storage_area WHERE id = ${loc.areaId} AND is_active AND NOT is_site FOR SHARE`);
-  if (!a) throw new Error("구역을 찾지 못했습니다 — 새로 고침해 보세요");
-  const plan = sanitizePlan(a.plan) as Plan | null;
-  if (!plan?.shapes.some((s) => s.id === loc.slotId && s.kind === "block")) throw new Error("그 자리가 도면에서 지워졌습니다 — 새로 고침해 보세요");
-  if (loc.stack !== "new") {
-    if (!Number.isInteger(loc.stack) || loc.stack < 1 || loc.stack > 99) throw new Error("더미 번호가 이상합니다");
-    return loc.stack;
-  }
-  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`slot:${loc.areaId}:${loc.slotId}`}))`);
-  const [m] = await tx.execute<{ m: number }>(sql`
-    SELECT COALESCE(MAX(stack_no), 0)::int AS m FROM tire_storage
-    WHERE area_id = ${loc.areaId} AND slot_id = ${loc.slotId} AND status IN ('보관중','확인대기') AND id <> ${selfId ?? 0}`);
-  const n = Number(m.m) + 1;
-  if (n > 99) throw new Error("한 자리에 더미가 너무 많습니다 — 자리를 나눠 주세요");
-  return n;
 }
 
 /** 위치 정하기·바꾸기 (상세 화면). loc null 이면 위치 지움 */
@@ -257,6 +229,31 @@ export async function undoPlace(
       return { note, unconfirmed };
     });
     touch();
+    return { ok: true, ...out };
+  } catch (e) {
+    return { ok: false, error: errText(e) };
+  }
+}
+
+/* ------------------------------------------------------------------
+ * 처음 보는 세트 — 손님·차·거래처가 앱에 없어도 그 자리에서 (사장님 2026-11-18)
+ *   규칙·설명은 storage-found-db.ts registerFoundSetTx (스크립트 시험이 같은 코드를 부른다)
+ * ---------------------------------------------------------------- */
+
+export type { FoundOwner } from "./storage-found-db";
+
+export async function registerFoundSet(
+  input: FoundSetInput,
+): Promise<Result<{ id: number; no: number; stackNo: number | null; vehicleId: number; plate: string; owner: string; reused: boolean }>> {
+  if (!(await hasPerm("sale"))) return { ok: false, error: NO_SALE };
+  const { validateDrop } = await import("./tire-storage-pure");
+  const bad = validateDrop(input.drop);
+  if (bad) return { ok: false, error: bad };
+  const sess = await getSession();
+  try {
+    const out = await db.transaction((tx) => registerFoundSetTx(tx, input, sess?.uid ?? null));
+    touch();
+    revalidatePath(`/vehicle/${out.vehicleId}`);
     return { ok: true, ...out };
   } catch (e) {
     return { ok: false, error: errText(e) };
