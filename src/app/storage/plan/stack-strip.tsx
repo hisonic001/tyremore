@@ -17,7 +17,7 @@ import type { SetLite } from "./location";
  *     휴대폰 터치도 되게 포인터 이벤트로(브라우저 기본 끌기는 터치에서 안 된다).
  *   - ⭐ **휴대폰은 꾹 눌러야(0.3초) 이동이 켜진다** (사장님 「휴대폰에서 잘 안 됨 — 조금 꾹 누르면 활성화로」). 바로 밀면 화면이 넘어가고,
  *     꾹 누르면 진동 + 덩어리가 들린 뒤 끈다. 켜진 뒤에만 touchmove 를 막아(passive:false) 화면이 같이 밀리지 않게.
- *     길게 누르기 메뉴·글자 선택은 끈다. 마우스는 지금처럼 바로 끈다.
+ *     길게 누르기 메뉴·글자 선택은 끈다. 🔴 마우스도 똑같이 꾹 눌러야 한다(사장님 「누르고 있어야만 이동」).
  */
 
 const COLORS = [
@@ -132,12 +132,12 @@ export function StackStrip({ sets, count, current, onPick, onCount, highlightId,
   const down = (e: RPointerEvent<HTMLDivElement>, id: number) => {
     if (!onDrop) return;
     e.stopPropagation();
-    const mouse = e.pointerType === "mouse";
+    // 🔴 마우스도 꾹 눌러야 켜진다 (사장님 2026-11-18 「누르고 있어야만 이동 가능하게」) — 실수로 끌리는 일이 없게
     const x = e.clientX;
     const y = e.clientY;
-    press.current = { id, x, y, moved: false, armed: mouse, timer: null };
+    press.current = { id, x, y, moved: false, armed: false, timer: null };
     e.currentTarget.setPointerCapture(e.pointerId);
-    if (!mouse) {
+    {
       press.current.timer = setTimeout(() => {
         const p = press.current;
         if (!p || p.id !== id || p.moved) return;
