@@ -92,7 +92,9 @@ export function StoragePanel({
             return (
               <label
                 key={s.id}
-                className={`flex cursor-pointer items-center gap-3 rounded-control border p-3 ${on ? "border-brand-500 bg-brand-50" : "border-slate-200 bg-slate-50"}`}
+                className={`flex cursor-pointer items-center gap-3 rounded-control border p-3 ${
+                  on ? "border-brand-500 bg-brand-50" : s.status === "확인대기" ? "border-amber-300 bg-amber-50" : "border-slate-200 bg-slate-50"
+                }`}
               >
                 <input
                   type="checkbox"
@@ -102,11 +104,12 @@ export function StoragePanel({
                   }
                   className="size-5 accent-brand-600"
                 />
-                <span className="tabular text-xl font-extrabold">{formatStorageNo(s.no)}</span>
+                <span className="tabular text-xl font-extrabold">{s.no != null ? formatStorageNo(s.no) : "실사 전"}</span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">{s.describe || "내용 없음"}</span>
                   <span className="block text-xs text-slate-500">
-                    {s.storedOn}부터 보관 {on ? "→ 오늘 찾아감(꺼내 끼움)" : "· 꺼내 끼우면 체크"}
+                    {s.areaName ? `📍${s.areaName} · ` : ""}
+                    {s.storedOn}부터 보관{s.status === "확인대기" ? "(실사 전 후보)" : ""} {on ? "→ 오늘 찾아감(꺼내 끼움)" : "· 꺼내 끼우면 체크"}
                   </span>
                 </span>
               </label>

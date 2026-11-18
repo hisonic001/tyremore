@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request) {
   if (!(await hasPerm("customer"))) return new Response("고객 권한이 없습니다", { status: 403 });
   const k = new URL(req.url).searchParams.get("kind");
-  const kind: StorageKind = k === "스노" || k === "일반" ? k : contactKindFor(new Date().getMonth() + 1);
+  const kind: StorageKind = k === "스노" || k === "일반" ? k : contactKindFor(Number(new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" }).slice(5, 7))); // 한국 시각 달
   const targets = contactTargets(await contactRows(), kind);
   const ws = XLSX.utils.json_to_sheet(
     targets.map((t) => ({

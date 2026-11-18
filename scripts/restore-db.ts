@@ -32,7 +32,8 @@ const ORDER = [
   "vehicle",
   "quote",
   "quote_item",
-  "tire_storage", // D-42 — customer·vehicle·quote 뒤
+  "storage_area", // D-42 도면 — tire_storage 가 참조
+  "tire_storage", // D-42 — customer·vehicle·quote·storage_area 뒤
   "stock_item",
   "stock_movement",
   "purchase_invoice",

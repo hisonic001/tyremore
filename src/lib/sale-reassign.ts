@@ -166,12 +166,17 @@ export async function reassignSale(input: {
    *    거래처로 돌릴 때는 차량을 유지하므로 세트도 그대로.
    */
   const [stc] = await db.execute<{ stored: number; released: number }>(sql`
-    SELECT count(*) FILTER (WHERE stored_quote_id = ${q.id} AND status IN ('보관중','확인대기'))::int stored,
+    SELECT count(*) FILTER (WHERE stored_quote_id = ${q.id} AND origin = '판매' AND status IN ('보관중','확인대기'))::int stored,
            count(*) FILTER (WHERE released_quote_id = ${q.id} AND status = '찾아감')::int released
     FROM tire_storage`);
   const storedHere = Number(stc?.stored ?? 0);
   if (storedHere > 0 && input.target.kind === "walkin") {
     return { ok: false, error: "이 판매로 맡긴 보관 타이어가 있어 비회원으로 바꿀 수 없습니다 — 손님·차량을 골라 주세요" };
+  }
+  if (storedHere > 0 && input.target.kind === "customer" && setCustomerId != null) {
+    const { storageOwnerProblem } = await import("./tire-storage-db");
+    const problem = await storageOwnerProblem(db, setCustomerId);
+    if (problem) return { ok: false, error: `이 판매로 맡긴 보관 타이어가 있습니다 — ${problem}` };
   }
 
   /**
@@ -221,7 +226,7 @@ export async function reassignSale(input: {
     if (storedHere > 0 && input.target.kind === "customer") {
       await tx.execute(sql`
         UPDATE tire_storage SET customer_id = ${setCustomerId}, vehicle_id = ${setVehicleId}, updated_at = now()
-        WHERE stored_quote_id = ${q.id} AND status IN ('보관중','확인대기')`);
+        WHERE stored_quote_id = ${q.id} AND origin = '판매' AND status IN ('보관중','확인대기')`);
     }
 
     /** MARS 에 이미 들어간 건은 메모에도 한 번만 남긴다 (sale-edit 의 방식과 같게) */

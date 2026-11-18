@@ -16,7 +16,7 @@ import { listSaleDrafts, removeSaleDraft, saveSaleDraft, type ServerSaleDraft } 
 import { useConfirm } from "@/components/ui/confirm";
 import { AmountBox } from "@/components/ui/amount-box";
 import { EMPTY_SALE_STORAGE, StoragePanel } from "./storage-panel";
-import { formatStorageNo, type SaleStorageInput } from "@/lib/tire-storage-pure";
+import { formatStorageNo, parseStorageMemo, type SaleStorageInput } from "@/lib/tire-storage-pure";
 
 const won = (n: number) => n.toLocaleString();
 
@@ -473,6 +473,32 @@ export function SaleForm({
         cancelLabel: "돌아가기",
       });
       if (!ok) return;
+    }
+    /**
+     * ⭐ 메모에 「보관」이 있는데 보관 칸이 비었으면 묻는다 (2026-11-18 — 배포 뒤 5건이 메모에만 적혀 보관 기록이 없었다).
+     *    「보관 칸 채우기」 → 메모에서 읽은 종류·브랜드·규격·본수로 맡긴 타이어 칸을 채우고 멈춘다(확인 후 다시 저장).
+     */
+    if (vehicle && !reserve && storage.drops.length === 0) {
+      const memoText = [memo, ...rows.map((r) => r.memo ?? "")].filter(Boolean).join(" / ");
+      const parsed = parseStorageMemo(memoText, Number(workDate.slice(5, 7)) || undefined);
+      if (parsed.drops.length > 0) {
+        const fill = await ask({
+          title: "메모에 「보관」이 있습니다 — 보관에 등록할까요?",
+          body: `메모에서 읽은 것: ${parsed.drops.map((d) => [d.brand, d.kind, `${d.qty}본`, d.size].filter(Boolean).join(" ")).join(" / ")}
+
+「보관 칸 채우기」를 누르면 아래 📦 타이어 보관 칸에 채워 둡니다 — 확인하고 다시 판매완료를 눌러 주세요.`,
+          confirmLabel: "보관 칸 채우기",
+          cancelLabel: "보관 없이 저장",
+        });
+        if (fill) {
+          setStorage({
+            ...storage,
+            drops: parsed.drops.map((d) => ({ kind: d.kind, brand: d.brand ?? "", size: d.size ?? "", qty: d.qty, dot: "", memo: "" })),
+          });
+          setError("📦 보관 칸을 채웠습니다 — 내용을 확인하고 판매완료를 다시 눌러 주세요");
+          return;
+        }
+      }
     }
     /* 받은 돈이 합계보다 많을 수는 없다 — 본사청구·예약에서도 마찬가지 */
     if (partial && paySum > total) {

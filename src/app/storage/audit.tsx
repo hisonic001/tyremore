@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/notice";
 import { confirmCandidate, dismissCandidate, moveStorage } from "@/lib/tire-storage";
 import { formatStorageNo, sizeHints, sizesIn, type StorageDropInput, type StorageKind } from "@/lib/tire-storage-pure";
-import type { StorageRow } from "@/lib/tire-storage-data";
+import type { AreaInfo, PinRow, StorageRow } from "@/lib/tire-storage-data";
+import { LocationSection } from "./plan/location-section";
 import { DropFields } from "./drop-fields";
 import { otherPlatesIn, VehiclePicker } from "./vehicle-picker";
 
@@ -15,7 +16,7 @@ import { otherPlatesIn, VehiclePicker } from "./vehicle-picker";
  *   있음 → 번호 받고 보관중(맡긴 날 = 원래 판매일) · 없음 → 제외.
  *   이 화면에서 「있음」 한 세트들은 아래 「스티커 한꺼번에 인쇄」로 뽑는다.
  */
-export function AuditList({ rows }: { rows: StorageRow[] }) {
+export function AuditList({ rows, areas, pins }: { rows: StorageRow[]; areas: AreaInfo[]; pins: PinRow[] }) {
   const [done, setDone] = useState<{ id: number; no: number }[]>([]);
   return (
     <div className="mt-2">
@@ -35,14 +36,14 @@ export function AuditList({ rows }: { rows: StorageRow[] }) {
       )}
       <div className="divide-y divide-slate-100">
         {rows.map((r) => (
-          <AuditRow key={r.id} r={r} onConfirmed={(no) => setDone((d) => [...d, { id: r.id, no }])} />
+          <AuditRow key={r.id} r={r} areas={areas} pins={pins} onConfirmed={(no) => setDone((d) => [...d, { id: r.id, no }])} />
         ))}
       </div>
     </div>
   );
 }
 
-function AuditRow({ r, onConfirmed }: { r: StorageRow; onConfirmed: (no: number) => void }) {
+function AuditRow({ r, areas, pins, onConfirmed }: { r: StorageRow; areas: AreaInfo[]; pins: PinRow[]; onConfirmed: (no: number) => void }) {
   const router = useRouter();
   const [drop, setDrop] = useState<StorageDropInput>({
     kind: (r.kind as StorageKind | null) ?? null,
@@ -60,9 +61,12 @@ function AuditRow({ r, onConfirmed }: { r: StorageRow; onConfirmed: (no: number)
 
   if (state?.kind === "ok")
     return (
-      <p className="py-3 text-sm text-brand-700">
-        ✓ #{formatStorageNo(state.no)} {r.plateNo} {r.ownerName} — 보관 중으로 등록
-      </p>
+      <div className="py-3">
+        <p className="text-sm text-brand-700">
+          ✓ #{formatStorageNo(state.no)} {r.plateNo} {r.ownerName} — 보관 중으로 등록 · 지금 놓인 자리를 찍어 두세요
+        </p>
+        <LocationSection id={r.id} areaId={r.areaId} x={r.pinX} y={r.pinY} areas={areas} pins={pins} compact />
+      </div>
     );
   if (state?.kind === "gone") return <p className="py-3 text-sm text-slate-400">— {r.plateNo} {r.ownerName} 없음 처리</p>;
 

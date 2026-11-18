@@ -45,6 +45,8 @@ export async function insertStoredSet(
     storedOn: string;
     storedQuoteId?: number | null;
     userId: number | null;
+    /** 판매(판매 취소 때 같이 되돌림) · 등록(손으로) */
+    origin: "판매" | "등록";
   },
 ): Promise<{ id: number; no: number }> {
   const bad = validateDrop(o.drop);
@@ -53,9 +55,9 @@ export async function insertStoredSet(
   const no = await nextStorageNo(tx);
   const [r] = await tx.execute<{ id: number }>(sql`
     INSERT INTO tire_storage (storage_no, status, customer_id, vehicle_id, kind, brand, size, qty, dot, memo,
-                              stored_on, stored_quote_id, created_by)
+                              stored_on, stored_quote_id, created_by, origin)
     VALUES (${no}, '보관중', ${o.customerId}, ${o.vehicleId}, ${d.kind}, ${d.brand}, ${d.size}, ${d.qty}, ${d.dot}, ${d.memo},
-            ${o.storedOn}::date, ${o.storedQuoteId ?? null}, ${o.userId})
+            ${o.storedOn}::date, ${o.storedQuoteId ?? null}, ${o.userId}, ${o.origin})
     RETURNING id
   `);
   return { id: Number(r.id), no };
@@ -83,16 +85,25 @@ export async function applySaleStorage(
   const released: number[] = [];
 
   for (const id of [...new Set(o.storage.pickupIds)]) {
-    const [s] = await tx.execute<{ id: number; status: string; customer_id: number; vehicle_id: number | null; storage_no: number }>(sql`
+    const [s] = await tx.execute<{ id: number; status: string; customer_id: number; vehicle_id: number | null; storage_no: number | null }>(sql`
       SELECT id, status, customer_id, vehicle_id, storage_no FROM tire_storage WHERE id = ${id} FOR UPDATE`);
     if (!s) throw new Error("찾아갈 보관 세트를 찾지 못했습니다 — 새로 고침 후 다시 해 주세요");
-    if (s.status !== "보관중") throw new Error(`보관 #${String(s.storage_no).padStart(4, "0")} 는 이미 「${s.status}」입니다`);
+    const label = s.storage_no == null ? "실사 전 후보" : `보관 #${String(s.storage_no).padStart(4, "0")}`;
+    if (s.status !== "보관중" && s.status !== "확인대기") throw new Error(`${label} 는 이미 「${s.status}」입니다 — 보관 칸에서 체크를 빼 주세요`);
     const sameOwner = Number(s.customer_id) === o.customerId || (o.vehicleId != null && Number(s.vehicle_id) === o.vehicleId);
-    if (!sameOwner) throw new Error(`보관 #${String(s.storage_no).padStart(4, "0")} 는 다른 손님의 세트입니다`);
-    await tx.execute(sql`
-      UPDATE tire_storage SET status = '찾아감', released_on = ${o.workDate}::date, released_quote_id = ${o.quoteId},
-             released_by = ${o.userId}, updated_at = now()
-      WHERE id = ${id}`);
+    if (!sameOwner) throw new Error(`${label} 는 다른 손님의 세트입니다`);
+    if (s.status === "확인대기") {
+      // 실사 전에 찾아감 — 번호가 없어 「찾아감」으로 둘 수 없다 → 제외(까닭을 남기고, 판매 취소 때 되돌린다)
+      await tx.execute(sql`
+        UPDATE tire_storage SET status = '제외', released_on = ${o.workDate}::date, released_quote_id = ${o.quoteId},
+               release_note = '실사 전에 찾아감', released_by = ${o.userId}, updated_at = now()
+        WHERE id = ${id}`);
+    } else {
+      await tx.execute(sql`
+        UPDATE tire_storage SET status = '찾아감', released_on = ${o.workDate}::date, released_quote_id = ${o.quoteId},
+               released_by = ${o.userId}, updated_at = now()
+        WHERE id = ${id}`);
+    }
     released.push(id);
   }
 
@@ -108,6 +119,7 @@ export async function applySaleStorage(
           storedOn: o.workDate,
           storedQuoteId: o.quoteId,
           userId: o.userId,
+          origin: "판매",
         }),
       );
     }
@@ -122,8 +134,10 @@ export async function applySaleStorage(
  */
 export async function revertSaleStorage(tx: Tx, quoteId: number, quoteNo: string, userId: number | null): Promise<string | null> {
   const notes: string[] = [];
+  /* 🔴 「판매」로 맡긴 세트만 (2026-11-18) — 실사·경리 명단으로 옛 판매에 묶인 세트는 창고에서 확인한 실물이다.
+     그 옛 판매를 취소했다고 지우면 안 된다 (검토 갈래 발견). */
   const dropped = await tx.execute<{ id: number; storage_no: number | null; status: string }>(sql`
-    SELECT id, storage_no, status FROM tire_storage WHERE stored_quote_id = ${quoteId} FOR UPDATE`);
+    SELECT id, storage_no, status FROM tire_storage WHERE stored_quote_id = ${quoteId} AND origin = '판매' FOR UPDATE`);
   const retired: string[] = [];
   for (const s of dropped) {
     const no = String(s.storage_no ?? 0).padStart(4, "0");
@@ -144,5 +158,11 @@ export async function revertSaleStorage(tx: Tx, quoteId: number, quoteNo: string
     WHERE released_quote_id = ${quoteId} AND status = '찾아감'
     RETURNING storage_no`);
   if (back.length) notes.push(`찾아간 것으로 했던 보관 ${back.map((b) => `#${String(b.storage_no).padStart(4, "0")}`).join(", ")} 를 다시 보관 중으로 돌렸습니다`);
+  const backCand = await tx.execute(sql`
+    UPDATE tire_storage SET status = '확인대기', released_on = NULL, released_quote_id = NULL, released_by = NULL,
+           release_note = NULL, updated_at = now()
+    WHERE released_quote_id = ${quoteId} AND status = '제외' AND release_note = '실사 전에 찾아감'
+    RETURNING id`);
+  if (backCand.length) notes.push(`실사 전 후보 ${backCand.length}세트를 다시 실사 탭으로 돌렸습니다`);
   return notes.length ? notes.join(" · ") : null;
 }

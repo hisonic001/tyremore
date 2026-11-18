@@ -36,6 +36,12 @@ export interface StorageRow {
   sourceText: string | null;
   storedQuoteId: number | null;
   releasedQuoteId: number | null;
+  origin: string;
+  /** ⭐ 위치 (2026-11-18) — 구역 도면 위 점(0~1). 같은 좌표 = 같은 더미 */
+  areaId: number | null;
+  areaName: string | null;
+  pinX: number | null;
+  pinY: number | null;
   /** 스티커·목록에 쓰는 「주인 이름」 — 거래처 차량이면 거래처 이름 */
   ownerName: string;
   describe: string;
@@ -65,16 +71,23 @@ type Raw = {
   source_text: string | null;
   stored_quote_id: number | null;
   released_quote_id: number | null;
+  origin: string;
+  area_id: number | null;
+  area_name: string | null;
+  pin_x: number | null;
+  pin_y: number | null;
 };
 
 const BASE = sql`
   SELECT s.id, s.storage_no, s.status, s.kind, s.brand, s.size, s.qty, s.dot, s.memo,
          to_char(s.stored_on, 'YYYY-MM-DD') stored_on, to_char(s.released_on, 'YYYY-MM-DD') released_on, s.release_note,
          s.customer_id, c.name customer_name, c.supplier_name, c.phone,
-         s.vehicle_id, v.plate_no, v.model, v.last_fitted_size, s.source_text, s.stored_quote_id, s.released_quote_id
+         s.vehicle_id, v.plate_no, v.model, v.last_fitted_size, s.source_text, s.stored_quote_id, s.released_quote_id,
+         s.origin, s.area_id, a.name AS area_name, s.pin_x, s.pin_y
   FROM tire_storage s
   JOIN customer c ON c.id = s.customer_id
-  LEFT JOIN vehicle v ON v.id = s.vehicle_id`;
+  LEFT JOIN vehicle v ON v.id = s.vehicle_id
+  LEFT JOIN storage_area a ON a.id = s.area_id`;
 
 function toRow(r: Raw): StorageRow {
   const qty = Number(r.qty);
@@ -102,17 +115,23 @@ function toRow(r: Raw): StorageRow {
     sourceText: r.source_text,
     storedQuoteId: r.stored_quote_id == null ? null : Number(r.stored_quote_id),
     releasedQuoteId: r.released_quote_id == null ? null : Number(r.released_quote_id),
+    origin: r.origin,
+    areaId: r.area_id == null ? null : Number(r.area_id),
+    areaName: r.area_name,
+    pinX: r.pin_x == null ? null : Number(r.pin_x),
+    pinY: r.pin_y == null ? null : Number(r.pin_y),
     ownerName: r.supplier_name ?? r.customer_name,
     describe: describeSet({ brand: r.brand, kind: r.kind, size: r.size, qty }),
   };
 }
 
-export type StorageView = "보관중" | "지난" | "확인대기";
+export type StorageView = "보관중" | "지난" | "확인대기" | "위치없음";
 
 const VIEW_WHERE: Record<StorageView, SQL> = {
   보관중: sql`s.status = '보관중'`,
   지난: sql`s.status IN ('찾아감','폐기','제외')`,
   확인대기: sql`s.status = '확인대기'`,
+  위치없음: sql`s.status = '보관중' AND s.area_id IS NULL`,
 };
 
 const LIMIT = 300;
@@ -143,7 +162,14 @@ export async function listStorage(o: { q?: string; view: StorageView }): Promise
     if (!any.length) return { rows: [], more: false };
     conds.push(sql`(${sql.join(any, sql` OR `)})`);
   }
-  const order = o.view === "지난" ? sql`s.released_on DESC NULLS LAST, s.id DESC` : o.view === "확인대기" ? sql`s.stored_on, s.id` : sql`s.storage_no DESC`;
+  const order =
+    o.view === "지난"
+      ? sql`s.released_on DESC NULLS LAST, s.id DESC`
+      : o.view === "확인대기"
+        ? sql`s.stored_on, s.id`
+        : o.view === "위치없음"
+          ? sql`s.storage_no`
+          : sql`s.storage_no DESC`;
   const raw = await db.execute<Raw>(sql`${BASE} WHERE ${sql.join(conds, sql` AND `)} ORDER BY ${order} LIMIT ${LIMIT + 1}`);
   return { rows: raw.slice(0, LIMIT).map(toRow), more: raw.length > LIMIT };
 }
@@ -203,12 +229,25 @@ export async function storageDetail(id: number): Promise<StorageDetail | null> {
  * 차량 화면·판매 화면 — 이 차(또는 이 손님)의 보관 세트.
  * 거래처 차고 손님은 차가 여러 대라 손님으로 넓히지 않는다(남의 차 세트가 뜬다).
  */
-export async function storageForVehicle(vehicleId: number | null, customerId: number | null, withPast = false): Promise<StorageRow[]> {
+export async function storageForVehicle(vehicleId: number | null, customerId: number | null, withPast = false, withCandidates = false): Promise<StorageRow[]> {
   if (vehicleId == null && customerId == null) return [];
   const who = sql`(s.vehicle_id = ${vehicleId ?? 0} OR (s.customer_id = ${customerId ?? 0} AND c.supplier_name IS NULL))`;
-  const status = withPast ? sql`s.status IN ('보관중','확인대기','찾아감','폐기')` : sql`s.status = '보관중'`;
+  const status = withPast
+    ? sql`s.status IN ('보관중','확인대기','찾아감','폐기')`
+    : withCandidates
+      ? sql`s.status IN ('보관중','확인대기')`
+      : sql`s.status = '보관중'`;
   const raw = await db.execute<Raw>(sql`${BASE} WHERE ${who} AND ${status}
     ORDER BY (s.status = '보관중') DESC, s.stored_on DESC LIMIT 12`);
+  return raw.map(toRow);
+}
+
+/** 스티커 — 번호 범위로 (보관중만) */
+export async function labelRowsByRange(from: number, to: number): Promise<StorageRow[]> {
+  const lo = Math.max(1, Math.min(from, to));
+  const hi = Math.min(lo + 400, Math.max(from, to));
+  const raw = await db.execute<Raw>(sql`${BASE}
+    WHERE s.status = '보관중' AND s.storage_no BETWEEN ${lo} AND ${hi} ORDER BY s.storage_no`);
   return raw.map(toRow);
 }
 
@@ -255,4 +294,60 @@ export async function storageForSale(quoteId: number): Promise<{ stored: Storage
     ORDER BY s.storage_no`);
   const rows = raw.map(toRow);
   return { stored: rows.filter((r) => r.storedQuoteId === quoteId), released: rows.filter((r) => r.releasedQuoteId === quoteId) };
+}
+
+/* ------------------------------------------------------------------
+ * ⭐ 구역 도면 · 점 (2026-11-18)
+ * ---------------------------------------------------------------- */
+
+export interface AreaInfo {
+  id: number;
+  name: string;
+  isSite: boolean;
+  plan: unknown;
+  hasImage: boolean;
+  /** 그림 캐시 열쇠 — 바뀌면 새로 받는다 */
+  ver: number;
+  sort: number;
+}
+
+export async function listAreas(): Promise<AreaInfo[]> {
+  const rows = await db.execute<{ id: number; name: string; is_site: boolean; plan: unknown; has_image: boolean; ver: number; sort: number }>(sql`
+    SELECT id, name, is_site, plan, (image IS NOT NULL) AS has_image,
+           floor(extract(epoch FROM updated_at))::bigint AS ver, sort
+    FROM storage_area WHERE is_active ORDER BY is_site DESC, sort, id`);
+  return rows.map((r) => ({ id: Number(r.id), name: r.name, isSite: !!r.is_site, plan: r.plan, hasImage: !!r.has_image, ver: Number(r.ver), sort: Number(r.sort) }));
+}
+
+export interface PinRow {
+  id: number;
+  no: number | null;
+  areaId: number;
+  x: number;
+  y: number;
+  kind: string | null;
+  plate: string | null;
+  owner: string;
+  describe: string;
+}
+
+/** 도면 위 점 전부 (보관중) — 위치 찍기·찾기·더미 묶음이 같이 쓴다 */
+export async function areaPins(): Promise<PinRow[]> {
+  const raw = await db.execute<Raw>(sql`${BASE} WHERE s.status = '보관중' AND s.area_id IS NOT NULL AND s.pin_x IS NOT NULL ORDER BY s.storage_no`);
+  return raw.map(toRow).map((r) => ({
+    id: r.id,
+    no: r.no,
+    areaId: r.areaId!,
+    x: r.pinX!,
+    y: r.pinY!,
+    kind: r.kind,
+    plate: r.plateNo,
+    owner: r.ownerName,
+    describe: r.describe,
+  }));
+}
+
+export async function areaImage(id: number): Promise<string | null> {
+  const [r] = await db.execute<{ image: string | null }>(sql`SELECT image FROM storage_area WHERE id = ${id}`);
+  return r?.image ?? null;
 }
