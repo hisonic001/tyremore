@@ -48,6 +48,8 @@ export interface StackStripProps {
   showList?: boolean;
   /** 고른 더미 위 글자 — 실사 「지금」, 찾기 「여기」 */
   currentLabel?: string;
+  /** ⭐ 두 번 톡톡(더블클릭) = 그 세트 내용 고치기 (사장님 2026-11-18) */
+  onEdit?: (setId: number) => void;
   /** ⭐ 끌어다 놓기 — 있으면 덩어리를 잡을 수 있다. toStack 의 새 순서(아래→위) 를 준다 */
   onDrop?: (setId: number, toStack: number, bottomToTop: number[]) => void;
 }
@@ -77,7 +79,9 @@ interface Drag {
   at: number;
 }
 
-export function StackStrip({ sets, count, current, onPick, onCount, highlightId, showList = true, currentLabel = "지금", onDrop }: StackStripProps) {
+export function StackStrip({ sets, count, current, onPick, onCount, highlightId, showList = true, currentLabel = "지금", onDrop, onEdit }: StackStripProps) {
+  /** 두 번 톡톡 알아보기 — 같은 덩어리를 0.35초 안에 두 번 */
+  const lastTap = useRef<{ id: number; t: number } | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const press = useRef<{ id: number; x: number; y: number; moved: boolean; armed: boolean; timer: ReturnType<typeof setTimeout> | null } | null>(null);
   /** 꾹 눌러 들린 덩어리 (그림 강조) */
@@ -130,14 +134,14 @@ export function StackStrip({ sets, count, current, onPick, onCount, highlightId,
     setDrag(null);
   };
   const down = (e: RPointerEvent<HTMLDivElement>, id: number) => {
-    if (!onDrop) return;
+    if (!onDrop && !onEdit) return;
     e.stopPropagation();
     // 🔴 마우스도 꾹 눌러야 켜진다 (사장님 2026-11-18 「누르고 있어야만 이동 가능하게」) — 실수로 끌리는 일이 없게
     const x = e.clientX;
     const y = e.clientY;
     press.current = { id, x, y, moved: false, armed: false, timer: null };
     e.currentTarget.setPointerCapture(e.pointerId);
-    {
+    if (onDrop) {
       press.current.timer = setTimeout(() => {
         const p = press.current;
         if (!p || p.id !== id || p.moved) return;
@@ -172,6 +176,15 @@ export function StackStrip({ sets, count, current, onPick, onCount, highlightId,
     const p = press.current;
     const d = drag;
     reset();
+    // 그냥 톡 누름(꾹·끌기 아님) — 같은 덩어리를 곧 또 누르면 고치기
+    if (p && !p.armed && !p.moved && onEdit) {
+      const now = Date.now();
+      if (lastTap.current && lastTap.current.id === p.id && now - lastTap.current.t < 350) {
+        lastTap.current = null;
+        onEdit(p.id);
+      } else lastTap.current = { id: p.id, t: now };
+      return;
+    }
     if (!p?.armed || !p.moved || !d || d.to == null || !onDrop) return;
     justDropped.current = true;
     setTimeout(() => (justDropped.current = false), 300);
@@ -293,7 +306,11 @@ export function StackStrip({ sets, count, current, onPick, onCount, highlightId,
         </div>
       )}
 
-      {onDrop && <p className="mb-1 text-xs text-slate-600">잘못 쌓았으면 타이어 덩어리를 <strong>꾹 누르고(살짝 진동)</strong> 끌어서 위·아래나 다른 더미에 놓으세요.</p>}
+      {onDrop && (
+        <p className="mb-1 text-xs text-slate-600">
+          잘못 쌓았으면 덩어리를 <strong>꾹 누르고(살짝 진동)</strong> 끌어 위·아래나 다른 더미에 놓으세요. 내용 고치기는 덩어리를 <strong>두 번 톡톡</strong>.
+        </p>
+      )}
 
       {showList && current != null && (
         <div className="rounded-card border border-slate-300 bg-white p-2">
