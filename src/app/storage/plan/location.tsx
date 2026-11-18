@@ -27,6 +27,12 @@ export interface SetLite {
   stackNo: number | null;
   /** 더미 안 순서 — 늦게 놓을수록 위 (없으면 맨 아래 쪽) */
   placedAt?: number | null;
+  /** 실사 중 두 번 톡톡 고치기용 원래 값 (2026-11-18) */
+  brand?: string | null;
+  size?: string | null;
+  dot?: string | null;
+  memo?: string | null;
+  lastFittedSize?: string | null;
 }
 
 export interface LocValue {

@@ -16,5 +16,10 @@ export function toSetLite(r: StorageRow): SetLite {
     slotId: r.slotId,
     stackNo: r.stackNo,
     placedAt: r.placedAt,
+    brand: r.brand,
+    size: r.size,
+    dot: r.dot,
+    memo: r.memo,
+    lastFittedSize: r.lastFittedSize,
   };
 }
