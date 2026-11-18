@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Notice } from "@/components/ui/notice";
 import { useConfirm } from "@/components/ui/confirm";
-import { placeHere, undoPlace, type PrevLoc } from "@/lib/storage-area";
+import { dropSet, placeHere, undoPlace, type PrevLoc } from "@/lib/storage-area";
 import { dismissCandidate } from "@/lib/tire-storage";
 import type { AreaInfo } from "@/lib/tire-storage-data";
 import { formatStorageNo, labelKind } from "@/lib/tire-storage-pure";
@@ -62,6 +62,7 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
   const [found, setFound] = useState<string | null>(null);
   /** 이 자리 더미 수 (그림의 [−] N [+]) — 빈 더미는 그림에만, 기기에 자리마다 기억 */
   const [stackCount, setStackCount] = useState(1);
+  const [stackBusy, setStackBusy] = useState(false);
   const [, start] = useTransition();
   const [ask, confirmNode] = useConfirm();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -192,7 +193,7 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
       const r = await placeHere(s.id, { areaId: loc.areaId!, slotId: loc.slotId!, stack: loc.stack! });
       setBusyId(null);
       if (!r.ok) return setMsg({ tone: "error", text: r.error });
-      setSets((all) => all.map((x) => (x.id === s.id ? { ...x, status: "보관중", no: r.no, areaId: loc.areaId, slotId: loc.slotId, stackNo: r.stackNo } : x)));
+      setSets((all) => all.map((x) => (x.id === s.id ? { ...x, status: "보관중", no: r.no, areaId: loc.areaId, slotId: loc.slotId, stackNo: r.stackNo, placedAt: Date.now() } : x)));
       if (loc.stack === "new") changeLoc({ ...loc, stack: r.stackNo }); // 새 더미 → 진짜 번호로, 그대로 고른 채
       setDone((d) => {
         const next = d.includes(s.id) ? d : [...d, s.id];
@@ -254,6 +255,7 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
       areaId: loc.areaId,
       slotId: loc.slotId,
       stackNo: r.stackNo,
+      placedAt: Date.now(),
     };
     setSets((all) => [...all, lite]);
     if (loc.stack === "new" && r.stackNo != null) changeLoc({ ...loc, stack: r.stackNo });
@@ -270,6 +272,22 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
     } catch {
       /* 무시 */
     }
+  };
+
+  /** ⭐ 더미 고치기 = 끌어다 놓기 (2026-11-18 「위아래 잘못 쌓음 → 드래그앤드롭」). 그림은 먼저 바뀌고, 실패하면 되돌린다 */
+  const dropped = (id: number, toStack: number, bottomToTop: number[]) => {
+    const before = sets;
+    const t0 = Date.now();
+    setSets((all) => all.map((x) => (bottomToTop.includes(x.id) ? { ...x, stackNo: toStack, placedAt: t0 + bottomToTop.indexOf(x.id) } : x)));
+    setStackBusy(true);
+    start(async () => {
+      const r = await dropSet({ id, areaId: loc.areaId!, slotId: loc.slotId!, stackNo: toStack, bottomToTop });
+      setStackBusy(false);
+      if (!r.ok) {
+        setSets(before);
+        setMsg({ tone: "error", text: r.error });
+      }
+    });
   };
 
   const notHere = async (s: SetLite) => {
@@ -320,7 +338,13 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
           {/* ⭐ 더미 그림 (5차) — 쌓인 모양 · 몇 본 · 누구 것. 더미를 누르면 거기로, 「다음 더미 →」 한 번으로 넘어간다 */}
           {area && plan && loc.slotId && (
             <div className="mt-3 rounded-card border-2 border-slate-900 p-3">
-              <StackStrip sets={slotSets} count={shownCount} current={curStack} onPick={(no) => changeLoc({ ...loc, stack: no })} onCount={(n) => {
+              <StackStrip
+                sets={slotSets}
+                count={shownCount}
+                current={curStack}
+                onDrop={stackBusy ? undefined : dropped}
+                onPick={(no) => changeLoc({ ...loc, stack: no })}
+                onCount={(n) => {
                 setCount(n);
                 if (curStack > n) changeLoc({ ...loc, stack: n });
               }} />

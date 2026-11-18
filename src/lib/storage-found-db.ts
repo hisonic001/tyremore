@@ -158,3 +158,46 @@ export async function registerFoundSetTx(
   }
   return { id: r.id, no: r.no, stackNo, vehicleId, plate, owner: ownerName, reused };
 }
+
+/** 더미 안 순서 다시 매기기 (트랜잭션 안) — 설명은 storage-area.ts reorderStack. 시험: scripts/test-found-set.ts */
+export async function reorderStackTx(tx: Tx, input: { areaId: number; slotId: string; stackNo: number }, ids: number[]): Promise<void> {
+  const rows = await tx.execute<{ id: number; ms: number | null }>(sql`
+    SELECT id, (extract(epoch FROM located_at) * 1000)::float8 AS ms FROM tire_storage
+    WHERE area_id = ${input.areaId} AND slot_id = ${input.slotId} AND stack_no = ${input.stackNo} AND status = '보관중'
+    ORDER BY id FOR UPDATE`);
+  const have = rows.map((r) => Number(r.id)).sort((a, b) => a - b);
+  const want = [...ids].sort((a, b) => a - b);
+  if (have.length !== want.length || have.some((v, i) => v !== want[i])) throw new Error("그 사이 더미가 바뀌었습니다 — 새로 고침 후 다시 해 주세요");
+  const known = rows.map((r) => (r.ms == null ? null : Number(r.ms)));
+  const base = Math.min(...known.filter((v): v is number => v != null), Date.now());
+  let k = 0;
+  const times = known.map((v) => v ?? base - (rows.length - k++) * 1000).sort((a, b) => a - b);
+  for (let i = 1; i < times.length; i++) if (times[i] <= times[i - 1]) times[i] = times[i - 1] + 1;
+  for (const [i, id] of ids.entries()) {
+    await tx.execute(sql`UPDATE tire_storage SET located_at = to_timestamp(${times[i] / 1000}), updated_at = now() WHERE id = ${id}`);
+  }
+}
+
+/**
+ * ⭐ 끌어다 놓기 한 번 (트랜잭션 안) — 같은 자리 안 다른 더미면 옮기고, 그 더미 순서를 화면이 준 대로(아래→위).
+ *   잠금 순서는 placeHere 와 같다: 세트 줄 → 구역(resolveLoc FOR SHARE) → 그 더미 세트들.
+ */
+export async function dropSetTx(
+  tx: Tx,
+  input: { id: number; areaId: number; slotId: string; stackNo: number; bottomToTop: number[] },
+  userId: number | null,
+): Promise<void> {
+  if (!input.bottomToTop.includes(input.id)) throw new Error("순서가 이상합니다 — 새로 고침해 보세요");
+  const [t] = await tx.execute<{ status: string; area_id: number | null; slot_id: string | null; stack_no: number | null }>(sql`
+    SELECT status, area_id, slot_id, stack_no FROM tire_storage WHERE id = ${input.id} FOR UPDATE`);
+  if (!t || t.status !== "보관중") throw new Error("보관 중인 세트가 아닙니다 — 새로 고침해 보세요");
+  const same = Number(t.area_id) === input.areaId && t.slot_id === input.slotId && Number(t.stack_no) === input.stackNo;
+  if (!same) {
+    const stackNo = await resolveLoc(tx, { areaId: input.areaId, slotId: input.slotId, stack: input.stackNo }, input.id);
+    await tx.execute(sql`
+      UPDATE tire_storage SET area_id = ${input.areaId}, slot_id = ${input.slotId}, stack_no = ${stackNo},
+             located_at = now(), located_by = ${userId}, updated_at = now()
+      WHERE id = ${input.id}`);
+  }
+  await reorderStackTx(tx, input, input.bottomToTop);
+}

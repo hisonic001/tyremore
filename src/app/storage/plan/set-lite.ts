@@ -15,5 +15,6 @@ export function toSetLite(r: StorageRow): SetLite {
     areaId: r.areaId,
     slotId: r.slotId,
     stackNo: r.stackNo,
+    placedAt: r.placedAt,
   };
 }

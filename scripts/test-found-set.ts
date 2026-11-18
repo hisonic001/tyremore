@@ -6,7 +6,7 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { registerFoundSetTx } from "@/lib/storage-found-db";
+import { dropSetTx, registerFoundSetTx } from "@/lib/storage-found-db";
 import { sanitizePlan } from "@/lib/storage-plan-pure";
 
 const ROLLBACK = "__시험_되돌림__";
@@ -75,6 +75,28 @@ async function main() {
       // E. 이미 있는 차 고르기
       const e = await registerFoundSetTx(tx, { plate: "", owner: { kind: "차량", vehicleId: a.vehicleId }, drop, storedOn: null, loc: null }, null);
       ok(e.reused && e.vehicleId === a.vehicleId, "E 이미 있는 차 고르기");
+
+      // F. 더미 안 순서 (▲▼) — A·B 가 같은 더미. 지금 순서는 놓은 시각 순(A 아래, B 위) → 뒤집기
+      const order = async () =>
+        (await tx.execute<{ id: number }>(sql`SELECT id FROM tire_storage WHERE area_id = ${loc.areaId} AND slot_id = ${slot.id} AND stack_no = ${a.stackNo}
+          AND status = '보관중' ORDER BY located_at NULLS FIRST, storage_no`)).map((r) => Number(r.id));
+      const before = await order();
+      const flipped = [...before].reverse();
+      await dropSetTx(tx, { id: flipped[flipped.length - 1], areaId: loc.areaId, slotId: slot.id, stackNo: a.stackNo!, bottomToTop: flipped }, null);
+      ok(JSON.stringify(await order()) === JSON.stringify(flipped), `F 끌어다 놓기 — 같은 더미 순서 뒤집기 (${before.length}세트)`);
+      // 다른 더미 맨 아래로 끌어 놓기 (빈 더미 9)
+      await dropSetTx(tx, { id: a.id, areaId: loc.areaId, slotId: slot.id, stackNo: 9, bottomToTop: [a.id] }, null);
+      const [ma] = await tx.execute<{ stack_no: number }>(sql`SELECT stack_no FROM tire_storage WHERE id = ${a.id}`);
+      ok(Number(ma.stack_no) === 9, "F 다른 더미로 끌어 놓기 → 더미 9");
+      let ferr = "";
+      await tx.execute(sql`SAVEPOINT f`);
+      try {
+        await dropSetTx(tx, { id: b.id, areaId: loc.areaId, slotId: slot.id, stackNo: a.stackNo!, bottomToTop: [b.id, 999999999] }, null);
+      } catch (e) {
+        ferr = (e as Error).message;
+      }
+      await tx.execute(sql`ROLLBACK TO SAVEPOINT f`);
+      ok(!!ferr, `F 목록이 더미와 다르면 거절 — ${ferr}`);
 
       throw new Error(ROLLBACK);
     });

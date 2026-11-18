@@ -12,7 +12,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { getSession, hasPerm } from "./auth";
 import { defaultRoomPlan, imageProblem, removedOccupiedSlots, sanitizePlan, slotLabel, slotNameProblem, type Plan } from "./storage-plan-pure";
-import { registerFoundSetTx, resolveLoc, type FoundSetInput, type Loc } from "./storage-found-db";
+import { dropSetTx, registerFoundSetTx, resolveLoc, type FoundSetInput, type Loc } from "./storage-found-db";
 
 type Result<T = object> = ({ ok: true } & T) | { ok: false; error: string };
 const NO_SALE = "판매 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다";
@@ -255,6 +255,25 @@ export async function registerFoundSet(
     touch();
     revalidatePath(`/vehicle/${out.vehicleId}`);
     return { ok: true, ...out };
+  } catch (e) {
+    return { ok: false, error: errText(e) };
+  }
+}
+
+/**
+ * ⭐ 더미 고치기 = 끌어다 놓기 (사장님 2026-11-18 — 「위아래 잘못 쌓음」 → 「버튼 늘리지 말고 드래그앤드롭」)
+ *   더미 안 순서 = 위치를 정한 시각(located_at, 늦을수록 위). 새 칸을 만들지 않고 그 더미 세트들의 시각을
+ *   **새 순서대로 다시 나눠 준다**(원래 시각 묶음을 오름차순으로). 다른 더미에 놓으면 먼저 옮긴다. 정본 storage-found-db.dropSetTx.
+ */
+export async function dropSet(input: { id: number; areaId: number; slotId: string; stackNo: number; bottomToTop: number[] }): Promise<Result> {
+  if (!(await hasPerm("sale"))) return { ok: false, error: NO_SALE };
+  const ids = input.bottomToTop.map(Number);
+  if (!ids.length || new Set(ids).size !== ids.length) return { ok: false, error: "순서가 이상합니다 — 새로 고침해 보세요" };
+  const sess = await getSession();
+  try {
+    await db.transaction((tx) => dropSetTx(tx, { ...input, bottomToTop: ids }, sess?.uid ?? null));
+    touch();
+    return { ok: true };
   } catch (e) {
     return { ok: false, error: errText(e) };
   }

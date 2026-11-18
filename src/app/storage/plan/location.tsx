@@ -25,6 +25,8 @@ export interface SetLite {
   areaId: number | null;
   slotId: string | null;
   stackNo: number | null;
+  /** 더미 안 순서 — 늦게 놓을수록 위 (없으면 맨 아래 쪽) */
+  placedAt?: number | null;
 }
 
 export interface LocValue {
