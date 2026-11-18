@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type PointerEvent as RPointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent as RPointerEvent } from "react";
 import { formatStorageNo, labelKind } from "@/lib/tire-storage-pure";
 import type { SetLite } from "./location";
 
@@ -14,7 +14,10 @@ import type { SetLite } from "./location";
  *   - 「지금」 더미는 검정. 빈 더미는 점선(「여기 쌓기」). 위의 [−] N [+] 로 이 자리 더미 수를 정한다.
  *   - ⭐ **고치기 = 끌어다 놓기** (사장님 「위아래 잘못 쌓음 → 버튼 늘리지 말고 드래그앤드롭」):
  *     타이어 덩어리를 잡고 끌어 같은 더미 위·아래나 다른 더미에 놓는다. 놓을 자리에 검정 줄이 보인다.
- *     휴대폰 터치도 되게 포인터 이벤트로(브라우저 기본 끌기는 터치에서 안 된다). 잡은 덩어리는 화면을 스크롤하지 않는다.
+ *     휴대폰 터치도 되게 포인터 이벤트로(브라우저 기본 끌기는 터치에서 안 된다).
+ *   - ⭐ **휴대폰은 꾹 눌러야(0.3초) 이동이 켜진다** (사장님 「휴대폰에서 잘 안 됨 — 조금 꾹 누르면 활성화로」). 바로 밀면 화면이 넘어가고,
+ *     꾹 누르면 진동 + 덩어리가 들린 뒤 끈다. 켜진 뒤에만 touchmove 를 막아(passive:false) 화면이 같이 밀리지 않게.
+ *     길게 누르기 메뉴·글자 선택은 끈다. 마우스는 지금처럼 바로 끈다.
  */
 
 const COLORS = [
@@ -76,7 +79,20 @@ interface Drag {
 
 export function StackStrip({ sets, count, current, onPick, onCount, highlightId, showList = true, currentLabel = "지금", onDrop }: StackStripProps) {
   const [drag, setDrag] = useState<Drag | null>(null);
-  const press = useRef<{ id: number; x: number; y: number; moved: boolean } | null>(null);
+  const press = useRef<{ id: number; x: number; y: number; moved: boolean; armed: boolean; timer: ReturnType<typeof setTimeout> | null } | null>(null);
+  /** 꾹 눌러 들린 덩어리 (그림 강조) */
+  const [armedId, setArmedId] = useState<number | null>(null);
+  /** 들린 뒤 실제로 움직이는 중 — 이때부터 손가락 따라 덩어리가 보이고 원래 자리는 흐려진다 */
+  const [moving, setMoving] = useState(false);
+
+  // 이동이 켜진 뒤에만 화면 스크롤을 막는다 — 켜지기 전에 밀면 그냥 스크롤
+  useEffect(() => {
+    const stop = (e: TouchEvent) => {
+      if (press.current?.armed) e.preventDefault();
+    };
+    window.addEventListener("touchmove", stop, { passive: false });
+    return () => window.removeEventListener("touchmove", stop);
+  }, []);
   /** 끌기가 끝난 직후 기둥 「누르기」가 같이 일어나지 않게 */
   const justDropped = useRef(false);
 
@@ -105,25 +121,58 @@ export function StackStrip({ sets, count, current, onPick, onCount, highlightId,
     return { to, at };
   };
 
+  const LONG_MS = 300;
+  const reset = () => {
+    if (press.current?.timer) clearTimeout(press.current.timer);
+    press.current = null;
+    setArmedId(null);
+    setMoving(false);
+    setDrag(null);
+  };
   const down = (e: RPointerEvent<HTMLDivElement>, id: number) => {
     if (!onDrop) return;
     e.stopPropagation();
-    press.current = { id, x: e.clientX, y: e.clientY, moved: false };
+    const mouse = e.pointerType === "mouse";
+    const x = e.clientX;
+    const y = e.clientY;
+    press.current = { id, x, y, moved: false, armed: mouse, timer: null };
     e.currentTarget.setPointerCapture(e.pointerId);
+    if (!mouse) {
+      press.current.timer = setTimeout(() => {
+        const p = press.current;
+        if (!p || p.id !== id || p.moved) return;
+        p.armed = true;
+        setArmedId(id);
+        setDrag({ id, x: p.x, y: p.y, ...targetAt(p.x, p.y, id) });
+        try {
+          navigator.vibrate?.(40);
+        } catch {
+          /* 무시 */
+        }
+      }, LONG_MS);
+    }
   };
   const move = (e: RPointerEvent<HTMLDivElement>) => {
     const p = press.current;
     if (!p) return;
-    if (!p.moved && Math.hypot(e.clientX - p.x, e.clientY - p.y) < 8) return;
+    const far = Math.hypot(e.clientX - p.x, e.clientY - p.y) >= 8;
+    if (!p.armed) {
+      // 꾹 누르기 전에 밀었다 = 스크롤하려는 것 — 이동은 안 켠다
+      if (far) reset();
+      return;
+    }
+    if (!p.moved && !far) return;
+    if (!p.moved) setMoving(true);
     p.moved = true;
+    p.x = e.clientX;
+    p.y = e.clientY;
     setDrag({ id: p.id, x: e.clientX, y: e.clientY, ...targetAt(e.clientX, e.clientY, p.id) });
   };
   const up = () => {
     const p = press.current;
-    press.current = null;
     const d = drag;
-    setDrag(null);
-    if (!p?.moved || !d || d.to == null || !onDrop) return;
+    reset();
+    if (!p?.armed || !p.moved || !d || d.to == null || !onDrop) return;
     justDropped.current = true;
     setTimeout(() => (justDropped.current = false), 300);
     const order = bottomUp((by.get(d.to) ?? []).filter((s) => s.id !== d.id)).map((s) => s.id);
@@ -133,10 +182,7 @@ export function StackStrip({ sets, count, current, onPick, onCount, highlightId,
     if (from?.stackNo === d.to && before.join() === order.join()) return; // 제자리
     onDrop(d.id, d.to, order);
   };
-  const cancel = () => {
-    press.current = null;
-    setDrag(null);
-  };
+  const cancel = () => reset();
 
   return (
     <div>
@@ -210,10 +256,11 @@ export function StackStrip({ sets, count, current, onPick, onCount, highlightId,
                       onPointerMove={move}
                       onPointerUp={up}
                       onPointerCancel={cancel}
-                      className={`relative w-full shrink-0 overflow-hidden rounded ${colorOf.get(s.id)} ${s.id === highlightId ? "outline outline-4 outline-black" : ""} ${
-                        drag?.id === s.id ? "opacity-30" : ""
-                      } ${onDrop ? "cursor-grab" : ""}`}
-                      style={{ height: Math.min(s.qty, 16) * TIRE_PX - 1, touchAction: onDrop ? "none" : undefined }}
+                      onContextMenu={onDrop ? (e) => e.preventDefault() : undefined}
+                      className={`relative w-full shrink-0 select-none overflow-hidden rounded ${colorOf.get(s.id)} ${s.id === highlightId ? "outline outline-4 outline-black" : ""} ${
+                        moving && drag?.id === s.id ? "opacity-30" : ""
+                      } ${armedId === s.id && !moving ? "z-10 scale-110 shadow-lg ring-4 ring-amber-500" : ""} ${onDrop ? "cursor-grab" : ""}`}
+                      style={{ height: Math.min(s.qty, 16) * TIRE_PX - 1, WebkitTouchCallout: "none", WebkitUserSelect: "none" }}
                     >
                       {/* 타이어 줄 — 한 본에 한 줄 */}
                       <div
@@ -234,7 +281,7 @@ export function StackStrip({ sets, count, current, onPick, onCount, highlightId,
       </div>
 
       {/* 끄는 덩어리 — 손가락을 따라간다 */}
-      {drag && dragged && (
+      {drag && dragged && moving && (
         <div
           className={`pointer-events-none fixed z-50 w-20 -translate-x-1/2 -translate-y-1/2 rounded px-1 py-1 text-center text-xs font-extrabold text-white shadow-xl ${colorOf.get(dragged.id)}`}
           style={{ left: drag.x, top: drag.y }}
@@ -246,7 +293,7 @@ export function StackStrip({ sets, count, current, onPick, onCount, highlightId,
         </div>
       )}
 
-      {onDrop && <p className="mb-1 text-xs text-slate-600">잘못 쌓았으면 타이어 덩어리를 꾹 잡고 끌어서 위·아래나 다른 더미에 놓으세요.</p>}
+      {onDrop && <p className="mb-1 text-xs text-slate-600">잘못 쌓았으면 타이어 덩어리를 <strong>꾹 누르고(살짝 진동)</strong> 끌어서 위·아래나 다른 더미에 놓으세요.</p>}
 
       {showList && current != null && (
         <div className="rounded-card border border-slate-300 bg-white p-2">
