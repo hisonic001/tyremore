@@ -351,3 +351,9 @@ export async function areaImage(id: number): Promise<string | null> {
   const [r] = await db.execute<{ image: string | null }>(sql`SELECT image FROM storage_area WHERE id = ${id}`);
   return r?.image ?? null;
 }
+
+/** ⭐ 창고 실사 화면 — 보관중 + 실사 전 전부 (매장 규모 수백 세트라 한 번에 넘겨 화면에서 거른다) */
+export async function countSets(): Promise<StorageRow[]> {
+  const raw = await db.execute<Raw>(sql`${BASE} WHERE s.status IN ('보관중','확인대기') ORDER BY s.storage_no NULLS LAST, s.stored_on LIMIT 1500`);
+  return raw.map(toRow);
+}
