@@ -77,6 +77,11 @@ async function main() {
       const d2 = await registerFoundSetTx(tx, { plate: "99테9993", owner: { kind: "손님", name: " ", phone: "" }, drop, storedOn: null, loc: null }, null);
       ok(d2.owner === "이름 모름 99테9993" && !d2.reused, `D2 이름 없이 등록 → 「${d2.owner}」`);
 
+      // D3. 「10월쯤」 — 날짜 칸은 그 달 가운데, 원문에 「대략」
+      const d3 = await registerFoundSetTx(tx, { plate: "", owner: { kind: "차량", vehicleId: a.vehicleId }, drop, storedOn: "2026-10-15", storedApprox: true, loc: null }, null);
+      const [r3] = await tx.execute<{ stored_on: string; source_text: string | null }>(sql`SELECT stored_on::text, source_text FROM tire_storage WHERE id = ${d3.id}`);
+      ok(r3.stored_on === "2026-10-15" && (r3.source_text ?? "").startsWith("맡긴 날 대략 2026-10"), `D3 달로 고르기 → ${r3.stored_on} 「${r3.source_text}」`);
+
       // E. 이미 있는 차 고르기
       const e = await registerFoundSetTx(tx, { plate: "", owner: { kind: "차량", vehicleId: a.vehicleId }, drop, storedOn: null, loc: null }, null);
       ok(e.reused && e.vehicleId === a.vehicleId, "E 이미 있는 차 고르기");
