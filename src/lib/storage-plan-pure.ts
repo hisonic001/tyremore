@@ -258,7 +258,22 @@ export function nextStackNo(sets: SetAtSlot[], areaId: number, slotId: string): 
 /** 「흰색 창고 › 안쪽 2 › 더미 3」 — 비면 「위치 없음」 */
 export function locationText(o: { areaName?: string | null; slotLabel?: string | null; stackNo?: number | null }): string {
   if (!o.areaName) return "위치 없음";
-  return [o.areaName, o.slotLabel, o.stackNo ? `더미 ${o.stackNo}` : null].filter(Boolean).join(" › ");
+  // 더미는 화면에서 뺐다(사장님 2026-11-18) — 옛 세트의 더미 번호가 DB 에 남아 있어도 안 보인다
+  return [o.areaName, o.slotLabel].filter(Boolean).join(" › ");
+}
+
+/**
+ * ⭐ 더미 없애기 (사장님 2026-11-18 — 「더미 구성하는 게 복잡 — 더 직관적이고 쉽게」, 세 안 중 「더미 없애기」 고름)
+ *   위치 = **구역 › 자리** 까지만. 화면은 더미를 묻지도 보이지도 않고, 새로 놓는 세트는 stack_no 에 이 값을 넣는다.
+ *   찾을 때는 그 자리에 가서 스티커 보관번호로 찾는다. 같은 자리 = 함께 있는 세트(섞여 쌓인 것 포함).
+ *   🔴 stack_no 칸·옛 번호는 지우지 않았다(되돌릴 길) — 「더미를 다시 고르게」 재제안 금지.
+ */
+export const ONE_STACK = 1;
+
+/** 같은 자리에 있는 세트들 (더미 구분 없이) */
+export function setsAtSlot<T extends SetAtSlot>(sets: T[], areaId: number | null, slotId: string | null): T[] {
+  if (areaId == null || !slotId) return [];
+  return sets.filter((s) => s.areaId === areaId && s.slotId === slotId);
 }
 
 /** 도면 고칠 때 — 세트가 든 자리를 지우면 안 된다(그 세트가 어디 있는지 잃는다) */

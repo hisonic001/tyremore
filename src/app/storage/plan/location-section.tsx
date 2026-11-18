@@ -9,9 +9,10 @@ import { setStorageLocation } from "@/lib/storage-area";
 import type { AreaInfo } from "@/lib/tire-storage-data";
 import { formatStorageNo } from "@/lib/tire-storage-pure";
 import { chosenText, LocationChooser, LocationFinder, type LocValue, type SetLite } from "./location";
+import { ONE_STACK, setsAtSlot } from "@/lib/storage-plan-pure";
 
 /**
- * 보관 상세의 「📍 위치」 (2026-11-18 3차) — 있으면 찾기(글자 크게 → 같은 더미 → 도면), 없으면 「위치 정하기」.
+ * 보관 상세의 「📍 위치」 (2026-11-18 3차) — 있으면 찾기(글자 크게 → 같은 자리 세트 → 도면 — 더미는 2026-11-18 뺐다), 없으면 「위치 정하기」.
  */
 export function LocationSection({
   id,
@@ -33,11 +34,11 @@ export function LocationSection({
   const router = useRouter();
   const [ask, confirmNode] = useConfirm();
   const [editing, setEditing] = useState(false);
-  const [v, setV] = useState<LocValue>({ areaId, slotId, stack: stackNo });
+  const [v, setV] = useState<LocValue>({ areaId, slotId, stack: slotId ? (stackNo ?? ONE_STACK) : null });
   const [err, setErr] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const has = areaId != null;
-  const mates = sets.filter((s) => s.areaId === areaId && s.slotId === slotId && s.stackNo === stackNo && slotId != null);
+  const mates = setsAtSlot(sets, areaId, slotId);
 
   if (editing)
     return (

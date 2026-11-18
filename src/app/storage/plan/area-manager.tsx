@@ -8,7 +8,7 @@ import { useConfirm } from "@/components/ui/confirm";
 import { addArea, hideArea, renameArea, saveAreaPlan, setAreaImage } from "@/lib/storage-area";
 import type { AreaInfo } from "@/lib/tire-storage-data";
 import { formatStorageNo } from "@/lib/tire-storage-pure";
-import { slotLabel, stacksIn } from "@/lib/storage-plan-pure";
+import { setsAtSlot, slotLabel } from "@/lib/storage-plan-pure";
 import type { SetLite } from "./location";
 import { areaImageUrl, PlanCanvas, toPlan } from "./plan-canvas";
 import { PlanEditor } from "./plan-editor";
@@ -148,23 +148,22 @@ export function AreaManager({
                 <p className="text-lg font-extrabold">
                   {sel.name} › {slotLabel(plan, slotId)}
                 </p>
-                {stacksIn(sets, sel.id, slotId).map((st) => (
-                  <div key={st.no} className="mt-2">
-                    <p className="font-bold">
-                      더미 {st.no} · {st.sets.length}세트 · {st.tires}본
-                    </p>
-                    <ul className="text-sm">
-                      {st.sets.map((x) => (
-                        <li key={x.id}>
-                          <a href={`/storage/${x.id}`} className="underline underline-offset-2">
-                            #{formatStorageNo(x.no)} {x.plate} {x.owner} · {x.describe}
-                          </a>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-                {stacksIn(sets, sel.id, slotId).length === 0 && <p className="mt-1 text-sm text-slate-600">비어 있는 자리입니다.</p>}
+                {setsAtSlot(sets, sel.id, slotId).length > 0 ? (
+                  <ul className="mt-2 text-sm">
+                    <li className="font-bold">
+                      {setsAtSlot(sets, sel.id, slotId).length}세트 · {setsAtSlot(sets, sel.id, slotId).reduce((t, x) => t + x.qty, 0)}본
+                    </li>
+                    {setsAtSlot(sets, sel.id, slotId).map((x) => (
+                      <li key={x.id}>
+                        <a href={`/storage/${x.id}`} className="underline underline-offset-2">
+                          #{formatStorageNo(x.no)} {x.plate} {x.owner} · {x.describe}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-1 text-sm text-slate-600">비어 있는 자리입니다.</p>
+                )}
               </div>
             )}
           </>
