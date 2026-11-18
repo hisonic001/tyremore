@@ -4,11 +4,10 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Notice } from "@/components/ui/notice";
 import { useConfirm } from "@/components/ui/confirm";
 import { dropSet, placeHere, undoPlace, type PrevLoc } from "@/lib/storage-area";
-import { dismissCandidate, updateStorage } from "@/lib/tire-storage";
+import { dismissCandidate } from "@/lib/tire-storage";
 import type { AreaInfo } from "@/lib/tire-storage-data";
-import { formatStorageNo, labelKind, sizeHints, type StorageDropInput } from "@/lib/tire-storage-pure";
-import { Button } from "@/components/ui/button";
-import { DropFields } from "../drop-fields";
+import { formatStorageNo, labelKind } from "@/lib/tire-storage-pure";
+import { SetEditPanel } from "./set-edit-panel";
 import { slotLabel, slotsOf } from "@/lib/storage-plan-pure";
 import { chosenText, LocationChooser, type LocValue, type SetLite } from "./location";
 import { toPlan } from "./plan-canvas";
@@ -64,8 +63,7 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
   const [stackCount, setStackCount] = useState(1);
   const [stackBusy, setStackBusy] = useState(false);
   /** 두 번 톡톡으로 연 세트 고치기 (2026-11-18) */
-  const [editing, setEditing] = useState<{ id: number; drop: StorageDropInput } | null>(null);
-  const [editErr, setEditErr] = useState<string | null>(null);
+  const [editId, setEditId] = useState<number | null>(null);
   const [, start] = useTransition();
   const [ask, confirmNode] = useConfirm();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -293,34 +291,8 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
     });
   };
 
-  /** ⭐ 더미 덩어리 두 번 톡톡 → 내용 고치기 (사장님 2026-11-18). 정본 updateStorage(상세 화면 「고치기」와 같은 것) */
-  const openEdit = (id: number) => {
-    const s = sets.find((x) => x.id === id);
-    if (!s) return;
-    setEditErr(null);
-    setEditing({
-      id,
-      drop: { kind: (s.kind as StorageDropInput["kind"]) ?? null, brand: s.brand ?? "", size: s.size ?? "", qty: s.qty, dot: s.dot ?? "", memo: s.memo ?? "" },
-    });
-  };
-  const saveEdit = () => {
-    if (!editing) return;
-    const e = editing;
-    start(async () => {
-      const r = await updateStorage(e.id, e.drop);
-      if (!r.ok) return setEditErr(r.error);
-      const d = e.drop;
-      setSets((all) =>
-        all.map((x) =>
-          x.id === e.id
-            ? { ...x, kind: d.kind, brand: d.brand, size: d.size, qty: d.qty, dot: d.dot, memo: d.memo, describe: [d.brand, d.size, `${d.qty}본`].filter(Boolean).join(" ") }
-            : x,
-        ),
-      );
-      setEditing(null);
-      setMsg({ tone: "success", text: "고쳤습니다 — 스티커 내용이 바뀌었다면 다시 뽑아 주세요" });
-    });
-  };
+  /** ⭐ 더미 덩어리 두 번 톡톡 → 전부 고치기 (2026-11-18 「다 수정 가능하게」 — set-edit-panel.tsx) */
+  const openEdit = (id: number) => setEditId(id);
 
   const notHere = async (s: SetLite) => {
     if (!(await ask({ title: `${s.plate ?? ""} ${s.owner} — 창고에 없나요?`, body: "실사 후보에서 뺍니다(기록은 남습니다).", confirmLabel: "창고에 없음", tone: "danger" }))) return;
@@ -397,27 +369,25 @@ export function WarehouseCount({ areas, sets: initial, today }: { areas: AreaInf
             </div>
           )}
 
-          {/* 두 번 톡톡 → 고치기 */}
-          {editing && (() => {
-            const s = sets.find((x) => x.id === editing.id);
-            return (
-              <div className="mt-3 space-y-3 rounded-card border-2 border-amber-500 bg-amber-50 p-3">
-                <p className="text-lg font-extrabold">
-                  #{formatStorageNo(s?.no ?? null)} {s?.plate ?? ""} {s?.owner ?? ""} — 내용 고치기
-                </p>
-                <DropFields value={editing.drop} onChange={(drop) => setEditing({ ...editing, drop })} sizeHints={sizeHints(s?.size, s?.lastFittedSize)} />
-                {editErr && <Notice tone="error">{editErr}</Notice>}
-                <div className="flex gap-2">
-                  <Button variant="ghost" onClick={() => setEditing(null)}>
-                    닫기
-                  </Button>
-                  <Button size="lg" className="flex-1" onClick={saveEdit}>
-                    고친 내용 저장
-                  </Button>
-                </div>
-              </div>
-            );
-          })()}
+          {/* 두 번 톡톡 → 전부 고치기 */}
+          {editId != null &&
+            (() => {
+              const es = sets.find((x) => x.id === editId);
+              return es ? (
+                <SetEditPanel
+                  key={editId}
+                  set={es}
+                  today={today}
+                  onClose={() => setEditId(null)}
+                  onPatch={(patch) => setSets((all) => all.map((x) => (x.id === editId ? { ...x, ...patch } : x)))}
+                  onGone={(m) => {
+                    setSets((all) => all.filter((x) => x.id !== editId));
+                    setEditId(null);
+                    setMsg({ tone: "success", text: m });
+                  }}
+                />
+              ) : null;
+            })()}
 
           {/* 찾기 */}
           <div className="mt-3 flex gap-2">
