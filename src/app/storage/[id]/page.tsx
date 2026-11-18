@@ -7,7 +7,8 @@ import { StatusPill } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
 import { ListRow } from "@/components/ui/list-row";
 import { Notice } from "@/components/ui/notice";
-import { storageDetail } from "@/lib/tire-storage-data";
+import { areaPins, listAreas, storageDetail } from "@/lib/tire-storage-data";
+import { LocationSection } from "../plan/location-section";
 import { formatStorageNo } from "@/lib/tire-storage-pure";
 import { formatPhone } from "@/lib/normalize";
 import { shortDate } from "@/lib/tire-age";
@@ -97,6 +98,22 @@ export default async function StorageDetailPage({ params, searchParams }: { para
         </dl>
         {d.sourceText && <p className="mt-3 rounded-control bg-slate-50 p-2 text-[13px] text-slate-600">원래 판매 메모: {d.sourceText}</p>}
       </div>
+
+      {/* ⭐ 위치 (2026-11-18) — 배치도 → 구역 도면 위 점. 섞인 더미는 같은 점 */}
+      {(d.status === "보관중" || d.status === "확인대기") && (
+        <section className="mt-3 rounded-card border border-slate-200 bg-white p-3">
+          <h2 className="text-sm font-semibold text-slate-600">📍 위치{d.areaName ? ` — ${d.areaName}` : " — 아직 안 찍음"}</h2>
+          <LocationSection
+            id={d.id}
+            areaId={d.areaId}
+            x={d.pinX}
+            y={d.pinY}
+            areas={await listAreas()}
+            pins={await areaPins()}
+            startOpen={sp.new === "1" && d.areaId == null}
+          />
+        </section>
+      )}
 
       {d.no != null && d.status === "보관중" && (
         <ButtonLink href={`/print/storage?ids=${d.id}`} variant="secondary" size="lg" className="mt-3">

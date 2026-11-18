@@ -28,6 +28,7 @@ export async function VehicleStorageBlock({ vehicleId, customerId }: { vehicleId
           <span className="min-w-0 flex-1">
             <span className="block truncate font-medium">{r.describe || "내용 없음"}</span>
             <span className="block text-xs text-slate-500">
+              {r.areaName ? `📍${r.areaName} · ` : ""}
               {shortDate(r.storedOn)}부터{r.vehicleId !== vehicleId && r.plateNo ? ` · ${r.plateNo}에서 뺌` : ""}
             </span>
           </span>

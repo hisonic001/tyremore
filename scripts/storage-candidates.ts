@@ -37,13 +37,16 @@ async function main() {
     has_row: boolean;
   }>(sql`
     SELECT q.id, q.quote_no, to_char(q.work_date, 'YYYY-MM-DD') work_date,
-           COALESCE(q.customer_id, v.customer_id) customer_id, q.vehicle_id,
-           c.name customer_name, v.plate_no,
+           COALESCE(v.customer_id, q.customer_id) AS customer_id, q.vehicle_id,
+           c.name AS customer_name, v.plate_no,
            concat_ws(' / ', q.payment_memo, (SELECT string_agg(i.memo, ' / ' ORDER BY i.id) FROM quote_item i WHERE i.quote_id = q.id AND i.memo LIKE '%보관%')) memos,
-           EXISTS (SELECT 1 FROM tire_storage t WHERE t.stored_quote_id = q.id) has_row
+           -- 이미 만든 판매 · 또는 같은 차에 ±7일 안 보관/후보가 있으면(손 등록 등) 건너뛴다 — 두 번 생기지 않게 (2026-11-18)
+           (EXISTS (SELECT 1 FROM tire_storage t WHERE t.stored_quote_id = q.id)
+            OR EXISTS (SELECT 1 FROM tire_storage t WHERE t.vehicle_id = q.vehicle_id AND t.status IN ('보관중','확인대기')
+                        AND t.stored_on BETWEEN q.work_date - 7 AND q.work_date + 7)) AS has_row
     FROM quote q
     LEFT JOIN vehicle v ON v.id = q.vehicle_id
-    LEFT JOIN customer c ON c.id = COALESCE(q.customer_id, v.customer_id)
+    LEFT JOIN customer c ON c.id = COALESCE(v.customer_id, q.customer_id)
     WHERE q.status = '성사' AND q.work_date >= ${from}::date
       AND (q.payment_memo LIKE '%보관%' OR EXISTS (SELECT 1 FROM quote_item i WHERE i.quote_id = q.id AND i.memo LIKE '%보관%'))
     ORDER BY q.work_date, q.id
@@ -115,9 +118,9 @@ async function main() {
   await db.transaction(async (tx) => {
     for (const c of cands) {
       await tx.execute(sql`
-        INSERT INTO tire_storage (storage_no, status, customer_id, vehicle_id, kind, brand, size, qty, stored_on, stored_quote_id, source_text, release_note)
+        INSERT INTO tire_storage (storage_no, status, customer_id, vehicle_id, kind, brand, size, qty, stored_on, stored_quote_id, source_text, release_note, origin)
         VALUES (NULL, '확인대기', ${c.customerId}, ${c.vehicleId}, ${c.set.kind}, ${c.set.brand}, ${c.set.size}, ${c.set.qty},
-                ${c.workDate}::date, ${c.saleId}, ${c.memo}, ${c.note})`);
+                ${c.workDate}::date, ${c.saleId}, ${c.memo}, ${c.note}, '실사')`);
       made++;
     }
   });

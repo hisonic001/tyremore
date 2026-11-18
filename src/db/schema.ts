@@ -24,6 +24,7 @@ import {
   numeric,
   pgTable,
   primaryKey,
+  real,
   text,
   timestamp,
   uniqueIndex,
@@ -1837,6 +1838,22 @@ export const saleDraft = pgTable("sale_draft", {
  *   🔴 보관번호는 재사용하지 않는다 — 찾아간 자리가 비어도 새 세트는 맨 끝(tire-storage-db.nextStorageNo).
  *   보관료는 여기 없다 — 받을 땐 판매에 「보관료」(S001/1194) 줄을 넣는다(손님마다 다름).
  */
+/**
+ * ⭐ 보관 구역 도면 (2026-11-18) — 배치도 한 줄(is_site) + 구역마다 한 줄. 정본 생성 scripts/add-tire-storage.ts
+ *   plan = 칸(사각형) 목록 — 앱이 기본 도면을 그려 두고 사장님이 손가락으로 고친다 (storage-plan-pure.ts).
+ *   image = 배경 사진(선택, 데이터 URL ≤ 900KB) — /storage/area/[id]/image 로 내보낸다.
+ */
+export const storageArea = pgTable("storage_area", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  name: text("name").notNull(),
+  isSite: boolean("is_site").notNull().default(false),
+  plan: jsonb("plan").$type<Record<string, unknown>>().notNull(),
+  image: text("image"),
+  sort: integer("sort").notNull().default(0),
+  isActive: boolean("is_active").notNull().default(true),
+  updatedAt,
+});
+
 export const tireStorage = pgTable(
   "tire_storage",
   {
@@ -1865,6 +1882,15 @@ export const tireStorage = pgTable(
     releaseNote: text("release_note"),
     /** 실사 후보의 원래 판매 메모 */
     sourceText: text("source_text"),
+    /**
+     * ⭐ 어디서 왔나 (2026-11-18) — 판매(판매 저장·카드로 맡김 → 판매 취소 때 같이 되돌림) · 등록(손으로) ·
+     *    실사(옛 메모·경리 명단). 🔴 판매 취소·대상 바꾸기·예약 전환은 「판매」만 건드린다 — 창고에서 확인한 세트가 지워지지 않게.
+     */
+    origin: text("origin").notNull().default("판매"),
+    /** ⭐ 위치 (2026-11-18) — 구역 도면 위의 점(0~1). 같은 좌표 = 같은 더미(섞여 쌓인 여러 세트) */
+    areaId: bigint("area_id", { mode: "number" }).references(() => storageArea.id),
+    pinX: real("pin_x"),
+    pinY: real("pin_y"),
     createdBy: bigint("created_by", { mode: "number" }).references(() => appUser.id),
     releasedBy: bigint("released_by", { mode: "number" }).references(() => appUser.id),
     createdAt,
@@ -1876,6 +1902,8 @@ export const tireStorage = pgTable(
     check("tire_storage_kind_needed", sql`${t.kind} IS NOT NULL OR ${t.status} IN ('확인대기','제외')`),
     check("tire_storage_no_needed", sql`${t.storageNo} IS NOT NULL OR ${t.status} IN ('확인대기','제외')`),
     check("tire_storage_qty", sql`${t.qty} BETWEEN 1 AND 8`),
+    check("tire_storage_origin", sql`${t.origin} IN ('판매','등록','실사')`),
+    index("idx_tire_storage_area").on(t.areaId).where(sql`${t.status} = '보관중'`),
     index("idx_tire_storage_customer").on(t.customerId).where(sql`${t.status} = '보관중'`),
     index("idx_tire_storage_vehicle").on(t.vehicleId),
     index("idx_tire_storage_stored_quote").on(t.storedQuoteId),

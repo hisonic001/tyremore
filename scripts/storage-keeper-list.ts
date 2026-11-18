@@ -172,9 +172,9 @@ async function main() {
           WHERE id = ${p.storageId} AND status = '확인대기'`);
       } else if (p.act === "새로") {
         await tx.execute(sql`
-          INSERT INTO tire_storage (storage_no, status, customer_id, vehicle_id, kind, brand, size, qty, memo, stored_on, stored_quote_id, source_text, release_note)
+          INSERT INTO tire_storage (storage_no, status, customer_id, vehicle_id, kind, brand, size, qty, memo, stored_on, stored_quote_id, source_text, release_note, origin)
           VALUES (NULL, '확인대기', ${p.customerId}, ${p.vehicleId}, '일반', ${p.e.brand}, ${p.e.size}, ${p.e.qty}, ${p.e.memo},
-                  ${p.e.day}::date, ${p.quoteId ?? null}, ${p.e.clean}, '경리 명단(11/12)에 있음')`);
+                  ${p.e.day}::date, ${p.quoteId ?? null}, ${p.e.clean}, '경리 명단(11/12)에 있음', '실사')`);
       }
     }
     for (const m of notListed) {

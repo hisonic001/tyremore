@@ -19,8 +19,10 @@ import {
   cleanDrop,
   formatLabelSize,
   LABEL_PAPER_KEY,
+  LABEL_PER_KEY,
   LABEL_SIZE_KEY,
   parseLabelPaper,
+  parseLabelPer,
   parseLabelSize,
   validateDrop,
   type SaleStorageInput,
@@ -56,7 +58,7 @@ export async function registerStorage(input: { vehicleId: number; drop: StorageD
   const storedOn = /^\d{4}-\d{2}-\d{2}$/.test(input.storedOn ?? "") ? input.storedOn! : ymdKst(new Date());
   try {
     const r = await db.transaction((tx) =>
-      insertStoredSet(tx, { customerId, vehicleId: input.vehicleId, drop: input.drop, storedOn, userId: s?.uid ?? null }),
+      insertStoredSet(tx, { customerId, vehicleId: input.vehicleId, drop: input.drop, storedOn, userId: s?.uid ?? null, origin: "등록" }),
     );
     touch(input.vehicleId);
     return { ok: true, ...r };
@@ -123,6 +125,15 @@ export async function updateStorage(id: number, drop: StorageDropInput): Promise
   return { ok: true };
 }
 
+/** 스티커 — 타이어마다 한 장 / 한 세트에 한 장 */
+export async function setLabelPer(per: string): Promise<Result<{ per: string }>> {
+  if (!(await hasPerm("sale"))) return { ok: false, error: NO_SALE };
+  const v = parseLabelPer(per);
+  await setSetting(LABEL_PER_KEY, v);
+  revalidatePath("/print/storage");
+  return { ok: true, per: v };
+}
+
 /** 스티커 용지 — 일반 프린터(A4) / 라벨프린터 */
 export async function setLabelPaper(paper: string): Promise<Result<{ paper: string }>> {
   if (!(await hasPerm("sale"))) return { ok: false, error: NO_SALE };
@@ -187,7 +198,8 @@ export async function dismissCandidate(id: number): Promise<Result> {
 /** 판매 화면 — 차를 고르면 그 차의 보관 세트 */
 export async function findStoredSets(vehicleId: number | null, customerId: number | null): Promise<StorageRow[]> {
   if (!(await hasPerm("sale"))) return [];
-  return storageForVehicle(vehicleId, customerId);
+  // 실사 전 후보도 보인다(주황) — 실사가 끝나기 전에 손님이 오셔도 찾아감을 적을 수 있게 (2026-11-18)
+  return storageForVehicle(vehicleId, customerId, false, true);
 }
 
 /** 정비 내역 카드 — 이 판매에 걸린 보관 (펼칠 때 부른다) */
@@ -259,10 +271,13 @@ export async function moveStorage(id: number, vehicleId: number): Promise<Result
   if (problem) return { ok: false, error: problem };
   const stamp = new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" }).slice(5).replace("-", "/");
   const trace = `${stamp} 차 바꿈 ${t.plate ?? "차량 없음"} → ${v.plate}`;
-  await db.execute(sql`
+  // 옮기면 옛 판매와 끊는다(origin 판매 → 등록) — 그 판매를 취소해도 옮긴 세트는 그대로 (검토 갈래 발견 2026-11-18)
+  const moved = await db.execute(sql`
     UPDATE tire_storage SET vehicle_id = ${vehicleId}, customer_id = ${v.customer_id},
+           origin = CASE WHEN origin = '판매' THEN '등록' ELSE origin END,
            source_text = left(COALESCE(source_text || ' · ', '') || ${trace}, 900), updated_at = now()
-    WHERE id = ${id} AND status IN ('확인대기','보관중')`);
+    WHERE id = ${id} AND status IN ('확인대기','보관중') RETURNING id`);
+  if (!moved.length) return { ok: false, error: "그 사이 상태가 바뀌었습니다 — 새로 고침해 보세요" };
   touch(vehicleId);
   if (t.vehicle_id) revalidatePath(`/vehicle/${t.vehicle_id}`);
   return { ok: true, plate: v.plate };
@@ -283,6 +298,9 @@ export async function renumberStorage(id: number, newNo: number): Promise<Result
       if (Number(t.storage_no) === newNo) throw new Error("지금 번호와 같습니다");
       const [used] = await tx.execute<{ status: string }>(sql`SELECT status FROM tire_storage WHERE storage_no = ${newNo}`);
       if (used) throw new Error(`#${String(newNo).padStart(4, "0")} 는 이미 쓴 번호입니다(${used.status}) — 비어 있는 번호로 해 주세요`);
+      // 지금 가장 큰 번호보다 큰 번호로는 못 간다 — 잘못 치면(1200) 다음 새 번호가 1201부터 시작해 버린다
+      const [mx] = await tx.execute<{ m: number }>(sql`SELECT COALESCE(MAX(storage_no), 0)::int AS m FROM tire_storage`);
+      if (newNo > Number(mx.m)) throw new Error(`#${String(Number(mx.m)).padStart(4, "0")} 보다 큰 번호로는 바꿀 수 없습니다 — 새 번호는 저절로 매겨집니다`);
       const stamp = new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" }).slice(5).replace("-", "/");
       await tx.execute(sql`
         UPDATE tire_storage SET storage_no = ${newNo},

@@ -502,6 +502,8 @@ export async function saveSale(
       break;
     }
   }
+  // 보관 문제(남의 세트·이미 나간 세트 등)는 다시 눌러도 같다 — 까닭만 그대로 (2026-11-18)
+  if (/보관|실사 전 후보|자리표시/.test(lastErr)) return { ok: false, error: `저장하지 못했습니다 — ${lastErr.slice(0, 160)}` };
   return { ok: false, error: `저장하지 못했습니다 — 다시 한 번 눌러 주세요 (${lastErr.slice(0, 120)})` };
 }
 

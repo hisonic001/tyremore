@@ -84,9 +84,4 @@ export function VehiclePicker({
   );
 }
 
-/** 메모에 적힌 차량번호 중 지금 차와 다른 것 */
-export function otherPlatesIn(text: string | null | undefined, current: string | null | undefined): string[] {
-  const norm = (p: string) => p.replace(/\s/g, "");
-  const cur = norm(current ?? "");
-  return [...new Set([...(text ?? "").matchAll(/\d{2,3}\s?[가-힣]\s?\d{4}/g)].map((m) => norm(m[0])))].filter((p) => p !== cur).slice(0, 3);
-}
+export { otherPlatesIn } from "@/lib/tire-storage-pure";

@@ -7,11 +7,13 @@ import { ButtonLink } from "@/components/ui/button";
 import { ChipLink } from "@/components/ui/chip";
 import { EmptyState } from "@/components/ui/empty";
 import { Notice } from "@/components/ui/notice";
-import { contactRows, listStorage, storageCounts, type StorageRow, type StorageView } from "@/lib/tire-storage-data";
+import { areaPins, contactRows, listAreas, listStorage, storageCounts, type StorageRow, type StorageView } from "@/lib/tire-storage-data";
 import { contactKindFor, contactTargets, formatStorageNo, type StorageKind } from "@/lib/tire-storage-pure";
 import { formatPhone } from "@/lib/normalize";
 import { shortDate } from "@/lib/tire-age";
 import { AuditList } from "./audit";
+import { PlaceList } from "./plan/place-list";
+import { AreaManager } from "./plan/area-manager";
 import Link from "@/lib/link";
 
 export const dynamic = "force-dynamic";
@@ -19,21 +21,24 @@ export const dynamic = "force-dynamic";
 /**
  * ⭐ 타이어 보관 (D-42, 사장님 착수 지시 2026-11-17)
  *
- *   보관번호가 곧 창고 자리다 — 번호 순서로 쌓는다(사장님 결정). 차량번호·전화·이름·보관번호·규격으로 찾는다.
- *   탭: 보관 중 · 실사(11월 메모 후보 확인) · 연락 명단(환절기) · 지난 기록.
+ *   번호 = 누구 것, 위치 = 구역 도면 위의 점 (2026-11-18 개정 — 「찾는 게 문제」). 차량번호·전화·이름·보관번호·규격으로 찾는다.
+ *   탭: 보관 중 · 실사 · 붙이기(위치 찍기) · 구역(도면) · 연락 명단 · 지난 기록.
  */
-type Tab = "보관중" | "실사" | "연락" | "지난";
+type Tab = "보관중" | "실사" | "붙이기" | "구역" | "연락" | "지난";
+
+/** 서버는 UTC — 달은 한국 시각으로 (8/1·1/1 아침 9시 전 어긋남 방지) */
+const kstMonth = () => Number(new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" }).slice(5, 7));
 
 export default async function StoragePage({ searchParams }: { searchParams: Promise<{ q?: string; tab?: string; kind?: string }> }) {
   await requirePerm("sale");
   const sp = await searchParams;
-  const tab: Tab = (["보관중", "실사", "연락", "지난"] as const).find((t) => t === sp.tab) ?? "보관중";
+  const tab: Tab = (["보관중", "실사", "붙이기", "구역", "연락", "지난"] as const).find((t) => t === sp.tab) ?? "보관중";
   const q = (sp.q ?? "").trim().slice(0, 40);
   const counts = await storageCounts();
 
   const href = (t: Tab, extra: Record<string, string> = {}) => {
     const p = new URLSearchParams({ tab: t, ...extra });
-    if (q && t !== "연락") p.set("q", q);
+    if (q && t !== "연락" && t !== "구역") p.set("q", q);
     return `/storage?${p}`;
   };
 
@@ -58,6 +63,16 @@ export default async function StoragePage({ searchParams }: { searchParams: Prom
         )}
       </p>
 
+      {/* ⭐ 스티커 모아 인쇄 (2026-11-18) — 번호 범위로 한 번에 */}
+      <form action="/print/storage" target="_blank" className="mt-2 flex flex-wrap items-center gap-1.5 text-sm text-slate-600">
+        스티커 모아 인쇄
+        <input name="from" inputMode="numeric" placeholder="4" className="tabular w-16 rounded-control border border-slate-300 px-2 py-2" />~
+        <input name="to" inputMode="numeric" placeholder="55" className="tabular w-16 rounded-control border border-slate-300 px-2 py-2" />
+        <button type="submit" className="min-h-11 rounded-control border border-slate-400 bg-white px-3 font-medium text-slate-800">
+          인쇄 화면
+        </button>
+      </form>
+
       <div className="mt-3 flex flex-wrap gap-2">
         <ChipLink href={href("보관중")} active={tab === "보관중"}>
           보관 중
@@ -67,6 +82,12 @@ export default async function StoragePage({ searchParams }: { searchParams: Prom
             실사 {counts.확인대기}
           </ChipLink>
         )}
+        <ChipLink href={href("붙이기")} active={tab === "붙이기"}>
+          📍 붙이기
+        </ChipLink>
+        <ChipLink href={href("구역")} active={tab === "구역"}>
+          🗺 구역
+        </ChipLink>
         <ChipLink href={href("연락")} active={tab === "연락"}>
           연락 명단
         </ChipLink>
@@ -75,7 +96,7 @@ export default async function StoragePage({ searchParams }: { searchParams: Prom
         </ChipLink>
       </div>
 
-      {tab !== "연락" && (
+      {tab !== "연락" && tab !== "구역" && (
         <form action="/storage" className="mt-3 flex gap-2">
           <input type="hidden" name="tab" value={tab} />
           <input
@@ -91,9 +112,13 @@ export default async function StoragePage({ searchParams }: { searchParams: Prom
       )}
 
       {tab === "연락" ? (
-        <ContactTab kind={sp.kind === "스노" || sp.kind === "일반" ? sp.kind : contactKindFor(new Date().getMonth() + 1)} canExport={await hasPerm("customer")} />
+        <ContactTab kind={sp.kind === "스노" || sp.kind === "일반" ? sp.kind : contactKindFor(kstMonth())} canExport={await hasPerm("customer")} />
       ) : tab === "실사" ? (
         <AuditTab q={q} />
+      ) : tab === "붙이기" ? (
+        <PlaceTab q={q} />
+      ) : tab === "구역" ? (
+        <AreaManager areas={await listAreas()} pins={await areaPins()} canEdit={await hasPerm("sale_edit")} />
       ) : (
         <ListTab view={tab === "지난" ? "지난" : "보관중"} q={q} />
       )}
@@ -113,10 +138,26 @@ function StorageListRow({ r }: { r: StorageRow }) {
       href={`/storage/${r.id}`}
       icon={<span className="tabular text-[11px] font-bold text-slate-700">{formatStorageNo(r.no)}</span>}
       title={`${r.plateNo ?? "차량 없음"} · ${r.ownerName}`}
-      sub={[r.describe, r.memo].filter(Boolean).join(" · ") || "내용 없음"}
+      sub={[r.areaName ? `📍${r.areaName}` : null, r.describe, r.memo].filter(Boolean).join(" · ") || "내용 없음"}
       right={past ? <StatusPill tone={r.status === "찾아감" ? "success" : "neutral"}>{r.status}</StatusPill> : kindPill(r.kind)}
       rightSub={past ? `${shortDate(r.releasedOn ?? r.storedOn)}` : `${shortDate(r.storedOn)}~`}
     />
+  );
+}
+
+async function PlaceTab({ q }: { q: string }) {
+  const { rows, more } = await listStorage({ view: "위치없음", q });
+  const areas = await listAreas();
+  const pins = await areaPins();
+  return (
+    <section className="mt-3">
+      <Notice tone="info">
+        스티커를 붙이면서 세트마다 <strong>📍 위치 찍기</strong> → 건물 → 도면에서 그 자리를 누르세요. 다른 세트와 섞여 쌓였으면 그 점을 누르면 같은 더미로 묶입니다.
+        도면이 실제와 다르면 「🗺 구역」 탭에서 고치세요.
+      </Notice>
+      {more && <Notice tone="warn">300세트까지만 보여 줍니다 — 차량번호로 찾아 주세요</Notice>}
+      <PlaceList rows={rows} areas={areas} pins={pins} />
+    </section>
   );
 }
 
@@ -158,7 +199,7 @@ async function AuditTab({ q }: { q: string }) {
       </Notice>
       {more && <Notice tone="warn">300건까지만 보여 줍니다</Notice>}
       {rows.length ? (
-        <AuditList rows={rows} />
+        <AuditList rows={rows} areas={await listAreas()} pins={await areaPins()} />
       ) : (
         <EmptyState emoji="✅" title="확인할 후보가 없습니다" hint="실사가 끝났거나, 아직 후보를 만들지 않았습니다" />
       )}

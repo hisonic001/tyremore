@@ -228,7 +228,7 @@ export async function convertToReservation(
   /* 🔴 보관이 걸린 판매 (D-42) — 예약은 「아직 시공 안 함」이라 맡김·찾아감과 모순된다 */
   const [st] = await db.execute<{ n: number }>(sql`
     SELECT count(*)::int n FROM tire_storage
-    WHERE (stored_quote_id = ${quoteId} AND status = '보관중') OR (released_quote_id = ${quoteId} AND status = '찾아감')`);
+    WHERE (stored_quote_id = ${quoteId} AND origin = '판매' AND status = '보관중') OR (released_quote_id = ${quoteId} AND status = '찾아감')`);
   if (Number(st?.n ?? 0) > 0) {
     return { ok: false, error: "이 판매에 타이어 보관(맡김·찾아감)이 걸려 있어 예약으로 바꿀 수 없습니다 — 판매를 취소하고 예약으로 다시 등록해 주세요" };
   }

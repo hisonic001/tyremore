@@ -26,6 +26,20 @@ export type LabelPaper = "a4" | "label";
 export function parseLabelPaper(raw: string | null | undefined): LabelPaper {
   return raw === "label" ? "label" : "a4";
 }
+/**
+ * 한 세트에 한 장(set) / **타이어마다 한 장(tire, 기본)** — 사장님 2026-11-18: 「한 대분씩이 아니라 8개 2대분, 6개(4+2)처럼
+ * 섞여 있음」 → 섞인 더미에서도 어느 타이어가 누구 것인지 보이게 본수만큼 뽑는다.
+ */
+export const LABEL_PER_KEY = "storage_label_per";
+export type LabelPer = "tire" | "set";
+export function parseLabelPer(raw: string | null | undefined): LabelPer {
+  return raw === "set" ? "set" : "tire";
+}
+/** 타이어마다 한 장 — 세트를 본수만큼 늘리고 「1/4」 를 붙인다 */
+export function expandPerTire<T extends { id: number; qty: number }>(sets: T[]): (T & { idx: number; key: string })[] {
+  return sets.flatMap((s) => Array.from({ length: Math.max(1, Math.min(8, s.qty)) }, (_, i) => ({ ...s, idx: i + 1, key: `${s.id}-${i + 1}` })));
+}
+
 /** 라벨에 쓰는 종류 이름 — 사장님 표현 「일반 / 윈터」 */
 export function labelKind(kind: string | null | undefined): string {
   return kind === "스노" ? "윈터" : kind === "일반" ? "일반" : "";
@@ -401,4 +415,11 @@ export function contactTargets(rows: ContactRow[], kind: StorageKind): ContactTa
     by.set(r.customerId, t);
   }
   return [...by.values()].sort((a, b) => a.oldest.localeCompare(b.oldest) || a.name.localeCompare(b.name));
+}
+
+/** 메모에 적힌 차량번호 중 지금 차와 다른 것 — 「84고0717보관 이 차량번호로 바꿔 적어서 붙이기」 */
+export function otherPlatesIn(text: string | null | undefined, current: string | null | undefined): string[] {
+  const norm = (p: string) => p.replace(/\s/g, "");
+  const cur = norm(current ?? "");
+  return [...new Set([...(text ?? "").matchAll(/\d{2,3}\s?[가-힣]\s?\d{4}/g)].map((m) => norm(m[0])))].filter((p) => p !== cur).slice(0, 3);
 }
