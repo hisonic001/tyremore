@@ -275,3 +275,44 @@ export function imageProblem(dataUrl: string | null | undefined): string | null 
   if (dataUrl.length > 900_000) return "사진이 너무 큽니다 — 다시 골라 주세요";
   return null;
 }
+
+/* ------------------------------------------------------------------
+ * 여러 칸 한꺼번에 (사장님 2026-11-18 — 「Ctrl 누르고 칸 누르면 다중선택, 선택된 채 Ctrl 끌면 같은 크기로 복사되어 새로 생성」)
+ * ---------------------------------------------------------------- */
+
+/** 묶음이 도면 밖으로 안 나가게 움직일 수 있는 만큼만 (모양이 찌그러지지 않게 묶음째로 막는다) */
+export function clampGroupDelta(shapes: PlanShape[], dx: number, dy: number, planH: number): { dx: number; dy: number } {
+  if (!shapes.length) return { dx: 0, dy: 0 };
+  const minX = Math.min(...shapes.map((s) => s.x));
+  const maxX = Math.max(...shapes.map((s) => s.x + s.w));
+  const minY = Math.min(...shapes.map((s) => s.y));
+  const maxY = Math.max(...shapes.map((s) => s.y + s.h));
+  return { dx: snap(clamp(dx, -minX, PLAN_W - maxX)), dy: snap(clamp(dy, -minY, planH - maxY)) };
+}
+
+/** 여러 칸을 같이 옮기기 — orig 는 끌기 시작할 때의 칸들 */
+export function moveGroup(orig: PlanShape[], dx: number, dy: number, planH: number): PlanShape[] {
+  const d = clampGroupDelta(orig, dx, dy, planH);
+  return orig.map((s) => fitShape({ ...s, x: s.x + d.dx, y: s.y + d.dy }, planH));
+}
+
+/**
+ * 고른 칸들을 같은 크기로 복사 — 새 id, 자리(block)는 「새 자리 N」으로 이름이 겹치지 않게,
+ * 건물의 「들어갈 구역」은 복사하지 않는다(한 구역이 두 건물에 걸리지 않게). 80칸 넘으면 넘는 것은 버린다(저장 한도).
+ */
+export function cloneShapes(plan: Plan, ids: string[], dx = 0, dy = 0): { plan: Plan; newIds: string[] } {
+  const src = plan.shapes.filter((s) => ids.includes(s.id));
+  const room = Math.max(0, 80 - plan.shapes.length);
+  const d = clampGroupDelta(src, dx, dy, plan.h);
+  let next: Plan = plan;
+  const newIds: string[] = [];
+  for (const s of src.slice(0, room)) {
+    const c: PlanShape = fitShape(
+      { id: newShapeId(), kind: s.kind, x: s.x + d.dx, y: s.y + d.dy, w: s.w, h: s.h, label: s.kind === "block" ? nextSlotName(next) : s.label },
+      plan.h,
+    );
+    next = { ...next, shapes: [...next.shapes, c] };
+    newIds.push(c.id);
+  }
+  return { plan: next, newIds };
+}
