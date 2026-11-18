@@ -16,7 +16,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { db } from "@/db";
 import { appUser } from "@/db/schema";
-import { allOnPerms, evalPerm, type PermKey, type PermMap } from "./perm-keys";
+import { allOnPerms, evalPerm, evalStoragePerm, type PermKey, type PermMap } from "./perm-keys";
 import { SESSION_COOKIE, SESSION_DAYS, sessionSecret, signSession, verifySession, type Session } from "./session";
 
 const scrypt = promisify(_scrypt) as (p: string, s: Buffer, l: number) => Promise<Buffer>;
@@ -79,6 +79,27 @@ export async function hasPerm(key: PermKey): Promise<boolean> {
   const u = await userPermRow(s.uid);
   if (!u || !u.isActive) return false;
   return evalPerm(u.role, (u.perms ?? null) as PermMap | null, key);
+}
+
+/**
+ * ⭐ 타이어 보관 권한 (2026-11-18) — 「타이어 보관 관리」(storage) 하나로 보관 일 전부가 된다.
+ *   use(등록·실사·찾아감·위치) = 보관 관리 **또는** 판매 등록 / edit(고치기·지우기·되돌리기·주인·번호·도면) = 보관 관리 **또는** 정비 내역 수정.
+ *   옛 키도 계속 통하게 둔 것은 새 키만 켜면 기존 직원이 갑자기 막히기 때문이다(D-42 원래 걱정).
+ */
+export async function hasStoragePerm(level: "use" | "edit"): Promise<boolean> {
+  const s = await getSession();
+  if (!s) return false;
+  if (s.role === "owner") return true;
+  const u = await userPermRow(s.uid);
+  if (!u || !u.isActive) return false;
+  return evalStoragePerm(u.role, (u.perms ?? null) as PermMap | null, level);
+}
+
+/** 보관 화면용 — 보관 권한(use) 없으면 홈으로 */
+export async function requireStoragePerm(): Promise<Session> {
+  const s = await requireSession();
+  if (!(await hasStoragePerm("use"))) redirect("/");
+  return s;
 }
 
 /** 페이지용 — 권한 없으면 홈으로 */

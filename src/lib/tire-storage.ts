@@ -3,14 +3,15 @@
 /**
  * ⭐ 타이어 보관 — 화면이 부르는 액션 (D-42, 2026-11-17)
  *
- *   권한: 등록·찾아감·인쇄 크기·실사 = sale / 폐기·제외·되돌리기·고치기 = sale_edit.
+ *   권한(2026-11-18~): 등록·찾아감·인쇄 크기·실사 = hasStoragePerm("use") / 폐기·제외·되돌리기·고치기·주인·번호 = hasStoragePerm("edit")
+ *   — 「타이어 보관 관리」(storage) 하나로 전부, 옛 키(판매 등록 / 정비 내역 수정)도 계속 통한다.
  *   새 권한 키는 만들지 않았다 — 새 키는 꺼진 채 시작해 직원이 하룻밤 사이 막힌다.
  *   쓰기 정본은 tire-storage-db.ts, 규칙은 tire-storage-pure.ts.
  */
 import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { getSession, hasPerm } from "./auth";
+import { getSession, hasPerm, hasStoragePerm } from "./auth";
 import { setSetting } from "./app-setting";
 import { ymdKst } from "./tire-age";
 import { applySaleStorage, hasSaleStorage, insertStoredSet, nextStorageNo, storageOwnerProblem } from "./tire-storage-db";
@@ -32,6 +33,7 @@ import {
 type Result<T = object> = ({ ok: true } & T) | { ok: false; error: string };
 
 const NO_SALE = "판매 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다";
+const NO_STORE = "보관 관리 권한이 없습니다 — 사장님이 설정→계정에서 「타이어 보관 관리」를 켤 수 있습니다";
 const NO_EDIT = "판매 수정 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다";
 
 function touch(vehicleId?: number | null) {
@@ -46,7 +48,7 @@ function errText(e: unknown): string {
 
 /** 판매 없이 맡김 등록 (차량 화면·보관 화면) */
 export async function registerStorage(input: { vehicleId: number; drop: StorageDropInput; storedOn?: string }): Promise<Result<{ id: number; no: number }>> {
-  if (!(await hasPerm("sale"))) return { ok: false, error: NO_SALE };
+  if (!(await hasStoragePerm("use"))) return { ok: false, error: NO_STORE };
   const s = await getSession();
   const bad = validateDrop(input.drop);
   if (bad) return { ok: false, error: bad };
@@ -69,7 +71,7 @@ export async function registerStorage(input: { vehicleId: number; drop: StorageD
 
 /** 찾아감(sale) · 폐기(sale_edit) — 판매 없이 손으로 */
 export async function releaseStorage(id: number, to: "찾아감" | "폐기", note?: string): Promise<Result> {
-  if (!(await hasPerm(to === "폐기" ? "sale_edit" : "sale"))) return { ok: false, error: to === "폐기" ? NO_EDIT : NO_SALE };
+  if (!(await hasStoragePerm(to === "폐기" ? "edit" : "use"))) return { ok: false, error: NO_STORE };
   const s = await getSession();
   const rows = await db.execute<{ vehicle_id: number | null }>(sql`
     UPDATE tire_storage SET status = ${to}, released_on = (now() AT TIME ZONE 'Asia/Seoul')::date,
@@ -83,7 +85,7 @@ export async function releaseStorage(id: number, to: "찾아감" | "폐기", not
 
 /** 잘못 등록한 것 지우기 → 「제외」(줄은 남는다 — 삭제하지 않는다) */
 export async function excludeStorage(id: number, note: string): Promise<Result> {
-  if (!(await hasPerm("sale_edit"))) return { ok: false, error: NO_EDIT };
+  if (!(await hasStoragePerm("edit"))) return { ok: false, error: NO_STORE };
   const s = await getSession();
   const rows = await db.execute<{ vehicle_id: number | null }>(sql`
     UPDATE tire_storage SET status = '제외', released_on = (now() AT TIME ZONE 'Asia/Seoul')::date,
@@ -99,7 +101,7 @@ export async function excludeStorage(id: number, note: string): Promise<Result> 
  * 손으로 찾아감·폐기한 것을 되돌리기 — 판매로 찾아간 것은 판매를 취소해야 한다(판매와 어긋나지 않게).
  */
 export async function restoreStorage(id: number): Promise<Result> {
-  if (!(await hasPerm("sale_edit"))) return { ok: false, error: NO_EDIT };
+  if (!(await hasStoragePerm("edit"))) return { ok: false, error: NO_STORE };
   const rows = await db.execute<{ vehicle_id: number | null }>(sql`
     UPDATE tire_storage SET status = '보관중', released_on = NULL, release_note = NULL, released_by = NULL, updated_at = now()
     WHERE id = ${id} AND status IN ('찾아감','폐기') AND released_quote_id IS NULL AND storage_no IS NOT NULL
@@ -111,7 +113,7 @@ export async function restoreStorage(id: number): Promise<Result> {
 
 /** 내용 고치기 (브랜드·규격·본수·종류·DOT·메모) */
 export async function updateStorage(id: number, drop: StorageDropInput): Promise<Result> {
-  if (!(await hasPerm("sale_edit"))) return { ok: false, error: NO_EDIT };
+  if (!(await hasStoragePerm("edit"))) return { ok: false, error: NO_STORE };
   const bad = validateDrop(drop);
   if (bad) return { ok: false, error: bad };
   const d = cleanDrop(drop);
@@ -127,7 +129,7 @@ export async function updateStorage(id: number, drop: StorageDropInput): Promise
 
 /** 스티커 — 타이어마다 한 장 / 한 세트에 한 장 */
 export async function setLabelPer(per: string): Promise<Result<{ per: string }>> {
-  if (!(await hasPerm("sale"))) return { ok: false, error: NO_SALE };
+  if (!(await hasStoragePerm("use"))) return { ok: false, error: NO_STORE };
   const v = parseLabelPer(per);
   await setSetting(LABEL_PER_KEY, v);
   revalidatePath("/print/storage");
@@ -136,7 +138,7 @@ export async function setLabelPer(per: string): Promise<Result<{ per: string }>>
 
 /** 스티커 용지 — 일반 프린터(A4) / 라벨프린터 */
 export async function setLabelPaper(paper: string): Promise<Result<{ paper: string }>> {
-  if (!(await hasPerm("sale"))) return { ok: false, error: NO_SALE };
+  if (!(await hasStoragePerm("use"))) return { ok: false, error: NO_STORE };
   const v = parseLabelPaper(paper);
   await setSetting(LABEL_PAPER_KEY, v);
   revalidatePath("/print/storage");
@@ -145,7 +147,7 @@ export async function setLabelPaper(paper: string): Promise<Result<{ paper: stri
 
 /** 스티커 크기 — 매장 라벨프린터에 맞춰 한 번 */
 export async function setLabelSize(raw: string): Promise<Result<{ size: string }>> {
-  if (!(await hasPerm("sale"))) return { ok: false, error: NO_SALE };
+  if (!(await hasStoragePerm("use"))) return { ok: false, error: NO_STORE };
   const size = formatLabelSize(parseLabelSize(raw));
   await setSetting(LABEL_SIZE_KEY, size);
   revalidatePath("/print/storage");
@@ -156,7 +158,7 @@ export async function setLabelSize(raw: string): Promise<Result<{ size: string }
  * 실사 「있음」 — 확인대기 후보에 번호를 주고 보관중으로. 맡긴 날은 원래 판매일 그대로.
  */
 export async function confirmCandidate(id: number, drop: StorageDropInput): Promise<Result<{ no: number }>> {
-  if (!(await hasPerm("sale"))) return { ok: false, error: NO_SALE };
+  if (!(await hasStoragePerm("use"))) return { ok: false, error: NO_STORE };
   const bad = validateDrop(drop);
   if (bad) return { ok: false, error: bad };
   const d = cleanDrop(drop);
@@ -184,7 +186,7 @@ export async function confirmCandidate(id: number, drop: StorageDropInput): Prom
 
 /** 실사 「없음」 — 창고에 없다 → 제외 */
 export async function dismissCandidate(id: number): Promise<Result> {
-  if (!(await hasPerm("sale"))) return { ok: false, error: NO_SALE };
+  if (!(await hasStoragePerm("use"))) return { ok: false, error: NO_STORE };
   const s = await getSession();
   const rows = await db.execute(sql`
     UPDATE tire_storage SET status = '제외', released_on = (now() AT TIME ZONE 'Asia/Seoul')::date, release_note = '실사 없음',
@@ -261,7 +263,7 @@ export async function moveStorage(id: number, vehicleId: number): Promise<Result
   const [t] = await db.execute<{ status: string; vehicle_id: number | null; plate: string | null }>(sql`
     SELECT t.status, t.vehicle_id, v.plate_no AS plate FROM tire_storage t LEFT JOIN vehicle v ON v.id = t.vehicle_id WHERE t.id = ${id}`);
   if (!t) return { ok: false, error: "보관 세트를 찾지 못했습니다" };
-  if (!(await hasPerm(t.status === "확인대기" ? "sale" : "sale_edit"))) return { ok: false, error: t.status === "확인대기" ? NO_SALE : NO_EDIT };
+  if (!(await hasStoragePerm(t.status === "확인대기" ? "use" : "edit"))) return { ok: false, error: NO_STORE };
   if (t.status !== "확인대기" && t.status !== "보관중") return { ok: false, error: "보관 중이거나 실사 확인 전인 세트만 옮길 수 있습니다" };
   if (Number(t.vehicle_id) === vehicleId) return { ok: false, error: "이미 그 차의 세트입니다" };
   const [v] = await db.execute<{ customer_id: number; plate: string }>(sql`
@@ -288,7 +290,7 @@ export async function moveStorage(id: number, vehicleId: number): Promise<Result
  *   찾아갔어도 다시 안 쓴다 — 재사용 금지 D-42). 판매 수정 권한.
  */
 export async function renumberStorage(id: number, newNo: number): Promise<Result<{ no: number }>> {
-  if (!(await hasPerm("sale_edit"))) return { ok: false, error: NO_EDIT };
+  if (!(await hasStoragePerm("edit"))) return { ok: false, error: NO_STORE };
   if (!Number.isInteger(newNo) || newNo < 1 || newNo > 99999) return { ok: false, error: "번호는 1~99999 사이 숫자로 적어 주세요" };
   try {
     const no = await db.transaction(async (tx) => {

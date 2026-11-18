@@ -4,19 +4,19 @@
  * ⭐ 보관 구역 도면 · 위치 — 화면이 부르는 액션 (2026-11-18, 3차 개정)
  *
  *   위치 = 구역 + 자리(구역 도면의 block 칸 id) + 더미 번호. 점(좌표)은 버렸다 — 사장님 「허술·허접」.
- *   도면 고치기·구역 더하기/이름/숨기기·배경 사진 = sale_edit / 위치 정하기·창고 실사 = sale.
+ *   도면 고치기·구역 더하기/이름/숨기기·배경 사진 = hasStoragePerm("edit") / 위치 정하기·창고 실사 = hasStoragePerm("use") (2026-11-18 「타이어 보관 관리」 권한).
  *   규칙은 storage-plan-pure.ts.
  */
 import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { getSession, hasPerm } from "./auth";
+import { getSession, hasStoragePerm } from "./auth";
 import { defaultRoomPlan, imageProblem, removedOccupiedSlots, sanitizePlan, slotLabel, slotNameProblem, type Plan } from "./storage-plan-pure";
 import { dropSetTx, registerFoundSetTx, resolveLoc, type FoundSetInput, type Loc } from "./storage-found-db";
 
 type Result<T = object> = ({ ok: true } & T) | { ok: false; error: string };
-const NO_SALE = "판매 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다";
-const NO_EDIT = "판매 수정 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다";
+const NO_SALE = "보관 권한이 없습니다 — 사장님이 설정→계정에서 「타이어 보관 관리」를 켤 수 있습니다";
+const NO_EDIT = NO_SALE;
 
 function touch() {
   revalidatePath("/storage");
@@ -28,7 +28,7 @@ function errText(e: unknown): string {
 
 /** 도면 저장 — 🔴 세트가 든 자리는 지울 수 없다(그 세트가 어디 있는지 잃는다). 이름 바꾸기는 괜찮다(id 로 묶음) */
 export async function saveAreaPlan(id: number, plan: unknown): Promise<Result> {
-  if (!(await hasPerm("sale_edit"))) return { ok: false, error: NO_EDIT };
+  if (!(await hasStoragePerm("edit"))) return { ok: false, error: NO_EDIT };
   const p = sanitizePlan(plan);
   if (!p) return { ok: false, error: "도면을 읽지 못했습니다" };
   try {
@@ -57,7 +57,7 @@ export async function saveAreaPlan(id: number, plan: unknown): Promise<Result> {
 }
 
 export async function addArea(name: string): Promise<Result<{ id: number }>> {
-  if (!(await hasPerm("sale_edit"))) return { ok: false, error: NO_EDIT };
+  if (!(await hasStoragePerm("edit"))) return { ok: false, error: NO_EDIT };
   const n = name.trim().slice(0, 30);
   if (!n) return { ok: false, error: "구역 이름을 적어 주세요" };
   const [r] = await db.execute<{ id: number }>(sql`
@@ -69,7 +69,7 @@ export async function addArea(name: string): Promise<Result<{ id: number }>> {
 }
 
 export async function renameArea(id: number, name: string): Promise<Result> {
-  if (!(await hasPerm("sale_edit"))) return { ok: false, error: NO_EDIT };
+  if (!(await hasStoragePerm("edit"))) return { ok: false, error: NO_EDIT };
   const n = name.trim().slice(0, 30);
   if (!n) return { ok: false, error: "구역 이름을 적어 주세요" };
   await db.execute(sql`UPDATE storage_area SET name = ${n}, updated_at = now() WHERE id = ${id}`);
@@ -79,7 +79,7 @@ export async function renameArea(id: number, name: string): Promise<Result> {
 
 /** 숨기기 — 그 구역에 세트(보관중·실사 전)가 있으면 막는다 */
 export async function hideArea(id: number): Promise<Result> {
-  if (!(await hasPerm("sale_edit"))) return { ok: false, error: NO_EDIT };
+  if (!(await hasStoragePerm("edit"))) return { ok: false, error: NO_EDIT };
   const [n] = await db.execute<{ n: number }>(sql`SELECT count(*)::int AS n FROM tire_storage WHERE area_id = ${id} AND status IN ('보관중','확인대기')`);
   if (Number(n.n) > 0) return { ok: false, error: `이 구역에 세트가 ${n.n}개 있습니다 — 먼저 다른 구역으로 옮겨 주세요` };
   await db.execute(sql`UPDATE storage_area SET is_active = false, updated_at = now() WHERE id = ${id} AND NOT is_site`);
@@ -89,7 +89,7 @@ export async function hideArea(id: number): Promise<Result> {
 
 /** 배경 사진 (선택) — 화면에서 1600px·JPEG 로 줄여 보낸다. null 이면 지움 */
 export async function setAreaImage(id: number, dataUrl: string | null): Promise<Result> {
-  if (!(await hasPerm("sale_edit"))) return { ok: false, error: NO_EDIT };
+  if (!(await hasStoragePerm("edit"))) return { ok: false, error: NO_EDIT };
   const bad = imageProblem(dataUrl);
   if (bad) return { ok: false, error: bad };
   await db.execute(sql`UPDATE storage_area SET image = ${dataUrl || null}, updated_at = now() WHERE id = ${id}`);
@@ -112,7 +112,7 @@ export interface PrevLoc {
 
 /** 위치 정하기·바꾸기 (상세 화면). loc null 이면 위치 지움 */
 export async function setStorageLocation(storageId: number, loc: Loc | null): Promise<Result<{ stackNo: number | null }>> {
-  if (!(await hasPerm("sale"))) return { ok: false, error: NO_SALE };
+  if (!(await hasStoragePerm("use"))) return { ok: false, error: NO_SALE };
   const s = await getSession();
   try {
     const out = await db.transaction(async (tx) => {
@@ -140,7 +140,7 @@ export async function placeHere(
   storageId: number,
   loc: Loc,
 ): Promise<Result<{ no: number; confirmed: boolean; stackNo: number; prev: PrevLoc }>> {
-  if (!(await hasPerm("sale"))) return { ok: false, error: NO_SALE };
+  if (!(await hasStoragePerm("use"))) return { ok: false, error: NO_SALE };
   const { nextStorageNo, storageOwnerProblem } = await import("./tire-storage-db");
   const sess = await getSession();
   try {
@@ -195,7 +195,7 @@ export async function undoPlace(
   prev: PrevLoc,
   unconfirm: boolean,
 ): Promise<Result<{ note: string; unconfirmed: boolean }>> {
-  if (!(await hasPerm("sale"))) return { ok: false, error: NO_SALE };
+  if (!(await hasStoragePerm("use"))) return { ok: false, error: NO_SALE };
   try {
     const out = await db.transaction(async (tx) => {
       const [t] = await tx.execute<{ storage_no: number | null; area_id: number | null; slot_id: string | null; stack_no: number | null; fresh: boolean }>(sql`
@@ -245,7 +245,7 @@ export type { FoundOwner } from "./storage-found-db";
 export async function registerFoundSet(
   input: FoundSetInput,
 ): Promise<Result<{ id: number; no: number; stackNo: number | null; vehicleId: number; plate: string; owner: string; reused: boolean }>> {
-  if (!(await hasPerm("sale"))) return { ok: false, error: NO_SALE };
+  if (!(await hasStoragePerm("use"))) return { ok: false, error: NO_SALE };
   const { validateDrop } = await import("./tire-storage-pure");
   const bad = validateDrop(input.drop);
   if (bad) return { ok: false, error: bad };
@@ -266,7 +266,7 @@ export async function registerFoundSet(
  *   **새 순서대로 다시 나눠 준다**(원래 시각 묶음을 오름차순으로). 다른 더미에 놓으면 먼저 옮긴다. 정본 storage-found-db.dropSetTx.
  */
 export async function dropSet(input: { id: number; areaId: number; slotId: string; stackNo: number; bottomToTop: number[] }): Promise<Result> {
-  if (!(await hasPerm("sale"))) return { ok: false, error: NO_SALE };
+  if (!(await hasStoragePerm("use"))) return { ok: false, error: NO_SALE };
   const ids = input.bottomToTop.map(Number);
   if (!ids.length || new Set(ids).size !== ids.length) return { ok: false, error: "순서가 이상합니다 — 새로 고침해 보세요" };
   const sess = await getSession();

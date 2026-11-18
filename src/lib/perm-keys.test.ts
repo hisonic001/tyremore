@@ -1,7 +1,7 @@
 /** ⭐ 기능 권한 판정 시험 (2026-09-02) — owner 무조건 통과, 직원은 켠 것만 */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { allOnPerms, BASE_KEYS, evalPerm, OWNER_KEYS, PERM_KEYS } from "./perm-keys";
+import { allOnPerms, BASE_KEYS, evalPerm, evalStoragePerm, OWNER_KEYS, PERM_KEYS } from "./perm-keys";
 
 describe("evalPerm", () => {
   test("owner 는 스위치와 무관하게 전부 된다", () => {
@@ -39,4 +39,19 @@ describe("evalPerm", () => {
   test("모르는 역할은 owner 대접을 못 받는다", () => {
     assert.equal(evalPerm("admin", {}, "sale"), false);
   });
+});
+
+test("타이어 보관 관리(2026-11-18) — storage 하나로 전부, 옛 키도 계속 통함", () => {
+  // 보관 관리만 켠 직원: 쓰기·고치기 다 됨
+  assert.equal(evalStoragePerm("tech", { storage: true }, "use"), true);
+  assert.equal(evalStoragePerm("tech", { storage: true }, "edit"), true);
+  // 옛 키: 판매 등록 = 쓰기만, 정비 내역 수정 = 고치기만
+  assert.equal(evalStoragePerm("tech", { sale: true }, "use"), true);
+  assert.equal(evalStoragePerm("tech", { sale: true }, "edit"), false);
+  assert.equal(evalStoragePerm("tech", { sale_edit: true }, "edit"), true);
+  // 아무것도 없으면 안 됨, 사장님은 늘 됨
+  assert.equal(evalStoragePerm("tech", {}, "use"), false);
+  assert.equal(evalStoragePerm("owner", {}, "edit"), true);
+  // 「전부 켜기」에 들어간다
+  assert.ok(BASE_KEYS.includes("storage"));
 });

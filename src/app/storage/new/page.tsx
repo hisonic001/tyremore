@@ -1,4 +1,4 @@
-import { requirePerm } from "@/lib/auth";
+import { requireStoragePerm } from "@/lib/auth";
 import { PageHeader, PageShell } from "@/components/ui/page";
 import { vehicleHitById } from "@/lib/search";
 import { storageForVehicle } from "@/lib/tire-storage-data";
@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
  *   교체 작업과 함께 맡기면 판매 등록 화면의 「맡긴 타이어」가 더 빠르다.
  */
 export default async function NewStoragePage({ searchParams }: { searchParams: Promise<{ vehicle?: string }> }) {
-  await requirePerm("sale");
+  await requireStoragePerm();
   const sp = await searchParams;
   const vid = Number(sp.vehicle);
   const hit = Number.isInteger(vid) && vid > 0 ? await vehicleHitById(vid) : null;

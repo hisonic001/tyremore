@@ -1326,6 +1326,10 @@ D-08 의 「채워 넣기」를 4단계로 다시 지었다.
   `convertToReservation` 은 보관이 걸려 있으면 막는다. `reassignSale` 은 맡긴 세트를 새 차·새 주인으로 옮기고,
   비회원으로 돌리기는 막는다. 감시기 `customer-integrity-check.ts` ④(보관 주인 ≠ 차량 주인 · 자리표시).
 - 권한은 새 키 없이 — 등록·찾아감·인쇄·실사 `sale` / 폐기·제외·되돌리기·고치기 `sale_edit` / 연락 명단 엑셀 `customer`.
+  ⭐ **2026-11-18 새 키 `storage`「타이어 보관 관리」** (사장님 「직원 계정에서 따로 보관은 관리 가능하게 — 새로 권한을 만들어서」):
+  켜면 보관 일 전부(use = 등록·실사·찾아감·위치 / edit = 고치기·지우기·되돌리기·주인·번호·도면). 판정 정본 `perm-keys.evalStoragePerm` · `auth.hasStoragePerm`.
+  🔴 옛 키도 계속 통한다(use ← sale, edit ← sale_edit) — 새 키만으로 기존 직원이 하룻밤 사이 막히지 않게. 「전부 켜기」(BASE_KEYS)에 들어감.
+  판매 화면 안의 보관 칸(saleStorage·attachSaleStorage·findStoredSets)은 판매 일이라 그대로 `sale`.
 - **연락 명단은 마케팅 동의를 거르지 않는다** — 맡긴 물건 안내는 서비스 연락. 화면에 「할인·이벤트 넣으면 광고 →
   동의 손님만」 경고와 동의 칸을 둔다. 8~12월 = 스노 맡긴 손님, 1~7월 = 일반 맡긴 손님(`contactKindFor`). 문자 발송은 없다.
 - **실사 후보** `scripts/storage-candidates.ts --dry/--fix` — 판매 메모(`parseStorageMemo`)에서 「맡김」만 뽑아

@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { requirePerm } from "@/lib/auth";
+import { requireStoragePerm } from "@/lib/auth";
 import { listAreas } from "@/lib/tire-storage-data";
 import { slotsOf } from "@/lib/storage-plan-pure";
 import { toPlan } from "@/app/storage/plan/plan-canvas";
@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
  *   화면의 「흰색 창고 › 안쪽 2」와 창고 벽의 글자가 같아야 찾는 사람이 헤매지 않는다.
  */
 export default async function SignsPage({ searchParams }: { searchParams: Promise<{ area?: string }> }) {
-  await requirePerm("sale");
+  await requireStoragePerm();
   const sp = await searchParams;
   const area = (await listAreas()).find((a) => a.id === Number(sp.area) && !a.isSite);
   if (!area) notFound();

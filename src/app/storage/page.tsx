@@ -1,5 +1,5 @@
 import { Archive, Search } from "lucide-react";
-import { requirePerm, hasPerm } from "@/lib/auth";
+import { hasPerm, requireStoragePerm, hasStoragePerm } from "@/lib/auth";
 import { PageHeader, PageShell } from "@/components/ui/page";
 import { ListRow } from "@/components/ui/list-row";
 import { StatusPill } from "@/components/ui/badge";
@@ -31,7 +31,7 @@ type Tab = "창고" | "보관중" | "실사" | "구역" | "연락" | "지난";
 const kstMonth = () => Number(new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" }).slice(5, 7));
 
 export default async function StoragePage({ searchParams }: { searchParams: Promise<{ q?: string; tab?: string; kind?: string }> }) {
-  await requirePerm("sale");
+  await requireStoragePerm();
   const sp = await searchParams;
   // 옛 「붙이기」 탭 주소는 창고 실사로
   const tab: Tab = (["창고", "보관중", "실사", "구역", "연락", "지난"] as const).find((t) => t === (sp.tab === "붙이기" ? "창고" : sp.tab)) ?? "보관중";
@@ -120,7 +120,7 @@ export default async function StoragePage({ searchParams }: { searchParams: Prom
       ) : tab === "창고" ? (
         <CountTab />
       ) : tab === "구역" ? (
-        <AreaManager areas={await listAreas()} sets={(await countSets()).map(toSetLite)} occupied={await slotCounts()} canEdit={await hasPerm("sale_edit")} />
+        <AreaManager areas={await listAreas()} sets={(await countSets()).map(toSetLite)} occupied={await slotCounts()} canEdit={await hasStoragePerm("edit")} />
       ) : (
         <ListTab view={tab === "지난" ? "지난" : "보관중"} q={q} />
       )}
