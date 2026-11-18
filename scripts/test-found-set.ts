@@ -21,8 +21,8 @@ async function main() {
   try {
     await db.transaction(async (tx) => {
       // 시험용 번호판 — 없는 것이어야 한다
-      const plates = ["99테9991", "99테9992"];
-      const [hit] = await tx.execute<{ n: number }>(sql`SELECT count(*)::int n FROM vehicle WHERE plate_no_norm IN (${plates[0]}, ${plates[1]})`);
+      const plates = ["99테9991", "99테9992", "99테9993"];
+      const [hit] = await tx.execute<{ n: number }>(sql`SELECT count(*)::int n FROM vehicle WHERE plate_no_norm IN (${plates[0]}, ${plates[1]}, ${plates[2]})`);
       if (Number(hit.n) > 0) throw new Error("시험 번호판이 이미 있습니다 — 다른 번호로 바꾸세요");
       const [area] = await tx.execute<{ id: number; plan: unknown }>(sql`SELECT id, plan FROM storage_area WHERE is_active AND NOT is_site ORDER BY sort LIMIT 1`);
       const slot = sanitizePlan(area.plan)?.shapes.find((s) => s.kind === "block");
@@ -60,7 +60,6 @@ async function main() {
       // D. 자리표시 이름 · 빈 이름 · 없는 거래처 → 거절
       for (const [label, owner] of [
         ["자리표시 「고객」", { kind: "손님" as const, name: "고객" }],
-        ["빈 이름", { kind: "손님" as const, name: " " }],
         ["없는 거래처", { kind: "거래처" as const, supplier: "없는거래처시험" }],
       ] as const) {
         let err = "";
@@ -73,6 +72,10 @@ async function main() {
         await tx.execute(sql`ROLLBACK TO SAVEPOINT t`);
         ok(!!err, `D ${label} 거절 — ${err}`);
       }
+
+      // D2. 이름 몰라도 됨 → 그 차 전용 이름 「이름 모름 99테9993」
+      const d2 = await registerFoundSetTx(tx, { plate: "99테9993", owner: { kind: "손님", name: " ", phone: "" }, drop, storedOn: null, loc: null }, null);
+      ok(d2.owner === "이름 모름 99테9993" && !d2.reused, `D2 이름 없이 등록 → 「${d2.owner}」`);
 
       // E. 이미 있는 차 고르기
       const e = await registerFoundSetTx(tx, { plate: "", owner: { kind: "차량", vehicleId: a.vehicleId }, drop, storedOn: null, loc: null }, null);
@@ -105,7 +108,7 @@ async function main() {
   } catch (e) {
     if ((e as Error).message !== ROLLBACK) throw e;
   }
-  const [left] = await db.execute<{ n: number }>(sql`SELECT count(*)::int n FROM vehicle WHERE plate_no_norm IN ('99테9991','99테9992')`);
+  const [left] = await db.execute<{ n: number }>(sql`SELECT count(*)::int n FROM vehicle WHERE plate_no_norm IN ('99테9991','99테9992','99테9993')`);
   ok(Number(left.n) === 0, "되돌림 — 시험 차량이 남지 않음");
   console.log(fails ? `\n✗ ${fails}개 실패` : "\n모두 통과");
   process.exit(fails ? 1 : 0);

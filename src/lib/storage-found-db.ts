@@ -108,12 +108,15 @@ export async function registerFoundSetTx(
       [vehicleId, customerId, plate, ownerName, reused] = [Number(dup.id), Number(dup.customer_id), dup.plate_no, dup.name, true];
     } else {
       if (input.owner.kind === "손님") {
-        const name = input.owner.name.trim();
-        if (!name) throw new Error("손님 이름을 넣어 주세요 — 모르면 거래처 차인지 확인해 주세요");
+        /* ⭐ 이름 몰라도 된다 (사장님 2026-11-18 「실사 중 손님 이름이 없는 것도 있음 — 옵션화」).
+           비면 「이름 모름 12가3456」 — **그 차 전용 이름**. 🔴 공용 자리표시(「고객」 등)에 묶지 않는다:
+           여러 손님 차가 한 손님 줄에 붙으면 한쪽을 고칠 때 전부 바뀐다(D-27 사고). 오시면 손님 화면에서 이름을 고친다. */
+        const unnamed = !input.owner.name.trim();
+        const name = unnamed ? `이름 모름 ${plate}` : input.owner.name.trim();
         if (isPlaceholderCustomerName(name)) throw new Error(`「${name}」은 자리표시 이름이라 보관을 붙일 수 없습니다 — 실제 이름을 넣어 주세요`);
         const phone = (input.owner.phone ?? "").replace(/\D/g, "");
         let cid: number | null = null;
-        if (phone.length >= 9 && !isPlaceholderPhone(phone)) {
+        if (!unnamed && phone.length >= 9 && !isPlaceholderPhone(phone)) {
           const [c] = await tx.execute<{ id: number; name: string }>(sql`
             SELECT id, name FROM customer WHERE replace(replace(phone,'-',''),' ','') = ${phone} AND is_active ORDER BY id LIMIT 1`);
           if (c && normalizeName(name) === normalizeName(c.name)) cid = Number(c.id);
@@ -122,7 +125,9 @@ export async function registerFoundSetTx(
           const [c] = await tx.execute<{ id: number }>(sql`
             INSERT INTO customer (name, name_search, phone, type, memo)
             VALUES (${name}, ${name.replace(/\s/g, "").toLowerCase()}, ${input.owner.phone?.trim() || null}, '개인',
-                    ${`보관 타이어로 등록(${today}) — 주소·동의 아직 없음, 다시 오시면 판매 때 채우기`})
+                    ${unnamed
+                      ? `보관 타이어 실사 때 이름 몰라 차번호로 임시 이름(${today}) — 오시면 이름·주소·동의 채우기`
+                      : `보관 타이어로 등록(${today}) — 주소·동의 아직 없음, 다시 오시면 판매 때 채우기`})
             RETURNING id`);
           cid = Number(c.id);
         }

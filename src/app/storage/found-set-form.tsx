@@ -177,7 +177,7 @@ export function FoundSetForm({
           </div>
           {mode === "손님" ? (
             <div className="mt-2 space-y-2">
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="손님 이름" className={INPUT} />
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="손님 이름 — 몰라도 됩니다" className={INPUT} />
               <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="전화 (몰라도 됩니다)" className={INPUT} />
             </div>
           ) : supplier ? (
