@@ -5,6 +5,7 @@ import { execSync } from "node:child_process";
 import path from "node:path";
 import { chromium, type FrameLocator, type Locator, type Page } from "playwright";
 import { marsMissing } from "../src/lib/mars-ready";
+import { failKey, marsNameCandidates, marsRegDate, SAME_FAIL_LIMIT } from "../src/lib/mars-fill-pure";
 import { replacedFromServices, type ReplacedItems } from "../src/lib/mars-service-words";
 
 /**
@@ -828,8 +829,9 @@ async function createCustomer(
      * 실제 등록일을 모르니 월·일은 오늘 것을 그대로 쓴다.
      */
     const t = new Date();
-    const md = `-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
-    const regDate = `${c.year}${md}`;
+    const todayIso = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+    // 🔴 오늘보다 뒤는 안 된다 — 2027년식 신차에 2027-11-18 을 넣어 MARS 가 저장을 막았다 (2026-11-18)
+    const regDate = marsRegDate(c.year, todayIso);
     const okDate =
       (await fillField(page, "등록 날짜", f.getByRole("combobox", { name: "등록 날짜" }), regDate)) ||
       (await fillField(page, "등록 날짜", f.getByRole("textbox", { name: "등록 날짜" }), regDate));
@@ -901,9 +903,24 @@ async function createCustomer(
    *    `KOR Cust Contact Veh. Creation` 은 다른 화면에 없다.
    */
   const creationBtn = f.locator('button[controlname="KOR Cust Contact Veh. Creation"]');
+  /*
+   * 🔴 **기다려서** 본다 (2026-11-18 임규리 — 「페이지에 2개의 오류가 있습니다」로 창이 그대로인데 ✅ 를 찍었다.
+   *    isVisible 는 기다리지 않아서, 화면이 다시 그려지는 찰나에 「닫혔다」로 읽었다 — 다섯 번째 거짓 보고).
+   *    ① 오류 띠(「…개의 오류가 있습니다」)가 보이면 실패 ② 생성 창 확인 단추가 4초 안에 다시 보이면 실패.
+   */
+  const errBand = f.getByText(/개의 오류가 있습니다|오류가 있습니다/).first();
+  const banded = await errBand.isVisible().catch(() => false);
   const stillOpen =
-    (await creationBtn.count().catch(() => 0)) > 0 &&
-    (await creationBtn.last().isVisible({ timeout: 3000 }).catch(() => false));
+    banded ||
+    ((await creationBtn.count().catch(() => 0)) > 0 &&
+      (await creationBtn.last().waitFor({ state: "visible", timeout: 4000 }).then(() => true).catch(() => false)));
+  if (stillOpen && banded) {
+    // 오류 띠를 누르면 무엇이 틀렸는지 펼쳐진다 — 그 글을 그대로 옮긴다
+    await errBand.click({ timeout: 3000 }).catch(() => {});
+    await page.waitForTimeout(1200);
+    const detail = ((await f.getByRole("dialog").last().innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
+    throw new Error(`MARS 가 저장을 막았습니다(입력값 오류): ${detail.slice(0, 200) || "오류 띠 내용을 못 읽음"}`);
+  }
   if (stillOpen) {
     const said =
       (await f.getByRole("dialog").last().innerText().catch(() => "")) ||
@@ -1030,8 +1047,8 @@ async function createVehicleForContact(
     const md = `-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
     const regCell = await one(f.getByRole("combobox", { name: "등록 날짜" }));
     const okReg =
-      (await fillField(page, "등록 날짜", regCell, `${v.year}${md}`)) ||
-      (await fillField(page, "등록 날짜", await one(f.getByRole("textbox", { name: "등록 날짜" })), `${v.year}${md}`));
+      (await fillField(page, "등록 날짜", regCell, marsRegDate(v.year, `${new Date().getFullYear()}${md}`))) ||
+      (await fillField(page, "등록 날짜", await one(f.getByRole("textbox", { name: "등록 날짜" })), marsRegDate(v.year, `${new Date().getFullYear()}${md}`)));
     if (!okReg) log("    ⚠️ 등록 날짜를 못 넣었습니다");
     await page.waitForTimeout(400);
     await guard("등록 날짜");
@@ -1099,11 +1116,22 @@ async function findCustomerByName(
     await passBigSearchDialog(page);
   }
   await box.waitFor({ timeout: 15000 });
-  await box.fill(name);
-  await box.press("Enter");
-  await page.waitForTimeout(3000);
+  /* ⭐ 이름 후보 — 「박준현[대순진리회]」면 「박준현」으로도 (2026-11-18 — MARS 에는 소속 글자가 없어 0건이었다) */
+  const names = marsNameCandidates(name);
+  let usedName = names[0];
+  for (const [i, nm] of names.entries()) {
+    usedName = nm;
+    await box.fill(nm);
+    await box.press("Enter");
+    await page.waitForTimeout(3000);
+    const hit = await f.locator("tr").filter({ hasText: nm }).first().isVisible({ timeout: 2500 }).catch(() => false);
+    if (hit) {
+      if (i > 0) log(`    · 「${name}」 대신 「${nm}」로 찾았습니다`);
+      break;
+    }
+  }
   // 같은 이름이 여럿일 수 있다(렌트카·AJ렌트카…) — 전화번호로 좁힌다
-  let rows = f.locator("tr").filter({ hasText: name });
+  let rows = f.locator("tr").filter({ hasText: usedName });
   const digits = phone?.replace(/\D/g, "") ?? "";
   if (digits) rows = rows.filter({ hasText: digits });
   if (plate) {
@@ -2915,12 +2943,23 @@ async function main_() {
   }
   log("");
 
-  const ctx = await chromium
-    .launchPersistentContext(profileDir, {
+  /*
+   * 🔴 닫은 창이 프로필을 바로 놓지 않는다 — 곧장 띄우면 「Target page, context or browser has been closed」로 죽었다
+   *    (run#469 2026-11-13, 내장 브라우저도 이 PC 엔 없어 그대로 실패). 잠깐 쉬고, 실패하면 4초 뒤 한 번 더.
+   */
+  await new Promise((r) => setTimeout(r, 1500));
+  const openChrome = () =>
+    chromium.launchPersistentContext(profileDir, {
       headless: false,
       channel: "chrome",
       viewport: null,
       args: ["--start-maximized"],
+    });
+  const ctx = await openChrome()
+    .catch(async (e) => {
+      log(`  ⚠️ Chrome 이 안 열렸습니다(${(e as Error).message.split("\n")[0].slice(0, 80)}) — 4초 뒤 한 번 더`);
+      await new Promise((r) => setTimeout(r, 4000));
+      return openChrome();
     })
     .catch(async (e) => {
       log(`  ⚠️ 설치된 Chrome 으로 못 열었습니다: ${(e as Error).message.split("\n")[0]}`);
@@ -3926,6 +3965,20 @@ ${"=".repeat(56)}`);
         skipped++;
         log(`  ⚠️ 실패: ${(e as Error).message.split("\n")[0]}`);
         if (attemptId) await endMarsAttempt(attemptId, (e as Error).message.slice(0, 300)).catch(() => {});
+        /*
+         * ⭐ 같은 이유로 계속 실패하면 **보류로 내린다** (2026-11-18 로그 점검 — 임규리 16번·박준현 7번 같은 실패를
+         *    실행마다 되풀이했다. 화면만 돌고 MARS 에 반쪽 흔적이 쌓일 수 있다). 고친 뒤 정비 내역에서 다시 체크하면 올라온다.
+         */
+        try {
+          const { sameFailCount, holdMars } = await import("../src/lib/mars-queue");
+          const n = await sameFailCount(q.quoteId, failKey((e as Error).message));
+          if (n >= SAME_FAIL_LIMIT) {
+            await holdMars(q.quoteId, `자동입력이 같은 이유로 ${n}번 실패해 보류로 내렸습니다 — ${(e as Error).message.split("\n")[0].slice(0, 150)}`);
+            log(`     ⏸ 같은 이유로 ${n}번째 실패 — 보류로 내렸습니다 (고친 뒤 정비 내역에서 다시 MARS 체크)`);
+          }
+        } catch {
+          /* 보류 처리 실패는 다음 실행에서 다시 본다 */
+        }
         /**
          * 🔴 주문 화면까지 갔다가 죽으면 **채우다 만 초안이 MARS 에 남는다**
          *    (2026-08-17 확인 — 이영준 건이 run#89·90 두 번 실패하며 초안이 2개 쌓였는데
