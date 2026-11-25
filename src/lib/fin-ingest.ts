@@ -14,8 +14,9 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { CARD_SETTLE_PATTERN_SQL } from "./expense-cats";
-import { normName } from "./recon-data";
-import type { CardDayParseResult, CardDepositParseResult, CardTxnParseResult, FinParseResult, NormalizedCashTxn, PosParseResult, TaxParseResult } from "./fin-sheet";
+import { normName, samePartyName } from "./recon-data";
+import type { CardDayParseResult, CardDepositParseResult, CardTxnParseResult, FinParseResult, NormalizedCashTxn, NormalizedTaxInvoice, PosParseResult, TaxParseResult } from "./fin-sheet";
+import { pairStatementToNotices } from "./tax-mail-notice";
 import { autoMatchPosDayCore } from "./pos-close";
 import { applyAutoCategories } from "./expense-core";
 import { restoreCashLine } from "./cash-restore";
@@ -28,6 +29,10 @@ export interface IngestResult {
   dupCount: number;
   /** 통장만 — 폰 알림으로 먼저 들어와 있다가 이 파일로 확정된 줄 수 (D-41) */
   confirmedAlerts?: number;
+  /** 계산서만 — 메일 속보로 먼저 들어와 있다가 이 파일로 확정된 줄 수 (2026-11-25) */
+  confirmedNotices?: number;
+  /** 계산서만 — 이 파일 기간 안인데 파일에 없는 메일 속보 (취소·정정·홈택스 전송 전 — 사람이 본다) */
+  leftNotices?: number;
 }
 
 /** 행마다 중복 방지 열쇠 — 승인번호 없는 카드 형식은 파일 안 차례번호(#n)로 가른다 */
@@ -283,6 +288,9 @@ export async function ingestTaxInvoices(
   `);
   const uploadId = Number(up.id);
 
+  // 메일 속보 줄이 먼저 와 있으면 그 줄을 이 내용으로 확정한다 — 아래 INSERT 는 같은 승인번호라 건너뛴다 (2026-11-25)
+  const confirmedIds = await confirmTaxNotices(parsed.rows);
+
   let newCount = 0;
   for (let i = 0; i < parsed.rows.length; i += 100) {
     const chunk = parsed.rows.slice(i, i + 100);
@@ -311,11 +319,15 @@ export async function ingestTaxInvoices(
    * ⭐ 자동 정리 — 상대 유형(경비·무시) 학습분만 자동 무시.
    * 🔴 과거분 자동 접힘은 폐지 (사장님 방침 2026-08-26: "중요한 건 자료들 —
    *    이전 내용 전부 살려 달라"). 2025년 계산서도 통장(2025-01~)과 대조한다.
+   * 메일 속보에서 확정된 줄도 같이 (속보 때는 사업자번호를 몰랐을 수 있다).
    */
+  const mine = confirmedIds.length > 0
+    ? sql`(t.upload_id = ${uploadId} OR t.id IN (${sql.join(confirmedIds.map((id) => sql`${id}`), sql`, `)}))`
+    : sql`t.upload_id = ${uploadId}`;
   await db.execute(sql`
     UPDATE tax_invoice t SET recon_status = '무시', recon_reason = r.kind
     FROM tax_party_rule r
-    WHERE t.upload_id = ${uploadId} AND t.recon_status = '미대조'
+    WHERE ${mine} AND t.recon_status = '미대조'
       AND r.biz_no = t.counterparty_biz_no AND r.kind IN ('경비', '무시')
   `);
   // 품목 단위 규칙 (미쉐린 digital module 같은 혼합 상대) — 품목 정규화가 JS 라 여기서 맞춘다
@@ -325,8 +337,8 @@ export async function ingestTaxInvoices(
   if (itemRules.length > 0) {
     const rmap = new Map(itemRules.map((r) => [`${r.biz_no}|${r.item_key}`, r.kind]));
     const fresh = await db.execute<{ id: number; counterparty_biz_no: string; item_summary: string | null }>(sql`
-      SELECT id, counterparty_biz_no, item_summary FROM tax_invoice
-      WHERE upload_id = ${uploadId} AND recon_status = '미대조' LIMIT 500
+      SELECT t.id, t.counterparty_biz_no, t.item_summary FROM tax_invoice t
+      WHERE ${mine} AND t.recon_status = '미대조' LIMIT 500
     `);
     for (const row of fresh) {
       const k = rmap.get(`${row.counterparty_biz_no}|${normName(row.item_summary ?? "")}`);
@@ -338,11 +350,75 @@ export async function ingestTaxInvoices(
     }
   }
 
-  const dupCount = parsed.rows.length - newCount;
+  const dupCount = parsed.rows.length - newCount - confirmedIds.length; // 속보 확정은 「이미 있던 줄」이 아니다
   await db.execute(sql`
     UPDATE fin_upload SET new_count = ${newCount}, dup_count = ${dupCount} WHERE id = ${uploadId}
   `);
-  return { uploadId, rowCount: parsed.rows.length, newCount, dupCount };
+
+  // 이 파일 기간 안인데 파일에 없는 속보 — 취소·정정·아직 홈택스 전송 전. 지우지 않고 알린다
+  let leftNotices = 0;
+  if (parsed.periodFrom && parsed.periodTo) {
+    const dirs = [...new Set(parsed.rows.map((r) => r.direction))];
+    const [left] = await db.execute<{ n: number }>(sql`
+      SELECT count(*)::int n FROM tax_invoice
+      WHERE is_active AND approval_no LIKE '알림|%'
+        AND direction IN (${sql.join(dirs.map((d) => sql`${d}`), sql`, `)})
+        AND write_date BETWEEN ${parsed.periodFrom}::date AND ${parsed.periodTo}::date
+    `);
+    leftNotices = Number(left?.n ?? 0);
+  }
+  return { uploadId, rowCount: parsed.rows.length, newCount, dupCount, confirmedNotices: confirmedIds.length, leftNotices };
+}
+
+/**
+ * 메일 속보 계산서(승인번호 자리 「알림|」) ↔ 홈택스 줄 짝짓기 (2026-11-25) — 판정 정본은
+ * tax-mail-notice.pairStatementToNotices. 짝이면 속보 줄을 홈택스 내용(승인번호·사업자번호·금액·품목)으로 덮는다.
+ * upload_id 는 속보 묶음 그대로 (파일 배치를 취소해도 확정된 계산서가 사라지지 않게 — 통장 폰 알림과 같은 이치).
+ * 🔴 이미 장부에 있는 승인번호는 짝짓지 않는다(새 줄이 아니다). 질의 3개.
+ */
+async function confirmTaxNotices(rows: NormalizedTaxInvoice[]): Promise<number[]> {
+  if (rows.length === 0) return [];
+  const dates = rows.map((r) => r.writeDate).sort();
+  const notices = await db.execute<{ id: number; approval_no: string; direction: "매입" | "매출"; wd: string; name: string; supply_amount: number }>(sql`
+    SELECT id, approval_no, direction, write_date::text wd, counterparty_name name, supply_amount
+    FROM tax_invoice
+    WHERE is_active AND approval_no LIKE '알림|%'
+      AND write_date BETWEEN ${dates[0]}::date AND ${dates[dates.length - 1]}::date
+    LIMIT 2000
+  `);
+  if (notices.length === 0) return [];
+  const have = new Set<string>();
+  for (let i = 0; i < rows.length; i += 500) {
+    const chunk = rows.slice(i, i + 500);
+    const got = await db.execute<{ approval_no: string }>(sql`
+      SELECT approval_no FROM tax_invoice WHERE approval_no IN (${sql.join(chunk.map((r) => sql`${r.approvalNo}`), sql`, `)})
+    `);
+    for (const g of got) have.add(g.approval_no);
+  }
+  const fresh = rows.filter((r) => !have.has(r.approvalNo));
+  const pairs = pairStatementToNotices(
+    fresh,
+    notices.map((n) => ({ id: Number(n.id), approvalNo: n.approval_no, direction: n.direction, writeDate: n.wd, counterName: n.name, supplyAmount: n.supply_amount })),
+    (a, b) => samePartyName(a, b),
+  );
+  if (pairs.size === 0) return [];
+  const values: SQL[] = [];
+  for (const [i, id] of pairs) {
+    const r = fresh[i];
+    values.push(sql`(${id}::bigint, ${r.approvalNo}::text, ${r.writeDate}::date, ${r.issueDate}::date, ${r.counterBizNo}::text,
+      ${r.counterName}::text, ${r.supplyAmount}::int, ${r.vat}::int, ${r.total}::int, ${r.itemSummary}::text)`);
+  }
+  const done = await db.execute<{ id: number }>(sql`
+    UPDATE tax_invoice t SET approval_no = v.k, write_date = v.wd, issue_date = v.isd, counterparty_biz_no = v.biz,
+           counterparty_name = v.nm, supply_amount = v.sup, vat = v.vat, total = v.tot,
+           item_summary = COALESCE(v.item, t.item_summary),
+           memo = CASE WHEN t.memo LIKE '메일 속보%' THEN NULL ELSE t.memo END
+    FROM (VALUES ${sql.join(values, sql`, `)}) AS v(id, k, wd, isd, biz, nm, sup, vat, tot, item)
+    WHERE t.id = v.id AND t.approval_no LIKE '알림|%'
+      AND NOT EXISTS (SELECT 1 FROM tax_invoice x WHERE x.approval_no = v.k)
+    RETURNING t.id
+  `);
+  return done.map((d) => Number(d.id));
 }
 
 /* ================================================================== */

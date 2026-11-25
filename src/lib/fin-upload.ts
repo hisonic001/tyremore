@@ -295,7 +295,7 @@ export async function previewFinUpload(
 export async function applyFinUpload(
   fd: FormData,
 ): Promise<
-  | { ok: true; source: string; newCount: number; dupCount: number; rowCount: number; ym: string | null; yms: string[]; uploadId: number }
+  | { ok: true; source: string; newCount: number; dupCount: number; rowCount: number; ym: string | null; yms: string[]; uploadId: number; note?: string }
   | { ok: false; error: string }
 > {
   if (!(await hasPerm("finance"))) return { ok: false, error: "돈 관리 권한이 없습니다 — 사장님이 설정→계정에서 켤 수 있습니다" };
@@ -323,7 +323,11 @@ export async function applyFinUpload(
     );
 
     /* ⭐ 최근 한 일 — 원천마다 반영 함수가 다르지만 기록은 한 곳에서. 되돌리기 = cancelFinUpload(uploadId) */
-    const done = async (r: { uploadId: number; newCount: number; dupCount: number; rowCount: number }) => {
+    const done = async (r: { uploadId: number; newCount: number; dupCount: number; rowCount: number; confirmedNotices?: number; leftNotices?: number }) => {
+      /* 메일 속보 계산서 — 확정된 것 · 이 기간인데 엑셀에 없는 것 (2026-11-25) */
+      const note =
+        (r.confirmedNotices ? ` · 메일 속보 확정 ${r.confirmedNotices}` : "") +
+        (r.leftNotices ? ` · ⚠️ 엑셀에 없는 메일 속보 ${r.leftNotices}건(계산서 화면에서 확인)` : "");
       await logActivity({
         ym,
         actor: session?.uid ?? null,
@@ -331,10 +335,10 @@ export async function applyFinUpload(
         verb: "올리기",
         target: { table: "fin_upload", id: r.uploadId },
         n: Math.max(1, r.newCount),
-        label: `올리기: ${p.formatName} ${t.name} — 새 줄 ${r.newCount}${r.dupCount > 0 ? ` · 이미 있던 줄 ${r.dupCount}` : ""}`,
+        label: `올리기: ${p.formatName} ${t.name} — 새 줄 ${r.newCount}${r.dupCount > 0 ? ` · 이미 있던 줄 ${r.dupCount}` : ""}${note}`,
         undo: { kind: "upload", args: { uploadId: r.uploadId } },
       });
-      return { ok: true as const, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount, ym, yms, uploadId: r.uploadId };
+      return { ok: true as const, source: p.source, newCount: r.newCount, dupCount: r.dupCount, rowCount: r.rowCount, ym, yms, uploadId: r.uploadId, note: note || undefined };
     };
 
     if (p.kind === "tax") {

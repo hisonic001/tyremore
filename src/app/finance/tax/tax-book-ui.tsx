@@ -415,6 +415,7 @@ function CardView({ card: c, party, ctx }: { card: InvoiceCard; party: PartyRow;
           <span className="text-sm text-slate-500">{md(c.d)}</span>
           <DirAmount direction={c.direction} total={c.total} />
           {statusLabel && <StatusPill tone="neutral">{statusLabel}</StatusPill>}
+          {c.provisional && <StatusPill tone="neutral">메일 속보 · 홈택스 확정 전</StatusPill>}
         </span>
         {c.itemSummary && <span className="min-w-0 truncate text-xs text-slate-500">{c.itemSummary}</span>}
       </div>

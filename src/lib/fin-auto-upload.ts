@@ -112,6 +112,8 @@ export async function finAutoUpload(fileName: string, raw: Buffer): Promise<FinA
       `${p.formatName}${account ? ` [${account}]` : ""} — 새 줄 ${r.newCount}` +
       (r.dupCount ? ` · 이미 있던 줄 ${r.dupCount}` : "") +
       (r.confirmedAlerts ? ` · 폰 알림 확정 ${r.confirmedAlerts}` : "") +
+      (r.confirmedNotices ? ` · 메일 속보 확정 ${r.confirmedNotices}` : "") +
+      (r.leftNotices ? ` · ⚠️ 엑셀에 없는 메일 속보 ${r.leftNotices}건` : "") +
       (autoLine ? ` · 자동 대조 ${autoLine}` : "") +
       (bad ? ` · ⚠️ 못 읽은 줄 ${bad}개(화면에서 확인)` : "") +
       (auto.errors.length ? ` · ⚠️ 자동 대조 오류 ${auto.errors.length}` : ""),

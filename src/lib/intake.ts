@@ -10,7 +10,8 @@
  *     인보이스 PDF·엑셀       → invoice-save.saveInvoiceCore (입고 대기 등록 — 화면 업로드와 같은 정본)
  *     홈택스 보안메일(Cri)    → cri-mail → nts-tax-xml → fin-ingest.ingestTaxInvoices (계산서 장부)
  *     카드 명세서 메일        → (우리) vestmail 해독 / (신한) EUC-KR → card-statement 검산 → 겹침 거르기 → ingestCashTxns
- *     발행 대행 메일(본문)    → tax-mail-notice 「계산서 도착 알림」 — 장부에 넣지 않는다(승인번호 없음), 홈택스 엑셀과 대조용
+ *     발행 대행 메일(본문)    → 금액이 있으면(팝빌·bill36524) tax-notice-ingest 「속보」 줄 → 홈택스 엑셀이 오면 확정 (2026-11-25)
+ *                               금액이 없으면(스마트빌·이카운트·바로빌) 「계산서 도착 알림」만 — 홈택스 엑셀과 대조용
  *     콘티넨탈 Proforma · KICC 결제 알림 → 「쓰지 않음 — 까닭」 보관 (D-41 「쓰지 않기로 한 메일」)
  *
  *   mode 'review'(지난 메일 일괄 검토, docs/21 3장) — **해석까지만** 하고 장부에 넣지 않는다 → status '검토', parsed 에 요약.
@@ -40,6 +41,7 @@ import {
   type StatementParse,
 } from "./card-statement";
 import { htmlToText, parseTaxMailNotice, vendorOf } from "./tax-mail-notice";
+import { ingestTaxNotice } from "./tax-notice-ingest";
 import { parseAccountMap } from "./bank-alert-pure";
 
 export type IntakeMode = "apply" | "review";
@@ -161,7 +163,7 @@ async function route(input: IntakeInput, bytes: Buffer | null): Promise<Routed> 
     return { status: r.status, result: r.result, ...("cashTxnId" in r && r.cashTxnId ? { linkedTable: "cash_txn", linkedId: r.cashTxnId } : {}) };
   }
   const review = input.mode === "review";
-  if (input.type === "mail-note") return routeNote(input.sender ?? "", input.subject ?? "", input.body, review);
+  if (input.type === "mail-note") return routeNote(input.messageId, input.sender ?? "", input.subject ?? "", input.body, review);
 
   const name = input.fileName;
   const buf = bytes!;
@@ -217,16 +219,23 @@ async function route(input: IntakeInput, bytes: Buffer | null): Promise<Routed> 
 
 /* ------------------------------------------------------------------ */
 
-function routeNote(sender: string, subject: string, body: string, review: boolean): Routed {
+async function routeNote(messageId: string, sender: string, subject: string, body: string, review: boolean): Promise<Routed> {
   if (vendorOf(sender)) {
     const text = /<\w+[^>]*>/.test(body) ? htmlToText(body) : body;
     const n = parseTaxMailNotice(sender, subject, text);
     if (!n) return { status: "보관", result: "대행사 메일이지만 계산서 알림이 아닙니다" };
-    const what = `${n.vendor} ${n.kind} ${n.supplier} ${n.writeDate ?? "날짜?"}${n.supplyAmount != null ? ` 공급가 ${n.supplyAmount.toLocaleString()}` : ""}`;
+    const parsed = { kind: "notice", notice: n };
+    if (review) {
+      const what = `${n.vendor} ${n.kind} ${n.supplier} ${n.writeDate ?? "날짜?"}${n.supplyAmount != null ? ` 공급가 ${n.supplyAmount.toLocaleString()}` : ""}`;
+      return { status: "검토", result: `계산서 도착 알림 — ${what} (지난 메일: 해석만)`, parsed };
+    }
+    // 금액이 있으면 장부에 「속보」 줄, 없으면 도착 알림만 (2026-11-25)
+    const r = await ingestTaxNotice(n, messageId);
     return {
-      status: review ? "검토" : "보관",
-      result: `계산서 도착 알림 — ${what} (승인번호 없음: 홈택스 엑셀과 대조용, 장부에 넣지 않음)`,
-      parsed: { kind: "notice", notice: n },
+      status: r.status,
+      result: r.result,
+      parsed,
+      ...("taxInvoiceId" in r && r.taxInvoiceId ? { linkedTable: "tax_invoice", linkedId: r.taxInvoiceId } : {}),
     };
   }
   return { status: "보관", result: "결제 알림 — 쓰지 않음: 미쉐린 가상계좌 결제는 통장 출금이 인보이스 합계와 원 단위로 맞아 지급 자동 대조로 이어진다" };
@@ -261,9 +270,9 @@ async function routeHometax(html: string, review: boolean): Promise<Routed> {
     sumTotal: inv.total,
   };
   const r = await ingestTaxInvoices(tp, null, `메일: ${inv.counterName} ${inv.writeDate}`);
-  if (r.newCount === 0) return { status: "중복", result: `${what} — 이미 장부에 있는 계산서`, parsed };
+  if (r.newCount === 0 && !r.confirmedNotices) return { status: "중복", result: `${what} — 이미 장부에 있는 계산서`, parsed };
   const [t] = await db.execute<{ id: number }>(sql`SELECT id FROM tax_invoice WHERE approval_no = ${inv.approvalNo}`);
-  return { status: "반영", result: what, linkedTable: "tax_invoice", linkedId: t ? Number(t.id) : undefined, parsed };
+  return { status: "반영", result: r.confirmedNotices ? `${what} — 메일 속보 확정` : what, linkedTable: "tax_invoice", linkedId: t ? Number(t.id) : undefined, parsed };
 }
 
 /** 카드사 → 앱 계정 이름 (확인 2026-11-17: 신한법인카드 · 우리법인카드). 바꾸려면 CARD_STATEMENT_LABELS="신한=…;우리=…" */

@@ -93,6 +93,8 @@ interface InvRow {
   cov: number;
   /** 간접 확인(앱 기록 ↔ 지급 잡기·외상 수금) — CASH_LAT.ind */
   ind: boolean;
+  /** 메일 속보 줄 (승인번호 자리 「알림|」) */
+  prov: boolean;
 }
 
 interface LinkRow {
@@ -202,10 +204,11 @@ export async function taxBook(ym: string): Promise<TaxBook> {
   /* ④ 이 달 계산서 전부 (상태 무관 — 자동·규칙으로 끝난 것도 「앱이 알아서 맞춘 것」에 들어간다) */
   const invRows = await db.execute<{
     id: number; direction: "매입" | "매출"; d: string; biz: string; name: string; total: number;
-    item_summary: string | null; recon_status: string; recon_reason: string | null; cov: string; ind: boolean;
+    item_summary: string | null; recon_status: string; recon_reason: string | null; cov: string; ind: boolean; prov: boolean;
   }>(sql`
     SELECT t.id, t.direction, to_char(t.write_date, 'YYYY-MM-DD') d, t.counterparty_biz_no biz,
-           t.counterparty_name name, t.total, t.item_summary, t.recon_status, t.recon_reason, x.cov, x.ind
+           t.counterparty_name name, t.total, t.item_summary, t.recon_status, t.recon_reason, x.cov, x.ind,
+           (t.approval_no LIKE '알림|%') prov
     FROM tax_invoice t ${CASH_LAT}
     WHERE t.is_active AND t.write_date >= ${start}::date AND t.write_date < ${nextStart}::date
     ORDER BY t.write_date DESC, t.id DESC LIMIT 400
@@ -222,6 +225,7 @@ export async function taxBook(ym: string): Promise<TaxBook> {
     reconReason: r.recon_reason,
     cov: Number(r.cov),
     ind: r.ind === true,
+    prov: r.prov === true,
   }));
 
   /* ⑤ 연결된 줄(되돌리기 재료·자동 여부) + 후보 통장 줄의 날짜·적요 */
@@ -523,6 +527,7 @@ export async function taxBook(ym: string): Promise<TaxBook> {
       money,
       mark: worse(who.mark, money.mark),
       auto,
+      ...(i.prov ? { provisional: true } : {}),
     };
   };
 

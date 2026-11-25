@@ -59,10 +59,11 @@ export async function uploadCoverage(): Promise<CoverageRow[]> {
      그래서 다음 달에 한 번 더 받는 습관은 그대로 필요하다) */
   const tax = await db.execute<{ direction: string; d: string | null }>(sql`
     SELECT t.direction, GREATEST(t.dmax, COALESCE(u.umax, t.dmax))::text d FROM
-      (SELECT direction, max(write_date) dmax FROM tax_invoice WHERE is_active GROUP BY 1) t
+      (SELECT direction, max(write_date) dmax FROM tax_invoice WHERE is_active AND approval_no NOT LIKE '알림|%' GROUP BY 1) t
       LEFT JOIN (SELECT CASE source WHEN '홈택스매입' THEN '매입' ELSE '매출' END dir,
                         max((created_at AT TIME ZONE 'Asia/Seoul')::date) umax
                  FROM fin_upload WHERE source IN ('홈택스매입', '홈택스매출') AND status = '반영'
+                   AND file_name NOT LIKE '메일%' -- 메일 속보·보안메일 한 통은 「여기까지 받음」이 아니다 (2026-11-25)
                  GROUP BY 1) u ON u.dir = t.direction
     ORDER BY 1 LIMIT 2
   `);
