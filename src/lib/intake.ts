@@ -135,16 +135,28 @@ export async function handleIntake(input: IntakeInput): Promise<IntakeOutcome> {
  * 🔴 '검토' 상태만 — 이미 반영·중복인 것은 건드리지 않는다.
  */
 export async function applyIntakeRow(id: number): Promise<IntakeOutcome> {
+  return rerunStored(id, "apply", ["검토"]);
+}
+
+/**
+ * 보관된 원본을 **해석만 다시** 한다(장부에 넣지 않음) — 읽는 법을 고친 뒤 보관·해석불가였던 것을 「검토」로 되살린다.
+ * (예: Vercel 에서 PDF 를 못 읽어 보관된 미쉐린 인보이스 · 검산 실패했던 명세서. scripts/intake-review.ts --reparse)
+ */
+export async function reparseIntakeRow(id: number): Promise<IntakeOutcome> {
+  return rerunStored(id, "review", ["보관", "해석불가", "검토"]);
+}
+
+async function rerunStored(id: number, mode: IntakeMode, allowed: string[]): Promise<IntakeOutcome> {
   const [r] = await db.execute<{
     id: number; kind: string; status: string; sender: string | null; subject: string | null; ref: string;
     file_name: string | null; mime: string | null; body: string | null; file_bytes: Buffer | null;
   }>(sql`SELECT id, kind, status, sender, subject, ref, file_name, mime, body, file_bytes FROM intake_log WHERE id = ${id}`);
   if (!r) return { id, status: "오류", result: "그런 기록이 없습니다" };
-  if (r.status !== "검토") return { id, status: r.status as IntakeStatus, result: `검토 상태가 아닙니다 (${r.status})` };
+  if (!allowed.includes(r.status)) return { id, status: r.status as IntakeStatus, result: `${allowed.join("·")} 상태가 아닙니다 (${r.status})` };
   const messageId = r.ref.replace(/^mail:/, "").replace(/#.*$/, "");
   const input: IntakeInput = r.file_name
-    ? { type: "mail-file", messageId, index: 0, sender: r.sender, subject: r.subject, fileName: r.file_name, mime: r.mime, base64: "", mode: "apply" }
-    : { type: "mail-note", messageId, sender: r.sender, subject: r.subject, body: r.body ?? "", mode: "apply" };
+    ? { type: "mail-file", messageId, index: 0, sender: r.sender, subject: r.subject, fileName: r.file_name, mime: r.mime, base64: "", mode }
+    : { type: "mail-note", messageId, sender: r.sender, subject: r.subject, body: r.body ?? "", mode };
   let out: Routed;
   try {
     out = await route(input, r.file_bytes ? Buffer.from(r.file_bytes) : null);
@@ -196,7 +208,7 @@ async function route(input: IntakeInput, bytes: Buffer | null): Promise<Routed> 
       const { previewInvoice } = await import("./invoice");
       const pv = await previewInvoice(name, ab);
       if ("error" in pv) return { status: "보관", result: `${pv.error} — 원본 보관` };
-      const invoices = pv.invoices.map((i) => ({ no: i.invoiceNo, supplier: i.supplier, issuedAt: i.issuedAt, total: i.total, qty: i.totalQty, duplicate: i.duplicate, ok: i.ok }));
+      const invoices = pv.invoices.map((i) => ({ no: i.invoiceNo, orderNo: i.orderNo, supplier: i.supplier, issuedAt: i.issuedAt, total: i.total, qty: i.totalQty, duplicate: i.duplicate, ok: i.ok }));
       return { status: "검토", result: invoices.map((i) => `${i.supplier} ${i.no} 합계 ${(i.total ?? 0).toLocaleString()}${i.duplicate ? " (장부에 있음)" : " (장부에 없음)"}`).join(" · "), parsed: { kind: "invoice", invoices } };
     }
     const { saveInvoiceCore } = await import("./invoice-save");
@@ -280,7 +292,8 @@ async function routeCardStatement(card: "신한" | "우리", getHtml: () => stri
     const dec = decryptVestMail(html, bizNo);
     if (!dec.ok) return { status: dec.wrongPassword ? "해석불가" : "보관", result: `우리카드 명세서를 못 열었습니다: ${dec.error} — 원본 보관` };
     html = dec.html;
-    if (!isWooriStatement(html)) return { status: "해석불가", result: "풀렸지만 우리카드 이용대금명세서 모양이 아닙니다" };
+    // 우리카드는 계약갱신 안내·요청 거래내역·국외이용 매입내역도 같은 VestMail 로 보낸다 — 명세서가 아니면 보관만 (2026-11-18 실물)
+    if (!isWooriStatement(html)) return { status: "보관", result: "우리카드 보안메일이지만 이용대금명세서가 아닙니다(안내·요청 내역 등) — 원본 보관" };
   } else if (!isShinhanStatement(html)) {
     return { status: "보관", result: "신한카드 메일이지만 이용대금명세서가 아닙니다 — 원본 보관" };
   }
@@ -288,7 +301,7 @@ async function routeCardStatement(card: "신한" | "우리", getHtml: () => stri
   const p: StatementParse = card === "우리" ? parseWooriStatement(html) : parseShinhanStatement(html);
   const label = cardLabel(card);
   const head = `${card}카드 명세서 ${p.periodFrom ?? "?"}~${p.periodTo ?? "?"} (결제 ${p.payDate ?? "?"}) ${p.rows.length}줄 · 총액 ${(p.statementTotal ?? 0).toLocaleString()}원`;
-  const parsedBase = { kind: "card", card, label, periodFrom: p.periodFrom, periodTo: p.periodTo, payDate: p.payDate, statementTotal: p.statementTotal, rows: p.rows.length, ok: p.ok, checks: p.checks };
+  const parsedBase = { kind: "card", card, label, periodFrom: p.periodFrom, periodTo: p.periodTo, payDate: p.payDate, statementTotal: p.statementTotal, prepaid: p.prepaid, rows: p.rows.length, ok: p.ok, checks: p.checks, notes: p.notes };
   if (!p.ok) return { status: "해석불가", result: `${head} — 검산 실패: ${p.checks.join(" / ")} (반영 안 함)`, parsed: parsedBase };
 
   // 같은 계정에 이미 있는 줄(승인 엑셀·지난 명세서)과 겹침 거르기

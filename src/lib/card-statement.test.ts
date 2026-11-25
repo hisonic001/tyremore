@@ -37,6 +37,19 @@ describe("신한 명세서", () => {
     assert.equal(p.ok, false);
     assert.match(p.checks[0], /≠/);
   });
+  test("「취소매출」 표(칸 6개)는 환급 줄 — 원거래금액을 이용금액으로 읽지 않고, 「입금하실 금액」으로 검산 (2026-09 실물)", () => {
+    const html = shinhan(sRow("26.08.01", "가짜 구독 (US/소프트웨어)", "148,743") + sRow("26.08.14", "가짜타이어 (서울/기타)", "29,000"), "177,743")
+      .replace("결제일 : 2026.11.15", "입금하실 금액 합계 171,671 원 결제일 : 2026.11.15")
+      .replace("</body>", `<table><tr><th>취소일자</th><th>가맹점명(업종)</th><th>이용카드</th><th>취소금액</th><th>원거래일자</th><th>원거래금액</th></tr>
+<tr><td>26.08.03</td><td>가짜 구독(소프트웨어)</td><td>1111******2222</td><td>-2,989</td><td>26.05.10</td><td>32,943</td></tr>
+<tr><td>26.08.03</td><td>가짜 구독(소프트웨어)</td><td>1111******2222</td><td>-3,083</td><td>26.07.10</td><td>33,867</td></tr></table></body>`);
+    const p = parseShinhanStatement(html);
+    assert.equal(p.ok, true, p.checks.join());
+    assert.equal(p.statementTotal, 171671);
+    assert.equal(p.rows.length, 4);
+    assert.equal(p.rows.filter((r) => r.inAmount > 0).map((r) => r.inAmount).join(), "2989,3083");
+    assert.match(p.rows[2].description, /^\[취소\]/);
+  });
 });
 
 const woori = (rows: string, total: string, period = "2026년10월01일 ~ 2026년10월31일") => `<html><body>
@@ -64,6 +77,22 @@ describe("우리 명세서 (VestMail 로 푼 HTML)", () => {
     assert.equal(p.rows[2].inAmount, 10000);
     assert.equal(p.rows[0].occurredAt, "2026-10-01 00:00:00");
   });
+  test("「선결제-…」 줄은 장부 줄이 아니다 — 빼고, 검산에서만 차감 (2026-08 실물 47줄)", () => {
+    const html = woori(
+      wRow("08/04", "가짜 식당", "35,000", "", "35,000") +
+        wRow("08/18", "선결제-가짜 배달", "-30,000", "", "-30,000") +
+        wRow("08/18", "선결제-가짜 마트", "-5,000", "", "-5,000") +
+        wRow("08/20", "가짜 주유소", "50,000", "", "50,000"),
+      "50,000",
+      "2026년08월01일 ~ 2026년08월31일",
+    );
+    const p = parseWooriStatement(html);
+    assert.equal(p.ok, true, p.checks.join());
+    assert.equal(p.prepaid, 35000);
+    assert.equal(p.rows.length, 2);
+    assert.equal(p.rows.some((r) => /선결제/.test(r.description)), false);
+    assert.equal(p.rows.some((r) => r.inAmount > 0), false);
+  });
   test("1월 명세서의 12월 줄은 전년도", () => {
     const p = parseWooriStatement(woori(wRow("12/30", "가짜", "1,000", "", "1,000"), "1,000", "2027년01월01일 ~ 2027년01월31일"));
     assert.equal(p.rows[0].occurredAt, "2026-12-30 00:00:00");
@@ -71,9 +100,19 @@ describe("우리 명세서 (VestMail 로 푼 HTML)", () => {
 });
 
 describe("filterStatementOverlap", () => {
-  const line = (day: string, amts: number[]) => ({
+  const line = (day: string, amts: number[], foreign = false) => ({
     source: "법인카드" as const, occurredAt: `${day} 00:00:00`, description: "x", inAmount: 0, outAmount: amts[0],
-    balance: null, approvalNo: null, bizNo: null, installment: null, branch: null, payerCode: null, matchAmounts: amts,
+    balance: null, approvalNo: null, bizNo: null, installment: null, branch: null, payerCode: null, matchAmounts: amts, foreign,
+  });
+  test("해외 줄은 ±3일·5% 안이면 같은 결제 (승인 원화 ≠ 청구 원화) — 국내 줄은 정확히만", () => {
+    const r = filterStatementOverlap(
+      [line("2026-07-15", [32569], true), line("2026-07-15", [32569])],
+      [{ day: "2026-07-13", outAmount: 31800 }, { day: "2026-07-13", outAmount: 31800 }],
+    );
+    assert.equal(r.dropped.length, 1); // 해외 줄만 짝
+    assert.equal(r.keep.length, 1);
+    const far = filterStatementOverlap([line("2026-07-15", [32569], true)], [{ day: "2026-07-15", outAmount: 25000 }]);
+    assert.equal(far.keep.length, 1); // 5% 넘게 다르면 다른 결제
   });
   test("승인 엑셀로 이미 있는 줄(±1일·같은 금액)은 뺀다 — 수수료 전 금액으로도", () => {
     const r = filterStatementOverlap(

@@ -37,8 +37,18 @@ const nextConfig: NextConfig = {
     "/**": [
       "./node_modules/pdfjs-dist/cmaps/**",
       "./node_modules/pdfjs-dist/standard_fonts/**",
+      // 묶지 않고 node_modules 에서 그대로 부르므로 pdf.js 의 일꾼(worker) 파일도 함께 배포한다
+      "./node_modules/pdfjs-dist/legacy/build/**",
     ],
   },
+
+  /**
+   * 🔴 pdf.js 는 **묶지(bundle) 않는다** (2026-11-25, D-41).
+   *    Vercel 서버에서 미쉐린 인보이스 PDF 50통이 전부 「b is not a function」으로 실패했다 — 같은 PDF 가
+   *    PC(묶지 않고 node_modules 그대로)에서는 읽혔다. pdf.js 가 안에서 일꾼 모듈을 동적으로 불러오는데,
+   *    Next 가 묶으면서 그 경로가 깨진다. 묶지 않으면 PC 와 똑같이 돈다.
+   */
+  serverExternalPackages: ["pdfjs-dist"],
 
   /**
    * ⚠️ 사진 올리기(판매 등록 「사진으로 찾기·등록」)가 서버 액션으로 dataURL 을
