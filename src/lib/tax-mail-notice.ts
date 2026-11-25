@@ -165,3 +165,83 @@ export function matchNoticeToTaxInvoice(
   const exactDay = cands.filter((i) => i.writeDate === n.writeDate);
   return exactDay.length === 1 ? exactDay[0] : null;
 }
+
+/* ------------------------------------------------------------------ */
+/* 메일 「속보」 계산서 (2026-11-25 사장님 결정 — 매일 반영)                */
+/*
+ *   통장 폰 알림(「알림|」 dedup_key)과 같은 꼴이다:
+ *     메일이 오면 → tax_invoice 에 승인번호 자리에 「알림|mail:<메일ID>」를 넣은 **속보 줄**
+ *     홈택스 엑셀(또는 홈택스 보안메일)이 오면 → fin-ingest 가 그 줄을 **진짜 내용으로 덮는다**
+ *       (새 줄을 더 만들지 않는다 → 이중 계상 없음, 이미 걸린 대조도 산다)
+ *
+ *   🔴 금액이 메일에 있는 대행사만 — 팝빌·bill36524. 스마트빌·이카운트·바로빌 메일에는 금액이 **없다**
+ *      (2026-11-25 실물 87통: 팝빌 48·bill36524 9 는 공급가·세액 있음, 스마트빌 24·이카운트 5·바로빌 1 은 없음).
+ *      금액 모르는 계산서를 0원으로 넣으면 장부·부가세 합계가 틀어진다 → 그것들은 지금처럼 도착 알림만.
+ */
+
+export const TAX_NOTICE_KEY_PREFIX = "알림|";
+
+/** 속보 줄의 승인번호 자리 — 메일 하나에 한 줄 (같은 메일이 두 번 와도 한 줄) */
+export function noticeApprovalKey(messageId: string): string {
+  return `${TAX_NOTICE_KEY_PREFIX}mail:${messageId}`;
+}
+
+export function isNoticeKey(approvalNo: string | null | undefined): boolean {
+  return !!approvalNo && approvalNo.startsWith(TAX_NOTICE_KEY_PREFIX);
+}
+
+/** 속보로 넣을 수 있나 — 못 넣으면 까닭 */
+export function provisionBlocker(n: TaxMailNotice): string | null {
+  if (n.kind === "역발행요청") return "역발행 요청 — 아직 발행 전이라 장부에 넣지 않음";
+  if (!n.writeDate || !n.exactDate) return "메일에 작성일자가 없어 장부에 넣지 않음";
+  if (n.supplyAmount == null || n.vat == null) return "메일에 금액이 없어 장부에 넣지 않음(홈택스 엑셀이 올라오면 들어감)";
+  if (n.supplyAmount === 0 && n.vat === 0) return "금액 0원 — 장부에 넣지 않음";
+  return null;
+}
+
+export interface TaxRowLite {
+  direction: "매입" | "매출";
+  writeDate: string;
+  counterName: string;
+  supplyAmount: number;
+}
+
+/**
+ * 홈택스 줄 ↔ 속보 줄 짝짓기 (fin-ingest 가 부른다). 두 번 돈다:
+ *   1차 — 같은 구분·같은 작성일·같은 공급가·같은 상대 이름. 후보가 정확히 하나일 때만.
+ *   2차 — 1차에 안 붙은 것끼리, 같은 구분·작성일·이름 후보가 **정확히 하나**면(금액 정정) 붙인다.
+ *   애매하면 짝짓지 않는다 → 속보 줄이 남아 「엑셀에 없는 속보」로 드러난다(사람이 본다).
+ * 반환: 홈택스 줄 순번 → 속보 줄 id
+ */
+export function pairStatementToNotices(
+  rows: readonly TaxRowLite[],
+  notices: readonly TaxInvoiceLite[],
+  sameName: (a: string, b: string) => boolean = looseSameName,
+): Map<number, number> {
+  const out = new Map<number, number>();
+  const taken = new Set<number>();
+  const cand = (r: TaxRowLite, withAmount: boolean) =>
+    notices.filter(
+      (p) =>
+        !taken.has(p.id) &&
+        p.direction === r.direction &&
+        p.writeDate === r.writeDate &&
+        (!withAmount || p.supplyAmount === r.supplyAmount) &&
+        sameName(r.counterName, p.counterName),
+    );
+  for (const withAmount of [true, false]) {
+    rows.forEach((r, i) => {
+      if (out.has(i)) return;
+      const c = cand(r, withAmount);
+      if (c.length !== 1) return;
+      // 2차: 같은 날 같은 상대의 홈택스 줄이 둘 이상 남아 있으면 어느 것인지 모른다
+      if (!withAmount) {
+        const rivals = rows.filter((x, j) => !out.has(j) && x.direction === r.direction && x.writeDate === r.writeDate && sameName(x.counterName, c[0].counterName));
+        if (rivals.length !== 1) return;
+      }
+      out.set(i, c[0].id);
+      taken.add(c[0].id);
+    });
+  }
+  return out;
+}

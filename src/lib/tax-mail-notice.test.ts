@@ -4,7 +4,10 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { htmlToText, matchNoticeToTaxInvoice, parseTaxMailNotice, vendorOf, type TaxInvoiceLite } from "./tax-mail-notice";
+import {
+  htmlToText, isNoticeKey, matchNoticeToTaxInvoice, noticeApprovalKey, pairStatementToNotices, parseTaxMailNotice, provisionBlocker, vendorOf,
+  type TaxInvoiceLite, type TaxMailNotice,
+} from "./tax-mail-notice";
 
 describe("parseTaxMailNotice", () => {
   test("팝빌 — 제목의 공급자, 본문의 작성일자·공급가액·세액", () => {
@@ -59,5 +62,51 @@ describe("matchNoticeToTaxInvoice", () => {
   test("발행일자뿐(이카운트)이면 ±7일", () => {
     const n = parseTaxMailNotice("ecount@ecount.com", "[주식회사 가짜타이어](으)로부터 [전자(세금)계산서](이)가 도착했습니다.", "발행일자 | 2026/10/22")!;
     assert.equal(matchNoticeToTaxInvoice(n, book)?.id, 3);
+  });
+});
+
+describe("메일 속보 계산서 (2026-11-25)", () => {
+  const base: TaxMailNotice = { vendor: "팝빌", kind: "매입", supplier: "가짜트레이딩", writeDate: "2026-11-20", exactDate: true, supplyAmount: 480182, vat: 48018, item: null, ref: null };
+  test("승인번호 자리 열쇠", () => {
+    assert.equal(noticeApprovalKey("abc123"), "알림|mail:abc123");
+    assert.equal(isNoticeKey("알림|mail:abc123"), true);
+    assert.equal(isNoticeKey("20261120-41000203-000084bf"), false);
+  });
+  test("금액·작성일자가 있어야 속보로 넣는다", () => {
+    assert.equal(provisionBlocker(base), null);
+    assert.match(provisionBlocker({ ...base, vendor: "스마트빌", supplyAmount: null, vat: null }) ?? "", /금액이 없어/);
+    assert.match(provisionBlocker({ ...base, vendor: "이카운트", exactDate: false }) ?? "", /작성일자/);
+    assert.match(provisionBlocker({ ...base, kind: "역발행요청" }) ?? "", /역발행/);
+  });
+  const notice = (id: number, over: Partial<TaxInvoiceLite> = {}): TaxInvoiceLite => ({ id, approvalNo: `알림|mail:${id}`, direction: "매입", writeDate: "2026-11-20", counterName: "가짜트레이딩", supplyAmount: 480182, ...over });
+  test("1차 — 날짜·금액·이름이 맞으면 짝", () => {
+    const m = pairStatementToNotices([{ direction: "매입", writeDate: "2026-11-20", counterName: "가짜트레이딩", supplyAmount: 480182 }], [notice(7)]);
+    assert.equal(m.get(0), 7);
+  });
+  test("2차 — 금액이 바뀌었어도 그날 그 상대가 하나뿐이면 짝(정정)", () => {
+    const m = pairStatementToNotices([{ direction: "매입", writeDate: "2026-11-20", counterName: "가짜트레이딩", supplyAmount: 500000 }], [notice(7)]);
+    assert.equal(m.get(0), 7);
+  });
+  test("같은 날 같은 상대 계산서가 둘 — 금액 맞는 것 먼저, 남은 하나끼리는 정정으로 짝", () => {
+    const rows = [
+      { direction: "매입" as const, writeDate: "2026-11-20", counterName: "가짜트레이딩", supplyAmount: 100 },
+      { direction: "매입" as const, writeDate: "2026-11-20", counterName: "가짜트레이딩", supplyAmount: 200 },
+    ];
+    const m = pairStatementToNotices(rows, [notice(1, { supplyAmount: 100 }), notice(2, { supplyAmount: 999 })]);
+    assert.equal(m.get(0), 1);
+    assert.equal(m.get(1), 2);
+  });
+  test("금액이 안 맞는 홈택스 줄이 둘인데 속보는 하나 — 어느 것인지 모르니 안 붙임", () => {
+    const rows = [
+      { direction: "매입" as const, writeDate: "2026-11-20", counterName: "가짜트레이딩", supplyAmount: 100 },
+      { direction: "매입" as const, writeDate: "2026-11-20", counterName: "가짜트레이딩", supplyAmount: 200 },
+    ];
+    assert.equal(pairStatementToNotices(rows, [notice(1, { supplyAmount: 999 })]).size, 0);
+  });
+  test("다른 구분·다른 날·다른 상대는 안 붙음", () => {
+    const r = { direction: "매입" as const, writeDate: "2026-11-20", counterName: "가짜트레이딩", supplyAmount: 480182 };
+    assert.equal(pairStatementToNotices([{ ...r, direction: "매출" }], [notice(1)]).size, 0);
+    assert.equal(pairStatementToNotices([{ ...r, writeDate: "2026-11-21" }], [notice(1)]).size, 0);
+    assert.equal(pairStatementToNotices([{ ...r, counterName: "엉뚱상사" }], [notice(1)]).size, 0);
   });
 });

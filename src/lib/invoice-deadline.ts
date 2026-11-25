@@ -75,7 +75,7 @@ export async function invoiceDeadline(today = kstToday()): Promise<InvoiceDeadli
   const skipped = (name: string) => skip.has(name) || skip.has(`${name}|${prevYm}`);
   const [up] = await db.execute<{ n: number }>(sql`
     SELECT count(*)::int n FROM fin_upload
-    WHERE source = '홈택스매출' AND status = '반영'
+    WHERE source = '홈택스매출' AND status = '반영' AND file_name NOT LIKE '메일%'
       AND to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM') = ${thisYm}
   `);
 

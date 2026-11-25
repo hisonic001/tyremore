@@ -190,6 +190,7 @@ export function FinUpload({ ym, multiple, showNext = true }: { ym: string; multi
         const fileYm = r.ym ?? ym;
         const text =
           `${r.source} 반영했습니다 — 새로 ${r.newCount}줄 · 이미 있음 ${r.dupCount}줄` +
+          (r.note ?? "") +
           (r.ym && r.ym !== ym ? ` (자료는 ${Number(r.ym.slice(5, 7))}월입니다)` : "");
         setDoneMsg(text);
         setNext(nextStepOf(r.source, fileYm));
