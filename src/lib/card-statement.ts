@@ -19,7 +19,12 @@ import type { FinParseResult, NormalizedCashTxn } from "./fin-sheet";
 export interface StatementLine extends NormalizedCashTxn {
   /** 겹침 판정에 쓸 금액들 — [실제 청구액, 수수료 전 이용금액] */
   matchAmounts: number[];
+  /** 해외 결제(영문 가맹점·해외현지금액) — 승인 때와 청구 때 원화가 환율로 달라 겹침을 느슨하게 본다 */
+  foreign: boolean;
 }
+
+/** 가맹점 이름(괄호 앞)에 한글이 없으면 해외로 본다 — 「WWW.ALIEXPRESS」「ANTHROPIC* CLAUDE SUB (…/컴퓨터소프트웨어)」 */
+const looksForeign = (merchant: string) => !/[가-힣]/.test(merchant.split("(")[0] ?? "") && /[A-Za-z]{3,}/.test(merchant);
 
 export interface StatementParse extends Omit<FinParseResult, "rows"> {
   rows: StatementLine[];
@@ -28,9 +33,13 @@ export interface StatementParse extends Omit<FinParseResult, "rows"> {
   statementTotal: number | null;
   /** 결제일 (출금 예정일) YYYY-MM-DD */
   payDate: string | null;
-  /** 검산 통과 = 줄 합계와 총액이 원 단위로 같다 */
+  /** 선결제(결제일 전에 미리 낸 카드값) 합계 — 장부 줄이 아니다(통장 출금으로 이미 있다). 검산에서만 뺀다 */
+  prepaid: number;
+  /** 검산 통과 = 줄 순합계 − 선결제 = 명세서 총액 (원 단위) */
   ok: boolean;
   checks: string[];
+  /** 통과는 했지만 사람이 알아 둘 것 (예: 취소 줄 합과 전월 초과입금액의 10원 차이) */
+  notes: string[];
 }
 
 const num = (s: string | undefined) => {
@@ -68,14 +77,24 @@ function finish(
   periodTo: string | null,
   payDate: string | null,
   rawCsv: string,
+  prepaid = 0,
+  extra: { usageTotal?: number | null; tolerance?: number } = {},
 ): StatementParse {
   const sumOut = rows.reduce((s, r) => s + r.outAmount, 0);
   const sumIn = rows.reduce((s, r) => s + r.inAmount, 0);
-  // 명세서 총액은 취소(마이너스)를 뺀 순액이다 (2026-11 우리 실물: 취소 1줄 145,000)
-  const net = sumOut - sumIn;
+  // 명세서 총액 = 이용 − 취소 − 선결제 (2026-11 우리 실물: 취소 1줄 145,000 · 8월분 선결제 47줄)
+  const net = sumOut - sumIn - prepaid;
   const checks: string[] = [];
+  const notes: string[] = [];
+  // 이용 줄 합계는 언제나 엄격히 (신한: 「총합계」)
+  if (extra.usageTotal != null && sumOut !== extra.usageTotal) {
+    checks.push(`이용 줄 합계 ${sumOut.toLocaleString()}원 ≠ 명세서 총합계 ${extra.usageTotal.toLocaleString()}원`);
+  }
+  const gap = statementTotal == null ? 0 : net - statementTotal;
   if (statementTotal == null) checks.push("명세서 총액을 찾지 못했습니다");
-  else if (net !== statementTotal) checks.push(`줄 순합계 ${net.toLocaleString()}원 ≠ 명세서 총액 ${statementTotal.toLocaleString()}원`);
+  else if (gap !== 0 && Math.abs(gap) <= (extra.tolerance ?? 0)) {
+    notes.push(`취소·환급 줄 합과 명세서의 전월 초과입금액이 ${gap.toLocaleString()}원 다릅니다(수수료 환급 등 작은 조정) — 이용 줄은 총합계와 일치`);
+  } else if (gap !== 0) checks.push(`줄 순합계 ${net.toLocaleString()}원 ≠ 명세서 총액 ${statementTotal.toLocaleString()}원`);
   if (rows.length === 0) checks.push("이용 내역 줄을 하나도 읽지 못했습니다");
   return {
     source: "법인카드",
@@ -90,8 +109,10 @@ function finish(
     card,
     statementTotal,
     payDate,
+    prepaid,
     ok: checks.length === 0,
     checks,
+    notes,
   };
 }
 
@@ -120,35 +141,51 @@ export function parseShinhanStatement(html: string): StatementParse {
   const pay = /결제일\s*:?\s*(\d{4})\.(\d{2})\.(\d{2})/.exec(text);
   const payDate = pay ? `${pay[1]}-${pay[2]}-${pay[3]}` : null;
 
-  let statementTotal: number | null = null;
+  // 실제 출금액 = 「입금하실 금액 합계」(취소매출을 뺀 값). 없으면 「총합계」(2026-09 실물: 186,390 − 취소 6,072 = 180,318)
+  const toPay = /입금하실\s*금액\s*합계\s*([\d,]+)\s*원/.exec(text);
+  let statementTotal: number | null = toPay ? num(toPay[1]) : null;
+  let usageTotal: number | null = null;
   const lines: StatementLine[] = [];
   const csv: string[] = [];
   for (const c of rows) {
-    if (c[0] === "총합계") statementTotal = num(c.find((x, i) => i > 1 && /\d/.test(x)));
-    // 이용 내역 줄 = 첫 칸이 YY.MM.DD 이고 칸이 7개 안팎 (해외 상세표는 칸 9개라 뺀다)
+    if (c[0] === "총합계") {
+      usageTotal = num(c.find((x, i) => i > 1 && /\d/.test(x)));
+      if (statementTotal == null) statementTotal = usageTotal;
+    }
     const d = /^(\d{2})\.(\d{2})\.(\d{2})$/.exec(c[0] ?? "");
-    if (!d || c.length >= 9) continue;
-    const amount = num(c[5]);
-    if (amount === 0) continue;
+    if (!d) continue;
     const day = `20${d[1]}-${d[2]}-${d[3]}`;
-    const merchant = (c[1] ?? "").replace(/\s*\(\s*\/\s*\)\s*$/, "").trim();
-    lines.push({
-      source: "법인카드",
-      occurredAt: `${day} 00:00:00`,
-      description: merchant,
-      inAmount: amount < 0 ? -amount : 0,
-      outAmount: amount > 0 ? amount : 0,
-      balance: null,
-      approvalNo: null,
-      bizNo: null,
-      installment: c[3] && /\d/.test(c[3]) ? `${c[3]}` : null,
-      branch: null,
-      payerCode: null,
-      matchAmounts: [amount],
-    });
-    csv.push([day, merchant, amount].join(","));
+    if (c.length === 7) {
+      // 「카드이용내역」 줄 — 칸 정확히 7개, 청구금액은 5번째 (해외 상세표 9칸·취소매출 6칸과 갈린다)
+      const amount = num(c[5]);
+      if (amount === 0) continue;
+      const merchant = (c[1] ?? "").replace(/\s*\(\s*\/\s*\)\s*$/, "").trim();
+      lines.push({
+        source: "법인카드", occurredAt: `${day} 00:00:00`, description: merchant,
+        inAmount: amount < 0 ? -amount : 0, outAmount: amount > 0 ? amount : 0,
+        balance: null, approvalNo: null, bizNo: null,
+        installment: c[3] && /\d/.test(c[3]) ? `${c[3]}` : null, branch: null, payerCode: null,
+        matchAmounts: [Math.abs(amount)], foreign: looksForeign(merchant),
+      });
+      csv.push([day, merchant, amount].join(","));
+    } else if (c.length === 6 && num(c[3]) < 0) {
+      // 「취소매출 상세내역(전월 명세서 발송 이후 건)」 — [취소일자, 가맹점, 카드, 취소금액(−), 원거래일자, 원거래금액]
+      const refund = -num(c[3]);
+      const merchant = `[취소] ${(c[1] ?? "").trim()} (원거래 ${c[4] ?? "?"})`;
+      lines.push({
+        source: "법인카드", occurredAt: `${day} 00:00:00`, description: merchant,
+        inAmount: refund, outAmount: 0, balance: null, approvalNo: null, bizNo: null,
+        installment: null, branch: null, payerCode: null, matchAmounts: [refund], foreign: looksForeign(c[1] ?? ""),
+      });
+      csv.push([day, merchant, -refund].join(","));
+    }
   }
-  return finish("신한", "신한카드 법인 이용대금명세서(메일)", lines, statementTotal, periodFrom, periodTo, payDate, csv.join("\n"));
+  // 이용 줄은 「총합계」와 엄격히, 순액은 「입금하실 금액」과 — 취소 줄 합과 전월 초과입금액은 100원 안 차이를 견딘다
+  // (2026-09 실물: 취소 2,989+3,073=6,062 vs 전월 초과입금액 6,072 — 10원)
+  return finish("신한", "신한카드 법인 이용대금명세서(메일)", lines, statementTotal, periodFrom, periodTo, payDate, csv.join("\n"), 0, {
+    usageTotal,
+    tolerance: lines.some((l) => l.inAmount > 0) ? 100 : 0,
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -174,15 +211,23 @@ export function parseWooriStatement(html: string): StatementParse {
 
   const lines: StatementLine[] = [];
   const csv: string[] = [];
+  let prepaid = 0;
   for (const c of tableRows(html)) {
     const d = /^(\d{2})\/(\d{2})$/.exec(c[0] ?? "");
     if (!d || c.length < 10) continue;
     const pay9 = num(c[9]);
     if (pay9 === 0) continue; // 「면제 0」 같은 안내 줄
+    // 🔴 「선결제-…」 = 결제일 전에 미리 낸 카드값 — 환급이 아니다. 그 돈은 통장 출금(우리카드결제)으로 이미 장부에 있다.
+    //    장부 줄로 넣지 않고 검산에서만 뺀다 (2026-08 실물: 08-18 선결제 47줄 · 06-10 20줄)
+    if (/^선결제/.test((c[1] ?? "").trim())) {
+      prepaid += -pay9;
+      continue;
+    }
     const year = `${d[1]}${d[2]}` > endMD ? endY - 1 : endY;
     const day = `${year}-${d[1]}-${d[2]}`;
     const used = num(c[2]) || num(c[5]);
     const inst = (c[4] ?? "").trim();
+    const merchant = c[1] ?? "";
     lines.push({
       source: "법인카드",
       occurredAt: `${day} 00:00:00`,
@@ -195,11 +240,12 @@ export function parseWooriStatement(html: string): StatementParse {
       installment: inst && /\d/.test(inst) ? `${inst}개월` : null,
       branch: null,
       payerCode: null,
-      matchAmounts: [...new Set([pay9, used].filter((x) => x !== 0))],
+      matchAmounts: [...new Set([pay9, used].filter((x) => x !== 0).map(Math.abs))],
+      foreign: !!(c[3] ?? "").trim() || looksForeign(merchant),
     });
     csv.push([day, c[1], used, pay9].join(","));
   }
-  return finish("우리", "우리카드 이용대금명세서(메일)", lines, statementTotal, periodFrom, periodTo, payDate, csv.join("\n"));
+  return finish("우리", "우리카드 이용대금명세서(메일)", lines, statementTotal, periodFrom, periodTo, payDate, csv.join("\n"), prepaid);
 }
 
 /* ------------------------------------------------------------------ */
@@ -222,17 +268,38 @@ export function filterStatementOverlap(
   existing: readonly ExistingCardLine[],
 ): { keep: StatementLine[]; dropped: StatementLine[] } {
   const used = new Set<number>();
-  const keep: StatementLine[] = [];
-  const dropped: StatementLine[] = [];
-  for (const l of lines) {
+  const matched = new Set<number>();
+  // ① 정확히 — 같은 날 ±1일 · 같은 금액 (모든 줄). 정확한 짝이 먼저 기존 줄을 차지한다
+  lines.forEach((l, li) => {
+    if (l.outAmount === 0) return; // 취소·환급 줄은 기존 지출 줄과 짝짓지 않는다
     const day = l.occurredAt.slice(0, 10);
-    const hit = existing.findIndex(
-      (e, i) => !used.has(i) && dayDiff(e.day, day) <= 1 && l.matchAmounts.includes(e.outAmount),
-    );
+    const hit = existing.findIndex((e, i) => !used.has(i) && dayDiff(e.day, day) <= 1 && l.matchAmounts.includes(e.outAmount));
     if (hit >= 0) {
       used.add(hit);
-      dropped.push(l);
-    } else keep.push(l);
-  }
+      matched.add(li);
+    }
+  });
+  // ② 해외 줄만 느슨하게 — ±3일 · 금액 차이 5% 안 (승인 때 원화와 청구 때 원화가 환율로 다르다, 2026-07 알리익스프레스 실물)
+  lines.forEach((l, li) => {
+    if (matched.has(li) || !l.foreign || l.outAmount === 0) return;
+    const day = l.occurredAt.slice(0, 10);
+    let best = -1;
+    let bestGap = Infinity;
+    existing.forEach((e, i) => {
+      if (used.has(i) || dayDiff(e.day, day) > 3 || e.outAmount <= 0) return;
+      const gap = Math.abs(e.outAmount - l.outAmount) / l.outAmount;
+      if (gap <= 0.05 && gap < bestGap) {
+        best = i;
+        bestGap = gap;
+      }
+    });
+    if (best >= 0) {
+      used.add(best);
+      matched.add(li);
+    }
+  });
+  const keep: StatementLine[] = [];
+  const dropped: StatementLine[] = [];
+  lines.forEach((l, li) => (matched.has(li) ? dropped : keep).push(l));
   return { keep, dropped };
 }
